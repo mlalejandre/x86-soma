@@ -1,0 +1,4 @@
+uACPI (https://github.com/uACPI/uACPI), licencia MIT (ver LICENSE), version del 17-10-2026
+(commit c0edecef62bcac6ce3f783540099190bafadadda). Copiado sin cambios: source/ e include/.
+La capa de adaptacion de SOMA esta en src/arch/x86_64/acpi_sys.c (SOMA_164_T480S).
+Se compila con -DUACPI_USE_BUILTIN_STRING -DUACPI_NATIVE_ALLOC_ZEROED -DUACPI_SIZED_FREES (ver Makefile).

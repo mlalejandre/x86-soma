@@ -69,6 +69,13 @@ static uint32_t get_li(struct jrt *rt, jobj *re)
     return (uint32_t)i;
 }
 static void set_li(struct jrt *rt, jobj *re, uint32_t v) { js_put(rt, jobjv(re), LI(rt), jint(v)); }
+/* SOMA_185: el motor de expresiones trabaja en bytes UTF-8; lastIndex, index y las posiciones que ve el script son unidades UTF-16 */
+static uint32_t li_to_byte(struct jrt *rt, jstr *s, uint32_t li, int *beyond)
+{
+    *beyond = li > js_u16len(s); if (*beyond) return 0;
+    int mid; uint32_t b = js_u16_to_byte(rt, s, li, &mid); return mid ? b + 4 : b;
+}
+static void set_li_b(struct jrt *rt, jobj *re, jstr *s, uint32_t byte) { set_li(rt, re, js_byte_to_u16(rt, s, byte)); }
 static int exec_at(struct jrt *rt, jobj *re, jstr *s, uint32_t start, int32_t *caps)
 {
     wre_stack_lo = rt->stack_lo ? rt->stack_lo + 16 * 1024 : 0;
@@ -100,7 +107,7 @@ static jv build_result(struct jrt *rt, jobj *re, jstr *s, const int32_t *caps)
     int ng = wre_ngroups(prog(re));
     jobj *a = js_arr_new(rt, (uint32_t)ng + 1);
     for (int g = 0; g <= ng; g++) js_arr_push(rt, a, group_val(rt, s, caps, g));
-    js_set_c(rt, a, "index", jint(caps[0])); js_set_c(rt, a, "input", jstrv(s));
+    js_set_c(rt, a, "index", jint(js_byte_to_u16(rt, s, (uint32_t)caps[0]))); js_set_c(rt, a, "input", jstrv(s));
     js_set_c(rt, a, "groups", groups_obj(rt, re, s, caps));
     return jobjv(a);
 }
@@ -108,10 +115,10 @@ static jv build_result(struct jrt *rt, jobj *re, jstr *s, const int32_t *caps)
 static jv builtin_exec(struct jrt *rt, jobj *re, jstr *s)
 {
     int fl = wre_flags(prog(re)), use = (fl & (WRE_G | WRE_Y)) != 0; uint32_t li = use ? get_li(rt, re) : 0;
-    int32_t caps[2 * (WRE_MAXG + 1)];
-    if (li > s->len) { if (use) set_li(rt, re, 0); return jnull(); }
-    if (!exec_at(rt, re, s, li, caps)) { if (use) set_li(rt, re, 0); return jnull(); }
-    if (use) set_li(rt, re, (uint32_t)caps[1]);
+    int32_t caps[2 * (WRE_MAXG + 1)]; int beyond; uint32_t lb = li_to_byte(rt, s, li, &beyond);
+    if (beyond) { if (use) set_li(rt, re, 0); return jnull(); }
+    if (!exec_at(rt, re, s, lb, caps)) { if (use) set_li(rt, re, 0); return jnull(); }
+    if (use) set_li_b(rt, re, s, (uint32_t)caps[1]);
     return build_result(rt, re, s, caps);
 }
 static jv re_exec(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
@@ -123,9 +130,9 @@ static jv re_test(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
     jobj *re = this_re(rt, thisv, "RegExp.prototype.test"); jstr *s = js_tostr(rt, ARG(0)); (void)magic;
     int fl = wre_flags(prog(re)), use = (fl & (WRE_G | WRE_Y)) != 0; uint32_t li = use ? get_li(rt, re) : 0;
-    int32_t caps[2 * (WRE_MAXG + 1)];
-    if (li > s->len || !exec_at(rt, re, s, li, caps)) { if (use) set_li(rt, re, 0); return jbool(0); }
-    if (use) set_li(rt, re, (uint32_t)caps[1]);
+    int32_t caps[2 * (WRE_MAXG + 1)]; int beyond; uint32_t lb = li_to_byte(rt, s, li, &beyond);
+    if (beyond || !exec_at(rt, re, s, lb, caps)) { if (use) set_li(rt, re, 0); return jbool(0); }
+    if (use) set_li_b(rt, re, s, (uint32_t)caps[1]);
     return jbool(1);
 }
 static jstr *source_of(struct jrt *rt, jobj *re)
@@ -232,7 +239,8 @@ static jv op_replace(struct jrt *rt, int op, jobj *re, jstr *s, jv rep)
     struct wre *p = prog(re); int fl = wre_flags(p), all = (fl & WRE_G) != 0, sticky = (fl & WRE_Y) != 0, ng = wre_ngroups(p);
     if (op == S_REPLACEALL && !all) js_throw_err(rt, E_TYPE, "replaceAll debe llamarse con una RegExp global");
     int fn = js_is_callable(rep); jstr *rs = fn ? 0 : js_tostr(rt, rep);
-    struct wb out = {0}; uint32_t last = 0, pos = all ? 0 : (sticky ? get_li(rt, re) : 0); int32_t caps[2 * (WRE_MAXG + 1)]; int matched = 0;
+    struct wb out = {0}; uint32_t last = 0, pos = 0; int32_t caps[2 * (WRE_MAXG + 1)]; int matched = 0;
+    if (!all && sticky) { int beyond; pos = li_to_byte(rt, s, get_li(rt, re), &beyond); if (beyond) { set_li(rt, re, 0); return jstrv(s); } }
     if (all) set_li(rt, re, 0);
     while (pos <= s->len) {
         if (!exec_at(rt, re, s, pos, caps)) { if (sticky) set_li(rt, re, 0); break; }
@@ -241,12 +249,12 @@ static jv op_replace(struct jrt *rt, int op, jobj *re, jstr *s, jv rep)
         if (fn) {
             jv a[WRE_MAXG + 4]; int n = 0;
             for (int g = 0; g <= ng; g++) a[n++] = group_val(rt, s, caps, g);
-            a[n++] = jint(caps[0]); a[n++] = jstrv(s);
+            a[n++] = jint(js_byte_to_u16(rt, s, (uint32_t)caps[0])); a[n++] = jstrv(s);
             jv go = groups_obj(rt, re, s, caps); if (!IS_UNDEF(go)) a[n++] = go;
             jstr *r = js_tostr(rt, js_call(rt, rep, jundef(), a, n)); wb_addn(&out, r->d, r->len);
         } else expand_tpl(&out, rs, s, caps, p);
         last = (uint32_t)caps[1];
-        if (!all) { if (sticky) set_li(rt, re, last); break; }
+        if (!all) { if (sticky) set_li_b(rt, re, s, last); break; }
         pos = caps[1] == caps[0] ? adv1(s, (uint32_t)caps[1]) : (uint32_t)caps[1];
     }
     if (!matched) { wb_free(&out); return jstrv(s); }
@@ -298,7 +306,7 @@ jv js_regex_string_op(struct jrt *rt, int op, jstr *s, jv *args, int argc)
         }
         jv arr = jobjv(out); return js_call(rt, js_get_c(rt, arr, "values"), arr, 0, 0);
     }
-    case S_SEARCH: return exec_at(rt, re, s, 0, caps) ? jint(caps[0]) : jint(-1);
+    case S_SEARCH: return exec_at(rt, re, s, 0, caps) ? jint(js_byte_to_u16(rt, s, (uint32_t)caps[0])) : jint(-1);
     case S_REPLACE: case S_REPLACEALL: return op_replace(rt, op, re, s, argc > 1 ? args[1] : jundef());
     case S_SPLIT: return op_split(rt, re, s, argc > 1 ? args[1] : jundef());
     default: js_throw_err(rt, E_TYPE, "Operacion de cadena no soportada con RegExp");

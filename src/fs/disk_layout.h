@@ -30,6 +30,12 @@
 /* Zona 4: Checkpoints de Hardware */
 #define SOMA_LBA_CHECKPOINT     4096   /* LBA 4096..6210: Checkpoint de respaldo RamFS */
 #define SOMA_LBA_CHECKPOINT_END 6210
+/* PARCHE 130: segunda ranura del checkpoint (A/B), partida en dos tramos para aprovechar huecos libres: marcador 6211, datos 6212..8191 (1980 sectores)
+ * y los 133 restantes en 3962..4094. Total de la ranura: 1 + 2113 sectores (igual que la A). */
+#define SOMA_LBA_CKPT_B_MARKER  6211
+#define SOMA_LBA_CKPT_B_DATA    6212
+#define SOMA_LBA_CKPT_B_SPLIT   1980   /* sectores de datos en el primer tramo */
+#define SOMA_LBA_CKPT_B_DATA2   3962   /* LBA 3962..4094 */
 
 /* Zona 5: Fuentes del Sistema (SRCFS) */
 #define SOMA_LBA_SRCFS_INDEX    8192   /* LBA 8192..8255: Índice de fuentes (64 sectores = 511 entradas) */
@@ -39,4 +45,14 @@
  * el final del disco. ejecutar.py agranda hdd.img (por defecto a 64 MiB) para que haya sitio. */
 #define SOMA_LBA_BIGFS_START    16384
 
+
+/* PARCHE 122 (Fase 1, permisos): zonas del disco que un USUARIO (o un agente, para leer) puede tocar con sector_read/sector_write.
+ * Antes la lista de zonas protegidas se escribio sin BIGFS (LBA >= 16384, el almacen de archivos grandes) y sin el checkpoint entero (solo se
+ * protegian 4095..4400 de 4095..6210). Ahora SOLO es escribible lo que esta listado aqui como libre; todo lo demas (arranque, buzon, VFS, diario,
+ * checkpoint, fuentes, BIGFS) esta protegido. */
+static inline int soma_lba_user_zone(unsigned long long sec)
+{
+    if (sec >= SOMA_LBA_USER_MIN && sec < SOMA_LBA_CKPT_B_DATA2) return 1;                   /* 3600..3961 (PARCHE 130: el resto es la ranura B del checkpoint) */
+    return 0;
+}
 #endif

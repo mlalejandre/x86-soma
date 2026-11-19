@@ -13,22 +13,22 @@
  */
 #define USER_BASE    0x8000000000ULL      /* PML4[1]: region de usuario, vacia en la PML4 del kernel (parche 017) */
 /* SOMA_PARCHE_019_FILES: region de usuario ampliada para programas grandes.
- *   codigo + datos + bss : USER_BASE .. +4 MiB (USER_CODE_AREA, hasta USER_CODE_MAX_PAGES paginas)
+ *   codigo + datos + bss : USER_BASE .. +12 MiB (USER_CODE_AREA, hasta USER_CODE_MAX_PAGES paginas)
  *   pila                 : USER_STACK_VA, USER_STACK_PAGES paginas (la pila crece hacia abajo desde su cima) */
-#define USER_CODE_AREA      0x400000ULL           /* 4 MiB */
-#define USER_CODE_MAX_PAGES 1024
+#define USER_CODE_AREA      0xC00000ULL           /* 12 MiB (SOMA_202: eran 4; el motor del navegador con sus fuentes ocupa mas) */
+#define USER_CODE_MAX_PAGES 3072
 #define USER_WINDOW  0x2000000ULL                 /* 32 MiB: todo lo que un proceso puede tocar y pasar al kernel */
 #define USER_CODE_VA USER_BASE
 #define USER_STACK_VA (USER_BASE + 0x1000000ULL)
 
 #define SYS_EXIT   0
-#define SYS_WRITE  1   /* write(ptr, len) -> bytes escritos o -1 (EFAULT) */
+#define SYS_WRITE  1   /* write(ptr, len) -> bytes escritos o -14 (EFAULT) */
 #define SYS_YIELD  2
 #define SYS_SLEEP  3   /* sleep(ms) */
 #define SYS_GETPID 4   /* -> tid del hilo */
 /* SOMA_PARCHE_019_FILES: ficheros del almacen BIGFS (solo lectura) y argumentos. Los errores son codigos negativos:
- * -14 puntero invalido, -9 descriptor invalido, -22 argumento invalido, -24 demasiados ficheros abiertos y los
- * de BIGFS (-2 no existe, -5 es un directorio, ...). */
+ * -14 puntero invalido, -9 descriptor invalido, -22 argumento invalido, -24 demasiados ficheros abiertos,
+ * -13 ruta privada y los de BIGFS ya traducidos a la tabla unica de src/core/errno.h (-2 no existe, -21 es un directorio, -5 error de E/S...). */
 #define SYS_OPEN    5   /* open(ruta_ptr, ruta_len, flags=0) -> fd >= 0 */
 #define SYS_READ    6   /* read(fd, buf, len) -> bytes leidos (0 = fin); como mucho 64 KiB por llamada */
 #define SYS_SEEK    7   /* seek(fd, desplazamiento, 0=desde el inicio | 1=desde la posicion | 2=desde el final) -> nueva posicion */
@@ -55,12 +55,64 @@
 /* SOMA_PARCHE_022_VIDEO */
 #define SYS_AUDIO_STATUS 18   /* audio_status(u64 out[3]) -> 0; out = {espacio libre FIFO en bytes, reloj de audio en us, huecos} */
 #define SYS_UPTIME_MS    19   /* -> milisegundos desde el arranque */
+/* PARCHE 139: servicios persistentes (solo los procesos lanzados por sandbox.c tienen este bit en su filtro).
+ *   svc_next(resultado) -> 0 hay una peticion nueva en SBX_IN_VA | 1 terminar. Entrega la respuesta anterior (si la habia) y bloquea. */
+#define SYS_SVC_NEXT     20
+/* PARCHE 142: RED para procesos de ring 3, como CAPACIDAD: solo los procesos lanzados con estos bits en su filtro (servicio netsvc,
+ * navegador aislado) pueden usarlas; los programas normales no (USER_SYS_DEFAULT). Cada proceso solo toca SUS conexiones (tcp_owner) y
+ * como mucho USER_MAX_SOCKETS a la vez; al morir se cierran todas. Ninguna bloquea mas de unos ms salvo el DNS (hasta 4 s).
+ *   net_dns(nombre, len, ip_out[4])  -> 0 | -2 no resuelve | -22 nombre no valido
+ *   tcp_open(ip_be32, puerto)        -> descriptor | -16 demasiadas | -5 sin conexiones libres  (envia el SYN y vuelve)
+ *   tcp_poll(d)                      -> 1 establecida | 0 pendiente | -5 fallida
+ *   tcp_send(d, buf, len)            -> bytes enviados (len <= 64 KiB) | <0
+ *   tcp_recv(d, buf, max)            -> bytes | 0 nada aun | -1 el otro extremo cerro | -5 error   (max <= 16 KiB)
+ *   tcp_close(d)                     -> 0 */
+#define SYS_NET_DNS      21
+#define SYS_TCP_OPEN     22
+#define SYS_TCP_POLL     23
+#define SYS_TCP_SEND     24
+#define SYS_TCP_RECV     25
+#define SYS_TCP_CLOSE    26
+#define USER_SYS_NET_MASK ((1u << SYS_NET_DNS) | (1u << SYS_TCP_OPEN) | (1u << SYS_TCP_POLL) | (1u << SYS_TCP_SEND) | (1u << SYS_TCP_RECV) | (1u << SYS_TCP_CLOSE))
+#define USER_SYS_DEFAULT  0x000FFFFFu      /* syscalls 0..19: lo de siempre; red y canal del navegador, solo por capacidad. SOMA_192: sin la 20
+                                            * (SYS_SVC_NEXT es solo de los servicios aislados, que la llevan en su propio filtro; a un programa normal le devolvia 1) */
+#define USER_MAX_SOCKETS  4
 #define USER_MAX_FDS 8
 #define USER_ARGS_MAX 128
 
 /* Codigos de salida negativos de usermode_run_code() */
 #define USER_EXIT_FAULT_BASE (-1000)   /* -1000 - numero de vector de la excepcion de CPU */
 #define USER_EXIT_TIMEOUT    (-2000)   /* superó el limite de tiempo */
+#define USER_EXIT_QUOTA      (-5000)   /* PARCHE 126: superó la cuota de llamadas al sistema */
+#define USER_EXIT_DENIED     (-6000)   /* PARCHE 138: llamada al sistema no permitida por su filtro (procesos aislados) */
+#define USER_EXIT_NOMEM      (-7000)   /* PARCHE 138: la region bajo demanda no pudo crecer (limite propio o reserva del sistema) */
+
+/* PARCHE 138: regiones de memoria PRESTADAS a un proceso (servicios aislados, ver sandbox.h).
+ * Los marcos los posee quien crea la region: el proceso solo los ve mapeados; al morir el proceso NO se liberan, para que el
+ * kernel pueda leer el resultado. Con demand=1 las paginas se reservan al primer acceso (fallo de pagina) hasta npages. */
+struct uregion {
+    uint64_t  va;            /* alineada a 4 KiB */
+    uint32_t  npages;
+    uint32_t  used;          /* paginas ya reservadas (demand) */
+    uint64_t  flags;         /* VMM_FLAG_* (siempre con USER; nunca W+X) */
+    uint64_t *frames;        /* npages entradas; 0 = sin reservar todavia */
+    int       demand;
+};
+#define USER_MAX_REGIONS 4
+struct uexec_spec {          /* PARCHE 138: opciones de usermode_exec_ex */
+    uint32_t        sysmask;           /* bit n = syscall n permitida (0 = las de siempre: todas) */
+    struct uregion *regions[USER_MAX_REGIONS];
+    int             nregions;
+    uint32_t        reserve_frames;    /* las regiones bajo demanda no crecen si el PMM bajaria de esto */
+};
+int usermode_exec_ex(const char *name, const void *img, size_t len, uint32_t max_ms, const struct uexec_spec *sp, int *err);
+int usermode_demand_fault(uint64_t cr2, uint64_t error_code);   /* 1 = pagina servida (reintentar la instruccion) */
+/* PARCHE 139: para la capa de servicios (sandbox.c) */
+int      usermode_cur_index(void);                    /* indice del proceso actual o -1 */
+void     usermode_set_deadline_cur(uint64_t abs_ms);  /* plazo absoluto del proceso actual */
+int      usermode_proc_alive(int idx);                /* 1 si sigue vivo (no terminado) */
+uint64_t usermode_proc_as(int idx);                   /* su espacio de direcciones (0 si no hay) */
+uint32_t usermode_proc_tid(int idx);                  /* tid de su hilo (0 si no hay) */
 
 #define USER_MAX_PROCS 8
 #define USER_STACK_PAGES 16     /* 64 KiB de pila de usuario */

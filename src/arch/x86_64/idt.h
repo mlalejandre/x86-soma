@@ -49,3 +49,6 @@ uint64_t timer_get_uptime_ms(void);
 void timer_sleep_ms(uint32_t ms);
 void pic_remap(void);
 void timer_init(uint32_t freq_hz);
+uint64_t idt_irq_count(int vector);        /* SOMA_158: interrupciones atendidas por vector (32..47, 255) */
+void idt_load(void);                       /* SOMA_159: carga la IDT comun en el nucleo que la llama */
+void idt_set_vector(uint8_t vec, void (*stub)(void));

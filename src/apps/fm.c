@@ -101,34 +101,84 @@ struct lib_ent {
 
 struct fm_undo { char from[FM_PATH]; char to[FM_PATH]; uint8_t store; };
 
-static struct fm_item file_list[MAX_FM_FILES];
-static int file_count = 0;
-static int selected_idx = -1;
-static int scroll_offset = 0;
-static enum fm_sort_mode sort_mode = FM_SORT_NAME_ASC;
-
-static char current_folder[FM_PATH] = "/workspace";
-static int  fm_view = FV_RAM;
-static int  fm_cat = 0;
-static char preview_text[256] = "";
-static char preview_extra[64] = "";
-
-static uint64_t last_click_time = 0;
-
-static enum fm_modal_mode modal_mode = FM_MODAL_NONE;
-static char modal_input[48] = "";
-static uint32_t modal_input_len = 0;
-static char modal_target[FM_PATH] = "";
-
-static char fm_filter[24] = "";
-static uint32_t fm_filter_len = 0;
-static int fm_search_active = 0;
-
-static char fm_msg[112] = "";
-static uint64_t fm_msg_until = 0;
-static char st_info[160] = "";
-static int g_vis_rows = 10;
-
+/* SOMA_214_ARCHIVOS: varias ventanas del explorador. Carpeta, lista, seleccion, orden, vista, filtro, historial, menus y
+ * dialogos viven en una instancia por ventana; la Biblioteca, el deshacer y la cache de miniaturas se comparten. */
+struct fm_hist { uint8_t view, cat; char path[FM_PATH]; };
+struct fm_crumb { int32_t x, w; uint8_t view, cat; const char *label; uint8_t llen; uint16_t plen; };
+struct fm_inst {
+    struct fm_item file_list[MAX_FM_FILES];
+    int file_count, selected_idx, scroll_offset;
+    enum fm_sort_mode sort_mode;
+    char current_folder[FM_PATH];
+    int fm_view, fm_cat;
+    char preview_text[256], preview_extra[64];
+    uint64_t last_click_time;
+    enum fm_modal_mode modal_mode;
+    char modal_input[48]; uint32_t modal_input_len; char modal_target[FM_PATH];
+    char fm_filter[24]; uint32_t fm_filter_len; int fm_search_active;
+    char fm_msg[112]; uint64_t fm_msg_until; char st_info[160];
+    int g_vis_rows;
+    int fm_mode, fm_reveal, fm_hover, fm_hover_ui, fm_hover_side, fm_sb_drag, fm_sb_grab;
+    int fm_ctx_open, fm_ctx_kind, fm_ctx_hover; int32_t fm_ctx_x, fm_ctx_y;
+    int g_vis_cols;
+    struct fm_hist fm_histv[16]; int fm_hn, fm_hpos;
+    struct fm_crumb crumbs[24]; int ncr, cr_first;
+};
+#define FM_INST_MAX 8
+static void fm_inst_defaults(struct fm_inst *p)
+{
+    char *b = (char *)p; for (size_t i = 0; i < sizeof *p; ++i) b[i] = 0;
+    p->selected_idx = -1; p->sort_mode = FM_SORT_NAME_ASC;
+    const char *w = "/workspace"; int k = 0; while (w[k]) { p->current_folder[k] = w[k]; k++; } p->current_folder[k] = 0;
+    p->fm_view = FV_RAM; p->modal_mode = FM_MODAL_NONE; p->g_vis_rows = 10;
+    p->fm_hover = -1; p->fm_hover_ui = -1; p->fm_hover_side = -1; p->fm_ctx_hover = -1; p->g_vis_cols = 1; p->fm_hpos = -1;
+}
+static struct fm_inst fm_inst1;
+static struct fm_inst *fm_insts[FM_INST_MAX + 1] = { 0, &fm_inst1 };
+static int fm_iused[FM_INST_MAX + 1], fm_iready;
+static struct fm_inst *FMI = &fm_inst1;
+static void fm_iboot(void) { if (!fm_iready) { fm_iready = 1; fm_inst_defaults(&fm_inst1); } }
+#define file_list (FMI->file_list)
+#define file_count (FMI->file_count)
+#define selected_idx (FMI->selected_idx)
+#define scroll_offset (FMI->scroll_offset)
+#define sort_mode (FMI->sort_mode)
+#define current_folder (FMI->current_folder)
+#define fm_view (FMI->fm_view)
+#define fm_cat (FMI->fm_cat)
+#define preview_text (FMI->preview_text)
+#define preview_extra (FMI->preview_extra)
+#define last_click_time (FMI->last_click_time)
+#define modal_mode (FMI->modal_mode)
+#define modal_input (FMI->modal_input)
+#define modal_input_len (FMI->modal_input_len)
+#define modal_target (FMI->modal_target)
+#define fm_filter (FMI->fm_filter)
+#define fm_filter_len (FMI->fm_filter_len)
+#define fm_search_active (FMI->fm_search_active)
+#define fm_msg (FMI->fm_msg)
+#define fm_msg_until (FMI->fm_msg_until)
+#define st_info (FMI->st_info)
+#define g_vis_rows (FMI->g_vis_rows)
+#define fm_mode (FMI->fm_mode)
+#define fm_reveal (FMI->fm_reveal)
+#define fm_hover (FMI->fm_hover)
+#define fm_hover_ui (FMI->fm_hover_ui)
+#define fm_hover_side (FMI->fm_hover_side)
+#define fm_sb_drag (FMI->fm_sb_drag)
+#define fm_sb_grab (FMI->fm_sb_grab)
+#define fm_ctx_open (FMI->fm_ctx_open)
+#define fm_ctx_kind (FMI->fm_ctx_kind)
+#define fm_ctx_hover (FMI->fm_ctx_hover)
+#define fm_ctx_x (FMI->fm_ctx_x)
+#define fm_ctx_y (FMI->fm_ctx_y)
+#define g_vis_cols (FMI->g_vis_cols)
+#define fm_histv (FMI->fm_histv)
+#define fm_hn (FMI->fm_hn)
+#define fm_hpos (FMI->fm_hpos)
+#define crumbs (FMI->crumbs)
+#define ncr (FMI->ncr)
+#define cr_first (FMI->cr_first)
 static int fm_big_state = 0;       /* 0 sin probar, 1 montado, 2 sin formatear, 3 error */
 static int fm_big_err = 0;
 
@@ -621,12 +671,14 @@ static void fm_goto(int view, const char *path, int cat) {
 }
 
 void fm_init(void) {
+    fm_iboot();
     modal_mode = FM_MODAL_NONE;
     fm_msg[0] = '\0';
     fm_goto(FV_RAM, "/workspace", 0);
 }
 
 void fm_open_folder(const char *folder) {
+    fm_iboot();
     modal_mode = FM_MODAL_NONE;
     if (!folder || !*folder) { fm_goto(FV_RAM, current_folder, 0); return; }
     if (folder[0] == '@') {
@@ -724,17 +776,8 @@ static void fm_update_preview(int idx) {
  *  - menu contextual bajo el puntero, resalte al pasar el raton, rueda y barra de desplazamiento arrastrable
  * Toda la logica de archivos (RamFS, BIGFS, Biblioteca, organizar, deshacer, portapapeles) es la de antes.
  * ==================================================================== */
-static int  fm_mode = 0;                 /* 0 lista, 1 iconos */
-static int  fm_reveal = 0;               /* hay que desplazar para que se vea la seleccion */
-static int  fm_hover = -1;               /* elemento bajo el puntero */
-static int  fm_hover_ui = -1;            /* boton bajo el puntero (FB_*) */
-static int  fm_hover_side = -1;
-static int  fm_sb_drag = 0, fm_sb_grab = 0;
-static int  fm_ctx_open = 0, fm_ctx_kind = 0, fm_ctx_hover = -1;   /* kind: 0 elemento, 1 fondo */
-static int32_t fm_ctx_x = 0, fm_ctx_y = 0;
 static int32_t fm_mx = -1, fm_my = -1;
 static int  fm_prev_left = 0, fm_swallow = 0;
-static int  g_vis_cols = 1;
 
 static void fm_set_sel(int idx) {
     selected_idx = idx;
@@ -743,9 +786,6 @@ static void fm_set_sel(int idx) {
 }
 
 /* ---- historial de navegacion ---- */
-struct fm_hist { uint8_t view, cat; char path[FM_PATH]; };
-static struct fm_hist fm_hist[16];
-static int fm_hn = 0, fm_hpos = -1;
 static int fm_hist_same(const struct fm_hist *h) {
     if (h->view != fm_view) return 0;
     if (fm_view == FV_CAT) return h->cat == fm_cat;
@@ -753,17 +793,17 @@ static int fm_hist_same(const struct fm_hist *h) {
     return str_eq(h->path, current_folder);
 }
 static void fm_hist_sync(void) {
-    if (fm_hpos >= 0 && fm_hist_same(&fm_hist[fm_hpos])) return;
-    if (fm_hpos + 1 >= 16) { for (int i = 1; i < 16; ++i) fm_hist[i - 1] = fm_hist[i]; fm_hpos--; }
+    if (fm_hpos >= 0 && fm_hist_same(&fm_histv[fm_hpos])) return;
+    if (fm_hpos + 1 >= 16) { for (int i = 1; i < 16; ++i) fm_histv[i - 1] = fm_histv[i]; fm_hpos--; }
     fm_hpos++; fm_hn = fm_hpos + 1;
-    struct fm_hist *h = &fm_hist[fm_hpos];
+    struct fm_hist *h = &fm_histv[fm_hpos];
     h->view = (uint8_t)fm_view; h->cat = (uint8_t)fm_cat; str_copy(h->path, current_folder, sizeof(h->path));
 }
 static void fm_hist_go(int d) {
     int np = fm_hpos + d;
     if (np < 0 || np >= fm_hn) return;
     fm_hpos = np;
-    struct fm_hist *h = &fm_hist[np];
+    struct fm_hist *h = &fm_histv[np];
     if (h->view == FV_RAM || h->view == FV_BIG) fm_goto(h->view, h->path, 0); else fm_goto(h->view, 0, h->cat);
 }
 
@@ -1069,9 +1109,6 @@ static int side_hit(const struct fl *L, int32_t mx, int32_t my) {
 }
 
 /* migas de pan */
-struct fm_crumb { int32_t x, w; uint8_t view, cat; const char *label; uint8_t llen; uint16_t plen; };
-static struct fm_crumb crumbs[24];
-static int ncr = 0, cr_first = 0;
 static void fm_build_crumbs(const struct fl *L) {
     ncr = 0;
     struct fm_crumb *c;
@@ -2325,4 +2362,90 @@ int fm_clip_op(int op) {
     lib_dirty = 1;
     fm_reload();
     return 1;
+}
+
+
+#undef file_list
+#undef file_count
+#undef selected_idx
+#undef scroll_offset
+#undef sort_mode
+#undef current_folder
+#undef fm_view
+#undef fm_cat
+#undef preview_text
+#undef preview_extra
+#undef last_click_time
+#undef modal_mode
+#undef modal_input
+#undef modal_input_len
+#undef modal_target
+#undef fm_filter
+#undef fm_filter_len
+#undef fm_search_active
+#undef fm_msg
+#undef fm_msg_until
+#undef st_info
+#undef g_vis_rows
+#undef fm_mode
+#undef fm_reveal
+#undef fm_hover
+#undef fm_hover_ui
+#undef fm_hover_side
+#undef fm_sb_drag
+#undef fm_sb_grab
+#undef fm_ctx_open
+#undef fm_ctx_kind
+#undef fm_ctx_hover
+#undef fm_ctx_x
+#undef fm_ctx_y
+#undef g_vis_cols
+#undef fm_histv
+#undef fm_hn
+#undef fm_hpos
+#undef crumbs
+#undef ncr
+#undef cr_first
+
+/* SOMA_214_ARCHIVOS: instancias */
+int fm_inst_new(void)
+{
+    fm_iboot();
+    for (int k = 1; k <= FM_INST_MAX; ++k) {
+        if (fm_iused[k]) continue;
+        if (!fm_insts[k]) { fm_insts[k] = (struct fm_inst *)kmalloc(sizeof(struct fm_inst)); if (!fm_insts[k]) return 0; }
+        fm_inst_defaults(fm_insts[k]);
+        fm_iused[k] = 1;
+        FMI = fm_insts[k];
+        return k;
+    }
+    return 0;
+}
+void fm_select(int slot) { fm_iboot(); if (slot >= 1 && slot <= FM_INST_MAX && fm_insts[slot]) FMI = fm_insts[slot]; }
+void fm_inst_drop(int slot)
+{
+    if (slot < 1 || slot > FM_INST_MAX || !fm_iused[slot]) return;
+    fm_iused[slot] = 0;
+    if (FMI == fm_insts[slot]) FMI = &fm_inst1;
+    if (slot != 1 && fm_insts[slot]) { kfree(fm_insts[slot]); fm_insts[slot] = 0; }
+}
+int fm_inst_find(const char *path)
+{
+    for (int k = 1; k <= FM_INST_MAX; ++k) {
+        if (!fm_iused[k] || !fm_insts[k] || !path) continue;
+        const char *a = fm_insts[k]->current_folder, *b = path;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b && fm_insts[k]->fm_view == FV_RAM) return k;
+    }
+    return 0;
+}
+const char *fm_inst_name(int slot)
+{
+    if (slot < 1 || slot > FM_INST_MAX || !fm_insts[slot]) return "";
+    struct fm_inst *p = fm_insts[slot];
+    if (p->fm_view == FV_LIB || p->fm_view == FV_CAT) return "Biblioteca";
+    const char *s = p->current_folder, *n = s;
+    for (; *s; ++s) if (*s == '/' && s[1]) n = s + 1;
+    if (p->fm_view == FV_BIG && (!n[0] || (n[0] == '/' && !n[1]))) return "Almacen";
+    return n[0] == '/' && !n[1] ? "/" : n;
 }

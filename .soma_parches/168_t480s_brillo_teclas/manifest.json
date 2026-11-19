@@ -1,0 +1,68 @@
+{
+  "created": {
+    "docs/PARCHE_168_T480S_BRILLO_TECLAS.md": "3ef88f5496990b7986179f9b877e6a3c6340d41092112ff68c2fb351ed13ff1b",
+    "src/arch/x86_64/backlight.c": "83927363ed12dbab00cfd9411bc11a82458e4fb94ef2e1a2730db6ca5f289f95",
+    "src/arch/x86_64/backlight.h": "d3421b21614191a02df9cb40e8e5e84d04cd43bae4f462216534a183857dbacb",
+    "src/arch/x86_64/backlight_core.h": "6a584d810f8e1d630afc8132e0e85b6e59d2bd6777bd876192f1050c7430fe97",
+    "tests/acpi_168_teclas.asl": "0dbdaa82e03d770c2fae2af8ee8ada3ebb8e766a62e053beaf2755afd3e5995f",
+    "tests/test_brillo_168.c": "967959bb751d9e4c6b09442df2b1921812ceb4c661c1aa9cda49418e4767a0a6"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "f3e1d481b2f2dadc1811eae30c4690a602bc0ca5220a4e4234b914b222518cc5",
+      "old": "bc17f670882237a8bce508a2db98198f8aa8ed8210f9ed5d11775190882043df"
+    },
+    "docs/PLAN_T480S.md": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "687d189b2f5a079bb519400cff58175c065e48e0bc535f52a19bb62224b95f50",
+      "old": "aebf88d098c0cbb902a6d7537ad25328b4bf8fb2dac468db60420dbb9828e4f2"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "386d5d23c6c29eecd76a96bb7fc20fc800d4ea23d77375403b7e7b0e266fb201",
+      "old": "c2669645f610f06afe9614d060f0b5197463cb5b282888067572404ce7eb309d"
+    },
+    "src/arch/x86_64/acpi_sys.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "c92206e0a88966e12c9a0acd0df9d4e4256c3e7f03c352abb7b915919320f1ff",
+      "old": "b877174553aa1f97e9216b740a7992a661b275b6c769f47f53e32cb6802ad238"
+    },
+    "src/arch/x86_64/acpi_sys.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "63e36272c769911ebe6e0e0f0fd1bba4b88fa7f0f8419b62fef9f83c7a6da383",
+      "old": "98d80019b8a6067f669534ed58a89db2798ba3aa53354949b873736355424089"
+    },
+    "src/arch/x86_64/hda.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "d2c67bd4f369682af1e07ee47a6371f1c4bac3ba6036355d462448578d69ae83",
+      "old": "b2ef5685942999b5a2ad30150971e391d003f38931f3b6ccad45aeaea591317d"
+    },
+    "src/arch/x86_64/hda.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "636fb17859caf40d6f7de7ff8e0316d5d6b9f814e5d67bf6891db15e9916f4b5",
+      "old": "b1798b29bdd0a85b7272c522f41cbad6fde1149eeecd8dc75a21dfc1e7ae2c8a"
+    },
+    "src/core/kernel.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "d7659b0432df9c78933c0ced58cf4c566e4a885763204a782abbfa46c387b48c",
+      "old": "744f8f5352a298a8a2ddf9ab406474eb450fb9ca1338f74075d41d4459edd8c2"
+    },
+    "src/ui/console.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "7ff5eb09f4031ff2b43a8f423003013f45e3f8f2cee10309e4c9be888a17774e",
+      "old": "077e6abaf72884090b976c75d2d5506155b30bd0f23f24960fbb148da2aaf03d"
+    }
+  },
+  "log": "20261115_234547 parche 168: brillo por la PWM del chipset Intel, consultas del EC (_Qxx), HKEY del ThinkPad, avisos de video, teclas de volumen, la tapa apaga la pantalla, orden brillo",
+  "version": 1
+}

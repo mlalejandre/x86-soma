@@ -1,0 +1,37 @@
+{
+  "created": {},
+  "date": "20261119_210131",
+  "files": {
+    "src/apps/codeedit.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "362e5a8af824e234038eafab8ef86f6f01836377489ceaf1758427d89cef2d5c",
+      "old": "2ac899cdec383e8ff4f1b019c8bc668ad067d7b33c418fa6a783261f812116fb"
+    },
+    "src/apps/codeedit.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "d6a123d4875408ccf92dafeec425ffc4d85dbe3f40be9ab8a6f0ec186737d0ea",
+      "old": "c404847af478bc54dbc0955c8763f3816bd747d9db7ca460da5e6fc564c6364a"
+    },
+    "src/apps/paint.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "33c67099e66da955dd7ccd6d89d229b142e56cf13f3a5975d6201c6c95f20c0d",
+      "old": "1541072d9508307eeecf51df8331c06d2e0d36e2005594d7b25070fa317fea29"
+    },
+    "src/apps/paint.h": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "5bd250bbf34d79c4026a35ff2f90c495665591c3cd45db02811bfe68e0f56174",
+      "old": "2a28591e12cd74bd3caaa0e80a52d286880bb6fd6839e4756cec958e8dacefef"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "a71b6dea122b7c3f15606de70a8e4c41c4efec012e3ad49301a6b9dcbc839ea9",
+      "old": "121b7c772e051da20512816dbfd0cc0c74662cb63b0822eb8ecb42260b71125a"
+    }
+  },
+  "name": "219_aviso_sin_guardar"
+}

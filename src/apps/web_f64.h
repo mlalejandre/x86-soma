@@ -48,7 +48,15 @@ f64 f64_atan2(f64 y, f64 x);
 f64 f64_asin(f64 a);
 f64 f64_acos(f64 a);
 f64 f64_parse(const char *s, const char **end);        /* decimal con signo y exponente; end = tras lo leido (NULL si nada) */
-int f64_to_str(f64 a, char *out, int radix);            /* formato JS Number#toString; devuelve longitud (out >= 64 bytes) */
+/* SOMA_200: tamanos de `out`. Estas funciones no reciben el tamano del bufer: quien llama debe reservar F64_STR_MAX bytes. Antes
+ * number_proto usaba 400 y (1e308).toString(2) escribe 1025; toExponential y toLocaleString aceptaban cualquier numero de decimales
+ * pedido por la pagina: tres desbordamientos de pila del nucleo alcanzables desde JavaScript.
+ *   f64_to_str base 10: <= 25 bytes; otra base: <= 1080 (1024 cifras + punto + 52 + signo)
+ *   f64_to_fixed / f64_to_precision: <= 130 con los decimales acotados a F64_DIGITS_MAX
+ *   f64_to_exponential: <= 780 (sin decimales pedidos escribe todas las cifras exactas de un denormal) */
+#define F64_STR_MAX    1200
+#define F64_DIGITS_MAX 100
+int f64_to_str(f64 a, char *out, int radix);            /* formato JS Number#toString; devuelve longitud */
 int f64_to_fixed(f64 a, int digits, char *out);         /* toFixed */
 int f64_to_precision(f64 a, int prec, char *out);       /* toPrecision */
 int f64_to_exponential(f64 a, int digits, char *out);   /* toExponential (digits<0: los necesarios) */

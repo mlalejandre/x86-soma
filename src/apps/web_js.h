@@ -46,6 +46,7 @@ int  wjs_dispatch(struct wjs *js, struct wnode *target, const char *type, int x,
 void wjs_fire_load(struct wjs *js);                    /* DOMContentLoaded + load */
 int  wjs_heap_used(struct wjs *js);
 int  wjs_halted(struct wjs *js);
+void wjs_gc_stats(struct wjs *js, uint32_t *collections, uint32_t *live_bytes);   /* SOMA 189: recolecciones hechas y bytes vivos */
 void wjs_set_url(struct wjs *js, const char *url);                 /* location tras un cambio de URL sin recarga (hash, pushState) */
 void wjs_set_script(struct wjs *js, struct wnode *n);   /* document.currentScript durante la ejecucion de un <script src> */
 #endif

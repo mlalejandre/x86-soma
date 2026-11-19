@@ -1,6 +1,8 @@
 /* SOMA_PARCHE_NAVEGADOR: puente DOM <-> JavaScript (document, elementos, estilo, almacenamiento, ventana). */
 #include "web_js_i.h"
 #include "web_net.h"
+#include "rng.h"
+#include "web_css.h"   /* SOMA_188: innerText usa el estilo calculado */
 
 struct wcss;
 int wc_query(struct wcss *c, struct wnode *root, const char *sel, struct wnode **out, int max, int first_only);
@@ -16,7 +18,8 @@ struct dom {
     jobj *p_node, *p_elem, *p_html, *p_doc, *p_text, *p_comment, *p_frag, *p_style, *p_cstyle, *p_dataset, *p_storage, *p_classlist, *p_nodelist;
     jobj *p_tag[WT_COUNT];
     jobj *local, *session;
-    char url[1100]; struct wnode *cur_script;
+    char url[WN_URL_MAX + 64]; struct wnode *cur_script; jobj *mo148_cb;
+    jobj *wraps;                   /* SOMA 189: todos los envoltorios de nodos (wnode->js esta fuera del monton JS: esta lista los mantiene vivos) */
 };
 #define DOM(rt) ((struct dom *)(rt)->dom)
 #define HOST(rt) ((rt)->host)
@@ -45,11 +48,38 @@ static jobj *wrap(struct jrt *rt, struct wnode *n)
     else if (n->type == WN_COMMENT) proto = d->p_comment;
     else if (n->name && n->name[0] == '#') proto = d->p_frag;
     else proto = (n->tag < WT_COUNT && d->p_tag[n->tag]) ? d->p_tag[n->tag] : d->p_html;
-    jobj *o = hostobj(rt, proto, HK_NODE, n, 0).u.o; n->js = o; return o;
+    jobj *o = hostobj(rt, proto, HK_NODE, n, 0).u.o; if (n->type == WN_DOC || (n->type == WN_ELEM && n->tag == WT_FORM)) o->flag |= 2; n->js = o;   /* SOMA_187A: flag 2 = acceso por nombre */
+    if (!d->wraps) d->wraps = js_arr_new(rt, 64);
+    js_arr_push(rt, d->wraps, jobjv(o));
+    return o;
 }
 static jv W(struct jrt *rt, struct wnode *n) { return n ? jobjv(wrap(rt, n)) : jnull(); }
+/* SOMA_148_NATIVE_MO_BRIDGE: notificacion tras setters C, sin
+ * ejecutar los callbacks del usuario hasta la cola de microtareas. */
+static void mo148_emit(struct jrt *rt, struct wnode *n, const char *type, const char *name, const char *old)
+{
+    struct dom *state = DOM(rt);
+    if (!state || !state->mo148_cb) return;
+    jv cb = jobjv(state->mo148_cb);
+    jv args[4] = { S(rt, type), W(rt, n), name ? S(rt, name) : jnull(), old ? S(rt, old) : jnull() };
+    (void)js_call(rt, cb, jundef(), args, 4);
+}
+static int mo148_diff(const char *a, const char *b)
+{
+    if (!a || !b) return a != b;
+    return !wu_streq(a, b);
+}
 static jstr *Kc(struct jrt *rt, const char *c);
 static int is_elem(const struct wnode *n);
+/* SOMA_188: listas sin tope de 1024 (childNodes, querySelectorAll, getElementsBy*...): bufer del tamano del documento */
+static struct wnode **nbuf(struct jrt *rt, int *cap)
+{
+    int c = (int)DOC(rt)->nodes + 64; if (c < 64) c = 64; if (c > 400000) c = 400000;
+    struct wnode **b = (struct wnode **)kmalloc((uint32_t)c * (uint32_t)sizeof *b);
+    if (!b) js_throw_err(rt, E_RANGE, "memoria agotada");
+    *cap = c; return b;
+}
+static jv nodelist_free(struct jrt *rt, struct wnode **ns, int n);
 static jv nodelist(struct jrt *rt, struct wnode **ns, int n)
 {
     jobj *a = js_arr_new(rt, (uint32_t)n); a->proto = DOM(rt)->p_nodelist;
@@ -127,10 +157,15 @@ static void dyn_put(struct jrt *rt, jobj *o, jstr *key, jv val)
     switch (o->u.host.kind) {
     case HK_STYLE:
         if (!css_key_ok(key->d)) return;
-        hyphenate(key->d, prop, sizeof prop); wc_set_inline(DOC(rt), n, prop, vs->len ? vs->d : ""); touch(rt); return;
+        hyphenate(key->d, prop, sizeof prop); const char *old_style = wd_attr(n, "style");
+        wc_set_inline(DOC(rt), n, prop, vs->len ? vs->d : "");
+        if (mo148_diff(old_style, wd_attr(n, "style"))) mo148_emit(rt, n, "attributes", "style", old_style);
+        touch(rt); return;
     case HK_DATASET:
         wu_copy(buf, "data-", sizeof buf); hyphenate(key->d, buf + 5, sizeof buf - 5);
-        wd_set_attr(DOC(rt), n, buf, dupn(rt, vs->d, vs->len)); touch(rt); return;
+        const char *old_data = wd_attr(n, buf);
+        wd_set_attr(DOC(rt), n, buf, dupn(rt, vs->d, vs->len));
+        mo148_emit(rt, n, "attributes", buf, old_data); touch(rt); return;
     case HK_STORAGE: storage_op(rt, is_local(o), key->d, vs->d, 1); return;
     default: return;
     }
@@ -139,8 +174,14 @@ static int dyn_del(struct jrt *rt, jobj *o, jstr *key)
 {
     char buf[600], prop[120]; struct wnode *n = (struct wnode *)o->u.host.p;
     switch (o->u.host.kind) {
-    case HK_STYLE: hyphenate(key->d, prop, sizeof prop); wc_set_inline(DOC(rt), n, prop, ""); touch(rt); return 1;
-    case HK_DATASET: wu_copy(buf, "data-", sizeof buf); hyphenate(key->d, buf + 5, sizeof buf - 5); wd_del_attr(n, buf); touch(rt); return 1;
+    case HK_STYLE: { hyphenate(key->d, prop, sizeof prop); const char *old = wd_attr(n, "style");
+        wc_set_inline(DOC(rt), n, prop, "");
+        if (mo148_diff(old, wd_attr(n, "style"))) mo148_emit(rt, n, "attributes", "style", old);
+        touch(rt); return 1; }
+    case HK_DATASET: { wu_copy(buf, "data-", sizeof buf); hyphenate(key->d, buf + 5, sizeof buf - 5);
+        const char *old = wd_attr(n, buf); wd_del_attr(n, buf);
+        if (old) mo148_emit(rt, n, "attributes", buf, old);
+        touch(rt); return 1; }
     case HK_STORAGE: storage_op(rt, is_local(o), key->d, 0, 2); return 1;
     default: return 1;
     }
@@ -165,7 +206,30 @@ static jobj *dyn_keys(struct jrt *rt, jobj *o)
     }
     return out;
 }
-static const struct jdyn DYN = { dyn_get, dyn_put, dyn_del, dyn_has, dyn_keys };
+/* SOMA_187A: acceso por nombre. document.f devuelve <form name="f"> (tambien <img>, <embed>, <iframe> con name) y form.q devuelve el control con name o id "q" */
+static jv dyn_named(struct jrt *rt, jobj *o, jstr *key, int *found)
+{
+    struct wnode *d = (struct wnode *)o->u.host.p;
+    if (!d || !key->len || key->d[0] == '@') return jundef();
+    int doc = d->type == WN_DOC;
+    if (!doc && !(d->type == WN_ELEM && d->tag == WT_FORM)) return jundef();
+    for (struct wnode *n = d->first; n; ) {
+        if (n->type == WN_ELEM) {
+            const char *nm = wd_attr(n, "name");
+            if (doc) { if ((n->tag == WT_FORM || n->tag == WT_IMG || n->tag == WT_EMBED || n->tag == WT_IFRAME) && nm && wu_streq(nm, key->d)) { *found = 1; return W(rt, n); } }
+            else if (n->tag == WT_INPUT || n->tag == WT_SELECT || n->tag == WT_TEXTAREA || n->tag == WT_BUTTON || n->tag == WT_IMG) {
+                const char *id = wd_attr(n, "id");
+                if ((nm && wu_streq(nm, key->d)) || (id && wu_streq(id, key->d))) { *found = 1; return W(rt, n); }
+            }
+        }
+        if (n->first) { n = n->first; continue; }
+        while (n && n != d && !n->next) n = n->parent;
+        if (!n || n == d) break;
+        n = n->next;
+    }
+    return jundef();
+}
+static const struct jdyn DYN = { dyn_get, dyn_put, dyn_del, dyn_has, dyn_keys, dyn_named };
 
 /* ------------------------------------------------------------ utilidades de nodos */
 static int script_is_js(const struct wnode *n)
@@ -190,6 +254,19 @@ static void run_scripts(struct jrt *rt, struct wnode *n)
     if (!(n->flags & WNF_INDOC)) return;
     if (n->tag == WT_SCRIPT && n->type == WN_ELEM) { run_script_node(rt, n); return; }
     for (struct wnode *c = n->first; c; c = c->next) run_scripts(rt, c);
+}
+/* SOMA_146: scripts parseados desde cadenas HTML son inertes; los scripts
+ * creados por document.createElement('script') siguen ejecutandose al insertarse. */
+static void mark_fragment_scripts_inert(struct wnode *root)
+{
+    struct wnode *n = root;
+    while (n) {
+        if (n->type == WN_ELEM && n->tag == WT_SCRIPT) n->sel = 1;
+        if (n->first) { n = n->first; continue; }
+        while (n && n != root && !n->next) n = n->parent;
+        if (!n || n == root) break;
+        n = n->next;
+    }
 }
 static void insert_node(struct jrt *rt, struct wnode *parent, struct wnode *c, struct wnode *ref)
 {
@@ -343,7 +420,11 @@ static void cl_edit(struct jrt *rt, struct wnode *n, const char *tok, uint32_t t
         wb_addn(&b, s, (uint32_t)(p - s));
     }
     if (add && !has) { if (b.len) wb_addc(&b, ' '); wb_addn(&b, tok, tl); }
-    wd_set_attr(DOC(rt), n, "class", dupn(rt, b.p ? b.p : "", b.len)); wb_free(&b); touch(rt);
+    if (cur ? mo148_diff(cur, b.p ? b.p : "") : (b.len != 0)) {
+        wd_set_attr(DOC(rt), n, "class", dupn(rt, b.p ? b.p : "", b.len));
+        mo148_emit(rt, n, "attributes", "class", cur); touch(rt);
+    }
+    wb_free(&b);
 }
 static void check_token(struct jrt *rt, jstr *t)
 {
@@ -354,7 +435,7 @@ static void check_token(struct jrt *rt, jstr *t)
 /* ------------------------------------------------------------ URLs y geometria */
 static jv abs_url(struct jrt *rt, const char *v)
 {
-    char out[1100]; const char *base = DOC(rt)->base[0] ? DOC(rt)->base : DOM(rt)->url;
+    char out[WN_URL_MAX + 64]; const char *base = DOC(rt)->base[0] ? DOC(rt)->base : DOM(rt)->url;
     if (!v || !*v) return S(rt, base);
     if (wn_url_resolve(base, v, out, sizeof out) != 0) return S(rt, v);
     return S(rt, out);
@@ -371,7 +452,7 @@ static void view_info(struct jrt *rt, int *w, int *h, int *sx, int *sy)
 }
 static jv link_part(struct jrt *rt, struct wnode *n, int which)
 {
-    jv h = abs_url(rt, wd_attr(n, "href")); struct wn_url u; char tmp[1100];
+    jv h = abs_url(rt, wd_attr(n, "href")); struct wn_url u; char tmp[WN_URL_MAX + 64];
     if (wn_url_parse(h.u.s->d, &u) != 0) return S(rt, "");
     switch (which) {
     case 0: wu_copy(tmp, u.scheme, sizeof tmp); wu_copy(tmp + wu_strlen(tmp), ":", 2); return S(rt, tmp);
@@ -420,8 +501,10 @@ static const struct attrdef ATTRS[] = {
 static jv attr_prop(struct jrt *rt, struct wnode *n, const struct attrdef *a, int argc, jv *args)
 {
     if (argc > 0) {
+        const char *old = wd_attr(n, a->attr);
         if (a->kind == AK_BOOL) { if (js_truthy(args[0])) wd_set_attr(DOC(rt), n, a->attr, ""); else wd_del_attr(n, a->attr); }
         else { jstr *s = js_tostr(rt, args[0]); wd_set_attr(DOC(rt), n, a->attr, dupn(rt, s->d, s->len)); }
+        if (old || wd_attr(n, a->attr)) mo148_emit(rt, n, "attributes", a->attr, old);
         touch(rt); return jundef();
     }
     const char *v = wd_attr(n, a->attr);
@@ -436,7 +519,7 @@ static jv attr_prop(struct jrt *rt, struct wnode *n, const struct attrdef *a, in
 /* ------------------------------------------------------------ propiedades de nodo */
 enum {
     P_NODETYPE = 1, P_NODENAME, P_NODEVALUE, P_PARENTNODE, P_PARENTELEMENT, P_CHILDNODES, P_FIRSTCHILD, P_LASTCHILD, P_NEXTSIB, P_PREVSIB, P_OWNERDOC, P_ISCONNECTED, P_TEXTCONTENT, P_BASEURI,
-    P_TAGNAME, P_LOCALNAME, P_ID, P_CLASSNAME, P_CHILDREN, P_FIRSTELEM, P_LASTELEM, P_NEXTELEM, P_PREVELEM, P_CHILDCOUNT, P_INNERHTML, P_OUTERHTML, P_INNERTEXT, P_CLASSLIST, P_STYLE, P_DATASET, P_ATTRIBUTES,
+    P_TAGNAME, P_LOCALNAME, P_NS, P_ID, P_CLASSNAME, P_CHILDREN, P_FIRSTELEM, P_LASTELEM, P_NEXTELEM, P_PREVELEM, P_CHILDCOUNT, P_INNERHTML, P_OUTERHTML, P_INNERTEXT, P_CLASSLIST, P_STYLE, P_DATASET, P_ATTRIBUTES,
     P_OFFSETW, P_OFFSETH, P_OFFSETT, P_OFFSETL, P_OFFSETPARENT, P_CLIENTW, P_CLIENTH, P_CLIENTT, P_CLIENTL, P_SCROLLW, P_SCROLLH, P_SCROLLT, P_SCROLLL, P_TABINDEX, P_HIDDEN, P_CONTENTEDITABLE, P_ISCE, P_SHADOWROOT,
     P_VALUE, P_CHECKED, P_DEFCHECKED, P_DEFVALUE, P_SELECTED, P_SELINDEX, P_OPTIONS, P_FORM, P_ELEMENTS, P_LENGTH, P_FILES, P_INDETERMINATE, P_SELSTART, P_SELEND, P_VALIDITY, P_WILLVALIDATE, P_TEXT, P_TYPE,
     P_LABELS, P_NATW, P_NATH, P_COMPLETE, P_CURRENTSRC, P_CONTENTWINDOW, P_CONTENTDOC, P_ROWS_UNUSED, P_VALUEASNUMBER, P_SELECTEDOPTIONS, P_INDEX, P_CELLS_UNUSED,
@@ -449,6 +532,66 @@ static jv text_of(struct jrt *rt, struct wnode *n)
     if (n->type == WN_TEXT || n->type == WN_COMMENT) return Sn(rt, n->name ? n->name : "", n->tlen);
     struct wb b = {0}; wd_text_content(n, &b); jv r = Sn(rt, b.p ? b.p : "", b.len); wb_free(&b); return r;
 }
+/* SOMA_188: innerText segun la maquetacion (algoritmo "rendered text collection" simplificado, como Chrome):
+   omite display:none, visibility:hidden, <script>/<style>/<template>; colapsa espacios segun white-space; saltos por
+   bloques (2 en <p>), <br>, tabuladores entre celdas; aplica text-transform. Sin estilo calculado: textContent. */
+struct itx { struct wb *b; int req; int ws_pending; };
+static void itx_flush(struct itx *x)
+{
+    if (x->req && x->b->len) { while (x->b->len && x->b->p[x->b->len - 1] == ' ') x->b->len--; for (int i = 0; i < x->req; i++) wb_addc(x->b, '\n'); }
+    x->req = 0;
+}
+static void itx_req(struct itx *x, int n) { if (n > x->req) x->req = n; }
+static void itx_text(struct itx *x, const struct wstyle *ps, const char *t, uint32_t n)
+{
+    int ws = ps ? ps->white_space : 0, tt = ps ? ps->text_transform : 0;
+    int pre = ws == WS_PRE || ws == WS_PRE_WRAP, keepnl = pre || ws == WS_PRE_LINE;
+    for (uint32_t i = 0; i < n; i++) {
+        char c = t[i];
+        if (!pre && (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f')) {
+            if (c == '\n' && keepnl) { x->ws_pending = 0; itx_flush(x); wb_addc(x->b, '\n'); continue; }
+            x->ws_pending = 1; continue;
+        }
+        if (c == '\r') continue;
+        if (x->req) { x->ws_pending = 0; itx_flush(x); }
+        if (x->ws_pending) { x->ws_pending = 0; if (x->b->len && x->b->p[x->b->len - 1] != '\n' && x->b->p[x->b->len - 1] != ' ' && x->b->p[x->b->len - 1] != '\t') wb_addc(x->b, ' '); }
+        if (tt == 1 && c >= 'a' && c <= 'z') c = (char)(c - 32); else if (tt == 2 && c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        else if (tt == 3 && c >= 'a' && c <= 'z' && (!x->b->len || x->b->p[x->b->len - 1] == ' ' || x->b->p[x->b->len - 1] == '\n')) c = (char)(c - 32);
+        wb_addc(x->b, c);
+    }
+}
+static void itx_walk(struct itx *x, struct wnode *n, int depth)
+{
+    if (depth > 400) return;
+    for (struct wnode *c = n->first; c; c = c->next) {
+        if (c->type == WN_TEXT) { const struct wstyle *ps = n->st; if (ps && ps->visibility) continue; if (c->tlen) itx_text(x, ps, c->name, c->tlen); continue; }
+        if (c->type != WN_ELEM) continue;
+        const struct wstyle *s = c->st;
+        if (!s || s->display == D_NONE) continue;
+        int t = c->tag;
+        if (t == WT_SCRIPT || t == WT_STYLE || t == WT_TEMPLATE || t == WT_HEAD || t == WT_NOSCRIPT) continue;
+        if (t == WT_BR) { x->ws_pending = 0; if (x->req) itx_flush(x); wb_addc(x->b, '\n'); continue; }
+        int d = s->display, blockish = d == D_BLOCK || d == D_LIST_ITEM || d == D_FLEX || d == D_GRID || d == D_TABLE || d == D_TABLE_CAPTION || d == D_TABLE_GROUP;
+        if (n->st && (n->st->display == D_FLEX || n->st->display == D_INLINE_FLEX || n->st->display == D_GRID)) blockish = 1;   /* hijos de flex/grid: bloques */
+        int rq = t == WT_P ? 2 : (blockish || d == D_TABLE_ROW) ? 1 : 0;
+        if (rq) { x->ws_pending = 0; itx_req(x, rq); }
+        if (c->tag == WT_INPUT || c->tag == WT_TEXTAREA || c->tag == WT_SELECT || c->tag == WT_IMG) { if (c->tag != WT_IMG && c->tag != WT_INPUT) {} }
+        else if (c->tag != WT_TEXTAREA) itx_walk(x, c, depth + 1);
+        if (rq) { x->ws_pending = 0; itx_req(x, rq); }
+        if (d == D_TABLE_CELL) { struct wnode *nx = c->next; while (nx && nx->type != WN_ELEM) nx = nx->next; if (nx) { x->ws_pending = 0; if (x->req) itx_flush(x); wb_addc(x->b, '\t'); } }
+    }
+}
+static jv inner_text(struct jrt *rt, struct wnode *n)
+{
+    if (n->type != WN_ELEM) return text_of(rt, n);
+    char tmp[16]; if (HOST(rt) && HOST(rt)->computed) HOST(rt)->computed(HOST(rt)->ud, n, "display", tmp, sizeof tmp);   /* estilo al dia */
+    if (!n->st || n->st->display == D_NONE || !(n->flags & WNF_INDOC) || n->tag == WT_SCRIPT || n->tag == WT_STYLE) return text_of(rt, n);
+    for (struct wnode *a = n->parent; a; a = a->parent) if (a->type == WN_ELEM && a->st && a->st->display == D_NONE) return text_of(rt, n);
+    struct wb b = {0}; struct itx x = { &b, 0, 0 };
+    itx_walk(&x, n, 0);
+    while (b.len && (b.p[b.len - 1] == ' ')) b.len--;   /* espacios finales colapsables */
+    jv r = Sn(rt, b.p ? b.p : "", b.len); wb_free(&b); return r;
+}
 static void set_text(struct jrt *rt, struct wnode *n, jstr *s)
 {
     if (n->type == WN_TEXT || n->type == WN_COMMENT) { n->name = dupn(rt, s->d, s->len); n->tlen = s->len; }
@@ -458,38 +601,56 @@ static void set_text(struct jrt *rt, struct wnode *n, jstr *s)
 static void set_inner_html(struct jrt *rt, struct wnode *n, jstr *s)
 {
     while (n->first) wd_remove(n->first);
-    if (s->len) wd_parse_fragment(DOC(rt), n, s->d, s->len);
+    if (s->len) {
+        wd_parse_fragment(DOC(rt), n, s->d, s->len);
+        for (struct wnode *k = n->first; k; k = k->next) mark_fragment_scripts_inert(k);
+    }
     touch(rt);
 }
 static jv doc_collect(struct jrt *rt, int kind)
 {
-    struct wnode *buf[1024]; int c = 0; struct wnode *r = DOC(rt)->root;
+    int cap; struct wnode **buf = nbuf(rt, &cap); int c = 0; struct wnode *r = DOC(rt)->root;
     switch (kind) {
-    case 0: collect_tag(r, "form", 0, buf, &c, 1024); break;
-    case 1: collect_tag(r, "img", 0, buf, &c, 1024); break;
-    case 2: { struct wnode *t[1024]; int n = 0; collect_tag(r, "a", 0, t, &n, 1024); for (int i = 0; i < n; i++) if (wd_attr(t[i], "href")) buf[c++] = t[i]; collect_tag(r, "area", 0, t, &n, 0); break; }
-    case 3: collect_tag(r, "script", 0, buf, &c, 1024); break;
-    case 4: collect_tag(r, "", 1, buf, &c, 1024); break;
-    case 5: collect_tag(r, "embed", 0, buf, &c, 1024); break;
+    case 0: collect_tag(r, "form", 0, buf, &c, cap); break;
+    case 1: collect_tag(r, "img", 0, buf, &c, cap); break;
+    case 2: { int n = 0; collect_tag(r, "a", 0, buf, &n, cap); for (int i = 0; i < n; i++) if (wd_attr(buf[i], "href")) buf[c++] = buf[i]; break; }
+    case 3: collect_tag(r, "script", 0, buf, &c, cap); break;
+    case 4: collect_tag(r, "", 1, buf, &c, cap); break;
+    case 5: collect_tag(r, "embed", 0, buf, &c, cap); break;
     }
-    return nodelist(rt, buf, c);
+    return nodelist_free(rt, buf, c);
 }
+/* SOMA_188: elemento del espacio de nombres SVG (<svg> o dentro, salvo <foreignObject>) */
+static int svg_ns(const struct wnode *n) { for (const struct wnode *a = n; a && a->type == WN_ELEM; a = a->parent) { if (a->tag == WT_SVG) return 1; if (a->name && wu_streq(a->name, "foreignobject")) return 0; } return 0; }
+static jv nodelist_free(struct jrt *rt, struct wnode **ns, int n) { jv r = nodelist(rt, ns, n); kfree(ns); return r; }
 static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
+    if (magic >= ATTR_BASE && !node_or_null(thisv) && thisv.t == JT_OBJ) {
+        /* SOMA 188B: los atributos reflejados viven todos en HTMLElement.prototype (en un navegador, cada uno en su interfaz: async solo en
+         * HTMLScriptElement). Un prototipo que hereda de HTMLElement y define un metodo con ese nombre (Polymer: proto.async = function) no
+         * debe tropezar con el setter: se crea la propiedad propia, como si el accesor no existiera para ese objeto. */
+        if (argc > 0) { js_def(rt, thisv.u.o, js_intern_c(rt, ATTRS[magic - ATTR_BASE].prop), ARG(0), 0); return jundef(); }
+        return jundef();
+    }
     struct wnode *n = tonode(rt, thisv); int set = argc > 0; jv a0 = ARG(0); struct dom *dm = DOM(rt);
     if (magic >= ATTR_BASE) return attr_prop(rt, n, &ATTRS[magic - ATTR_BASE], argc, args);
     if (magic >= P_LINK0 && magic < P_LINK0 + 8) { if (set) { wd_set_attr(DOC(rt), n, "href", dupn(rt, js_tostr(rt, a0)->d, js_tostr(rt, a0)->len)); touch(rt); return jundef(); } return link_part(rt, n, magic - P_LINK0); }
     switch (magic) {
     case P_NODETYPE: return jint(n == DOC(rt)->root ? 9 : is_frag(n) ? 11 : n->type);
-    case P_NODENAME: if (n->type == WN_ELEM && !is_frag(n)) { char u[64]; uint32_t i = 0; for (; n->name[i] && i < 62; i++) u[i] = (char)((n->name[i] >= 'a' && n->name[i] <= 'z') ? n->name[i] - 32 : n->name[i]); u[i] = 0; return S(rt, u); }
+    case P_NODENAME: if (n->type == WN_ELEM && !is_frag(n) && svg_ns(n)) return S(rt, n->name);
+        if (n->type == WN_ELEM && !is_frag(n)) { char u[64]; uint32_t i = 0; for (; n->name[i] && i < 62; i++) u[i] = (char)((n->name[i] >= 'a' && n->name[i] <= 'z') ? n->name[i] - 32 : n->name[i]); u[i] = 0; return S(rt, u); }
         return S(rt, n->type == WN_TEXT ? "#text" : n->type == WN_COMMENT ? "#comment" : n->type == WN_DOC ? "#document" : "#document-fragment");
-    case P_TAGNAME: { char u[64]; uint32_t i = 0; for (; n->name[i] && i < 62; i++) u[i] = (char)((n->name[i] >= 'a' && n->name[i] <= 'z') ? n->name[i] - 32 : n->name[i]); u[i] = 0; return S(rt, u); }
+    case P_NS: if (n->type != WN_ELEM || is_frag(n)) return jnull(); return S(rt, svg_ns(n) ? "http://www.w3.org/2000/svg" : "http://www.w3.org/1999/xhtml");   /* SOMA_188 */
+    case P_TAGNAME: if (svg_ns(n)) return S(rt, n->name); { char u[64]; uint32_t i = 0; for (; n->name[i] && i < 62; i++) u[i] = (char)((n->name[i] >= 'a' && n->name[i] <= 'z') ? n->name[i] - 32 : n->name[i]); u[i] = 0; return S(rt, u); }
     case P_LOCALNAME: return S(rt, n->name);
-    case P_NODEVALUE: if (set) { if (n->type == WN_TEXT || n->type == WN_COMMENT) set_text(rt, n, js_tostr(rt, a0)); return jundef(); } return (n->type == WN_TEXT || n->type == WN_COMMENT) ? text_of(rt, n) : jnull();
-    case P_PARENTNODE: return W(rt, n->parent);
-    case P_PARENTELEMENT: return (n->parent && n->parent->type == WN_ELEM) ? W(rt, n->parent) : jnull();
-    case P_CHILDNODES: { struct wnode *buf[1024]; int c = 0; for (struct wnode *k = n->first; k && c < 1024; k = k->next) buf[c++] = k; return nodelist(rt, buf, c); }
-    case P_CHILDREN: { struct wnode *buf[1024]; int c = 0; for (struct wnode *k = n->first; k && c < 1024; k = k->next) if (k->type == WN_ELEM) buf[c++] = k; return nodelist(rt, buf, c); }
+    case P_NODEVALUE: if (set) { if (n->type == WN_TEXT || n->type == WN_COMMENT) {
+            const char *old = n->name; set_text(rt, n, js_tostr(rt, a0));
+            mo148_emit(rt, n, "characterData", 0, old);
+        } return jundef(); } return (n->type == WN_TEXT || n->type == WN_COMMENT) ? text_of(rt, n) : jnull();
+    case P_PARENTNODE: return wd_is_shadow_root(n) ? jnull() : W(rt, n->parent);   /* SOMA_188: la raiz sombra no tiene padre */
+    case P_PARENTELEMENT: return (n->parent && n->parent->type == WN_ELEM && !wd_is_shadow_root(n) && !wd_is_shadow_root(n->parent)) ? W(rt, n->parent) : jnull();
+    case P_CHILDNODES: { int cap; struct wnode **buf = nbuf(rt, &cap); int c = 0; for (struct wnode *k = n->first; k && c < cap; k = k->next) buf[c++] = k; return nodelist_free(rt, buf, c); }
+    case P_CHILDREN: { int cap; struct wnode **buf = nbuf(rt, &cap); int c = 0; for (struct wnode *k = n->first; k && c < cap; k = k->next) if (k->type == WN_ELEM) buf[c++] = k; return nodelist_free(rt, buf, c); }
     case P_FIRSTCHILD: return W(rt, n->first);
     case P_LASTCHILD: return W(rt, n->last);
     case P_NEXTSIB: return W(rt, n->next);
@@ -502,16 +663,24 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case P_OWNERDOC: return n->type == WN_DOC ? jnull() : W(rt, DOC(rt)->root);
     case P_ISCONNECTED: return jbool((n->flags & WNF_INDOC) != 0);
     case P_BASEURI: return S(rt, DOC(rt)->base[0] ? DOC(rt)->base : dm->url);
-    case P_TEXTCONTENT: case P_INNERTEXT: if (set) { set_text(rt, n, js_tostr(rt, a0)); return jundef(); } if (n->type == WN_DOC) return jnull(); return text_of(rt, n);
-    case P_ID: if (set) { jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "id", dupn(rt, s->d, s->len)); touch(rt); return jundef(); } { const char *v = wd_attr(n, "id"); return S(rt, v ? v : ""); }
-    case P_CLASSNAME: if (set) { jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "class", dupn(rt, s->d, s->len)); touch(rt); return jundef(); } return class_get(rt, n);
+    case P_TEXTCONTENT: case P_INNERTEXT: if (set) { set_text(rt, n, js_tostr(rt, a0)); return jundef(); } if (n->type == WN_DOC) return jnull();
+        if (magic == P_INNERTEXT && !web_feat_off("innertext")) return inner_text(rt, n);   /* SOMA_188 (soma.innertext=off: como antes) */
+        return text_of(rt, n);
+    case P_ID: if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "id");
+        wd_set_attr(DOC(rt), n, "id", dupn(rt, s->d, s->len));
+        mo148_emit(rt, n, "attributes", "id", old); touch(rt); return jundef(); } { const char *v = wd_attr(n, "id"); return S(rt, v ? v : ""); }
+    case P_CLASSNAME: if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "class");
+        wd_set_attr(DOC(rt), n, "class", dupn(rt, s->d, s->len));
+        mo148_emit(rt, n, "attributes", "class", old); touch(rt); return jundef(); } return class_get(rt, n);
     case P_INNERHTML:
         if (set) { set_inner_html(rt, n, js_tostr(rt, a0)); return jundef(); }
         { struct wb b = {0}; wd_outer_html(n, &b, 1); jv r = Sn(rt, b.p ? b.p : "", b.len); wb_free(&b); return r; }
     case P_OUTERHTML:
         if (set) {
             struct wnode *p = n->parent; if (!p) return jundef(); jstr *s = js_tostr(rt, a0);
-            struct wnode *tmp = wd_new_elem(DOC(rt), "div", 3); wd_parse_fragment(DOC(rt), tmp, s->d, s->len);
+            struct wnode *tmp = wd_new_elem(DOC(rt), "div", 3);
+            if (!tmp) js_throw_err(rt, E_RANGE, "memoria agotada");
+            wd_parse_fragment(DOC(rt), tmp, s->d, s->len); mark_fragment_scripts_inert(tmp);
             while (tmp->first) { struct wnode *k = tmp->first; wd_remove(k); wd_insert_before(p, k, n); }
             wd_remove(n); touch(rt); return jundef();
         }
@@ -519,7 +688,9 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case P_CLASSLIST: { jobj *w = n->js; jv c = js_get(rt, jobjv(w), Kc(rt, "@@cl")); if (c.t == JT_OBJ) return c; c = hostobj(rt, dm->p_classlist, HK_CLASSLIST, n, 0); js_def(rt, w, Kc(rt, "@@cl"), c, 0); return c; }
     case P_STYLE: {
         jobj *w = n->js;
-        if (set) { jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "style", dupn(rt, s->d, s->len)); touch(rt); return jundef(); }
+        if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "style");
+            wd_set_attr(DOC(rt), n, "style", dupn(rt, s->d, s->len));
+            mo148_emit(rt, n, "attributes", "style", old); touch(rt); return jundef(); }
         jv c = js_get(rt, jobjv(w), Kc(rt, "@@st")); if (c.t == JT_OBJ) return c; c = hostobj(rt, dm->p_style, HK_STYLE, n, 1); js_def(rt, w, Kc(rt, "@@st"), c, 0); return c;
     }
     case P_DATASET: { jobj *w = n->js; jv c = js_get(rt, jobjv(w), Kc(rt, "@@ds")); if (c.t == JT_OBJ) return c; c = hostobj(rt, dm->p_dataset, HK_DATASET, n, 1); js_def(rt, w, Kc(rt, "@@ds"), c, 0); return c; }
@@ -535,13 +706,22 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     }
     case P_CLIENTT: case P_CLIENTL: return jint(0);
     case P_OFFSETPARENT: return (n->parent && n->parent->type == WN_ELEM) ? W(rt, DOC(rt)->body) : jnull();
-    case P_SCROLLT: case P_SCROLLL: if (set) { if (n == DOC(rt)->body || n == DOC(rt)->html) { int vw, vh, sx, sy; view_info(rt, &vw, &vh, &sx, &sy); if (HOST(rt)->scroll_to) HOST(rt)->scroll_to(HOST(rt)->ud, magic == P_SCROLLL ? (int)f64_to_i64(js_tonum(rt, a0)) : sx, magic == P_SCROLLT ? (int)f64_to_i64(js_tonum(rt, a0)) : sy); } return jundef(); }
+    case P_SCROLLT: case P_SCROLLL: if (set && magic == P_SCROLLT && n != DOC(rt)->body && n != DOC(rt)->html) { int64_t v = f64_to_i64(js_tonum(rt, a0)); n->scy = v < 0 ? 0 : v > 100000000 ? 100000000 : (int32_t)v; return jundef(); }
+        if (!set && magic == P_SCROLLT && n != DOC(rt)->body && n != DOC(rt)->html) return jint(n->scy);   /* SOMA_181: scrollTop de cajas con overflow */
+        if (set) { if (n == DOC(rt)->body || n == DOC(rt)->html) { int vw, vh, sx, sy; view_info(rt, &vw, &vh, &sx, &sy); if (HOST(rt)->scroll_to) HOST(rt)->scroll_to(HOST(rt)->ud, magic == P_SCROLLL ? (int)f64_to_i64(js_tonum(rt, a0)) : sx, magic == P_SCROLLT ? (int)f64_to_i64(js_tonum(rt, a0)) : sy); } return jundef(); }
         { int vw, vh, sx, sy; view_info(rt, &vw, &vh, &sx, &sy); if (n == DOC(rt)->body || n == DOC(rt)->html) return jint(magic == P_SCROLLT ? sy : sx); return jint(0); }
-    case P_TABINDEX: if (set) { wd_set_attr(DOC(rt), n, "tabindex", dupn(rt, js_tostr(rt, a0)->d, js_tostr(rt, a0)->len)); return jundef(); } { const char *v = wd_attr(n, "tabindex"); return jint(v ? wu_atoi(v) : ((n->tag == WT_A || n->tag == WT_INPUT || n->tag == WT_BUTTON || n->tag == WT_SELECT || n->tag == WT_TEXTAREA) ? 0 : -1)); }
-    case P_HIDDEN: if (set) { if (js_truthy(a0)) wd_set_attr(DOC(rt), n, "hidden", ""); else wd_del_attr(n, "hidden"); touch(rt); return jundef(); } return jbool(wd_attr(n, "hidden") != 0);
-    case P_CONTENTEDITABLE: if (set) { wd_set_attr(DOC(rt), n, "contenteditable", dupn(rt, js_tostr(rt, a0)->d, js_tostr(rt, a0)->len)); return jundef(); } { const char *v = wd_attr(n, "contenteditable"); return S(rt, v ? (*v ? v : "true") : "inherit"); }
+    case P_TABINDEX: if (set) { const char *old = wd_attr(n, "tabindex");
+        jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "tabindex", dupn(rt, s->d, s->len));
+        mo148_emit(rt, n, "attributes", "tabindex", old); return jundef(); } { const char *v = wd_attr(n, "tabindex"); return jint(v ? wu_atoi(v) : ((n->tag == WT_A || n->tag == WT_INPUT || n->tag == WT_BUTTON || n->tag == WT_SELECT || n->tag == WT_TEXTAREA) ? 0 : -1)); }
+    case P_HIDDEN: if (set) { const char *old = wd_attr(n, "hidden");
+        if (js_truthy(a0)) wd_set_attr(DOC(rt), n, "hidden", ""); else wd_del_attr(n, "hidden");
+        if (old || wd_attr(n, "hidden")) mo148_emit(rt, n, "attributes", "hidden", old);
+        touch(rt); return jundef(); } return jbool(wd_attr(n, "hidden") != 0);
+    case P_CONTENTEDITABLE: if (set) { const char *old = wd_attr(n, "contenteditable");
+        jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "contenteditable", dupn(rt, s->d, s->len));
+        mo148_emit(rt, n, "attributes", "contenteditable", old); return jundef(); } { const char *v = wd_attr(n, "contenteditable"); return S(rt, v ? (*v ? v : "true") : "inherit"); }
     case P_ISCE: { const char *v = wd_attr(n, "contenteditable"); return jbool(v && (!*v || wu_strieq(v, "true"))); }
-    case P_SHADOWROOT: return jnull();
+    case P_SHADOWROOT: { struct wnode *sr = n->shadow; const char *md = sr ? wd_attr(sr, "mode") : 0; return sr && !(md && wu_streq(md, "closed")) ? W(rt, sr) : jnull(); }   /* SOMA_188 */
     case P_VALUE: {
         if (n->tag == WT_LI || n->tag == WT_PROGRESS || n->tag == WT_METER) { const char *v = wd_attr(n, "value"); return jint(v ? wu_atoi(v) : 0); }
         if (set) { if (n->tag == WT_INPUT) { const char *t = wd_attr(n, "type"); if (t && wu_strieq(t, "file")) return jundef(); } set_ctl_value(rt, n, js_tostr(rt, a0)); return jundef(); }
@@ -564,16 +744,25 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case P_FORM: return W(rt, form_of(n));
     case P_ELEMENTS: { struct wnode *buf[512]; int c = 0; collect_controls(n, buf, &c, 512); return nodelist(rt, buf, c); }
     case P_LENGTH:
-        if (n->type == WN_TEXT || n->type == WN_COMMENT) return jint(n->tlen);
+        if (n->type == WN_TEXT || n->type == WN_COMMENT) return jint(js_u16len_n(n->name, n->tlen));      /* SOMA_185: unidades UTF-16 */
         if (n->tag == WT_SELECT) { struct wnode *o[256]; int c = 0; opt_collect(n, o, &c, 256); return jint(c); }
         { struct wnode *buf[512]; int c = 0; collect_controls(n, buf, &c, 512); return jint(c); }
     case P_FILES: return jobjv(js_arr_new(rt, 0));
     case P_SELSTART: case P_SELEND: { jv tmp = jundef(); const char *v = ctl_value(rt, n, &tmp); int len = (int)wu_strlen(v); if (set) { n->sel = (int32_t)f64_to_i64(js_tonum(rt, a0)); return jundef(); } return jint(n->sel > 0 && n->sel <= len ? n->sel : (magic == P_SELEND ? len : len)); }
     case P_VALIDITY: { jobj *o = js_obj_new(rt, rt->p_object); js_set_c(rt, o, "valid", jbool(1)); js_set_c(rt, o, "valueMissing", jbool(0)); return jobjv(o); }
     case P_WILLVALIDATE: return jbool(1);
-    case P_TEXT: if (set) { set_text(rt, n, js_tostr(rt, a0)); return jundef(); } return text_of(rt, n);
+    case P_TEXT:
+        if (n->type == WN_ELEM && n->tag != WT_A && n->tag != WT_SCRIPT && n->tag != WT_OPTION && n->tag != WT_TITLE && !web_feat_off("webcomp")) {
+            /* SOMA_188: 'text' solo existe en <a>, <script>, <option> y <title>; en otros es una propiedad normal
+               (lit-html asigna .text a componentes antes de mejorarlos: escribia el texto en el DOM visible) */
+            if (set) { js_def(rt, thisv.u.o, js_intern_c(rt, "text"), a0, JP_ENUM); return jundef(); }
+            return jundef();
+        }
+        if (set) { set_text(rt, n, js_tostr(rt, a0)); return jundef(); } return text_of(rt, n);
     case P_TYPE: {
-        if (set) { jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "type", dupn(rt, s->d, s->len)); touch(rt); return jundef(); }
+        if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "type");
+            wd_set_attr(DOC(rt), n, "type", dupn(rt, s->d, s->len));
+            mo148_emit(rt, n, "attributes", "type", old); touch(rt); return jundef(); }
         const char *v = wd_attr(n, "type"); char low[40]; if (v) lower_copy(v, wu_strlen(v), low, sizeof low);
         if (n->tag == WT_INPUT) return S(rt, v && *v ? low : "text");
         if (n->tag == WT_BUTTON) return S(rt, v && *v ? low : "submit");
@@ -598,7 +787,8 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case P_BODY: if (set) { struct wnode *b = node_or_null(a0); if (b && d->html) { if (d->body && d->body != b) { d->body->parent ? (void)wd_remove(d->body) : (void)0; } wd_append(d->html, b); d->body = b; touch(rt); } return jundef(); } return W(rt, d->body);
     case P_SCROLLINGEL: return W(rt, d->html);
     case P_TITLE: {
-        struct wnode *t = 0; struct wnode *buf[8]; int c = 0; collect_tag(d->root, "title", 0, buf, &c, 8); if (c) t = buf[0];
+        struct wnode *t = 0; struct wnode *buf[32]; int c = 0; collect_tag(d->root, "title", 0, buf, &c, 32);
+        for (int i = 0; i < c && !t; i++) { int sv = 0; for (struct wnode *a = buf[i]->parent; a; a = a->parent) if (a->tag == WT_SVG) { sv = 1; break; } if (!sv) t = buf[i]; }   /* SOMA_188 */
         if (set) {
             jstr *s = js_tostr(rt, a0);
             if (!t && d->head) { t = wd_new_elem(d, "title", 5); wd_append(d->head, t); }
@@ -670,7 +860,7 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case M_APPEND: insert_node(rt, n, tonode(rt, ARG(0)), 0); return ARG(0);
     case M_INSBEFORE: insert_node(rt, n, tonode(rt, ARG(0)), IS_NULLISH(ARG(1)) ? 0 : tonode(rt, ARG(1))); return ARG(0);
     case M_REMOVECHILD: { struct wnode *c = tonode(rt, ARG(0)); if (c->parent != n) js_throw_err(rt, E_ERROR, "NotFoundError: el nodo no es hijo de este nodo"); wd_remove(c); touch(rt); return ARG(0); }
-    case M_REPLACECHILD: { struct wnode *nc = tonode(rt, ARG(0)), *old = tonode(rt, ARG(1)); if (old->parent != n) js_throw_err(rt, E_ERROR, "NotFoundError: el nodo no es hijo de este nodo"); insert_node(rt, n, nc, old); if (old->parent == n) wd_remove(old); touch(rt); return ARG(1); }
+    case M_REPLACECHILD: { struct wnode *nc = tonode(rt, ARG(0)), *old = tonode(rt, ARG(1)); if (old->parent != n) js_throw_err(rt, E_ERROR, "NotFoundError: el nodo no es hijo de este nodo"); if (nc == old) return ARG(1); insert_node(rt, n, nc, old); if (old->parent == n) wd_remove(old); touch(rt); return ARG(1); }
     case M_CLONE: case M_IMPORT: { struct wnode *src = magic == M_CLONE ? n : tonode(rt, ARG(0)); struct wnode *c = wd_clone(DOC(rt), src, magic == M_CLONE ? js_truthy(ARG(0)) : js_truthy(ARG(1))); if (!c) return jnull(); clear_js(c); return W(rt, c); }
     case M_CONTAINS: { struct wnode *o = node_or_null(ARG(0)); return jbool(o && (o == n || wd_is_ancestor(n, o))); }
     case M_HASCHILD: return jbool(n->first != 0);
@@ -683,15 +873,16 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case M_HASATTRS: return jbool(n->attrs != 0);
     case M_ATTRNAMES: { jobj *a = js_arr_new(rt, 8); for (struct wattr *t = n->attrs; t; t = t->next) js_arr_push(rt, a, S(rt, t->name)); return jobjv(a); }
     case M_QS: case M_QSA: {
-        jstr *s = js_tostr(rt, ARG(0)); struct wnode *buf[1024]; int c = wc_query(css(rt), n, s->d, buf, magic == M_QS ? 1 : 1024, magic == M_QS);
-        if (magic == M_QS) return c ? W(rt, buf[0]) : jnull();
-        return nodelist(rt, buf, c);
+        jstr *s = js_tostr(rt, ARG(0));
+        if (magic == M_QS) { struct wnode *one[1]; int c1 = wc_query(css(rt), n, s->d, one, 1, 1); return c1 ? W(rt, one[0]) : jnull(); }
+        int cap; struct wnode **buf = nbuf(rt, &cap); int c = wc_query(css(rt), n, s->d, buf, cap, 0);
+        return nodelist_free(rt, buf, c);
     }
     case M_MATCHES: return jbool(is_elem(n) && wc_matches(css(rt), n, js_tostr(rt, ARG(0))->d));
     case M_CLOSEST: { jstr *s = js_tostr(rt, ARG(0)); for (struct wnode *p = n; p && p->type == WN_ELEM; p = p->parent) if (is_elem(p) && wc_matches(css(rt), p, s->d)) return W(rt, p); return jnull(); }
-    case M_BYTAG: { jstr *s = js_tostr(rt, ARG(0)); struct wnode *buf[1024]; int c = 0; lower_copy(s->d, s->len, low, sizeof low); collect_tag(n, low, wu_streq(low, "*"), buf, &c, 1024); return nodelist(rt, buf, c); }
-    case M_BYCLASS: { struct wnode *buf[1024]; int c = 0; collect_class(n, js_tostr(rt, ARG(0))->d, buf, &c, 1024); return nodelist(rt, buf, c); }
-    case M_BYNAME: { struct wnode *buf[1024]; int c = 0; collect_name(n, js_tostr(rt, ARG(0))->d, buf, &c, 1024); return nodelist(rt, buf, c); }
+    case M_BYTAG: { jstr *s = js_tostr(rt, ARG(0)); int cap; struct wnode **buf = nbuf(rt, &cap); int c = 0; lower_copy(s->d, s->len, low, sizeof low); collect_tag(n, low, wu_streq(low, "*"), buf, &c, cap); return nodelist_free(rt, buf, c); }
+    case M_BYCLASS: { jstr *cs = js_tostr(rt, ARG(0)); int cap; struct wnode **buf = nbuf(rt, &cap); int c = 0; collect_class(n, cs->d, buf, &c, cap); return nodelist_free(rt, buf, c); }
+    case M_BYNAME: { jstr *ns = js_tostr(rt, ARG(0)); int cap; struct wnode **buf = nbuf(rt, &cap); int c = 0; collect_name(n, ns->d, buf, &c, cap); return nodelist_free(rt, buf, c); }
     case M_RESET: reset_form(n); touch(rt); return jundef();
     case M_SUBMIT: if (HOST(rt)->submit) HOST(rt)->submit(HOST(rt)->ud, n); return jundef();
     case M_SELECT: n->sel = 0; return jundef();
@@ -719,12 +910,20 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
             wc_get_inline(sn, prop, buf, sizeof buf); return S(rt, buf);
         }
         if (thisv.u.o->u.host.kind == HK_CSTYLE) return jundef();
-        if (magic == M_STYLE_SET) { jstr *v = js_tostr(rt, ARG(1)); wc_set_inline(DOC(rt), sn, prop, v->len ? v->d : ""); touch(rt); return jundef(); }
-        wc_get_inline(sn, prop, buf, sizeof buf); wc_set_inline(DOC(rt), sn, prop, ""); touch(rt); return S(rt, buf);
+        if (magic == M_STYLE_SET) { jstr *v = js_tostr(rt, ARG(1)); const char *old = wd_attr(sn, "style");
+            wc_set_inline(DOC(rt), sn, prop, v->len ? v->d : "");
+            if (mo148_diff(old, wd_attr(sn, "style"))) mo148_emit(rt, sn, "attributes", "style", old);
+            touch(rt); return jundef(); }
+        wc_get_inline(sn, prop, buf, sizeof buf); const char *old = wd_attr(sn, "style");
+        wc_set_inline(DOC(rt), sn, prop, "");
+        if (mo148_diff(old, wd_attr(sn, "style"))) mo148_emit(rt, sn, "attributes", "style", old);
+        touch(rt); return S(rt, buf);
     }
     if (magic == M_CSSTEXT || magic == M_STYLE_LENGTH || magic == M_STYLE_ITEM) {
         struct wnode *sn = (struct wnode *)thisv.u.o->u.host.p; const char *cur = wd_attr(sn, "style");
-        if (magic == M_CSSTEXT) { if (argc > 0) { jstr *s = js_tostr(rt, args[0]); wd_set_attr(DOC(rt), sn, "style", dupn(rt, s->d, s->len)); touch(rt); return jundef(); } return S(rt, cur ? cur : ""); }
+        if (magic == M_CSSTEXT) { if (argc > 0) { jstr *s = js_tostr(rt, args[0]); const char *old = wd_attr(sn, "style");
+            wd_set_attr(DOC(rt), sn, "style", dupn(rt, s->d, s->len));
+            mo148_emit(rt, sn, "attributes", "style", old); touch(rt); return jundef(); } return S(rt, cur ? cur : ""); }
         int c = 0; char names[64][64]; const char *p = cur ? cur : "";
         while (*p && c < 64) { while (*p == ';' || wu_isspace(*p)) p++; const char *s = p; while (*p && *p != ':' && *p != ';') p++; uint32_t l = (uint32_t)(p - s); while (l && wu_isspace(s[l - 1])) l--; if (l && *p == ':') { if (l > 63) l = 63; memcpy(names[c], s, l); names[c][l] = 0; c++; } while (*p && *p != ';') p++; }
         if (magic == M_STYLE_LENGTH) return jint(c);
@@ -750,7 +949,9 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     }
     if (magic == M_CL_LENGTH || magic == M_CL_VALUE) {
         struct wnode *cn = (struct wnode *)thisv.u.o->u.host.p; const char *cur = wd_attr(cn, "class");
-        if (magic == M_CL_VALUE) { if (argc > 0) { jstr *s = js_tostr(rt, args[0]); wd_set_attr(DOC(rt), cn, "class", dupn(rt, s->d, s->len)); touch(rt); return jundef(); } return S(rt, cur ? cur : ""); }
+        if (magic == M_CL_VALUE) { if (argc > 0) { jstr *s = js_tostr(rt, args[0]); const char *old = wd_attr(cn, "class");
+            wd_set_attr(DOC(rt), cn, "class", dupn(rt, s->d, s->len));
+            mo148_emit(rt, cn, "attributes", "class", old); touch(rt); return jundef(); } return S(rt, cur ? cur : ""); }
         int c = 0; const char *p = cur ? cur : ""; while (*p) { while (wu_isspace(*p)) p++; const char *s = p; while (*p && !wu_isspace(*p)) p++; if (p > s) c++; } return jint(c);
     }
     /* almacenamiento */
@@ -770,7 +971,7 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 /* ------------------------------------------------------------ funciones globales internas (__xxx) y ventana */
 static jv g_resolve(struct jrt *rt, jv t, jv *args, int argc, int magic)
 {
-    char out[1100]; jstr *b = js_tostr(rt, ARG(0)), *r = js_tostr(rt, ARG(1));
+    char out[WN_URL_MAX + 64]; jstr *b = js_tostr(rt, ARG(0)), *r = js_tostr(rt, ARG(1));
     if (wn_url_resolve(b->d, r->d, out, sizeof out) != 0) return jstrv(r);
     return S(rt, out);
 }
@@ -778,14 +979,18 @@ static jv g_url(struct jrt *rt, jv t, jv *args, int argc, int magic) { return S(
 static jv g_nav(struct jrt *rt, jv t, jv *args, int argc, int magic)
 {
     jstr *u = js_tostr(rt, ARG(0)); int mode = (int)f64_to_i64(js_tonum(rt, ARG(1)));
-    if (mode == 2 || mode == 3) wu_copy(DOM(rt)->url, u->d, sizeof DOM(rt)->url);
     if (HOST(rt)->navigate) HOST(rt)->navigate(HOST(rt)->ud, u->d, mode);
+    /* SOMA_192: la URL que ve el script solo cambia si el navegador acepto el pushState/replaceState (el parche 191 rechaza los que
+     * salen del origen, pero document.URL y la base de las URL relativas se quedaban con la URL rechazada) */
+    if (mode == 2 || mode == 3) wu_copy(DOM(rt)->url, HOST(rt)->url && HOST(rt)->navigate ? HOST(rt)->url : u->d, sizeof DOM(rt)->url);
     return jundef();
 }
 static jv g_hist(struct jrt *rt, jv t, jv *args, int argc, int magic) { if (HOST(rt)->history) HOST(rt)->history(HOST(rt)->ud, (int)f64_to_i64(js_tonum(rt, ARG(0)))); return jundef(); }
 static jv g_ua(struct jrt *rt, jv t, jv *args, int argc, int magic) { return S(rt, HOST(rt)->ua ? HOST(rt)->ua : "SOMA"); }
 static jv g_alert(struct jrt *rt, jv t, jv *args, int argc, int magic) { if (HOST(rt)->alert) HOST(rt)->alert(HOST(rt)->ud, js_tostr(rt, ARG(0))->d); return jundef(); }
 static jv g_now(struct jrt *rt, jv t, jv *args, int argc, int magic) { return jnum(f64_from_i64((int64_t)web_now_ms())); }
+/* SOMA_192: crypto.getRandomValues/randomUUID piden aqui 32 bits al generador del nucleo (antes usaban Math.random). */
+static jv g_rnd32(struct jrt *rt, jv t, jv *args, int argc, int magic) { (void)rt; return jnum(f64_from_i64((int64_t)rng_u32())); }
 static jv g_scroll(struct jrt *rt, jv t, jv *args, int argc, int magic)
 {
     if (HOST(rt)->scroll_to) HOST(rt)->scroll_to(HOST(rt)->ud, (int)f64_to_i64(js_tonum(rt, ARG(0))), (int)f64_to_i64(js_tonum(rt, ARG(1))));
@@ -820,9 +1025,30 @@ static jv g_attrfn(struct jrt *rt, jv t, jv *args, int argc, int magic)
 static jv g_parsefrag(struct jrt *rt, jv t, jv *args, int argc, int magic)
 {
     jstr *h = js_tostr(rt, ARG(0)); struct wnode *f = wd_new_elem(DOC(rt), "#document-fragment", 18);
-    wd_parse_fragment(DOC(rt), f, h->d, h->len); return W(rt, f);
+    wd_parse_fragment(DOC(rt), f, h->d, h->len); mark_fragment_scripts_inert(f); return W(rt, f);
 }
 static jv g_activate(struct jrt *rt, jv t, jv *args, int argc, int magic) { struct wnode *n = tonode(rt, ARG(0)); if (HOST(rt)->activate) HOST(rt)->activate(HOST(rt)->ud, n); return jundef(); }
+/* SOMA_188: shadow DOM. La raiz es un nodo "#shadow-root" (nodeType 11) con parent = anfitrion, fuera de su lista de hijos */
+static jv g_attachshadow(struct jrt *rt, jv t, jv *args, int argc, int magic)
+{
+    struct wnode *h = tonode(rt, ARG(0)); jstr *mode = js_tostr(rt, ARG(1));
+    if (h->type != WN_ELEM) js_throw_err(rt, E_TYPE, "attachShadow sobre un nodo que no es elemento");
+    if (h->shadow) js_throw_err(rt, E_TYPE, "NotSupportedError: el elemento ya tiene una raiz sombra");
+    struct wnode *sr = wd_new_elem(DOC(rt), "#shadow-root", 12); if (!sr) js_throw_err(rt, E_RANGE, "memoria agotada");
+    sr->parent = h; h->shadow = sr; if (h->flags & WNF_INDOC) sr->flags |= WNF_INDOC;
+    wd_set_attr(DOC(rt), sr, "mode", dupn(rt, mode->d, mode->len));
+    touch(rt); return W(rt, sr);
+}
+/* SOMA_188: CSS de adoptedStyleSheets: se guarda en la raiz (sombra o documento) y scan_styles lo aplica (sin <style> visible en el DOM) */
+static jv g_adoptcss(struct jrt *rt, jv t, jv *args, int argc, int magic)
+{
+    struct wnode *n = node_or_null(ARG(0)); if (!n) return jundef();
+    jstr *css = js_tostr(rt, ARG(1));
+    wd_set_attr(DOC(rt), n, "#adopted", dupn(rt, css->d, css->len));
+    touch(rt); return jundef();
+}
+static jv g_feat(struct jrt *rt, jv t, jv *args, int argc, int magic) { jstr *n = js_tostr(rt, ARG(0)); char b[32]; uint32_t k = n->len < 31 ? n->len : 31; memcpy(b, n->d, k); b[k] = 0; return jbool(!web_feat_off(b)); }   /* SOMA_188 */
+static jv g_shadowhost(struct jrt *rt, jv t, jv *args, int argc, int magic) { struct wnode *n = node_or_null(ARG(0)); return n && wd_is_shadow_root(n) ? W(rt, n->parent) : jnull(); }
 static jv g_focus(struct jrt *rt, jv t, jv *args, int argc, int magic)
 {
     struct wnode *n = node_or_null(ARG(0)), *old = DOC(rt)->focus;
@@ -871,7 +1097,7 @@ static const struct pdef NODE_P[] = {
     { "textContent", P_TEXTCONTENT, 1 }, { "baseURI", P_BASEURI, 0 }, { 0, 0, 0 }
 };
 static const struct pdef ELEM_P[] = {
-    { "tagName", P_TAGNAME, 0 }, { "localName", P_LOCALNAME, 0 }, { "id", P_ID, 1 }, { "className", P_CLASSNAME, 1 }, { "children", P_CHILDREN, 0 }, { "firstElementChild", P_FIRSTELEM, 0 }, { "lastElementChild", P_LASTELEM, 0 },
+    { "tagName", P_TAGNAME, 0 }, { "localName", P_LOCALNAME, 0 }, { "namespaceURI", P_NS, 0 }, { "id", P_ID, 1 }, { "className", P_CLASSNAME, 1 }, { "children", P_CHILDREN, 0 }, { "firstElementChild", P_FIRSTELEM, 0 }, { "lastElementChild", P_LASTELEM, 0 },
     { "nextElementSibling", P_NEXTELEM, 0 }, { "previousElementSibling", P_PREVELEM, 0 }, { "childElementCount", P_CHILDCOUNT, 0 }, { "innerHTML", P_INNERHTML, 1 }, { "outerHTML", P_OUTERHTML, 1 }, { "innerText", P_INNERTEXT, 1 },
     { "classList", P_CLASSLIST, 0 }, { "style", P_STYLE, 1 }, { "dataset", P_DATASET, 0 }, { "attributes", P_ATTRIBUTES, 0 }, { "offsetWidth", P_OFFSETW, 0 }, { "offsetHeight", P_OFFSETH, 0 }, { "offsetTop", P_OFFSETT, 0 },
     { "offsetLeft", P_OFFSETL, 0 }, { "offsetParent", P_OFFSETPARENT, 0 }, { "clientWidth", P_CLIENTW, 0 }, { "clientHeight", P_CLIENTH, 0 }, { "clientTop", P_CLIENTT, 0 }, { "clientLeft", P_CLIENTL, 0 },
@@ -940,6 +1166,7 @@ void js_dom_init(struct jrt *rt)
     { jobj *hd = mkclass(rt, "HTMLDocument", d->p_doc); (void)hd; }
     jobj *cd = mkclass(rt, "CharacterData", d->p_node);
     d->p_text = mkclass(rt, "Text", cd); d->p_comment = mkclass(rt, "Comment", cd);
+    (void)mkclass(rt, "CDATASection", d->p_text); (void)mkclass(rt, "ProcessingInstruction", cd);   /* SOMA 188B: los parchea el polyfill ShadyDOM de YouTube */
     d->p_frag = mkclass(rt, "DocumentFragment", d->p_node);
     jobj *svg = mkclass(rt, "SVGElement", d->p_elem);
     static const struct { int tag; const char *name; } TAGS[] = {
@@ -967,6 +1194,10 @@ void js_dom_init(struct jrt *rt)
     reg_methods(rt, d->p_node, NODE_M); reg_methods(rt, d->p_elem, ELEM_M); reg_methods(rt, d->p_doc, DOC_M);
     reg_methods(rt, d->p_doc, (const struct mdef[]){ { "querySelector", M_QS, 1 }, { "querySelectorAll", M_QSA, 1 }, { "getElementsByTagName", M_BYTAG, 1 }, { "getElementsByClassName", M_BYCLASS, 1 }, { 0, 0, 0 } });
     reg_methods(rt, d->p_frag, (const struct mdef[]){ { "querySelector", M_QS, 1 }, { "querySelectorAll", M_QSA, 1 }, { "getElementById", M_BYID, 1 }, { 0, 0, 0 } });
+    {   /* SOMA 188B: mezcla ParentNode tambien en DocumentFragment y Document (YouTube: Array.from(fragment.children)) */
+        static const struct pdef PN[] = { { "children", P_CHILDREN, 0 }, { "firstElementChild", P_FIRSTELEM, 0 }, { "lastElementChild", P_LASTELEM, 0 }, { "childElementCount", P_CHILDCOUNT, 0 }, { 0, 0, 0 } };
+        reg_props(rt, d->p_frag, PN); reg_props(rt, d->p_doc, PN);
+    }
     js_method(rt, d->p_nodelist, "item", node_method, 1, M_ITEM); js_method(rt, d->p_nodelist, "namedItem", node_method, 1, M_NAMEDITEM);
     js_method(rt, d->p_style, "getPropertyValue", node_method, 1, M_STYLE_GET); js_method(rt, d->p_style, "setProperty", node_method, 3, M_STYLE_SET); js_method(rt, d->p_style, "removeProperty", node_method, 1, M_STYLE_REMOVE);
     js_method(rt, d->p_style, "item", node_method, 1, M_STYLE_ITEM); js_getter(rt, d->p_style, "cssText", node_method, node_method, M_CSSTEXT); js_getter(rt, d->p_style, "length", node_method, 0, M_STYLE_LENGTH);
@@ -992,11 +1223,16 @@ void js_dom_init(struct jrt *rt)
     js_def(rt, rt->global, js_intern_c(rt, "sessionStorage"), hostobj(rt, d->p_storage, HK_STORAGE, (void *)2, 1), 0);
     static const char *WP[] = { "innerWidth", "innerHeight", "outerWidth", "outerHeight", "scrollX", "scrollY", "pageXOffset", "pageYOffset", "devicePixelRatio" };
     for (int i = 0; i < 9; i++) js_getter(rt, rt->global, WP[i], win_prop, 0, i);
-    reg_g(rt, "__resolve", g_resolve, 2); reg_g(rt, "__url", g_url, 0); reg_g(rt, "__nav", g_nav, 2); reg_g(rt, "__hist", g_hist, 1); reg_g(rt, "__ua", g_ua, 0);
+    reg_g(rt, "__resolve", g_resolve, 2); reg_g(rt, "__url", g_url, 0); reg_g(rt, "__nav", g_nav, 2); reg_g(rt, "__rnd32", g_rnd32, 0); reg_g(rt, "__hist", g_hist, 1); reg_g(rt, "__ua", g_ua, 0);
     reg_g(rt, "__alert", g_alert, 1); reg_g(rt, "__now", g_now, 0); reg_g(rt, "__scrollTo", g_scroll, 2); reg_g(rt, "__fetch", g_fetch, 4); reg_g(rt, "__cstyle", g_cstyle, 1);
-    reg_g(rt, "__attrfn", g_attrfn, 2); reg_g(rt, "__parseFrag", g_parsefrag, 1); reg_g(rt, "__activate", g_activate, 1); reg_g(rt, "__focus", g_focus, 1); reg_g(rt, "__setready", g_setready, 1);
+    reg_g(rt, "__attrfn", g_attrfn, 2); reg_g(rt, "__parseFrag", g_parsefrag, 1); reg_g(rt, "__activate", g_activate, 1); reg_g(rt, "__focus", g_focus, 1); reg_g(rt, "__attachShadow", g_attachshadow, 2); reg_g(rt, "__shadowHost", g_shadowhost, 1); reg_g(rt, "__adoptCss", g_adoptcss, 2); reg_g(rt, "__feat", g_feat, 1); reg_g(rt, "__setready", g_setready, 1);
     /* prelude en JS */
     int ok = 0; jv r = js_eval_string(rt, WEB_PRELUDE, (uint32_t)wu_strlen(WEB_PRELUDE), &ok);
+    /* SOMA 148: capturar callback privado y borrar el gancho global. */
+    if (ok) { jv mo = js_get_c(rt, jobjv(rt->global), "__soma148MutationNotify");
+        if (js_is_callable(mo)) d->mo148_cb = mo.u.o;
+        (void)js_delete(rt, rt->global, Kc(rt, "__soma148MutationNotify"));
+    }
     if (!ok) { jstr *m = js_tostr(rt, js_get(rt, r, rt->s_message)); char b[300]; wu_copy(b, "prelude: ", sizeof b); wu_copy(b + 9, m->d, sizeof b - 9); js_log(rt, 2, b); }
 }
 
@@ -1011,7 +1247,25 @@ static const char *event_class(const char *t)
     if (wu_streq(t, "wheel")) return "WheelEvent";
     if (wu_streq(t, "input") || wu_streq(t, "beforeinput")) return "InputEvent";
     if (wu_streq(t, "submit")) return "SubmitEvent";
+    if (wu_starts(t, "transition")) return "TransitionEvent";   /* SOMA_188 */
+    if (wu_starts(t, "animation")) return "AnimationEvent";
     return "Event";
+}
+/* SOMA_187A: KeyboardEvent.code a partir de key (disposicion US): "h" -> "KeyH", "7" -> "Digit7", " " -> "Space", signos -> "Minus"... */
+static void key_code_name(const char *k, char *out, uint32_t max)
+{
+    out[0] = 0; if (!k || !k[0]) return;
+    if (!k[1]) {
+        char c = k[0];
+        if (c >= 'a' && c <= 'z') { wu_copy(out, "KeyX", max); out[3] = (char)(c - 32); return; }
+        if (c >= 'A' && c <= 'Z') { wu_copy(out, "KeyX", max); out[3] = c; return; }
+        if (c >= '0' && c <= '9') { wu_copy(out, "DigitX", max); out[5] = c; return; }
+        static const struct { char c; const char *n; } P[] = { { ' ', "Space" }, { '-', "Minus" }, { '=', "Equal" }, { ',', "Comma" }, { '.', "Period" }, { '/', "Slash" }, { ';', "Semicolon" },
+            { '\'', "Quote" }, { '[', "BracketLeft" }, { ']', "BracketRight" }, { '\\', "Backslash" }, { '`', "Backquote" }, { 0, 0 } };
+        for (int i = 0; P[i].n; i++) if (P[i].c == c) { wu_copy(out, P[i].n, max); return; }
+        return;
+    }
+    wu_copy(out, k, max);   /* Enter, Tab, Escape, ArrowUp... coinciden con key */
 }
 int js_dom_dispatch(struct jrt *rt, struct wnode *target, const char *type, int x, int y, int key, const char *keystr, int mods)
 {
@@ -1020,14 +1274,21 @@ int js_dom_dispatch(struct jrt *rt, struct wnode *target, const char *type, int 
     int nocancel = wu_streq(type, "focus") || wu_streq(type, "blur") || wu_streq(type, "focusin") || wu_streq(type, "focusout") || wu_streq(type, "load") || wu_streq(type, "scroll") || wu_streq(type, "input") || wu_streq(type, "change");
     jobj *init = js_obj_new(rt, rt->p_object); int vw, vh, sx, sy; view_info(rt, &vw, &vh, &sx, &sy);
     js_set_c(rt, init, "bubbles", jbool(!nobub)); js_set_c(rt, init, "cancelable", jbool(!nocancel));
+    { int nocomp = wu_streq(type, "load") || wu_streq(type, "scroll") || wu_streq(type, "error") || wu_streq(type, "change") || wu_streq(type, "mouseenter") || wu_streq(type, "mouseleave");
+      js_set_c(rt, init, "composed", jbool(!nocomp)); }   /* SOMA_188: eventos de usuario cruzan el shadow DOM, como en los navegadores */
     js_set_c(rt, init, "clientX", jint(x)); js_set_c(rt, init, "clientY", jint(y)); js_set_c(rt, init, "x", jint(x)); js_set_c(rt, init, "y", jint(y));
     js_set_c(rt, init, "pageX", jint(x + sx)); js_set_c(rt, init, "pageY", jint(y + sy)); js_set_c(rt, init, "screenX", jint(x)); js_set_c(rt, init, "screenY", jint(y));
     js_set_c(rt, init, "shiftKey", jbool(mods & 1)); js_set_c(rt, init, "ctrlKey", jbool(mods & 2)); js_set_c(rt, init, "altKey", jbool(mods & 4)); js_set_c(rt, init, "metaKey", jbool(mods & 8));
     if (cls[0] == 'K') {
         js_set_c(rt, init, "keyCode", jint(key)); js_set_c(rt, init, "which", jint(key)); js_set_c(rt, init, "key", S(rt, keystr ? keystr : ""));
-        js_set_c(rt, init, "code", S(rt, keystr && keystr[0] && !keystr[1] ? (keystr[0] >= '0' && keystr[0] <= '9' ? "Digit" : "Key") : (keystr ? keystr : "")));
-    } else if (cls[0] == 'I' && keystr) js_set_c(rt, init, "data", S(rt, keystr));
-    else if (cls[0] == 'M' || cls[0] == 'P') { js_set_c(rt, init, "button", jint(wu_streq(type, "contextmenu") ? 2 : 0)); js_set_c(rt, init, "buttons", jint(wu_streq(type, "mousedown") ? 1 : 0)); js_set_c(rt, init, "detail", jint(wu_streq(type, "dblclick") ? 2 : 1)); }
+        { char cb[24]; key_code_name(keystr, cb, sizeof cb); js_set_c(rt, init, "code", S(rt, cb)); }   /* SOMA_187A */
+    } else if (cls[0] == 'T' || cls[0] == 'A') {   /* SOMA_188: TransitionEvent/AnimationEvent: nombre en keystr, ms en key */
+        js_set_c(rt, init, cls[0] == 'T' ? "propertyName" : "animationName", S(rt, keystr ? keystr : ""));
+        js_set_c(rt, init, "elapsedTime", jnum(f64_div(f64_from_i64(key), f64_from_i64(1000))));
+    } else if (cls[0] == 'I') {   /* SOMA_187A: InputEvent con data e inputType */
+        if (keystr) js_set_c(rt, init, "data", S(rt, keystr));
+        js_set_c(rt, init, "inputType", S(rt, !keystr ? "deleteContentBackward" : (keystr[0] == '\n' || keystr[0] == '\r') ? "insertLineBreak" : "insertText"));
+    } else if (cls[0] == 'M' || cls[0] == 'P') { js_set_c(rt, init, "button", jint(wu_streq(type, "contextmenu") ? 2 : 0)); js_set_c(rt, init, "buttons", jint(wu_streq(type, "mousedown") ? 1 : 0)); js_set_c(rt, init, "detail", jint(wu_streq(type, "dblclick") ? 2 : 1)); }
     jv ctor = js_get_c(rt, jobjv(rt->global), cls);
     jv targs[2] = { S(rt, type), jobjv(init) };
     jv ev = js_construct(rt, ctor, targs, 2, 0);

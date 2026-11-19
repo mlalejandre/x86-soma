@@ -54,7 +54,7 @@ static inline void wr64(volatile uint8_t *b, uint32_t off, uint64_t v) { wr32(b,
 #define PG_HID0    (PG_DEV0 + 2 * XHCI_MAX_DEVS)          /* por dispositivo HID: anillo del extremo (+0) y buffer del informe (+1) */
 #define DMA_FRAMES (PG_HID0 + 2 * XHCI_MAX_HID)
 #define CMD_TRBS   64
-#define EV_TRBS    64
+#define EV_TRBS    256                       /* SOMA_178_T480S: la camara isocrona genera hasta 8000 eventos por segundo */
 #define EP_TRBS    64
 _Static_assert(CMD_TRBS * 16 <= 4096 && EV_TRBS * 16 <= 4096 && EP_TRBS * 16 <= 4096, "anillos mayores que una pagina");
 
@@ -91,6 +91,8 @@ static void delay_ms(uint32_t ms)
 static struct xhci_trb mbox[MBOX_N];
 static int mbox_n;
 static int hid_event(const struct xhci_trb *t);                                      /* 1 = evento de un extremo HID, ya atendido */
+static int cam_event(const struct xhci_trb *t);                                      /* SOMA_178_T480S: 1 = evento del extremo isocrono de la camara */
+static void cam_stop_hook(void);
 
 
 static void ev_pump(void)
@@ -99,7 +101,7 @@ static void ev_pump(void)
     struct xhci_trb t;
     while (xhci_ev_pop(&evr, &t)) {
         wr64(rt, 0x20 + 0x18, xhci_ev_deq_phys(&evr, pgp(PG_EVENT)) | (1u << 3));      /* ERDP + limpiar EHB */
-        if (TRB_GET_TYPE(t.d3) == TRB_EV_TRANSFER && hid_event(&t)) continue;
+        if (TRB_GET_TYPE(t.d3) == TRB_EV_TRANSFER && (hid_event(&t) || cam_event(&t))) continue;
         if (TRB_GET_TYPE(t.d3) == TRB_EV_PORT_CHG) continue;
         if (mbox_n == MBOX_N) { for (int i = 1; i < MBOX_N; i++) mbox[i - 1] = mbox[i]; mbox_n--; }
         mbox[mbox_n++] = t;
@@ -631,6 +633,10 @@ int xhci_hid_start(const struct xhci_info *o, struct xhci_hid_status *st)
 /* ---------------------------------------------------------------- PARCHE 052: arranque, diagnostico y hot-plug ---------------------------------- */
 static struct xhci_info g_xi;
 static volatile int rescan_busy, mon_run, mon_alive, poll_busy;
+static int msc_inflight(void);                                                    /* SOMA_162 */
+static int un_busy_flag(void);                                                    /* SOMA_171 */
+static void un_stop_hook(void);
+static void un_start_hook(const struct xhci_info *o);
 
 const struct xhci_info *xhci_last(void) { return &g_xi; }
 
@@ -663,10 +669,13 @@ static int usb_bring_up(void)
     usb_print_devs(&g_xi);
     if (xhci_hid_start(&g_xi, &hs) != 0) kprint("USB: xHCI activo, sin teclado ni raton HID conectado\n");
     else { kprint("USB: teclado/raton HID activos (teclados "); kprint_dec((uint32_t)hs.nkbd); kprint(", ratones "); kprint_dec((uint32_t)hs.nmouse); kprint(")\n"); }
-    if (xhci_msc_start(&g_xi, &mi) == 0) {
+    int msr = xhci_msc_start(&g_xi, &mi);
+    xhci_msc_report();                                                              /* SOMA_172B: que se probo y por que */
+    if (msr == 0) {
         kprint("USB: almacenamiento masivo "); kprint(mi.vendor); kprint(" "); kprint(mi.product); kprint(" | ");
         kprint_dec((uint32_t)(mi.sectors / 2048)); kprint(" MiB (usa 'blk' para registrarlo como usb0)\n");
     }
+    un_start_hook(&g_xi);                                                           /* SOMA_171_T480S: red por USB */
     return 0;
 }
 
@@ -683,8 +692,12 @@ int xhci_rescan(void)
 {
     if (__sync_lock_test_and_set(&rescan_busy, 1)) return -1;
     for (int i = 0; i < 400 && poll_busy; i++) thread_sleep(5);                       /* deja terminar una lectura de estado de hub en curso */
+    for (int i = 0; i < 2000 && msc_inflight(); i++) thread_sleep(5);                 /* SOMA_162: y una E/S del disco USB (el sistema de archivos) */
+    for (int i = 0; i < 400 && un_busy_flag(); i++) thread_sleep(5);           /* SOMA_171: y un envio por la red USB */
     xhci_hid_stop();
+    cam_stop_hook();                                                                  /* SOMA_178_T480S */
     msc_ready = 0;
+    un_stop_hook();
     int r = usb_bring_up();
     __sync_lock_release(&rescan_busy);
     return r;
@@ -730,10 +743,20 @@ static void usbmon_main(void *arg)
     thread_exit();
 }
 
+static int autostart_done;                                                          /* SOMA_162_T480S: el disco USB puede pedirlo antes */
+static void autostart_run(void);
+/* SOMA_162_T480S: antes de que exista el sistema de archivos (no mira /etc/nousb: vfs_read lo inicializaria sin disco) */
+void xhci_autostart_early(void) { if (autostart_done) return; autostart_done = 1; autostart_run(); }
 void xhci_autostart(void)
 {
+    if (autostart_done) return;
+    autostart_done = 1;
     char probe[8];
     if (vfs_read("/etc/nousb", probe, sizeof probe) > 0) { kprint("USB: arranque automatico omitido (/etc/nousb)\n"); return; }
+    autostart_run();
+}
+static void autostart_run(void)
+{
     rescan_busy = 1;
     int r = usb_bring_up();
     rescan_busy = 0;
@@ -756,6 +779,10 @@ static inline uint64_t mpp(int n) { return XHCI_BUS(mp(n)); }
 #define M_CTL 2
 
 int xhci_msc_ready(void) { return msc_ready; }
+static int msc_inflight(void) { return m.busy; }
+static volatile uint32_t msc_gen;                                     /* SOMA_162_T480S: sube cada vez que el disco USB se (re)inicia */
+uint32_t xhci_msc_generation(void) { return msc_gen; }
+int xhci_rescanning(void) { return rescan_busy; }
 const struct xhci_msc_info *xhci_msc_get(void) { return &m.info; }
 
 static int msc_recover(int in)
@@ -823,9 +850,34 @@ static void msc_sense_clear(void)
     msc_scsi(cdb, (uint8_t)l, 1, 18);
 }
 
+/* SOMA_172B: se prueban TODOS los dispositivos de almacenamiento, en orden: el T480s tiene un lector de tarjetas interno
+ * (0BDA:0316) que, vacio, falla; antes se probaba solo el primero y el pendrive quedaba sin usar. */
+static int msc_start_one(const struct xhci_info *o, int want, struct xhci_msc_info *out);
+struct msc_try_info { uint16_t vid, pid; int r; };
+static struct msc_try_info msc_tries[4]; static int msc_ntries;
+static int msc_dev_found = -1;
 int xhci_msc_start(const struct xhci_info *o, struct xhci_msc_info *out)
 {
-    msc_ready = 0;
+    msc_ntries = 0;
+    for (int k = 0; k < 4; k++) {
+        int r = msc_start_one(o, k, out);
+        if (r == E_NO_CTRL && msc_dev_found < 0) return k ? msc_tries[0].r : E_NO_CTRL;   /* no hay mas candidatos */
+        if (msc_ntries < 4) { msc_tries[msc_ntries].vid = o->dev[msc_dev_found].vid; msc_tries[msc_ntries].pid = o->dev[msc_dev_found].pid; msc_tries[msc_ntries].r = r; msc_ntries++; }
+        if (r == 0) return 0;
+    }
+    return msc_ntries ? msc_tries[0].r : E_NO_CTRL;
+}
+void xhci_msc_report(void)
+{
+    for (int i = 0; i < msc_ntries; i++) {
+        kprint("USB: almacenamiento "); kprint_hex16(msc_tries[i].vid); kprint(":"); kprint_hex16(msc_tries[i].pid);
+        kprint(msc_tries[i].r == 0 ? ": en uso como disco\n" : msc_tries[i].r == E_TIMEOUT ? ": sin medio o no responde (lector de tarjetas vacio?)\n" : ": no sirve - ");
+        if (msc_tries[i].r != 0 && msc_tries[i].r != E_TIMEOUT) { kprint(xhci_err_str(msc_tries[i].r)); kprint("\n"); }
+    }
+}
+static int msc_start_one(const struct xhci_info *o, int want, struct xhci_msc_info *out)
+{
+    msc_ready = 0; msc_dev_found = -1;
     if (!o->ready) return E_NO_CTRL;
     if (!mdma) {
         uintptr_t x = XHCI_DMA_ALLOC(MSC_PAGES); if (!x) return E_MEM;
@@ -836,6 +888,7 @@ int xhci_msc_start(const struct xhci_info *o, struct xhci_msc_info *out)
     for (int i = 0; i < 3; i++) { volatile uint8_t *z = mp(i); for (int k = 0; k < 4096; k++) z[k] = 0; }
     { volatile uint8_t *z = mdata; for (uint32_t k = 0; k < 65536; k++) z[k] = 0; }
     int dix = -1; const struct usb_dev_info *dv = 0; const struct usb_if_info *fi = 0; const struct usb_ep_info *ei = 0, *eo = 0;
+    int seen = 0;
     for (int d = 0; d < o->ndev && dix < 0; d++) {
         if (o->dev[d].err) continue;
         for (int k = 0; k < o->dev[d].n_if && k < 4 && dix < 0; k++) {
@@ -843,10 +896,11 @@ int xhci_msc_start(const struct xhci_info *o, struct xhci_msc_info *out)
             if (f->cls != 8 || f->sub != 6 || f->proto != 0x50) continue;                           /* SCSI transparente, Bulk-Only */
             const struct usb_ep_info *a = 0, *b = 0;
             for (int j = 0; j < f->n_ep; j++) if ((f->ep[j].attr & 3) == 2) { if (f->ep[j].addr & 0x80) a = &f->ep[j]; else b = &f->ep[j]; }
-            if (a && b) { dix = d; dv = &o->dev[d]; fi = f; ei = a; eo = b; }
+            if (a && b && seen++ == want) { dix = d; dv = &o->dev[d]; fi = f; ei = a; eo = b; }    /* SOMA_172B: el candidato numero 'want' */
         }
     }
     if (dix < 0) return E_NO_CTRL;
+    msc_dev_found = dix;
     m.slot = dv->slot; m.dev = (uint8_t)dix; m.iface = fi->num;
     m.in_addr = ei->addr; m.out_addr = eo->addr;
     m.in_dci = (uint8_t)((ei->addr & 0xF) * 2 + 1); m.out_dci = (uint8_t)((eo->addr & 0xF) * 2);
@@ -881,7 +935,7 @@ int xhci_msc_start(const struct xhci_info *o, struct xhci_msc_info *out)
     l = msc_cdb_rw10(cdb, 0, 0, 1);
     if ((r = msc_scsi(cdb, (uint8_t)l, 1, 512)) != 0) return r;
     for (int i = 0; i < 16; i++) m.info.sector0[i] = ((volatile uint8_t *)mdata)[i];
-    msc_ready = 1;
+    msc_ready = 1; msc_gen++;
     *out = m.info;
     return 0;
 }
@@ -889,26 +943,337 @@ int xhci_msc_start(const struct xhci_info *o, struct xhci_msc_info *out)
 int xhci_msc_read(uint64_t lba, uint32_t n, void *buf)
 {
     if (!msc_ready || n == 0 || n > 128 || lba >= m.info.sectors || n > m.info.sectors - lba || lba > 0xFFFFFFFFu) return E_XFER;
-    if (m.busy) return E_TIMEOUT;
-    m.busy = 1;
+    if (rescan_busy || __sync_lock_test_and_set(&m.busy, 1)) return E_TIMEOUT;   /* SOMA_162: atomico; nada durante una reexploracion */
     uint8_t cdb[16]; int l = msc_cdb_rw10(cdb, 0, (uint32_t)lba, (uint16_t)n);
     int r = msc_scsi(cdb, (uint8_t)l, 1, n * 512u);
     if (r == E_XFER) { msc_sense_clear(); r = msc_scsi(cdb, (uint8_t)l, 1, n * 512u); }              /* un reintento tras limpiar el estado */
     if (r == 0) for (uint32_t i = 0; i < n * 512u; i++) ((uint8_t *)buf)[i] = ((volatile uint8_t *)mdata)[i];
-    m.busy = 0;
+    __sync_lock_release(&m.busy);
     return r;
 }
 
-int xhci_msc_write(uint64_t lba, uint32_t n, const void *buf)
+static int msc_write(uint64_t lba, uint32_t n, const void *buf, int sync)
 {
     if (!msc_ready || n == 0 || n > 128 || lba >= m.info.sectors || n > m.info.sectors - lba || lba > 0xFFFFFFFFu) return E_XFER;
-    if (m.busy) return E_TIMEOUT;
-    m.busy = 1;
+    if (rescan_busy || __sync_lock_test_and_set(&m.busy, 1)) return E_TIMEOUT;
     for (uint32_t i = 0; i < n * 512u; i++) ((volatile uint8_t *)mdata)[i] = ((const uint8_t *)buf)[i];
     uint8_t cdb[16]; int l = msc_cdb_rw10(cdb, 1, (uint32_t)lba, (uint16_t)n);
     int r = msc_scsi(cdb, (uint8_t)l, 0, n * 512u);
     if (r == E_XFER) { msc_sense_clear(); r = msc_scsi(cdb, (uint8_t)l, 0, n * 512u); }
-    if (r == 0) { l = msc_cdb_sync10(cdb); msc_scsi(cdb, (uint8_t)l, 0, 0); }                         /* vaciar cache; si el dispositivo no la soporta, se ignora */
-    m.busy = 0;
+    if (r == 0 && sync) { l = msc_cdb_sync10(cdb); msc_scsi(cdb, (uint8_t)l, 0, 0); }                 /* vaciar cache; si el dispositivo no la soporta, se ignora */
+    __sync_lock_release(&m.busy);
     return r;
 }
+int xhci_msc_write(uint64_t lba, uint32_t n, const void *buf) { return msc_write(lba, n, buf, 1); }
+/* SOMA_162_T480S: sin SYNCHRONIZE CACHE tras cada escritura (el sistema de archivos la pide en sus barreras con xhci_msc_sync) */
+int xhci_msc_write_nosync(uint64_t lba, uint32_t n, const void *buf) { return msc_write(lba, n, buf, 0); }
+int xhci_msc_sync(void)
+{
+    if (!msc_ready) return E_XFER;
+    if (rescan_busy || __sync_lock_test_and_set(&m.busy, 1)) return E_TIMEOUT;
+    uint8_t cdb[16]; int l = msc_cdb_sync10(cdb);
+    int r = msc_scsi(cdb, (uint8_t)l, 0, 0);
+    if (r == E_XFER) { msc_sense_clear(); r = 0; }                                                   /* sin cache que vaciar: no es un error */
+    __sync_lock_release(&m.busy);
+    return r;
+}
+
+#if defined(__x86_64__) && !defined(XHCI_SECOND)
+/* ---------------------------------------------------------------- SOMA_171_T480S: red por USB (movil o adaptador) ---------------------------------
+ * El movil compartiendo su conexion por cable (Android: RNDIS o NCM) o un adaptador USB-Ethernet estandar (CDC-ECM). Se busca la
+ * funcion de red en todas las configuraciones del dispositivo, se configuran sus dos extremos bulk y se sondea como interfaz "usb0".
+ * Recepcion: UN_NRX transferencias de 16 KiB siempre en cola; poll recoge sus finalizaciones de la bandeja de eventos sin esperar.
+ * Envio: una transferencia por trama (RNDIS: con su cabecera; NCM: dentro de un NTB16), con un byte de relleno si la longitud es
+ * multiplo del tamano de paquete (como usbnet de Linux, para que el dispositivo vea el final). Protocolos: src/core/usbnet_proto.c. */
+#include "usbnet_proto.h"
+#include "netif.h"
+#include "bootfb.h"
+#define UN_NRX   4
+#define UN_BUF   16384
+#define UN_PAGES (3 + 4 + 4 + UN_NRX * 4 + 4)               /* anillos, control, envio (16 KiB), recepcion y relleno para alinear */
+static struct {
+    volatile int ready, busy, link;
+    int kind, dev; uint8_t slot, in_dci, out_dci, in_addr, out_addr, comm_if, data_if, cfg_value; uint16_t mps, vid, pid;
+    struct xhci_ring rin, rout; uint8_t mac[6]; uint32_t rid; struct ncm_params np; uint16_t seq;
+    uint8_t *mem, *ctl, *txb, *rxb[UN_NRX]; int rx_next;
+    uint32_t tx, rx, txe, rxe, stalls; uint64_t txbytes, rxbytes;
+    const char *why;
+} un = { .why = "no hay ningun dispositivo de red USB" };
+static uint8_t unq[24][1518]; static uint16_t unq_len[24]; static int unq_head, unq_n;
+static inline uint64_t un_phys(const void *p) { return XHCI_BUS((const uint8_t *)p); }
+
+static int un_ctrl(uint8_t rt, uint8_t req, uint16_t val, uint16_t idx, uint16_t len)   /* datos en un.ctl */
+{
+    uint64_t last = 0; struct xhci_trb ev; struct xhci_ring *r = &ep0r[un.dev]; uint64_t base = pgp(PG_DEV0 + 2 * un.dev + 1);
+    if (rt & 0x80) xhci_ctrl_in(r, base, rt, req, val, idx, len, un_phys(un.ctl), &last);
+    else if (!len) xhci_ctrl_nodata(r, base, rt, req, val, idx, &last);
+    else {
+        uint32_t d0 = (uint32_t)rt | ((uint32_t)req << 8) | ((uint32_t)val << 16), d1 = (uint32_t)idx | ((uint32_t)len << 16);
+        xhci_ring_push(r, base, d0, d1, 8, TRB_TYPE(TRB_SETUP) | (1u << 6) | (2u << 16));                    /* IDT, TRT = OUT */
+        xhci_ring_push(r, base, (uint32_t)un_phys(un.ctl), (uint32_t)(un_phys(un.ctl) >> 32), len, TRB_TYPE(TRB_DATA));   /* DIR = OUT */
+        last = xhci_ring_push(r, base, 0, 0, 0, TRB_TYPE(TRB_STATUS) | (1u << 5) | (1u << 16));               /* IOC, estado IN */
+    }
+    XHCI_MB();
+    wr32(db, 4u * un.slot, 1);
+    if (wait_event(TRB_EV_TRANSFER, last, un.slot, 1, &ev, 1500) != 0) return E_TIMEOUT;
+    uint8_t cc = (uint8_t)(ev.d2 >> 24);
+    if (cc == 1 || cc == 13) return 0;
+    /* STALL en EP0: se reinicia el extremo y se salta lo pendiente */
+    un.stalls++;
+    command(0, 0, TRB_TYPE(TRB_RESET_EP) | (1u << 16) | ((uint32_t)un.slot << 24), &ev);
+    uint64_t deq = base + (uint64_t)r->enq * 16u + (r->cycle ? 1u : 0u);
+    command((uint32_t)deq, (uint32_t)(deq >> 32), TRB_TYPE(TRB_SET_TR_DEQ) | (1u << 16) | ((uint32_t)un.slot << 24), &ev);
+    return E_XFER;
+}
+/* RNDIS: orden de control y su respuesta (se pregunta hasta que llega: no se usa el extremo de avisos) */
+static int un_rndis(uint32_t len, uint32_t type, uint32_t rid, const uint8_t **info, uint32_t *ilen)
+{
+    if (un_ctrl(0x21, 0x00, 0, un.comm_if, (uint16_t)len) != 0) return -1;     /* SEND_ENCAPSULATED_COMMAND */
+    for (int t = 0; t < 60; t++) {
+        delay_ms(t < 5 ? 2 : 20);
+        for (int i = 0; i < 64; i++) un.ctl[i] = 0;
+        if (un_ctrl(0xA1, 0x01, 0, un.comm_if, 1025) != 0) continue;            /* GET_ENCAPSULATED_RESPONSE */
+        uint32_t ml = (uint32_t)un.ctl[4] | (uint32_t)un.ctl[5] << 8 | (uint32_t)un.ctl[6] << 16 | (uint32_t)un.ctl[7] << 24;
+        uint32_t ty = (uint32_t)un.ctl[0] | (uint32_t)un.ctl[1] << 8 | (uint32_t)un.ctl[2] << 16 | (uint32_t)un.ctl[3] << 24;
+        if (!ml || ml > 1025) continue;
+        if (ty == RNDIS_MSG_KEEPALIVE) {                                           /* el dispositivo pregunta si seguimos: contestar */
+            uint32_t rr = (uint32_t)un.ctl[8] | (uint32_t)un.ctl[9] << 8 | (uint32_t)un.ctl[10] << 16 | (uint32_t)un.ctl[11] << 24;
+            uint8_t save[64]; for (int i = 0; i < 64; i++) save[i] = un.ctl[i]; (void)save;
+            uint32_t n = rndis_build_keepalive_cmplt(un.ctl, rr); un_ctrl(0x21, 0x00, 0, un.comm_if, (uint16_t)n);
+            continue;
+        }
+        if (ty == RNDIS_MSG_INDICATE) continue;
+        return rndis_parse_cmplt(un.ctl, ml, type, rid, info, ilen);
+    }
+    return -2;
+}
+static void un_queue_rx(int i)
+{
+    xhci_ring_push(&un.rin, un_phys(un.mem), (uint32_t)un_phys(un.rxb[i]), (uint32_t)(un_phys(un.rxb[i]) >> 32), UN_BUF,
+                   TRB_TYPE(TRB_NORMAL) | (1u << 2) | (1u << 5));                 /* ISP + IOC */
+}
+static void un_q_frame(const uint8_t *f, uint32_t n, void *u)
+{
+    (void)u;
+    if (n > 1518) return;
+    if (unq_n == 24) { unq_head = (unq_head + 1) % 24; unq_n--; un.rxe++; }
+    int k = (unq_head + unq_n) % 24;
+    for (uint32_t i = 0; i < n; i++) unq[k][i] = f[i];
+    unq_len[k] = (uint16_t)n; unq_n++;
+}
+
+static void un_stop(void) { un.ready = 0; un.link = 0; while (un.busy) thread_sleep(1); unq_n = 0; }
+
+static int un_start(const struct xhci_info *o)
+{
+    un.ready = 0; un.link = 0; un.why = "no hay ningun dispositivo de red USB"; unq_n = 0; unq_head = 0;
+    if (bootinfo_disabled("usbred")) { un.why = "desactivada (soma.usbred=off o modo seguro)"; return -1; }
+    if (!un.mem) {
+        uintptr_t x = XHCI_DMA_ALLOC(UN_PAGES); if (!x) { un.why = "sin memoria DMA"; return E_MEM; }
+        un.mem = (uint8_t *)x;                                                     /* pagina 0: anillo IN, 1: anillo OUT, 2: control */
+        un.ctl = un.mem + 2 * 4096;
+        uintptr_t a = (x + 3 * 4096 + UN_BUF - 1) & ~(uintptr_t)(UN_BUF - 1);      /* buffers de 16 KiB alineados: nunca cruzan 64 KiB */
+        un.txb = (uint8_t *)a;
+        for (int i = 0; i < UN_NRX; i++) un.rxb[i] = (uint8_t *)(a + (uintptr_t)(i + 1) * UN_BUF);
+    }
+    const char *force = 0;
+#ifdef SOMA_USBNET_FORCE
+    force = SOMA_USBNET_FORCE;                                                     /* solo pruebas en QEMU */
+#endif
+    if (bootinfo_has_option("soma.usbnet=rndis")) force = "R"; else if (bootinfo_has_option("soma.usbnet=ecm")) force = "E"; else if (bootinfo_has_option("soma.usbnet=ncm")) force = "N";
+    struct usbnet_fn fn; int found = -1;
+    for (int d = 0; d < o->ndev && found < 0; d++) {
+        const struct usb_dev_info *dv = &o->dev[d];
+        if (dv->err || dv->is_hub || !dv->slot) continue;
+        int maybe = 0;                                                             /* clases que pueden ser red (o compuestos) */
+        for (int k = 0; k < dv->n_if; k++) { uint8_t c = dv->ifs[k].cls; if (c == 2 || c == 0x0A || c == 0xE0 || c == 0xEF || c == 0xFF) maybe = 1; }
+        if (dv->cls == 2 || dv->cls == 0xEF || dv->cls == 0) maybe |= (dv->n_if == 0);
+        if (!maybe) continue;
+        un.dev = d; un.slot = dv->slot;
+        if (un_ctrl(0x80, 6, 0x0100, 0, 18) != 0) continue;
+        int ncfg = un.ctl[17]; if (ncfg < 1) ncfg = 1; if (ncfg > 4) ncfg = 4;
+        for (int c = 0; c < ncfg && found < 0; c++) {
+            if (un_ctrl(0x80, 6, (uint16_t)(0x0200 | c), 0, 9) != 0) continue;
+            uint32_t tot = (uint32_t)(un.ctl[2] | un.ctl[3] << 8); if (tot < 9) continue; if (tot > 2048) tot = 2048;
+            if (un_ctrl(0x80, 6, (uint16_t)(0x0200 | c), 0, (uint16_t)tot) != 0) continue;
+            static uint8_t cfgb[2048]; for (uint32_t i = 0; i < tot; i++) cfgb[i] = un.ctl[i];
+            if (!usbnet_find(cfgb, tot, &fn)) continue;
+            if (force && ((force[0] == 'R') != (fn.kind == USBNET_RNDIS) || (force[0] == 'E') != (fn.kind == USBNET_ECM) || (force[0] == 'N') != (fn.kind == USBNET_NCM)) && ncfg > 1) continue;
+            un.cfg_value = cfgb[5]; found = d;
+        }
+    }
+    if (found < 0) return -1;
+    const struct usb_dev_info *dv = &o->dev[found];
+    un.kind = fn.kind; un.vid = dv->vid; un.pid = dv->pid;
+    un.comm_if = fn.comm_if; un.data_if = fn.data_if; un.in_addr = fn.in_addr; un.out_addr = fn.out_addr;
+    un.in_dci = (uint8_t)((fn.in_addr & 0xF) * 2 + 1); un.out_dci = (uint8_t)((fn.out_addr & 0xF) * 2);
+    un.mps = fn.in_mps ? fn.in_mps : 512;
+    un.why = "fallo al configurar el dispositivo";
+    if (un_ctrl(0x00, 9, un.cfg_value, 0, 0) != 0) return E_XFER;                 /* SET_CONFIGURATION */
+    xhci_ring_init(&un.rin, (struct xhci_trb *)un.mem, EP_TRBS, un_phys(un.mem));
+    xhci_ring_init(&un.rout, (struct xhci_trb *)(un.mem + 4096), EP_TRBS, un_phys(un.mem + 4096));
+    zero_ctx(pg(PG_INCTX), 4096);
+    xhci_build_cfg_bulk_input(pg(PG_INCTX), csz == 64, pg(PG_DEV0 + 2 * found), un.in_dci, un.out_dci, un.mps, un_phys(un.mem), un_phys(un.mem + 4096));
+    struct xhci_trb ev;
+    if (command((uint32_t)pgp(PG_INCTX), (uint32_t)(pgp(PG_INCTX) >> 32), TRB_TYPE(TRB_CONFIG_EP) | ((uint32_t)un.slot << 24), &ev) != 0) { un.why = "el controlador no acepto los extremos"; return E_CMD; }
+    un.link = 1;
+    if (un.kind == USBNET_RNDIS) {
+        const uint8_t *info; uint32_t il, mx = 0, al = 0;
+        un.rid = 1; uint32_t n = rndis_build_init(un.ctl, un.rid, UN_BUF);
+        if (un_rndis(n, RNDIS_MSG_INIT, un.rid, 0, 0) != 0) { un.why = "RNDIS: el dispositivo no contesto a INIT"; return E_XFER; }
+        /* (los datos del INIT_CMPLT ya se validaron; tamano maximo: se recibe en buffers de 16 KiB) */
+        (void)mx; (void)al;
+        n = rndis_build_query(un.ctl, ++un.rid, RNDIS_OID_PERM_ADDR, 48);
+        if (un_rndis(n, RNDIS_MSG_QUERY, un.rid, &info, &il) != 0 || il < 6) { un.why = "RNDIS: sin direccion MAC"; return E_XFER; }
+        for (int i = 0; i < 6; i++) un.mac[i] = info[i];
+        n = rndis_build_set32(un.ctl, ++un.rid, RNDIS_OID_FILTER, 0x0B);          /* propias, multidifusion y difusion */
+        if (un_rndis(n, RNDIS_MSG_SET, un.rid, 0, 0) != 0) { un.why = "RNDIS: no acepto el filtro de paquetes"; return E_XFER; }
+        n = rndis_build_query(un.ctl, ++un.rid, RNDIS_OID_MEDIA_STATUS, 4);
+        if (un_rndis(n, RNDIS_MSG_QUERY, un.rid, &info, &il) == 0 && il >= 4 && info[0] == 1) un.link = 0;   /* 0 conectado, 1 no */
+    } else {
+        int got_mac = 0;
+        if (fn.mac_str && un_ctrl(0x80, 6, (uint16_t)(0x0300 | fn.mac_str), 0x0409, 64) == 0) got_mac = usbnet_mac_from_string(un.ctl, 64, un.mac) == 0;
+        if (!got_mac) { un.mac[0] = 0x02; un.mac[1] = 0x50; un.mac[2] = (uint8_t)(un.vid >> 8); un.mac[3] = (uint8_t)un.vid; un.mac[4] = (uint8_t)(un.pid >> 8); un.mac[5] = (uint8_t)un.pid; }
+        if (un.kind == USBNET_NCM) {
+            if (un_ctrl(0xA1, 0x80, 0, un.comm_if, 28) != 0 || ncm_parse_params(un.ctl, 28, &un.np) != 0) { un.why = "NCM: sin parametros NTB"; return E_XFER; }
+            un.ctl[0] = (uint8_t)UN_BUF; un.ctl[1] = (uint8_t)(UN_BUF >> 8); un.ctl[2] = 0; un.ctl[3] = 0;
+            un_ctrl(0x21, 0x86, 0, un.comm_if, 4);                                  /* SET_NTB_INPUT_SIZE: lo que caben nuestros buffers */
+            if (un.np.out_max > UN_BUF) un.np.out_max = UN_BUF;
+        }
+        if (fn.data_alt && un_ctrl(0x01, 11, fn.data_alt, un.data_if, 0) != 0) { un.why = "no se pudo activar la interfaz de datos"; return E_XFER; }
+        if (un.kind == USBNET_ECM) un_ctrl(0x21, 0x43, 0x0E, un.comm_if, 0);        /* SET_ETHERNET_PACKET_FILTER (si no lo soporta, da igual) */
+    }
+    for (int i = 0; i < UN_NRX; i++) un_queue_rx(i);
+    un.rx_next = 0;
+    XHCI_MB();
+    wr32(db, 4u * un.slot, un.in_dci);
+    un.why = "operativa"; un.ready = 1;
+    kprint("USB: red "); kprint(usbnet_kind_str(un.kind)); kprint(" en "); kprint_hex16(un.vid); kprint(":"); kprint_hex16(un.pid);
+    kprint(" (configuracion "); kprint_dec(un.cfg_value); kprint(") | MAC "); 
+    for (int i = 0; i < 6; i++) { kprint_hex8(un.mac[i]); if (i < 5) kprint(":"); }
+    kprint(un.link ? " | interfaz usb0 lista\n" : " | sin conexion en el dispositivo\n");
+    return 0;
+}
+
+/* finalizacion pendiente de un extremo de la red, sin esperar */
+static int un_take_event(uint8_t dci, struct xhci_trb *ev)
+{
+    ev_pump();
+    unsigned long fl = irq_save();
+    for (int i = 0; i < mbox_n; i++) {
+        const struct xhci_trb *t = &mbox[i];
+        if (TRB_GET_TYPE(t->d3) != TRB_EV_TRANSFER || (int)(t->d3 >> 24) != un.slot || (int)((t->d3 >> 16) & 0x1F) != dci) continue;
+        *ev = *t;
+        for (int j = i + 1; j < mbox_n; j++) mbox[j - 1] = mbox[j];
+        mbox_n--;
+        irq_restore(fl);
+        return 1;
+    }
+    irq_restore(fl);
+    return 0;
+}
+static void un_recover_in(void)
+{
+    struct xhci_trb ev;
+    un.stalls++;
+    command(0, 0, TRB_TYPE(TRB_RESET_EP) | ((uint32_t)un.in_dci << 16) | ((uint32_t)un.slot << 24), &ev);
+    uint64_t deq = un_phys(un.mem) + (uint64_t)un.rin.enq * 16u + (un.rin.cycle ? 1u : 0u);
+    command((uint32_t)deq, (uint32_t)(deq >> 32), TRB_TYPE(TRB_SET_TR_DEQ) | ((uint32_t)un.in_dci << 16) | ((uint32_t)un.slot << 24), &ev);
+    ctrl_nodata(un.dev, un.slot, 0x02, 1, 0, un.in_addr);                         /* CLEAR_FEATURE(ENDPOINT_HALT) */
+    struct xhci_trb x; while (un_take_event(un.in_dci, &x)) { }
+    for (int i = 0; i < UN_NRX; i++) un_queue_rx(i);
+    un.rx_next = 0;
+    XHCI_MB(); wr32(db, 4u * un.slot, un.in_dci);
+}
+
+static int un_init(void) { return un.ready; }
+static int un_link(void) { return un.ready && un.link && !rescan_busy; }
+static const uint8_t *un_mac(void) { return un.mac; }
+static int un_poll(void *out, uint16_t max, uint16_t *len_out)
+{
+    if (!un.ready || rescan_busy) return 0;
+    if (!unq_n) {
+        if (__sync_lock_test_and_set(&un.busy, 1)) return 0;
+        struct xhci_trb ev;
+        for (int k = 0; k < UN_NRX && un.ready && un_take_event(un.in_dci, &ev); k++) {
+            uint8_t cc = (uint8_t)(ev.d2 >> 24);
+            int i = un.rx_next;
+            if (cc == 1 || cc == 13) {
+                uint32_t got = UN_BUF - (ev.d2 & 0xFFFFFFu);
+                const uint8_t *b = un.rxb[i];
+                if (un.kind == USBNET_RNDIS) rndis_unwrap(b, got, un_q_frame, 0);
+                else if (un.kind == USBNET_NCM) ncm_parse_ntb(b, got, un_q_frame, 0);
+                else if (got >= 14) un_q_frame(b, got > 1518 ? 1518 : got, 0);
+                un_queue_rx(i);
+                un.rx_next = (i + 1) % UN_NRX;
+                XHCI_MB(); wr32(db, 4u * un.slot, un.in_dci);
+            } else { un.rxe++; un_recover_in(); break; }
+        }
+        __sync_lock_release(&un.busy);
+    }
+    if (!unq_n) return 0;
+    uint16_t n = unq_len[unq_head]; if (n > max) n = max;
+    for (uint16_t i = 0; i < n; i++) ((uint8_t *)out)[i] = unq[unq_head][i];
+    unq_head = (unq_head + 1) % 24; unq_n--;
+    *len_out = n; un.rx++; un.rxbytes += n;
+    return 1;
+}
+static int un_send(const void *frame, uint16_t len)
+{
+    if (!un.ready || rescan_busy || len > 1514) return -1;
+    for (int w = 0; w < 200 && __sync_lock_test_and_set(&un.busy, 1); w++) thread_sleep(1);
+    if (!un.ready) { __sync_lock_release(&un.busy); return -1; }
+    uint32_t n;
+    uint8_t f[60]; const uint8_t *src = (const uint8_t *)frame;
+    if (len < 60) { for (int i = 0; i < 60; i++) f[i] = i < len ? src[i] : 0; src = f; len = 60; }
+    if (un.kind == USBNET_RNDIS) n = rndis_wrap(un.txb, src, len);
+    else if (un.kind == USBNET_NCM) n = ncm_build_ntb(un.txb, UN_BUF - 1, &un.np, un.seq++, src, len);
+    else { for (uint16_t i = 0; i < len; i++) un.txb[i] = src[i]; n = len; }
+    if (n && n % un.mps == 0) {                                                    /* el final de la transferencia debe notarse */
+        un.txb[n++] = 0;
+        if (un.kind == USBNET_NCM) { un.txb[8] = (uint8_t)n; un.txb[9] = (uint8_t)(n >> 8); }
+    }
+    int r = -1;
+    if (n) {
+        xhci_ring_push(&un.rout, un_phys(un.mem + 4096), (uint32_t)un_phys(un.txb), (uint32_t)(un_phys(un.txb) >> 32), n, TRB_TYPE(TRB_NORMAL) | (1u << 5));
+        XHCI_MB(); wr32(db, 4u * un.slot, un.out_dci);
+        struct xhci_trb ev;
+        if (wait_event(TRB_EV_TRANSFER, 0, un.slot, un.out_dci, &ev, 500) == 0 && ((ev.d2 >> 24) == 1 || (ev.d2 >> 24) == 13)) { r = 0; un.tx++; un.txbytes += len; }
+        else {
+            un.txe++;
+            command(0, 0, TRB_TYPE(TRB_RESET_EP) | ((uint32_t)un.out_dci << 16) | ((uint32_t)un.slot << 24), &ev);
+            uint64_t deq = un_phys(un.mem + 4096) + (uint64_t)un.rout.enq * 16u + (un.rout.cycle ? 1u : 0u);
+            command((uint32_t)deq, (uint32_t)(deq >> 32), TRB_TYPE(TRB_SET_TR_DEQ) | ((uint32_t)un.out_dci << 16) | ((uint32_t)un.slot << 24), &ev);
+            ctrl_nodata(un.dev, un.slot, 0x02, 1, 0, un.out_addr);
+        }
+    }
+    __sync_lock_release(&un.busy);
+    return r;
+}
+static void un_stats(uint32_t *t, uint32_t *r, uint64_t *tb, uint64_t *rb) { if (t) *t = un.tx; if (r) *r = un.rx; if (tb) *tb = un.txbytes; if (rb) *rb = un.rxbytes; }
+const struct netif_ops netif_usbnet = { "usb0", "red por USB (movil o adaptador)", un_init, un_send, un_poll, un_mac, un_link, un_stats };
+
+void usbnet_info(void)
+{
+    kprint("usb0 (red por USB): ");
+    if (!un.ready) { kprint(un.why); kprint("\n  (en el movil: Ajustes > Conexiones > Compartir conexion > Anclaje de USB)\n"); return; }
+    kprint(usbnet_kind_str(un.kind)); kprint(" en "); kprint_hex16(un.vid); kprint(":"); kprint_hex16(un.pid);
+    kprint(un.link ? " | conectado" : " | el dispositivo dice que no tiene conexion");
+    kprint("\n  enviadas "); kprint_dec(un.tx); kprint(" (errores "); kprint_dec(un.txe); kprint("), recibidas "); kprint_dec(un.rx);
+    kprint(" (perdidas "); kprint_dec(un.rxe); kprint("), reinicios de extremos "); kprint_dec(un.stalls); kprint("\n");
+}
+static int un_busy_flag(void) { return un.busy; }
+static void un_stop_hook(void) { un_stop(); }
+static void un_start_hook(const struct xhci_info *o) { un_start(o); }
+#else
+static int un_busy_flag(void) { return 0; }
+static void un_stop_hook(void) { }
+static void un_start_hook(const struct xhci_info *o) { (void)o; }
+#endif
+
+#ifndef XHCI_SECOND                                                                  /* SOMA_178_T480S: camara UVC (el segundo controlador del RP1 no la lleva) */
+#include "xhci_cam.inc"
+#else
+static int cam_event(const struct xhci_trb *t) { (void)t; return 0; }
+static void cam_stop_hook(void) { }
+#endif

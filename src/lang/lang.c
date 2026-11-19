@@ -1807,7 +1807,7 @@ void lang_init(void)
     seed_demo_scripts();
 }
 
-static int pl11_run(struct soma_vm *vm, const char *src)
+__attribute__((unused)) static int pl11_run(struct soma_vm *vm, const char *src)
 {
     static uint8_t pl11_bc[4096];
     uint32_t n = 0, bl = 0;

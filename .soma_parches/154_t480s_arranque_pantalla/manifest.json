@@ -1,0 +1,72 @@
+{
+  "created": {
+    "docs/PARCHE_154_T480S_ARRANQUE_PANTALLA.md": "04550e7fb394d2382c246127ae48068c7745867976fc0f4c4f7dbbe445bca808",
+    "grub/grub-t480s.cfg": "30644308e6bf4956f143f4f24d899d87725b0af17f5ecf34bc05ad165e224b4a",
+    "src/arch/x86_64/bootfb.c": "8b8311ee63fae4b3ffd9da7733e1ffd1b9b8c47eaf92efc2b36bb7bc2af588d8",
+    "src/arch/x86_64/bootfb.h": "e24ae578dce676c50e5193f9dc5e46179c38572503700d5800ea4c61e34e47c0"
+  },
+  "files": {
+    "Dockerfile": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "eb9a223457f1feb8cb9118979d2b77b7bd33168c4bfca87baf3e1c23e3a9fea7",
+      "old": "4db61839c6aaf08bc8c5bf2102a7cdd97be0141ceb763ae4e8c5d762631aa86b"
+    },
+    "Makefile": {
+      "backup": "original_1.bin",
+      "kind": "adaptado",
+      "new": "769d1e8cf6f9241ffcd878e10cb45d029dc6112afadeb5e43530dbce1fba97d7",
+      "old": "4249586985729b0c02363560a307b96c0800833f04901135910b2e50df623a80"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "85d8fbc892cb53a237b3d6e1b588a9635c4978c15a9d42e450d18250f93d3aec",
+      "old": "68a789a98b9ba4e47d3bf93688b532d0db1026fa91e3a48b9ab44f8b3d81f809"
+    },
+    "src/arch/x86_64/boot.s": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "f18a22c4de4645ac9b46da0b0483d11f510a1103ce0153907c53e99e7d796f74",
+      "old": "1fea8b0d7311a32d0e3325f8594e99a9b4bb21358c5f7d66e31803dd28234a0d"
+    },
+    "src/arch/x86_64/idt.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "65cacaa3fbc6a92d6003a0b4253bb6a2988ee98ae1ee084bb326c66b68142bf5",
+      "old": "6fe2c8a70f07311c9f472a8def66b35afbb7554257f6910c0e20ce818dd41dbb"
+    },
+    "src/arch/x86_64/pmm.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "bba2ee5a3478316dc143351cddaaa101a9b2b788d0eea42269f994e5ab7eb9ad",
+      "old": "d4cb3911a4bc1b634bbbbec5fb5d107e6a375fa002ac3bf6fe6d14bf5ab332e7"
+    },
+    "src/core/kernel.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "c2938ac9adb9e6c199fc90e145340dd8a1ae4c0f8f1a9c99094b607ad76a7527",
+      "old": "8bfdc4f05395203e69a3486e6a24450f1f7b8260da4a02029b019a9d0593b4e2"
+    },
+    "src/drivers/fb.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "3aaa5e0073686c7ae38283cb76ae56f75df669f933a206abc061b3f039332d5b",
+      "old": "76e05b8646f9741b566ad5ca4b84a40f454d7a70a0297478376e3888c890fc16"
+    },
+    "src/ui/console.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "45d0f9622964522bd636fe00cd944656fe5667f675d0f1c66e3b80e89437c4c3",
+      "old": "193f0a0cb99cdd98be01a69affba0d09b18f3c80b1c09ee26dfa3c7446ffacdc"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "ef6f65c17c9b9f10df9c3f13b5e826d39319046b6d520634c51be98f234eb58e",
+      "old": "6514346fe120628611e907d9517f8ebc560dde5f14981cfadbdbf9c588c39235"
+    }
+  },
+  "log": "20261115_104834 parche 154: Lenovo ThinkPad T480s - arranque Multiboot 2 (UEFI y BIOS), framebuffer del firmware (GOP/VBE) con write-combining, consola de arranque grafica, ISO soma-t480s",
+  "version": 1
+}

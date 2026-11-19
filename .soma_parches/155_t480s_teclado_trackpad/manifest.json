@@ -1,0 +1,58 @@
+{
+  "created": {
+    "docs/PARCHE_155_T480S_TECLADO_TRACKPAD.md": "f03804866a348fcf318881885fd7422b3090f978a93ce45f91468e7d74b9ae04",
+    "src/arch/x86_64/i8042.c": "785db1721bf7f019c234324571acb62ae2a33bcf38358b0904fc2765dc748654",
+    "src/arch/x86_64/i8042.h": "3b02b74aa1b4477cb353dae0ab3e6d43e032dcbfd14cf0f8bb1bce4230e88968",
+    "tests/host155/bootfb.h": "d46b0613a27e6a705ec6acf499d2903c599b1346f442f2fcbf7d20d56771476a",
+    "tests/host155/console.h": "3ed85a8a739e635a2f6636b4962be45c591bcdca793fdf2a74d28e31e80ee0cd",
+    "tests/host155/idt.h": "c968c6c6a0d4928f06a8e553b759a72f79417fd133ec92bed6d9f8619998676b",
+    "tests/host155/io.h": "95370d1df4a3b813aa6a05523f54229dce82e89c85d3e63d5069a185bfe03ed2",
+    "tests/test_i8042_155.c": "026572f092ea067a3000773e03693b511745143f85bdc4439ee6c5650c40736c"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "768a4db0bb3cf8eaa30d4f54eebc48abee6ba7a60da56e65601958e863738d40",
+      "old": "769d1e8cf6f9241ffcd878e10cb45d029dc6112afadeb5e43530dbce1fba97d7"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "4ff4e18760c0b061d292deb618e5c769c801c4aee3a18a09cae7123542f4f71d",
+      "old": "85d8fbc892cb53a237b3d6e1b588a9635c4978c15a9d42e450d18250f93d3aec"
+    },
+    "src/arch/x86_64/idt.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "5707169fb6a0f2644c5a239f67f3ac7015aeea40aec5ad4d348519ec26e5b252",
+      "old": "65cacaa3fbc6a92d6003a0b4253bb6a2988ee98ae1ee084bb326c66b68142bf5"
+    },
+    "src/core/kernel.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "885b3df11dd42c47dd471dc5dbeac95d110c4626c098903371757803813ea623",
+      "old": "c2938ac9adb9e6c199fc90e145340dd8a1ae4c0f8f1a9c99094b607ad76a7527"
+    },
+    "src/drivers/mouse.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "8c787b6a85bc2b2abc9a4753e13ea22b2aab2d2efe21d38bc2a02ff2ecf035f0",
+      "old": "93a8a72fa9d0d92ce3167685769e13a430d02432c5d7e04a2efeff7023c4f499"
+    },
+    "src/ui/console.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "a6167b43f2a410610ea43eadd8b2d5b7449a02e3623b6e7968ffd384b47a8a99",
+      "old": "45d0f9622964522bd636fe00cd944656fe5667f675d0f1c66e3b80e89437c4c3"
+    },
+    "src/ui/console.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "4b21bd0abcfb7b440cb36acad59bdde23e1580d3cfeefa7b58c6b3e7ba7a83a8",
+      "old": "efda955d2a90bed2ca6b3c2a571c02fca36a46e4f5744bbeaaa1c32ab24216e8"
+    }
+  },
+  "log": "20261115_113946 parche 155: Lenovo ThinkPad T480s - teclado y trackpad PS/2 (i8042 estilo Linux, Synaptics + TrackPoint, IRQ 1/12, distribucion espanola), make t480s-usb",
+  "version": 1
+}

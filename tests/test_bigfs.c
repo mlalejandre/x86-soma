@@ -16,7 +16,8 @@ struct ram {
     long fail_at;                 /* la escritura numero fail_at devuelve error (una vez) */
     uint64_t clock;
 };
-static int r_read(void *c, uint64_t lba, void *b, uint32_t n) { struct ram *r = c; if (lba + n > r->sectors) return -1; memcpy(b, r->d + lba * 512, (size_t)n * 512); return 0; }
+static long g_dev_reads, g_dev_read_sectors;
+static int r_read(void *c, uint64_t lba, void *b, uint32_t n) { struct ram *r = c; g_dev_reads++; g_dev_read_sectors += n; if (lba + n > r->sectors) return -1; memcpy(b, r->d + lba * 512, (size_t)n * 512); return 0; }
 static int r_write(void *c, uint64_t lba, const void *b, uint32_t n)
 {
     struct ram *r = c;
@@ -423,6 +424,116 @@ static void test_corrupcion(void)
     ram_free(&r);
 }
 
+/* ---------------------------------------------------------------- PARCHE 129: reconstruccion del superbloque */
+static void rs_populate(struct bigfs_dev *d, uint64_t seed)
+{
+    struct bigfs *fs = mount_ok(d); uint32_t f;
+    CHECK_EQ_INT(bigfs_mkdir(fs, "/docs"), 0);
+    CHECK_EQ_INT(bigfs_create(fs, "/docs/a.bin", &f), 0);
+    uint8_t *b = malloc(50000); fillpat(b, 50000, seed);
+    CHECK_EQ_INT((int)bigfs_write(fs, f, 0, b, 50000), 50000);
+    free(b); bigfs_unmount(fs);
+}
+static void rs_verify(struct bigfs_dev *d, uint64_t seed)
+{
+    struct bigfs *fs = mount_ok(d); uint32_t f;
+    if (!fs) return;
+    CHECK_EQ_INT(bigfs_lookup(fs, "/docs/a.bin", &f), BIGFS_T_FILE);
+    uint8_t *b = malloc(50000), *w = malloc(50000); fillpat(w, 50000, seed);
+    CHECK_EQ_INT((int)bigfs_read(fs, f, 0, b, 50000), 50000);
+    CHECK(memcmp(b, w, 50000) == 0);
+    free(b); free(w); bigfs_unmount(fs);
+    struct bigfs_fsck_report rep; CHECK_EQ_INT(bigfs_fsck(d, &rep), 0);
+}
+static void test_repair_super(void)
+{
+    struct ram r; ram_init(&r, 8192); struct bigfs_dev d = mkdev(&r); int e;
+    CHECK_EQ_INT(bigfs_repair_super(&d), BIGFS_E_NOTFMT);                       /* disco en blanco: nada que reconstruir */
+    { uint8_t z[512] = {0}; CHECK(memcmp(r.d, z, 512) == 0); }                  /* y no se ha escrito nada */
+    CHECK_EQ_INT(bigfs_format(&d, 0), 0);
+    rs_populate(&d, 7);
+    CHECK_EQ_INT(bigfs_repair_super(&d), 0);                                    /* sano: no hace nada */
+    uint8_t sb[512]; memcpy(sb, r.d, 512);
+    CHECK(memcmp(r.d + 129 * 512, sb, 512) == 0);                               /* la copia de reserva existe */
+    /* a) superbloque a ceros (en BLANCO: antes el sistema habria formateado y perdido todo) */
+    memset(r.d, 0, 512); CHECK(bigfs_mount(&d, &e) == 0);
+    CHECK_EQ_INT(bigfs_repair_super(&d), 1); CHECK(memcmp(r.d, sb, 512) == 0); rs_verify(&d, 7);
+    /* b) un bit cambiado (CRC malo) */
+    r.d[40] ^= 0x04; CHECK(bigfs_mount(&d, &e) == 0); CHECK_EQ_INT(e, BIGFS_E_CORRUPT);
+    CHECK_EQ_INT(bigfs_repair_super(&d), 1); rs_verify(&d, 7);
+    /* c) sin copia de reserva (disco anterior al parche): geometria automatica */
+    memset(r.d, 0, 512); memset(r.d + 129 * 512, 0, 512);
+    CHECK_EQ_INT(bigfs_repair_super(&d), 2); CHECK(memcmp(r.d, sb, 512) == 0); rs_verify(&d, 7);
+    /* d) una copia de reserva con el CRC malo no se acepta */
+    memset(r.d, 0, 512); r.d[129 * 512 + 30] ^= 1;
+    CHECK_EQ_INT(bigfs_repair_super(&d), 2); memcpy(r.d + 129 * 512, sb, 512);
+    /* d2) un superbloque valido de OTRA geometria en el relleno, en un sitio que no le corresponde (restos de un formateo anterior): se ignora */
+    {   struct ram o; ram_init(&o, 8192); struct bigfs_dev od = mkdev(&o); CHECK_EQ_INT(bigfs_format(&od, 600), 0);
+        memcpy(r.d + 131 * 512, o.d, 512); ram_free(&o);
+        memset(r.d, 0, 512); memset(r.d + 129 * 512, 0, 512);
+        CHECK_EQ_INT(bigfs_repair_super(&d), 2); CHECK(memcmp(r.d, sb, 512) == 0); rs_verify(&d, 7);   /* el senuelo no se acepta */
+        memset(r.d + 131 * 512, 0, 512); }
+    /* e) la raiz tambien destruida: no es un SOMABIG1 reconocible, no se inventa nada */
+    memset(r.d, 0, 512); memset(r.d + 129 * 512, 0, 512); memset(r.d + 512, 0, 256);
+    CHECK_EQ_INT(bigfs_repair_super(&d), BIGFS_E_NOTFMT);
+    { uint8_t z[512] = {0}; CHECK(memcmp(r.d, z, 512) == 0); }
+    ram_free(&r);
+    /* f) geometria no automatica (300 inodos): con copia se recupera */
+    ram_init(&r, 8192); d = mkdev(&r);
+    CHECK_EQ_INT(bigfs_format(&d, 300), 0); rs_populate(&d, 9);
+    memcpy(sb, r.d, 512); memset(r.d, 0, 512);
+    CHECK_EQ_INT(bigfs_repair_super(&d), 1); CHECK(memcmp(r.d, sb, 512) == 0); rs_verify(&d, 9);
+    ram_free(&r);
+    /* g) error de E/S al escribir el superbloque: se propaga y no queda nada a medias */
+    ram_init(&r, 8192); d = mkdev(&r); CHECK_EQ_INT(bigfs_format(&d, 0), 0); memset(r.d, 0, 512);
+    r.fail_at = r.writes; CHECK_EQ_INT(bigfs_repair_super(&d), BIGFS_E_IO);
+    { uint8_t z[512] = {0}; CHECK(memcmp(r.d, z, 512) == 0); }
+    CHECK_EQ_INT(bigfs_repair_super(&d), 1);                                    /* y reintentar funciona */
+    ram_free(&r);
+}
+
+/* ---------------------------------------------------------------- PARCHE 131: cache de lectura */
+static void test_cache(void)
+{
+    struct ram r; ram_init(&r, 16384); struct bigfs_dev d = mkdev(&r);
+    CHECK_EQ_INT(bigfs_format(&d, 0), 0);
+    struct bigfs *fs = mount_ok(&d); uint32_t f, g;
+    enum { SZ = 20000 };
+    uint8_t *w = malloc(SZ), *b = malloc(SZ); fillpat(w, SZ, 5);
+    CHECK_EQ_INT(bigfs_create(fs, "/c.bin", &f), 0); CHECK_EQ_INT((int)bigfs_write(fs, f, 0, w, SZ), SZ);
+    bigfs_unmount(fs); fs = mount_ok(&d); CHECK_EQ_INT(bigfs_lookup(fs, "/c.bin", &f), BIGFS_T_FILE);   /* montaje nuevo = cache fria */
+    long r0 = g_dev_reads;
+    CHECK_EQ_INT((int)bigfs_read(fs, f, 0, b, SZ), SZ); CHECK(memcmp(b, w, SZ) == 0);
+    long frias = g_dev_reads - r0; CHECK(frias > 0);
+    /* una lectura de 16 KiB (32 sectores) se cachea; las de 64 KiB no */
+    r0 = g_dev_reads; memset(b, 0, SZ);
+    CHECK_EQ_INT((int)bigfs_read(fs, f, 0, b, 16384), 16384); CHECK(memcmp(b, w, 16384) == 0);
+    long tras1 = g_dev_reads - r0;
+    r0 = g_dev_reads; memset(b, 0, SZ);
+    CHECK_EQ_INT((int)bigfs_read(fs, f, 0, b, 16384), 16384); CHECK(memcmp(b, w, 16384) == 0);
+    CHECK_EQ_INT((int)(g_dev_reads - r0), 0);                                  /* repetida: cero lecturas del disco */
+    CHECK(tras1 >= 0);
+    /* lecturas pequenas sueltas dentro de lo ya cacheado */
+    r0 = g_dev_reads; for (int i = 0; i < 20; ++i) { CHECK_EQ_INT((int)bigfs_read(fs, f, (uint64_t)i * 700, b, 100), 100); CHECK(memcmp(b, w + i * 700, 100) == 0); }
+    CHECK_EQ_INT((int)(g_dev_reads - r0), 0);
+    /* escribir invalida: se lee lo nuevo */
+    uint8_t nuevo[300]; fillpat(nuevo, 300, 77); memcpy(w + 5000, nuevo, 300);
+    CHECK_EQ_INT((int)bigfs_write(fs, f, 5000, nuevo, 300), 300);
+    CHECK_EQ_INT((int)bigfs_read(fs, f, 0, b, 16384), 16384); CHECK(memcmp(b, w, 16384) == 0);
+    /* reutilizacion de clusteres: borrar y crear otro archivo en el mismo sitio */
+    CHECK_EQ_INT(bigfs_unlink(fs, "/c.bin"), 0);
+    uint8_t *w2 = malloc(SZ); fillpat(w2, SZ, 99);
+    CHECK_EQ_INT(bigfs_create(fs, "/d.bin", &g), 0); CHECK_EQ_INT((int)bigfs_write(fs, g, 0, w2, SZ), SZ);
+    CHECK_EQ_INT((int)bigfs_read(fs, g, 0, b, 16384), 16384); CHECK(memcmp(b, w2, 16384) == 0);
+    CHECK_EQ_INT((int)bigfs_read(fs, g, 0, b, SZ), SZ); CHECK(memcmp(b, w2, SZ) == 0);
+    /* truncar y volver a crecer: lo nuevo son ceros, no restos de la cache */
+    CHECK_EQ_INT(bigfs_truncate(fs, g, 100), 0); CHECK_EQ_INT(bigfs_truncate(fs, g, 9000), 0);
+    CHECK_EQ_INT((int)bigfs_read(fs, g, 0, b, 9000), 9000); CHECK(memcmp(b, w2, 100) == 0);
+    int ceros = 1; for (int i = 100; i < 9000; ++i) if (b[i]) { ceros = 0; break; } CHECK(ceros);
+    struct bigfs_info inf; bigfs_info(fs, &inf); CHECK(inf.cache_hits > 0 && inf.cache_misses > 0);
+    free(w); free(w2); free(b); bigfs_unmount(fs); ram_free(&r);
+}
+
 /* ---------------------------------------------------------------- fuzzing contra un modelo */
 #define MMAX 96
 struct mnode { char path[96]; int type; uint8_t *data; size_t size; int used; };
@@ -613,6 +724,8 @@ int main(int argc, char **argv)
     test_errores_de_es();
     test_corte_de_energia();
     test_corrupcion();
+    test_repair_super();
+    test_cache();
     test_fuzz_modelo();
     TEST_MAIN_END("bigfs");
 }

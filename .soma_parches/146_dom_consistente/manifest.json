@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "files": {
+    "src/apps/web_html.c": {
+      "bak": "0.bak",
+      "old": "eb611ea7b1a338bfb4d5e09dfcbaaaf222c9638626ea2255dd94410d8d9d90fa",
+      "new": "e90ea4949262c5d3e6d7fce0129b00763d63ab9bcb5ed25ed78d001deb9d14ee",
+      "mode": 420
+    },
+    "src/apps/web_js_dom.c": {
+      "bak": "1.bak",
+      "old": "ee7f7a1bf523583041f78ca8607d2f07e718bb52fe53c0360a6aaa281e031f82",
+      "new": "196a2dcd3ea6e80761b33811dbd44c2fe6486b46df24e40f920e5b92c323c002",
+      "mode": 420
+    }
+  },
+  "created": {
+    "tests/test_web_dom_146.c": "6250befbf468e4277069a2340c09db89577403cd17b055feefb6eaa4540831d2",
+    "docs/PARCHE_146_DOM_SEGURO.md": "b7c7c4cfea441f596e4c6b3a67466f3e013d44ca93d37bcb518c318a843a0c8d"
+  }
+}

@@ -1,0 +1,129 @@
+{
+  "created": {
+    "docs/PARCHE_192_SEGURIDAD_GRUPO2.md": "6904f7df00beff5ad0b3ba96fb3e6503ef9401bf6e14efac1717bfe48bc2ffd8",
+    "src/arch/x86_64/memprot.c": "58a727aeca5137735d397ab0c64484ee11fffc5ccdf31086921532b6f5158a03",
+    "src/arch/x86_64/memprot.h": "6a30f2c8fc249a51d488ffe4197a9b0dfe047be6a7ade0695cb08fe87fe8b314",
+    "src/core/rng.c": "1088551f1583f649f4ac6686cd4093bb5fbd8c4dab1c38b20e34e65e4b6bc078",
+    "src/core/rng.h": "56b4f9a1e3d4b473735debb51ff84d8fd4d2fa13205e57aca2127a54527cb7ef",
+    "tests/stubs_netif.c": "f4b90f9a9639b71f9c8ff8812bd7c3a22eb468fe1f539bedc4ca13cbfa3a19d5",
+    "tests/test_rng_192.c": "38d1a8f8e6d138801aa3386c40648ed2d57a562717027f6c724a20f64578ab3d"
+  },
+  "date": "20261117_211122",
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "425dca11bfb6407f9a52795b2a4a446da534af7c9a285ea3a53435595e6d6342",
+      "old": "0d20136f51547906173b90122ac60e3644ca1f95047c8a1b01472bd7f66914e4"
+    },
+    "protected.txt": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "233e391fdefdbbc9c92b797c16df8fffe4557916e0b36e2b6f718942fde4bbb3",
+      "old": "f5f3c7b86566bbbaa76fbbd6a5ce11f0b0f7859cba8ebfe032d9cf1b38bdc7c3"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "c358a111b39677054228d508e0327166f87558b4a1a9ca909b23f3178aac5e4d",
+      "old": "dc3d5205ac639bd1518f4664c8d47b25204650ae01f232dea921ccc2989e7021"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "49cf5a33c03bb328a7c11344d753d9dbd7bd3905f7dbe388960e6750e5e8d9dc",
+      "old": "ee3fdb96f53995a778c268385f707007dc9a5871c3cab24376ae69e305af69ef"
+    },
+    "src/apps/web_js_lib3.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "9df0bc9c3f768c5919a913fd30dee83c5a7d1bdcc54811aa9e472113cd09d1f6",
+      "old": "a075250114ba9d9219acc4f5e357122b38aaff052d8b9f61d16231bfe9db38b9"
+    },
+    "src/apps/web_js_prelude.h": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "a6e44167be04a2b4b23967b46f93def5b1245872b417392ad1098dd09abfbf26",
+      "old": "91d9f0149344e26005e7d1df888fc6d7eb29febed353b1ce765fdfc9fc937cc6"
+    },
+    "src/arch/aarch64/wifi.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "e53427296e67de4cabae97eaf5d40f7fb2cc9a888caa40e9d9cf0932429308cf",
+      "old": "ba2538a8370ed889044379c0c7996caac8dab32d003bf896d8d6d172360d5644"
+    },
+    "src/arch/x86_64/hwscan.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "8f1983b43877ba87b56aaed65fc74a0ccea94d612deb2723e890ab5f91abfd8b",
+      "old": "ecd97f9f366825ae9976890a205a3fcb8d367687974f49692a92f2a987d112ec"
+    },
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "986f75bc7cbc002b654d68f105749f233ece0c0f099774fa084c60f52d6e29a7",
+      "old": "9ca6ea54b87bf09f1296c220cde1e4fd5cebeebdee85c50d8ff707898e8855b2"
+    },
+    "src/arch/x86_64/usermode.c": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "f97339365b86592efd2515466d7627c75421314db1171370fdb05167773de651",
+      "old": "8a9d9b5f9ae3b6e6b84067dee987580e9c4e24feff55e0ca29c4a504d68ebb1e"
+    },
+    "src/arch/x86_64/usermode.h": {
+      "backup": "original_10.bin",
+      "kind": "exacto",
+      "new": "774f5af0d8f5010c2385c76ffe99a83fe190722838268e366a399e01a190d466",
+      "old": "04ec21d5453be44a60b205735f44277518e31f780487082b3f53d442ca8a0093"
+    },
+    "src/arch/x86_64/vmm.c": {
+      "backup": "original_11.bin",
+      "kind": "exacto",
+      "new": "8cb7d9b3fd76da29d100d91db7077a51fcc65c472a2059d6df75c913cbe6a675",
+      "old": "9e15b8de4ff8b5326ad390db596707b2c073f2417b963626bf7a482b606da1f5"
+    },
+    "src/core/kernel.c": {
+      "backup": "original_12.bin",
+      "kind": "exacto",
+      "new": "ababf641159ef44351467df9db9b8fa2d8abaed671c60d7fc9c73e326946269c",
+      "old": "2735c58fc965ed35bfd62eb8aa68a5492f922be625d5d4f7ac007ae27c082021"
+    },
+    "src/core/tlscrypto.c": {
+      "backup": "original_13.bin",
+      "kind": "exacto",
+      "new": "a114985fb39bf3322bde86a6872ff77ba0f4164381a36b985e19ea3bfa2c2a72",
+      "old": "667515666dde81e599bac542e2969075d8d47cb93b9136cf1c6fbb096ffea1cc"
+    },
+    "src/fs/fs.c": {
+      "backup": "original_14.bin",
+      "kind": "exacto",
+      "new": "87f1e8ef090583e3e08eb68e0253699dcb01328a12f923039294ef3d04ee738c",
+      "old": "7b16b8dcfc84a72b2c89cb979bc0ff263875acbf183b771ee692ec9206d04e64"
+    },
+    "src/net/dns.c": {
+      "backup": "original_15.bin",
+      "kind": "exacto",
+      "new": "8c4c51167879fa343f2722723e852bcccdc220262773c8393ee28cc1037913b9",
+      "old": "504e216759644dc1ab9ac1cf73bd0fd9b3ee57e3a8a40ad97462f35b8ca507b7"
+    },
+    "src/net/net.c": {
+      "backup": "original_16.bin",
+      "kind": "exacto",
+      "new": "019cabc64e8482dc22d63b351e7cb0213cc9c2678a6ae7e41b89399edf3b0be4",
+      "old": "f6ef55de95661ac7eee8e797e4f12aded431ea6b1d1720f791e89f0268cfb7a0"
+    },
+    "src/net/tcp.c": {
+      "backup": "original_17.bin",
+      "kind": "exacto",
+      "new": "4adccfce5c23dfad0fc63bb9e7dc9bb93504ad53894f01583559eda1a4deaf12",
+      "old": "addc84fac4f642d109fa2c343634cca4917f088bc4f2a50aca16c22d33832c72"
+    },
+    "tests/stubs_sched.c": {
+      "backup": "original_18.bin",
+      "kind": "exacto",
+      "new": "649bd3cd148d1b7ee605229e0979c18e0298c59dc639504e8d4dcbb4796ad821",
+      "old": "f05a51c804d25ef6570cfd4fcd05ec064f0a90fdc513a82d54512369c787a4c4"
+    }
+  },
+  "name": "192_seguridad_grupo2"
+}

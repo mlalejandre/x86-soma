@@ -1,0 +1,73 @@
+{
+  "created": {
+    "docs/PARCHE_181_NAVEGADOR_MAQUETACION.md": "2bb609d1366fe84a4ee3e95f2e0e9155e4145cd7694b2a83c917730cfe6f6fc9",
+    "src/apps/web_color.inc": "3c606830d26be3154afcb78591e2c8bb2e7efebb6abe47b171d9f07c733b80fc",
+    "tests/layhost/fbhost.c": "f68dfddb25888e631dfbe043ee9370b71800e9fc259894522e03590ebf4179db",
+    "tests/layhost/lay_host.c": "572fdee797a953658cf83ebf532e7b2c9991a9d9b7bb31f04ccc626e4f279959",
+    "tests/test_web_layout_181.c": "a7290b54ee4cf0ab3805a1e48928b77587effc66858b6d019ea16ccd195995af"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "8387b7c6671ff1fbe189c05d9a61b62c90175a0479a0cacabc96359a4a50a685",
+      "old": "2d115e563a980e18684a13adc2af05b9446ce9e2fad8cffb60c8730b1749aef7"
+    },
+    "src/apps/browser.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "09ad6f0540daec4d7f4528762e7f4b808ede20e6eef704be30e49ddda6be76bf",
+      "old": "e9e71b4701ca022547d3fa861b71153b610af56a04ecd90df61f4a89a63ef8cc"
+    },
+    "src/apps/web_css.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "5d7b525b86ae6c711edca53ed337068e09a85eac938a8b58bcf37dd627b499b9",
+      "old": "6585a7b4a0379fb685f99e1e0248d25dded394a120e3efdb13a73c235b128535"
+    },
+    "src/apps/web_css.h": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "5f43545dca4bf7aa90481b4ba005da95c6b1fe46e3fce9418bba199ba23b2f4a",
+      "old": "a86f35806991864c50b471409baa7f30ce234a23b1b01ff8a91a43c96fcd4323"
+    },
+    "src/apps/web_dom.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "f97759299639af9ba34a02f05d62098170c27153a43c1d162dac004c9098dc76",
+      "old": "b179106067c85c0a6062b15f54742b0ec9e9bb70220ed510f2f27eec1aefcd49"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "1e53a60e83164b242485e09491e5600576f9996470f78a5353a660ae6b0eead2",
+      "old": "1fedc43ba294a400f885c11614c88f76ac01bb7c2defec0511024c34343a29f7"
+    },
+    "src/apps/web_layout.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "a3d5f994f54f4431f6dd4a0337b5e1675d881d566fd03bb1827e245dea909811",
+      "old": "faea328382df5fc99caaa0f12a6da545237bf2c01ad98a659427dfab7aba2620"
+    },
+    "src/apps/web_layout.h": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "10d7db7ac5ecf2fbb5e9516f4e482c4a235e30e202bcbe50643ab2cad5b6be8a",
+      "old": "4ff86defde7de4487229606a5180e84c8a6b5c71bd453f7075bdf9844ec22939"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "a7c3358d58c2186366012fc6ddce889098d6fff86b4c0b4b2d18febf2caa02e1",
+      "old": "e9db683d2c960128eb870f94941ab6b72af35154adf860430df72c8fbe8c950e"
+    },
+    "src/apps/web_ua.h": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "1c9d14b607840d8ad40edb987f744be4946083865c2271612e3d1e47a686466c",
+      "old": "9e1f976f54b35026712f70a18f1c95ca32eea30f213c1937b8a99903bc683bcd"
+    }
+  },
+  "log": "20261116_212049 parche 181: navegador (II): maquetacion (rejillas, flex, unidades, colores, scroll interno)",
+  "version": 1
+}

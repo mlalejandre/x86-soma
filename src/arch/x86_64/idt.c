@@ -1,9 +1,14 @@
+#include "bootfb.h"
 #include "idt.h"
+#include "web_fault.h"
+int gui_fault_recover(int vector, uint64_t fault_rip, uint64_t fault_addr, uint64_t *rip, uint64_t *rsp);   /* SOMA_221_RESCATE (gui.c) */
+int gui_hang_tick(uint64_t *rip, uint64_t *rsp);
 #include "console.h"
 #include "io.h"
 #include "panic.h"
 #include "usermode.h"
 #include "pic_irq.h"
+#include "i8042.h"
 
 struct idt_entry {
     uint16_t offset_low;
@@ -231,21 +236,42 @@ static uint8_t pic_read_isr(uint16_t cmd_port)
     return inb(cmd_port);
 }
 
+/* SOMA_158_T480S: contadores por vector (orden "irq") */
+static volatile uint64_t irq_vec_count[48];
+static volatile uint64_t irq_lapic_spurious;
+uint64_t idt_irq_count(int vector)
+{
+    if (vector == 255) return irq_lapic_spurious;
+    return (vector >= 32 && vector < 48) ? irq_vec_count[vector] : 0;
+}
+
 static void irq_dispatch(struct trap_frame *tf)
 {
+    irq_vec_count[tf->vector & 47]++;
     if (tf->vector == 32) {
         timer_ticks++;
         outb(0x20, 0x20);
         apic_eoi();                                                /* PARCHE 039: no hace nada si la IRQ viene del PIC */
         watchdog_tick(timer_ticks, tf->rip, tf->rbp, tf->rsp);   /* SOMA_PARCHE_008_PANIC */
+        if ((tf->cs & 3) == 0 && (tf->rflags & 0x200) && gui_hang_tick(&tf->rip, &tf->rsp))   /* SOMA_221_RESCATE: aplicacion colgada */
+            tf->rflags = (tf->rflags | 0x200) & ~0x40500ull;
         usermode_on_tick(timer_ticks, tf->cs);                     /* SOMA_PARCHE_014_RING3 */
+        i8042_tick(timer_ticks);                                   /* SOMA_155_T480S: respaldo del teclado/trackpad PS/2 */
         return;
     }
 
     if (tf->vector == 33) {
-        keyboard_irq_handler();
+        i8042_irq(1);                                              /* SOMA_155_T480S (antes keyboard_irq_handler) */
         outb(0x20, 0x20);
         apic_eoi();                                                /* PARCHE 039 */
+        return;
+    }
+
+    if (tf->vector == 44) {                                        /* SOMA_155_T480S: IRQ 12 = raton/trackpad PS/2 */
+        i8042_irq(12);
+        outb(0xA0, 0x20);
+        outb(0x20, 0x20);
+        apic_eoi();
         return;
     }
 
@@ -261,15 +287,34 @@ static void irq_dispatch(struct trap_frame *tf)
 
 void isr_exception_handler(struct trap_frame *tf)
 {
-    if (tf->vector == 255) return;                       /* PARCHE 038: espurio del LAPIC: se ignora (sin EOI) */
+    if (tf->vector == 255) { irq_lapic_spurious++; return; }   /* PARCHE 038: espurio del LAPIC: se ignora (sin EOI) */
     if (tf->vector == 64) { apic_timer_irq(); return; }  /* PARCHE 038: autotest del temporizador del LAPIC */
     if (tf->vector >= 32 && tf->vector < 48) {
         irq_dispatch(tf);
         return;
     }
+    /* SOMA_166_T480S: rdmsr/wrmsr "seguros" (msr_read_safe/msr_write_safe): si el registro no existe la CPU da #GP; se
+     * salta la instruccion y se devuelve error en RSI (tabla msr_fix: direccion que falla -> direccion de continuacion). */
+    if (tf->vector == 13 && (tf->cs & 3) == 0) {
+        extern const uint64_t __start_msr_fix[], __stop_msr_fix[];
+        for (const uint64_t *f = __start_msr_fix; f + 1 < __stop_msr_fix; f += 2)
+            if (f[0] == tf->rip) { tf->rip = f[1]; tf->rsi = 1; return; }
+    }
+    /* SOMA_198: un fallo del motor del navegador (su hilo de trabajo, en ring 0) cierra la pagina, no el sistema (web_fault.h) */
+    if ((tf->cs & 3) == 0 && tf->vector < 32 && web_fault_recover((int)tf->vector, tf->rip, tf->vector == 14 ? read_cr2() : 0, &tf->rip, &tf->rsp)) {
+        tf->rflags = (tf->rflags | 0x200) & ~0x40500ull;           /* con interrupciones; sin DF, TF ni AC */
+        return;
+    }
+    /* SOMA_221_RESCATE: un fallo dentro de una aplicacion del escritorio cierra esa ventana, no el sistema */
+    if ((tf->cs & 3) == 0 && tf->vector < 32 && gui_fault_recover((int)tf->vector, tf->rip, tf->vector == 14 ? read_cr2() : 0, &tf->rip, &tf->rsp)) {
+        tf->rflags = (tf->rflags | 0x200) & ~0x40500ull;
+        return;
+    }
     /* SOMA_PARCHE_014_RING3: una excepcion en ring 3 mata el proceso de usuario, no el kernel */
-    if ((tf->cs & 3) == 3 && usermode_active())
+    if ((tf->cs & 3) == 3 && usermode_active()) {
+        if (tf->vector == 14 && usermode_demand_fault(read_cr2(), tf->error_code)) return;   /* PARCHE 138: region bajo demanda */
         usermode_on_fault(tf->vector, tf->rip, read_cr2());
+    }
     {   /* PARCHE 109: excepcion DURANTE el informe de panico: no reentrar (desbordaria la pila); detener de forma observable */
         int nivel = panic_enter();
         if (nivel >= 1) {
@@ -286,6 +331,7 @@ void isr_exception_handler(struct trap_frame *tf)
     uint64_t cr4 = read_cr4();
 
     kprint("\n\n========================================================================\n");
+    bootfb_console_panic();        /* SOMA_154_T480S: en el portatil, el panico se ve en pantalla aunque la GUI estuviera activa */
     kprint("!!! KERNEL PANIC: EXCEPCION CPU DETECTADA !!!\n");
     kprint("========================================================================\n");
 
@@ -365,3 +411,7 @@ void idt_init(void)
     kprint(irq_spurious_count == antes + 2 ? "IDT: IRQ espuria 7/15 absorbida sin panico: OK\n"
                                            : "IDT: IRQ espuria 7/15: FALLO (no se contabilizo)\n");
 }
+
+/* SOMA_159_T480S: los nucleos secundarios usan la misma IDT; smp.c pone su vector de despertar (0xF0) */
+void idt_load(void) { __asm__ volatile ("lidt %0" : : "m"(idtr_desc)); }
+void idt_set_vector(uint8_t vec, void (*stub)(void)) { idt_set_gate(vec, (uint64_t)(uintptr_t)stub, 0x08, 0x8E); }

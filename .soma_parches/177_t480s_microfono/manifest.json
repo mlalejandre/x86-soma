@@ -1,0 +1,87 @@
+{
+  "created": {
+    "docs/PARCHE_177_T480S_MICROFONO.md": "304378f47db3bf30f2145224e7aad2989ebe1fc5a3f908bbf801e5fe84e672c2",
+    "src/apps/recorder.c": "cfabbe3b441302b0de57985348290265bafa3eccc990a8681a59c84f95069aaa",
+    "src/apps/recorder.h": "b6086ca20283ec9974587333a6b7e0c6a3c87628a61becc887a9a28f0f9a40dc",
+    "src/core/micrec.c": "70802e684319a474ff5e953b1653512840ae8f01770b85d96c08b90e331aeff7",
+    "src/core/micrec.h": "ae995ea9da1d63ca28175213c52fd7ace99cb6890fc3683568ce158c111c7ca2",
+    "tests/test_mic_177.c": "11fbbec66c4f19416b8472535dee421916684f230a43602508d989f6e1315aed",
+    "tests/test_micrec_177.c": "24dd805f8ab6d5ff4ae38cee99fbff9a2dd7ebf80d5d105f60aefc49f684c200"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "40fd0c02ea8873b546513efb8c872a32bc64fdf5ca9a7207f33733cd6d255298",
+      "old": "3410e57c331810da2be4a4304beda7dab96512a23d5c3346c6503af7eb3fc8d0"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_11.bin",
+      "kind": "exacto",
+      "new": "4c94bb4f031be4a4003d3d9046304090e79e3596b24276790db4b4c8221dff91",
+      "old": "f84d628321c54beed5bd2e390b8ae00b63fa2322a947f2e8decacfc6e7508be5"
+    },
+    "src/arch/aarch64/hda.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "cd4faa9b2ebec63e7bb3eb0af492dcf4f1affbd10eb30a18ded1068be61ab79c",
+      "old": "df56b836a4c8e2df1b41c7e6297ec9f30ba52882866cbcda73097a30c73c29fe"
+    },
+    "src/arch/aarch64/hda.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "104c6e2a0ae5377c3436866b3f99e0f10e7212129fd2e386216313f935687fc2",
+      "old": "a8ea49d9ec3d0550b016b1a9d69d63bda584bcbb712aeb22e84a2d3aad88f95b"
+    },
+    "src/arch/x86_64/hda.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "c46b5852b9152cc6fb577e0aebb9390c53427434df1d2a2f65fcf82a6b2bc8e4",
+      "old": "ac014cd5fb01887bd8dafde716107dc85859595fcf6ff86c2c3055aadf40136d"
+    },
+    "src/arch/x86_64/hda.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "8816a6f78d9501b7884416e9a81ab8e971337b4f8fe0575ed70d5719d6cf4569",
+      "old": "636fb17859caf40d6f7de7ff8e0316d5d6b9f814e5d67bf6891db15e9916f4b5"
+    },
+    "src/core/audio_sys.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "f989fbc2f0f138ddfd62e0ebf97661e0d40e37216235f84bb6393a26c52a2a14",
+      "old": "f6aa2e23572d5ab4e4f99311bc4b2e2de464156a5a07fa4b2bd2b55db234f660"
+    },
+    "src/core/wav.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "0b9483d26a20c51e0421daf7013165663b53897c861a6aae8d083b59d41d30df",
+      "old": "5035d84abf17602cc3b42a132490bcd97496259d44d40d0ae750557fbda7d165"
+    },
+    "src/core/wav.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "9f98405b4b669240153cd5da771b3d82ac2e6d110a34ef6dba5498a9fedf5751",
+      "old": "0fe843229c0a5dd8d4e8ef5f4de61340af8605aa10afe9e4f25507937b664e52"
+    },
+    "src/icons/icons.h": {
+      "backup": "original_10.bin",
+      "kind": "exacto",
+      "new": "a5148e83e1f7ee3ee22a358029db3b71dfd21ba3eb176f3424c3e229b48fd3a6",
+      "old": "4fc64b235b22becfb4090f6ebfefe7a1834a3f6b89c0cf68c62d26ddd5c6b880"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "fffe374bfebcf717c8e50ab0c3df43401b806d9502173fc85c1ed363a55c1aeb",
+      "old": "5385485bb3141917ac74a63040c657b23b331964e28c009f7337f42f77fb000d"
+    },
+    "src/ui/gui.h": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "1155f92d14186114f9a919101c261bd90cbadff6ae866e4e5b4d9d3941205599",
+      "old": "532bb9ae919490e834d92ef53162c1bcd8ba14266f6f5cc75236170e3ee3ae4b"
+    }
+  },
+  "log": "20261116_150307 parche 177: microfono (captura HDA ALC257), motor de grabacion, aplicacion Grabadora y orden mic",
+  "version": 1
+}

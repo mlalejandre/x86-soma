@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "console.h"
+#include "rng.h"
 #include "dns.h"
 #include "net.h"
 #include "udp.h"
@@ -20,14 +21,9 @@ uint8_t net_dns[4] = { 10, 0, 2, 3 };
 /* PARCHE 031: el ID de consulta era secuencial (0x1000, 0x1001, ...) y el puerto local fijo: cualquiera que pudiera enviar
  * paquetes al sistema podia falsificar una respuesta DNS y redirigir al navegador. Ahora ID y puerto local son impredecibles
  * y solo se aceptan respuestas que vienen del servidor DNS y de su puerto 53. */
-static uint32_t dns_rng = 0;
-static uint32_t dns_rand(void)
-{
-    dns_rng += (uint32_t)timer_get_uptime_ms() * 2654435761u + 0x9E3779B9u;
-    if (dns_rng == 0) dns_rng = 0xA5C3E1F7u;
-    dns_rng ^= dns_rng << 13; dns_rng ^= dns_rng >> 17; dns_rng ^= dns_rng << 5;
-    return dns_rng;
-}
+/* SOMA_192: el ID y el puerto salian de un xorshift de 32 bits sembrado con el tiempo de arranque (adivinable). Ahora, del
+ * generador unico del nucleo (rng.h). */
+static uint32_t dns_rand(void) { return rng_u32(); }
 
 
 static uint16_t rd16(const uint8_t *p)

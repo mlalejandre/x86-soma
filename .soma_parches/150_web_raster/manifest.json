@@ -1,0 +1,16 @@
+{
+  "created": {
+    "docs/PARCHE_150_RENDIMIENTO_WEB.md": "f06b0ffa299d4382c4fb91aef86a84344aee80940d9f26e22974fb2708ee178d",
+    "src/apps/web_raster_150.h": "eb10b522e24d838ca11b5e355f6fd8cec94cfdf337af098fb5e2e9d4bdd67ddb",
+    "tests/test_web_raster_150.c": "af02411d76ddb988cc97e16cfadcb6d6d20ad3a9cecd679b739d4693ff3e6f46"
+  },
+  "new": {
+    "src/apps/web_layout.c": "621eb20a76976bb7c0f5c0454f42ba4edc74369110efaca0a292fb3f1752cf0d",
+    "src/apps/web_page.c": "6049293754c678594c6b83208bfb76b547b9adc6b4bd9052a45302123a87e91d"
+  },
+  "old": {
+    "src/apps/web_layout.c": "c306857cab9929f14abacd8f8efae3e1c90a64159b1ef01516c0d2c02ee7ed95",
+    "src/apps/web_page.c": "8ce8a49ef6b7279135e186a70cbda030787acdbdbc3dfde6754c929e5d096457"
+  },
+  "version": 1
+}

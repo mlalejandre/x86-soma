@@ -12,3 +12,59 @@ src/core/switch.s
 src/core/mutex.c
 src/core/mutex.h
 src/core/arch.h
+
+# SOMA_191: frontera de seguridad. La IA no puede modificar el codigo que la limita a ella, a los procesos de usuario
+# o a la red (el host compara por nombre de archivo).
+src/arch/x86_64/usermode.c
+src/arch/x86_64/usermode.h
+src/arch/x86_64/uaccess.h
+src/arch/x86_64/user_path.h
+src/arch/x86_64/sandbox.c
+src/arch/x86_64/sandbox.h
+src/arch/x86_64/smp.c
+src/arch/x86_64/ssp_init.c
+src/arch/aarch64/usermode.c
+src/arch/aarch64/mmu.c
+src/core/elf.c
+src/core/elf.h
+src/core/sbx_abi.h
+src/core/ssp.c
+src/core/panic.c
+src/core/tls13.c
+src/core/tlscrypto.c
+src/core/crypto.c
+src/core/wpa.c
+src/core/ccmp.c
+src/agent/agent_policy.h
+src/agent/agent.c
+src/agent/shell.c
+src/net/net.c
+src/net/httpd.c
+src/net/httpd_policy.h
+src/net/tcp_policy.h
+src/fs/disk_layout.h
+src/apps/web_page.c
+# SOMA_192
+src/core/rng.c
+src/core/rng.h
+src/arch/x86_64/memprot.c
+src/arch/x86_64/memprot.h
+# SOMA_193
+src/agent/agent_net.c
+src/agent/agent_net.h
+src/user/websvc.c
+src/core/web_r3_abi.h
+src/arch/x86_64/web_r3.c
+src/arch/x86_64/web_r3.h
+src/agent/llm_proto.c
+src/agent/llm_proto.h
+src/agent/llm.c
+src/ui/console.c
+src/fs/fs.c
+# SOMA_194
+src/core/x509.c
+src/core/x509.h
+src/core/tls_roots.c
+src/core/tls_trust.c
+src/core/tls13.h
+src/apps/web_net.c

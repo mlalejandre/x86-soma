@@ -31,16 +31,62 @@
 #define MAX_PAGE_PX (14u * 1024u * 1024u)
 
 /* ---------------------------------------------------------------- estado */
-static char g_path[128];
-static uint8_t *g_data; static uint32_t g_len;
-static struct pdf *g_pdf; static int g_np, g_page;
-static char g_err[96], g_title[96], g_msg[120]; static int g_msg_ok = 1;
-static int g_zoom = 0;             /* 0 = ajustar al ancho, -1 = pagina entera, >0 = % */
-static int g_scroll, g_side = 1, g_picker, g_pick_sel, g_pick_scroll;
-static uint32_t *g_buf; static int g_bw, g_bh, g_bpage = -1, g_bscale = -1, g_unknown, g_ms;
-static int g_drag, g_drag_y, g_drag_s, g_side_scroll;
 #define MAXTH 400
-static uint32_t *g_th[MAXTH]; static int16_t g_thw[MAXTH], g_thh[MAXTH];
+/* SOMA_213_PDF: varias ventanas del lector PDF. Documento, pagina, zoom, desplazamiento, miniaturas y escalas de letra viven en
+ * una instancia por ventana; la lista de archivos PDF se comparte. La GUI elige la instancia con pdfview_select(). */
+struct pv_inst {
+    char g_path[128];
+    uint8_t *g_data; uint32_t g_len;
+    struct pdf *g_pdf; int g_np, g_page;
+    char g_err[96], g_title[96], g_msg[120]; int g_msg_ok;
+    int g_zoom;
+    int g_scroll, g_side, g_picker, g_pick_sel, g_pick_scroll;
+    uint32_t *g_buf; int g_bw, g_bh, g_bpage, g_bscale, g_unknown, g_ms;
+    int g_drag, g_drag_y, g_drag_s, g_side_scroll;
+    uint32_t *g_th[MAXTH]; int16_t g_thw[MAXTH], g_thh[MAXTH];
+    int g_fscale[65];
+};
+#define PV_INST_MAX 8
+static struct pv_inst pv_insts[PV_INST_MAX + 1];
+static int pv_used[PV_INST_MAX + 1], pv_ready;
+static struct pv_inst *PV = &pv_insts[1];
+static void pv_defaults(struct pv_inst *p)
+{
+    char *b = (char *)p; for (size_t i = 0; i < sizeof *p; ++i) b[i] = 0;
+    p->g_msg_ok = 1; p->g_side = 1; p->g_bpage = -1; p->g_bscale = -1;
+}
+static void pv_boot(void) { if (!pv_ready) { pv_ready = 1; pv_defaults(&pv_insts[1]); } }
+#define g_path (PV->g_path)
+#define g_data (PV->g_data)
+#define g_len (PV->g_len)
+#define g_pdf (PV->g_pdf)
+#define g_np (PV->g_np)
+#define g_page (PV->g_page)
+#define g_err (PV->g_err)
+#define g_title (PV->g_title)
+#define g_msg (PV->g_msg)
+#define g_msg_ok (PV->g_msg_ok)
+#define g_zoom (PV->g_zoom)
+#define g_scroll (PV->g_scroll)
+#define g_side (PV->g_side)
+#define g_picker (PV->g_picker)
+#define g_pick_sel (PV->g_pick_sel)
+#define g_pick_scroll (PV->g_pick_scroll)
+#define g_buf (PV->g_buf)
+#define g_bw (PV->g_bw)
+#define g_bh (PV->g_bh)
+#define g_bpage (PV->g_bpage)
+#define g_bscale (PV->g_bscale)
+#define g_unknown (PV->g_unknown)
+#define g_ms (PV->g_ms)
+#define g_drag (PV->g_drag)
+#define g_drag_y (PV->g_drag_y)
+#define g_drag_s (PV->g_drag_s)
+#define g_side_scroll (PV->g_side_scroll)
+#define g_th (PV->g_th)
+#define g_thw (PV->g_thw)
+#define g_thh (PV->g_thh)
+#define g_fscale (PV->g_fscale)
 static char g_files[48][96]; static int g_nfiles;
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
@@ -177,7 +223,7 @@ static void draw_image(uint32_t *buf, int bw, int bh, const struct pdf_op *o)
         }
     }
 }
-static int g_fscale[65];   /* por fuente: escala de la letra (1/1000) para que sus palabras midan como en el PDF */
+/* g_fscale: por fuente, escala de la letra (1/1000) para que sus palabras midan como en el PDF (por ventana: SOMA_213) */
 static void draw_word(const struct pdf_op *o, int thumb)
 {
     if (!o->text || o->len <= 0 || o->size <= 0) return;
@@ -245,6 +291,7 @@ static void close_doc(void)
 }
 int pdfview_open_file(const char *path)
 {
+    pv_boot();
     close_doc();
     s_cpy(g_path, path, sizeof g_path);
     uint32_t n = 0; uint8_t *d = (uint8_t *)vfs_read_alloc(path, &n);
@@ -257,7 +304,7 @@ int pdfview_open_file(const char *path)
     char m[120] = "Abierto: "; s_cat(m, path, sizeof m); say(m, 1);
     return 0;
 }
-void pdfview_init(void) { (void)has_wf(); }
+void pdfview_init(void) { pv_boot(); (void)has_wf(); }
 
 /* escala (px por punto * 256) para el modo de zoom y el area dada */
 static int scale_for(int vw, int vh)
@@ -602,3 +649,77 @@ void pdfview_handle_key(char ch)
     if (g_scroll < 0) g_scroll = 0;
 }
 int pdfview_clip_op(int op) { if (op == CLIP_OP_COPY) { copy_text(); return 1; } return 0; }
+
+
+#undef g_path
+#undef g_data
+#undef g_len
+#undef g_pdf
+#undef g_np
+#undef g_page
+#undef g_err
+#undef g_title
+#undef g_msg
+#undef g_msg_ok
+#undef g_zoom
+#undef g_scroll
+#undef g_side
+#undef g_picker
+#undef g_pick_sel
+#undef g_pick_scroll
+#undef g_buf
+#undef g_bw
+#undef g_bh
+#undef g_bpage
+#undef g_bscale
+#undef g_unknown
+#undef g_ms
+#undef g_drag
+#undef g_drag_y
+#undef g_drag_s
+#undef g_side_scroll
+#undef g_th
+#undef g_thw
+#undef g_thh
+#undef g_fscale
+
+/* SOMA_213_PDF: instancias */
+int pdfview_inst_new(void)
+{
+    pv_boot();
+    for (int k = 1; k <= PV_INST_MAX; ++k) {
+        if (pv_used[k]) continue;
+        pv_used[k] = 1;
+        PV = &pv_insts[k];
+        close_doc();
+        pv_defaults(PV);
+        return k;
+    }
+    return 0;
+}
+void pdfview_select(int slot) { pv_boot(); if (slot >= 1 && slot <= PV_INST_MAX) PV = &pv_insts[slot]; }
+void pdfview_inst_drop(int slot)
+{
+    if (slot < 1 || slot > PV_INST_MAX || !pv_used[slot]) return;
+    struct pv_inst *keep = PV;
+    PV = &pv_insts[slot]; close_doc(); pv_defaults(PV);
+    pv_used[slot] = 0;
+    PV = keep == &pv_insts[slot] ? &pv_insts[1] : keep;
+}
+int pdfview_inst_find(const char *path)
+{
+    for (int k = 1; k <= PV_INST_MAX; ++k) {
+        if (!pv_used[k] || !pv_insts[k].g_pdf || !path) continue;
+        const char *a = pv_insts[k].g_path, *b = path;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b) return k;
+    }
+    return 0;
+}
+const char *pdfview_inst_name(int slot)
+{
+    if (slot < 1 || slot > PV_INST_MAX || !pv_insts[slot].g_pdf) return "";
+    const char *p = pv_insts[slot].g_path, *n = p;
+    for (; *p; ++p) if (*p == '/') n = p + 1;
+    return n;
+}

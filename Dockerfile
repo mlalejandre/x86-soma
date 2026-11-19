@@ -6,6 +6,7 @@ RUN apt-get update && \
         binutils \
         make \
         grub-pc-bin \
+        grub-efi-amd64-bin \
         grub-common \
         xorriso \
         mtools \

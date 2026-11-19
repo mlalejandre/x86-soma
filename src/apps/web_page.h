@@ -8,13 +8,13 @@
 
 #define WP_HIST 32
 enum { WP_IDLE = 0, WP_FETCH, WP_RES, WP_SCRIPT, WP_IMAGES };
-enum { WPN_NORMAL = 0, WPN_REPLACE = 1, WPN_RELOAD = 2, WPN_NOHIST = 4 };
+enum { WPN_NORMAL = 0, WPN_REPLACE = 1, WPN_RELOAD = 2, WPN_NOHIST = 4, WPN_NOSORRY = 8 };
 enum { WPS_OK = 0, WPS_BUSY, WPS_ERR };
 enum { WPK_NONE = 0, WPK_TEXT, WPK_LINK };      /* cursor sugerido */
 
-struct wp_hist { char url[512]; int scroll_y; char title[64]; };
-struct wp_img { char *url; int w, h; uint32_t *px; int state; int has_alpha; int tries; uint32_t hash; int pw, ph;
-                int dist, dw, dh; };             /* SOMA_PARCHE_028_UI: distancia a la zona visible y tamano mostrado (0 = desconocido) */
+struct wp_hist { char url[2048]; int scroll_y; char title[64]; };   /* SOMA 188B: 2048 (era 512): las busquedas de Google pasan de 512 */
+struct wp_img { char *url; int w, h; uint32_t *px; int state; int has_alpha; int tries; uint32_t hash; int pw, ph; uint32_t serial; /* SOMA_152 */ int frames, cur; uint16_t *delay; uint32_t total_ms; /* SOMA_180: animacion (px tiene `frames` fotogramas de pw*ph) */ int size_dep; /* SOMA_152B */
+                int dist, dw, dh; uint8_t ratio_only, is_svg, redraws, painted; };   /* SOMA_188: painted = pedida al pintar (fondo CSS a la vista) */             /* SOMA_PARCHE_028_UI: distancia a la zona visible y tamano mostrado (0 = desconocido) */
 struct wp_store;
 struct wp_svg;
 
@@ -38,10 +38,22 @@ struct wpage {
     struct wjs_host host; uint64_t nav_at;
     int resized; uint32_t layout_dur; int refresh_rel;
     volatile int lay_busy; volatile uint32_t gen;  /* lay_busy: hay una maquetacion en curso (el GUI no debe tocar p->lay) */
+    volatile int scroll_req;                      /* SOMA_152: desplazamiento pedido por teclado (lo anima el hilo de la GUI) */
+    int script_phase, script_guard, script_status; /* SOMA_152B: scripts repartidos en turnos (la pagina se usa mientras) */
+    int img_relayout_due;                         /* SOMA_152B: una imagen de la que dependia la maquetacion ya llego */
+    struct wnode *dynq[64]; int dynq_h, dynq_n;   /* SOMA_152C: <script src> insertados por JS, pendientes (async) */
+    struct wnode *script_wait;                    /* SOMA_152D: script del HTML cuya descarga esta en el hilo de E/S */
     int img_ok, img_fail, img_logged; char img_why[72];
+    uint32_t svg_color;                    /* SOMA_180: color actual mientras se dibuja un <svg> en linea */
+    uint32_t anim_tick;                    /* SOMA_180: cambia cuando alguna imagen animada visible pasa de fotograma (entra en la clave de repintado) */
     int img_dirty;
     uint32_t img_scan_key; int img_waiting;       /* SOMA_PARCHE_028_UI: carga diferida de imagenes fuera de la pantalla */                                /* SOMA_PARCHE_028_UI: han llegado imagenes desde la ultima maquetacion */
+    uint32_t shcss[256]; int nshcss;              /* SOMA_188: hojas de arboles sombra ya anadidas (hash) */
+    uint64_t af_until, af_next; int user_acted;  /* SOMA_188: autofocus de elementos que llegan tarde (insertados por JS) */
     struct wp_svg *svgs; int nsvg;                /* SOMA_PARCHE_028_UI: <svg> en linea pendientes de rasterizar en la pasarela */
+    /* SOMA_188: cola de transitionend/animationstart/animationend (no se anima; se avisa a su tiempo) */
+    struct { struct wnode *n; uint64_t at; const char *name; uint16_t ms; uint8_t kind; } aq188[48];
+    int naq188;
 };
 
 struct wpage *wp_new(void);
@@ -53,6 +65,9 @@ int  wp_post(struct wpage *p, const char *url, const char *body, uint32_t blen, 
 void wp_history_go(struct wpage *p, int delta);
 int  wp_can_back(const struct wpage *p);
 int  wp_can_fwd(const struct wpage *p);
+uint32_t wp_store_gen(void);                                   /* SOMA_203 */
+void wp_store_export(const struct wpage *p, struct wb *o);
+int  wp_store_import(struct wpage *p, const void *data, uint32_t len);
 int  wp_img_get(struct wpage *p, const char *src, const uint32_t **px, int *w, int *h, char *abs, uint32_t absmax);   /* PARCHE 085 */
 void wp_stop(struct wpage *p);
 /* devuelve ms hasta que conviene volver a llamar */

@@ -1,0 +1,18 @@
+{
+  "created": {
+    "docs/PARCHE_151A_WEB_ASYNC.md": "046eb678d9ebf07480f20a9a9eec7015062161a739dc0a0f611ee1f557a3327e",
+    "src/apps/web_async_151.h": "272e5c1aa64f944030da5c428d52e3cc3151fa3ad63cacc1d3e4c4e07183a19a",
+    "tests/test_web_async_151.c": "6e0841f81ebeb0602b35c3c1e459dc408187d8f924a4bdfb209ca53584807829"
+  },
+  "new": {
+    "src/apps/web_net.c": "0f56cf509de8f63b7cd59ada22155f94d478e7b222b1c0db968a3384ae13f113",
+    "src/apps/web_net.h": "6324340b5e2aa41862eb678c38553839ad9632d030a99f62111c20283e936cdb",
+    "src/apps/web_page.c": "d3b56a17f136bd5692761c9dffe7f45dcedf987341cd9d5812ae500212e9128e"
+  },
+  "old": {
+    "src/apps/web_net.c": "7654d1c5265255970e0b9fd760faf44f88c2d7658dd146695be584463993d83d",
+    "src/apps/web_net.h": "f9cc5b6687cd0eb9aa225ebf86a61cdc9e1c6aa4e4e4acbadcede76b976828b7",
+    "src/apps/web_page.c": "6049293754c678594c6b83208bfb76b547b9adc6b4bd9052a45302123a87e91d"
+  },
+  "version": 1
+}

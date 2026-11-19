@@ -1,0 +1,53 @@
+{
+  "created": {
+    "docs/PARCHE_185_JS_UTF16.md": "ebedf224f83ce2222be7c6a9fd5901314b9523fab0d864f6b6cfb67e82f7e4c4",
+    "src/apps/web_js_u16.c": "0d5c0d1df2761142581f0abc0f27c53fe6e3e23c0f18e8ed77577555b2aebd87",
+    "tests/test_web_js_185.c": "e5f298961b5b7a0ca9bb9664e885e366ddba01972c36e03afb2b4e8ae382f734"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "6caee67554e3de5f097bac79549aa0e56a88051fe4d3defe94c0914f089f7ba5",
+      "old": "bfd152820468622fa46035e9c8fd8803360f360c73d580b6febb10306cf6b0d4"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "0c4e43aceff3589a6c7e9091ee4c1e865635080bbe17ba65bd167e4b575204e7",
+      "old": "1e53a60e83164b242485e09491e5600576f9996470f78a5353a660ae6b0eead2"
+    },
+    "src/apps/web_js_i.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "ada74d22e6572a42ad1b60d4f3f54a84b14982738a805f419cd10bd8fb0e9425",
+      "old": "451a32dd71220b897b730cee227341f75aafbb0850a23ca58ada93d6d451c7d9"
+    },
+    "src/apps/web_js_lib.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "1fd6c3831a3b56bcb13be4cc98856f0c559a78874d4a65a32e7302141c227041",
+      "old": "8f3a69007f531270ca72b2940fdd0b380f907f1ddccbe371ba39184d5295959c"
+    },
+    "src/apps/web_js_lib2.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "d38749957153ea4ecfe2035b1cc7db6db4137de88d8ed2050a7d8b2681414f89",
+      "old": "0bb32e29d72678842ce2276fa9726c3698aed5b415d11e9549786c91e16810cf"
+    },
+    "src/apps/web_js_regex.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "d8e766d219b6593fca07a63eb5585fe64a3812316b088de62fe344d6a5217329",
+      "old": "957ab5474ff4fae28366f61711b03eb9d0bd840798d24f6af62ebb6435ecb828"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "dd21b3ef81662537dd80b348c4b4fbce5ad3a5260af5023195916deff0d7536c",
+      "old": "9d050a099989206802c171aedd75bda707cf7bfe9112361a1b79c98e3f169d88"
+    }
+  },
+  "log": "20261116_224432 parche 185: motor JavaScript: cadenas UTF-16 (length, indices, pares sustitutos, regex, escape/unescape)",
+  "version": 1
+}

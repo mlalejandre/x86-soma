@@ -54,9 +54,11 @@ extern volatile uint32_t sched_preempt_count;
 void thread_sleep(uint32_t ms);
 void thread_exit(void);
 int  thread_kill(uint32_t tid);
+int  thread_wake(uint32_t tid);          /* PARCHE 139: adelanta el despertar de un hilo dormido */
 struct tcb *thread_current(void);
 void thread_reap_dead(void);
 void thread_dump(void);
+int  thread_format_stacks(char *out, uint32_t max);   /* PARCHE 132: marca de agua de pila por hilo; devuelve los que pasan del 80 % */
 int  thread_test_self(void);
 int  thread_format_table(char *out, uint32_t max);
 

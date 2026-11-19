@@ -1,0 +1,40 @@
+{
+  "created": {
+    "src/ui/sysicon.c": "3d09124b9f4326042b006bac6248c6ac0692dbb72407edcce87a60149fea40c2",
+    "src/ui/sysicon.h": "10faecc3541c3073b242bd0c039a70ccb0b5aa4217a6239eb444bd3c1ee71b09"
+  },
+  "date": "20261119_184942",
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "c21d857bdefe45b22b45b47ae63fd48de064e4eeddd71489257661fc7688503f",
+      "old": "2a8024387ede7cce9bf027431c3aa73733dd6f4062d57f26ca9d1ccb655ace58"
+    },
+    "src/apps/camapp.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "94522789cad5b1b27f569cba1b0fb3e11837a5704b860940077fdf8073a141f4",
+      "old": "8692a2bf1fda2a7e03801db3aae116ebb2fcc35f508f9d6ddc5d3d413835b341"
+    },
+    "src/apps/capapp.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "70f919cdfbcef7eee2aa29c8c53ef2af0ced346d68adc93089c3f629d96338d1",
+      "old": "a02a018cee8f663c5b06dd39f928bc8ea41cf452fb2990de9c8c4922db61291d"
+    },
+    "src/apps/recorder.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "c564dfac9946697d68a81d5b4b451bcddcccfd56b342105b83a65e8a96fb9f93",
+      "old": "cfabbe3b441302b0de57985348290265bafa3eccc990a8681a59c84f95069aaa"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "3089221cbfb77f070b9fcb93279bc3450b999e9f14651ca464b6681d4bbc0010",
+      "old": "535dba5589f9f3634aa1f808b6efb595c9c5779958f4fd4bddf20358c429e9c4"
+    }
+  },
+  "name": "210_iconos_sistema"
+}

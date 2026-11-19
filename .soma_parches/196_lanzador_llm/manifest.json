@@ -1,0 +1,58 @@
+{
+  "created": {
+    "docs/PARCHE_196_LANZADOR_LLM.md": "8c84671605caf761bd8ada04aa9521029e766d8ecc6d05fcfa49f59597361b74",
+    "tools/soma_lanzador.py": "affc90817ca603d7790b77b274962da6b43e20cd5ab673ab75143ef5b229e794"
+  },
+  "date": "20261117_234254",
+  "files": {
+    "src/agent/llm.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "961a9649699b26931bf33a950972ccc6667e9d040ab85214094429b79f7c9bc4",
+      "old": "2e1185446fa45b6c2345b52d0515b4261ff45d0890d5d97024745e5e1b6bcf3d"
+    },
+    "src/agent/llm.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "37ca000a3c889fab01513a8e77a3d909ce276f2e8ae9f2ecb9bfde9ac7344af4",
+      "old": "9541519544f1435fddec8f92124214376513f2ffffc91ef2c7af3461c891d247"
+    },
+    "src/agent/llm_proto.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "c964d22de397fa4c005233637d2b4464a71c6299812f6518134bb9a9f685d991",
+      "old": "9fce432eceaf6284c780b68e1aad6b2f078f782998dadc73c2802266bde5203f"
+    },
+    "src/agent/llm_proto.h": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "bb42e4da1a572dc5c181b210182ff5556e500adcc3beb6403d602870511c099e",
+      "old": "9729c8e35d6cc7586015551cd981a7b1821c3f16d066b892c359b35038e3a1ac"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "e5a20cc7f49593dd2527d78bb7b6214a1c86b234a02fc9dd32093fc1b323aaaa",
+      "old": "6f4cb58e51c2970d5c3a261017cd415d2f9fd744ecb5ec78625525bec2068b57"
+    },
+    "src/apps/settings.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "757ab18d9d6f6fa883a33a7ef6175c2d6bed13ea101d8e796d96d6cc9982da6b",
+      "old": "280cecbdce4edfdf22bbc99219edd299d3285017701acc8ccd6e1865846b56d0"
+    },
+    "src/ui/console.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "8f942308a8d3d14696ee0e647083134564ac204bdb7e674f8865ab3689ed7b3d",
+      "old": "8ce300dc1a12b70e8144b17b2dc6e0d6d3e618daa7499631a3c2b6085d166790"
+    },
+    "tests/test_llm_proto_195.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "6aa8a4bf344de252b87df7c6ed15c99e78a4a25d3237606340f02320f8348bb3",
+      "old": "59ca3d87544d10f0bb1a5407c27e9f2c76e896bf0959b76ed102cc2980116fc2"
+    }
+  },
+  "name": "196_lanzador_llm"
+}

@@ -32,7 +32,10 @@ enum soma_icon_id {
     ICON_SETTINGS = 12,    /* PARCHE 085: engranaje (vectorial) */
     ICON_PDF = 13,         /* PARCHE 088: documento PDF (vectorial) */
     ICON_MONITOR = 14,     /* PARCHE 089: monitor del sistema (vectorial) */
-    ICON_COUNT = 15
+    ICON_MIC = 15,         /* SOMA_177_T480S: grabadora (microfono, vectorial) */
+    ICON_CAM = 16,         /* SOMA_178_T480S: camara web (vectorial) */
+    ICON_SCR = 17,         /* SOMA_179_T480S: captura de pantalla (vectorial) */
+    ICON_COUNT = 18
 };
 
 static inline const uint8_t (*icon_get_data(int id))[16]

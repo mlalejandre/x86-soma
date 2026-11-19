@@ -1,5 +1,6 @@
 #include "lang/lang.h"
 #include "arch.h"
+#include "agent_net.h"
 #include "agent.h"
 #include "coder_app.h"
 #include "rtc.h"
@@ -1687,20 +1688,22 @@ static int programador_should_handle(const char *m)
 static void programador_run(const char *mission)
 {
     extern int gui_is_running(void);
-    extern void gui_open_coder_app(void);
-    extern void coder_app_load_project(const char *path);
+    extern void gui_open_coder_file(const char *path);
     static char target[128];
     kprint("\n\033[1;36m[PROGRAMADOR] La mision es de programacion: la resuelve el programador de SOMA.\033[0m\n");
     coder_pick_target(mission, target, sizeof target);
     agent_last_response[0] = '\0';
     int ok = coder_run_mission(target, mission, agent_last_response, sizeof(agent_last_response));
     mayordomo_store_reply(agent_last_response, 1);
-    if (ok && gui_is_running()) { coder_app_load_project(target); gui_open_coder_app(); }
+    if (ok && gui_is_running()) gui_open_coder_file(target);   /* SOMA_217_STUDIO: la ventana de ese archivo, o una nueva */
 }
 
 void agent_run(const char *agent_name, const char *mission)
 {
     while (*mission == ' ') mission++;
+    /* SOMA_193: las URL que escribe el USUARIO en su mision son destinos permitidos. Las de una mision delegada por otro agente no
+     * (las redacta el modelo: podrian llevar datos pegados). */
+    { extern int shell_agent_mode(void); if (!shell_agent_mode()) agent_net_observe(mission); }
     const char *requested_agent = agent_name ? agent_name : "soma";
     if (str_eq_ci(requested_agent, "mayordomo")) {
         mayordomo_run(mission);

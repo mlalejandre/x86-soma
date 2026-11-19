@@ -33,10 +33,18 @@ static void crash(void) { memcpy(live, dur, sizeof live); npend = 0; }
 static void crash_random(void) { for (int i = 0; i < npend; ++i) if (rnd64() & 1) memcpy(dur[pend[i].lba], pend[i].d, 512); memcpy(live, dur, sizeof live); npend = 0; }
 static void clean(void) { memset(live, 0, sizeof live); memset(dur, 0, sizeof dur); npend = 0; budget = -1; volatile_cache = 0; skip_flush = 0; }
 static uint8_t A[N][512], B[N][512];
-#define SAVE(seq) ckpt_save(&dev, LIVE, CK, N, MK, seq)
-#define VALID() ckpt_valid(&dev, CK, N, MK)
-#define RESTORE() ckpt_restore(&dev, CK, LIVE, N, MK, INT, JR)
-#define RECOVER() ckpt_recover(&dev, CK, LIVE, N, MK, INT, JR)
+static const struct ckpt_slot SA = { MK, CK, 0, N };                        /* ranura A: lineal */
+static const struct ckpt_slot SB = { 500, 510, 700, 10 };                   /* ranura B (PARCHE 130): partida en dos tramos (10 + 14 sectores) */
+#define SAVE(seq) ((void)(seq), ckpt_save(&dev, LIVE, &SA, 0, N))             /* una sola ranura: el comportamiento del parche 120 */
+#define VALID() ckpt_valid(&dev, &SA, 0, N)
+#define RESTORE() ckpt_restore(&dev, &SA, 0, LIVE, N, INT, JR)
+#define RECOVER() ckpt_recover(&dev, &SA, 0, LIVE, N, INT, JR)
+#define SAVE2() ckpt_save(&dev, LIVE, &SA, &SB, N)
+#define VALID2() ckpt_valid(&dev, &SA, &SB, N)
+#define RESTORE2() ckpt_restore(&dev, &SA, &SB, LIVE, N, INT, JR)
+#define RECOVER2() ckpt_recover(&dev, &SA, &SB, LIVE, N, INT, JR)
+static int slot_is(const struct ckpt_slot *sl, uint8_t v[N][512]) { for (uint32_t s = 0; s < N; ++s) if (memcmp(dur[ckpt_lba(sl, s)], v[s], 512)) return 0; return 1; }
+static int newest_is(uint8_t v[N][512]) { const struct ckpt_slot *w = ckpt_pick(&dev, &SA, &SB, N, 0, 0); return w && slot_is(w, v); }
 
 static void t_basico(void)
 {
@@ -119,6 +127,68 @@ static void t_aleatorio(void)
         CHECK(live_is(A) || live_is(B), "iteracion %d: VFS mezclado", it);
     }
 }
+/* PARCHE 130: dos generaciones. Los sectores de la ranura B estan partidos: el mapa de LBA se comprueba explicitamente. */
+static void t_ab_basico(void)
+{
+    static uint8_t C[N][512];
+    clean(); fillv(A, 1); put_live(A);
+    CHECK(SAVE2() == 0, "guardar 1"); CHECK(slot_is(&SA, A) && VALID2() == 2, "el primero va a la ranura A");
+    fillv(B, 2); put_live(B); CHECK(SAVE2() == 0, "guardar 2"); CHECK(slot_is(&SB, B) && slot_is(&SA, A), "el segundo va a la ranura B y A sigue intacta");
+    fillv(C, 3); put_live(C); CHECK(SAVE2() == 0, "guardar 3"); CHECK(slot_is(&SA, C) && slot_is(&SB, B), "el tercero vuelve a A y B sigue intacta");
+    for (uint32_t s = 0; s < 10; ++s) CHECK(ckpt_lba(&SB, s) == 510 + s, "tramo 1 de B");
+    for (uint32_t s = 10; s < N; ++s) CHECK(ckpt_lba(&SB, s) == 700 + (s - 10), "tramo 2 de B");
+    CHECK(memcmp(dur[510], B[0], 512) == 0 && memcmp(dur[700], B[10], 512) == 0, "los datos de B estan en sus dos tramos");
+    fillv(A, 9); put_live(A); CHECK(RESTORE2() == 0 && live_is(C), "restaurar usa la mas reciente (C)");
+}
+static void t_ab_fallback(void)
+{
+    static uint8_t C[N][512];
+    clean(); fillv(A, 1); put_live(A); SAVE2(); fillv(B, 2); put_live(B); SAVE2(); fillv(C, 3); put_live(C);
+    dur[ckpt_lba(&SB, 15)][9] ^= 1; memcpy(live, dur, sizeof live);        /* se estropea la ranura mas reciente (B, en su segundo tramo) */
+    CHECK(VALID2() == 2 && newest_is(A), "con la nueva corrupta la valida es la anterior (A)");
+    CHECK(RESTORE2() == 0 && live_is(A), "restaurar cae a la generacion anterior");
+    dur[ckpt_lba(&SA, 2)][0] ^= 1; memcpy(live, dur, sizeof live);
+    CHECK(VALID2() == 0 && RESTORE2() == -1, "con las dos corruptas se niega y no toca el VFS");
+    /* una marca de intencion pendiente con una sola ranura valida: la recuperacion usa esa */
+    clean(); fillv(A, 1); put_live(A); SAVE2(); fillv(B, 2); put_live(B); SAVE2(); fillv(C, 3); put_live(C); fl(0);
+    dur[ckpt_lba(&SB, 3)][1] ^= 1; memcpy(live, dur, sizeof live);
+    budget = 3; RESTORE2(); budget = -1; crash(); CHECK(RECOVER2() >= 0 && live_is(A), "recuperar tras un corte rehace desde la ranura valida");
+}
+/* corte tras CADA escritura de un guardado con dos ranuras: SIEMPRE queda un checkpoint valido, entero, el anterior o el nuevo */
+static int t_ab_cortes(int vol, int mutacion)
+{
+    static uint8_t C[N][512]; int sin_valido = 0, viejo = 0, nuevo = 0, total = 0;
+    for (long cut = 0; cut < 200; ++cut) {
+        clean(); volatile_cache = vol; fillv(A, 1); put_live(A); memcpy(dur, live, sizeof live); SAVE2(); fl(0);
+        fillv(B, 2); put_live(B); SAVE2(); fl(0); memcpy(dur, live, sizeof live);
+        fillv(C, 3); put_live(C); fl(0);
+        budget = cut; int r;
+        if (!mutacion) r = SAVE2();
+        else { const struct ckpt_slot *w = ckpt_pick(&dev, &SA, &SB, N, 0, 0); r = ckpt_save(&dev, LIVE, w, 0, N); }   /* MUTACION: pisa la mas reciente */
+        budget = -1;
+        if (vol) crash_random(); else crash();
+        int v = VALID2(); total = (int)cut + 1;
+        if (!v) { sin_valido++; if (!mutacion) CHECK(0, "tras el corte %ld no queda NINGUN checkpoint valido", cut); }
+        else { if (newest_is(B)) viejo++; else if (newest_is(C)) nuevo++; else { sin_valido++; if (!mutacion) CHECK(0, "tras el corte %ld la valida no es ni la anterior ni la nueva", cut); } }
+        if (r == 0) break;
+    }
+    if (!mutacion) { CHECK(viejo > 0 && nuevo > 0, "debe haber cortes en ambos lados (anterior %d, nuevo %d)", viejo, nuevo);
+        printf("  A/B guardado (%s): %d cortes: siempre hay checkpoint valido (%d dejan el anterior, %d el nuevo)\n", vol ? "cache volatil" : "sin cache", total, viejo, nuevo); }
+    return sin_valido;
+}
+static void t_ab_aleatorio(void)
+{
+    static uint8_t C[N][512];
+    for (int it = 0; it < 2000; ++it) {
+        clean(); volatile_cache = 1; fillv(A, (uint8_t)it); put_live(A); fl(0); SAVE2(); fl(0); fillv(B, (uint8_t)(it + 31)); put_live(B); fl(0); SAVE2(); fl(0);
+        fillv(C, (uint8_t)(it + 77)); put_live(C); fl(0);
+        budget = (long)(rnd64() % 90); int op = (int)(rnd64() % 3); if (op == 0) SAVE2(); else if (op == 1) RESTORE2(); else { SAVE2(); RESTORE2(); } budget = -1;
+        crash_random(); RECOVER2();
+        CHECK(VALID2() != 0, "iteracion %d: sin checkpoint valido", it);
+        CHECK(newest_is(A) || newest_is(B) || newest_is(C), "iteracion %d: checkpoint valido pero mezclado", it);
+        CHECK(live_is(A) || live_is(B) || live_is(C), "iteracion %d: VFS mezclado", it);
+    }
+}
 /* mutaciones: si se quita una proteccion, el test DEBE fallar */
 static int mutacion_sin_barrera_previa(void)
 {
@@ -144,9 +214,11 @@ static int mutacion_sin_recuperar(void)
 }
 int main(void)
 {
-    printf("== PARCHE 120: checkpoint del VFS ==\n");
+    printf("== PARCHE 120/130: checkpoint del VFS (una y dos generaciones) ==\n");
     t_basico(); t_corrupcion();
     t_guardar_cortes(0); t_guardar_cortes(1); t_restaurar_cortes(0); t_restaurar_cortes(1); t_aleatorio();
+    t_ab_basico(); t_ab_fallback(); t_ab_cortes(0, 0); t_ab_cortes(1, 0); t_ab_aleatorio();
+    { int m = t_ab_cortes(0, 1); CHECK(m > 0, "MUTACION: pisando la ranura mas reciente el test no vio la perdida de la generacion anterior"); printf("  mutacion (guardar sobre la mas reciente): %s (%d cortes que pierden la generacion anterior)\n", m ? "detectada" : "NO detectada", m); }
     int m1 = mutacion_sin_barrera_previa();
     CHECK(m1, "MUTACION: sin barreras el test no detecto un checkpoint valido a medias");
     printf("  mutacion (sin barreras): %s\n", m1 ? "detectada" : "NO detectada");

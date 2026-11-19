@@ -1,0 +1,87 @@
+{
+  "created": {
+    "docs/PARCHE_178_T480S_CAMARA.md": "4614b435629146f73089d71529a512310882bde9f229609149161d5da662e440",
+    "src/apps/camapp.c": "8692a2bf1fda2a7e03801db3aae116ebb2fcc35f508f9d6ddc5d3d413835b341",
+    "src/apps/camapp.h": "505e0addba12d20ad5fca06c845e121048ec03dfc2a6ec11416be7b4c8f88f7c",
+    "src/arch/x86_64/xhci_cam.inc": "30094c0432eb0eabb641f2a268e39c8635bf3617c5abec5284f213d77fef8b62",
+    "src/core/avi_wr.c": "03fd2dde4a0d070981bf3d8bf423e0cee0cf806ef84df7d26670f4716aa8726d",
+    "src/core/avi_wr.h": "5e08c47f6cc12067f1ca3dd6a3b6303d01f0b32157f9c2682dc8257f77328c7a",
+    "src/core/cam_hw.h": "630fabaed3860899a81f8406be3f105bdb0cf01cae6912336c82a3141404d507",
+    "src/core/camera.c": "13b7b1fe55365b6e9ab69636fd00b84159fe0fff8e7121a04c371b1bbe4014f0",
+    "src/core/camera.h": "1664c5fd413ba62ffb0d75e130fe68fe2b94231e604b3d7e996b782c8394538d",
+    "src/core/uvc.c": "d9bcdcf9268493d84538f2e5e21440543a13a726bac041943f83bb9b0e207217",
+    "src/core/uvc.h": "0231533b98fe526c502097fbed6634ba99d91f4921b160eb6918b23ab36ee5fe",
+    "tests/test_avi_wr_178.c": "6f4f29eac35938c35323f56a40f696592c392096c5d21cd406b17e286d7e25fc",
+    "tests/test_uvc_178.c": "857c627a098c6440705096ad6c6d6d7d13a38ed0bfa67c943de91867e2d154b0"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_9.bin",
+      "kind": "adaptado",
+      "new": "2b8c75ca6e6220fda343d06d82da0881443b1501cf9140b3fdae9206db95c276",
+      "old": "40fd0c02ea8873b546513efb8c872a32bc64fdf5ca9a7207f33733cd6d255298"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "e13f73d3f728329502210c61dd1f5b632cb9055414b19ad7b32b58a7a4bbc5e9",
+      "old": "4c94bb4f031be4a4003d3d9046304090e79e3596b24276790db4b4c8221dff91"
+    },
+    "src/arch/x86_64/xhci.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "746ac686f69bebe139dc0a3fa79397596550993adbbceeecf44491bd091103aa",
+      "old": "8bc266db565d4ed7e4dd9228745712c3ca1990bdc5da33eadbcf1bd877344405"
+    },
+    "src/core/micrec.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "b79352de39948f6b90fee2ed164cc1708a231ec0ae89ffebf7dd966e442ad3a8",
+      "old": "bd9fb0521bdcda0a4509f8844a013c1f698e4633c09b85efdeb73d7f1fa0d2d8"
+    },
+    "src/core/micrec.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "cbe1c398cd7ef42782508fb6b10379a61784e3063af6deaf3d1c4efeee9ade44",
+      "old": "ae995ea9da1d63ca28175213c52fd7ace99cb6890fc3683568ce158c111c7ca2"
+    },
+    "src/core/xhci_proto.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "03911b550d834f7dcbe135bfa0eeaae28880b071cebb8db57e39cb8898592f29",
+      "old": "bee7cd9cb50f17a2f10964152aaa3f91515c452005d23cd578a5ac4e21d03373"
+    },
+    "src/core/xhci_proto.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "af09e4b10750d51fb2b450bce4f01f3208b3adfbd1f7e411d9e4c4b88db5859e",
+      "old": "cca618a3dcdaa2deb7a909d42f153dcb220950e75415313654bd8b612b8b9014"
+    },
+    "src/icons/icons.h": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "a8c10909ccb9cfb59165cacb64c8fc534d1d3050ba3500d6f0fa2e163c9eacf8",
+      "old": "a5148e83e1f7ee3ee22a358029db3b71dfd21ba3eb176f3424c3e229b48fd3a6"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "ca30e2434e320939ffc693f19af59d977dbbc7220f071d839f8f484a0bcf1448",
+      "old": "6c127de629d6fa101534f675510c287e8a3ec9d49f5449be0fb230921c9613f1"
+    },
+    "src/ui/gui.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "4aa8a0bf662a7daf0cb0435412e746271bdd00abb8cf665a401918591bdbd917",
+      "old": "1155f92d14186114f9a919101c261bd90cbadff6ae866e4e5b4d9d3941205599"
+    },
+    "tests/test_xhci.c": {
+      "backup": "original_10.bin",
+      "kind": "exacto",
+      "new": "26b6c5603033c5a63cdec55be57ee7e1af89ba55af8c39e2af5f65bf4894545d",
+      "old": "5b9fae0be4e697a38aee7d76f5f2f77bca7624606970ef63a58ad6f01cc80711"
+    }
+  },
+  "log": "20261116_164434 parche 178: camara web UVC, foto y grabacion de video",
+  "version": 1
+}

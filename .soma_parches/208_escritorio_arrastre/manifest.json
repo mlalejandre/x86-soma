@@ -1,0 +1,19 @@
+{
+  "created": {},
+  "date": "20261119_160915",
+  "files": {
+    "src/agent/shell.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "cc1c7cbd7f85e1288482142a57cf4c5bfbecb00ed11b0e8d635247ccc6bb0e3e",
+      "old": "ad50e5e25763e648beefb5c64d62f0e916f128527bc48bec34a217f08790a681"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "3d2924efa1daeb2dea604e6bcf83797c8ea1ea8098f3092b9c6c74d23f3a7289",
+      "old": "3807ca175c0e519439910bafff266b340944af21de3d49af25c2b7e7f4c0e9e6"
+    }
+  },
+  "name": "208_escritorio_arrastre"
+}

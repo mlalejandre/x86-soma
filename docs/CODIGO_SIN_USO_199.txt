@@ -1,0 +1,684 @@
+# SOMA_199: secciones que el enlazador descarta en x86_64 por no tener ninguna referencia (objeto y simbolo).
+# Generado con: make ARCH=x86_64 LDEXTRA='--gc-sections --print-gc-sections'
+acpi_sys.o .eh_frame
+acpi_sys.o text acpi_ac_online
+acpi_sys.o text acpi_lid_open
+acpi_sys.o text acpi_power_setup
+agent.o .eh_frame
+agent_net.o .eh_frame
+agent_net.o text agent_net_allow_clear
+ahci.o .eh_frame
+ahci.o text ahci_flush
+ahci.o text ahci_ready
+ahci.o text ahci_sector_count
+apic.o .eh_frame
+apic.o text apic_routed
+audio.o .eh_frame
+audio.o text audio_media_bytes
+audio_sys.o .eh_frame
+avi.o .eh_frame
+avi.o text avi_walk
+avi_wr.o .eh_frame
+avi_wr.o text avi_wr_size
+backlight.o .eh_frame
+bigfs.o .eh_frame
+bigfs_glue.o .eh_frame
+blk.o .eh_frame
+blk_glue.o .eh_frame
+boot_gate.o .eh_frame
+bootfb.o .eh_frame
+bootfb.o text bootfb_console_active
+bootfb.o text bootinfo_loader
+brcm_proto.o .comment
+brcm_proto.o .eh_frame
+brcm_proto.o rodata CSWTCH.31
+brcm_proto.o rodata brcm_event_name.str1.1
+brcm_proto.o rodata cst2
+brcm_proto.o rodata str1.1
+brcm_proto.o text bcdc_build
+brcm_proto.o text bcdc_data_build
+brcm_proto.o text bcdc_data_skip
+brcm_proto.o text bcdc_parse
+brcm_proto.o text brcm_clm_chunk
+brcm_proto.o text brcm_escan_params
+brcm_proto.o text brcm_event_mask
+brcm_proto.o text brcm_event_name
+brcm_proto.o text brcm_event_parse
+brcm_proto.o text brcm_iovar
+brcm_proto.o text brcm_ssid
+brcm_proto.o text brcm_wsec_key
+brcm_proto.o text sdpcm_build
+brcm_proto.o text sdpcm_can_send
+brcm_proto.o text sdpcm_parse
+browser.o bss buf.0
+browser.o bss wu_ycnt
+browser.o bss wu_ylast
+browser.o .eh_frame
+browser.o text browser_get_element_text_by_id
+browser.o text browser_js_eval
+browser.o text browser_set_element_text_by_id
+browser.o text gettext_thunk
+browser.o text jpeg_yield_hook
+browser.o text settext_thunk
+camapp.o .eh_frame
+camera.o .eh_frame
+camera.o text camera_init
+camera.o text camera_present
+capapp.o .eh_frame
+ccmp.o .eh_frame
+clipboard.o .eh_frame
+clipboard.o text clip_overlay_close
+codeedit.o .eh_frame
+codeedit.o text ce_prompt_kind
+coder_app.o .eh_frame
+coder_core.o .eh_frame
+coder_core.o text cc_busy
+coder_core.o text cc_extract_code
+coder_demo.o .eh_frame
+conc_test.o .eh_frame
+console.o .eh_frame
+console.o text console_uart_dead
+console.o text console_uart_timeouts
+cpupower.o .eh_frame
+crypto.o .eh_frame
+dhcp.o .eh_frame
+dhcp_proto.o .eh_frame
+dma_pool.o .comment
+dma_pool.o .eh_frame
+dma_pool.o text dma_pool_alloc
+dma_pool.o text dma_pool_contains
+dma_pool.o text dma_pool_init
+dma_pool.o text dma_pool_used
+dns.o .eh_frame
+dns.o rodata names.0
+dns.o rodata net_run_dns_test.str1.1
+dns.o rodata str1.1
+dns.o text net_run_dns_test
+e1000e.o .eh_frame
+elf.o .eh_frame
+fat.o .eh_frame
+fb.o .eh_frame
+fb.o text fb_draw_circle
+fb.o text fb_set_mode_hd
+fm.o .eh_frame
+fm.o text fm_open_folder
+fm.o text fm_refresh
+fs.o .eh_frame
+fs.o text fs_blk_flush
+fs.o text fs_blk_read
+fs.o text fs_blk_write
+fs.o text vfs_format_list
+fs.o text vfs_list
+fs.o text vfs_tree
+fwcfg.o .eh_frame
+gem_proto.o .comment
+gem_proto.o .eh_frame
+gem_proto.o text gem_dmacfg
+gem_proto.o text gem_link_resolve
+gem_proto.o text gem_mac_from_regs
+gem_proto.o text gem_mac_to_regs
+gem_proto.o text gem_mac_valid
+gem_proto.o text gem_mdio_cmd
+gem_proto.o text gem_next
+gem_proto.o text gem_nwcfg
+gem_proto.o text gem_nwcfg_link
+gem_proto.o text gem_rx_desc_init
+gem_proto.o text gem_rx_desc_release
+gem_proto.o text gem_rx_len
+gem_proto.o text gem_rx_sw_owned
+gem_proto.o text gem_rx_whole
+gem_proto.o text gem_tx_desc_fill
+gem_proto.o text gem_tx_desc_init
+gem_proto.o text gem_tx_done
+gpio_proto.o .comment
+gpio_proto.o .eh_frame
+gpio_proto.o rodata gpio_parse.str1.1
+gpio_proto.o text gpio_ctrl_off
+gpio_proto.o text gpio_ctrl_with_func
+gpio_proto.o text gpio_func_of
+gpio_proto.o text gpio_pad_ie
+gpio_proto.o text gpio_pad_od
+gpio_proto.o text gpio_pad_off
+gpio_proto.o text gpio_pad_pull
+gpio_proto.o text gpio_pad_value
+gpio_proto.o text gpio_parse
+gpio_proto.o text gpio_pin_mask
+gpio_proto.o text gpio_status_off
+gpio_proto.o text gpio_valid
+gpio_proto.o text word_is
+gui.o bss her_stream_dec
+gui.o .eh_frame
+gui.o text gui_agent_busy
+gui.o text gui_leave
+gui.o text gui_open_agents
+gui.o text gui_open_file_manager
+gui.o text gui_soma_win_get_title
+gui.o text gui_soma_win_on_close
+gui.o text gui_soma_win_push_key
+gui.o text gui_soma_win_record_click
+gui.o text gui_stream_begin
+gui.o text gui_stream_push
+gui_font.o .eh_frame
+gui_font.o rodata FF_NAME
+gui_font.o rodata font_draw_string_ansi
+gui_font.o text font_draw_string_ansi
+gui_font.o text font_face_name
+gui_font.o text vicon_draw_tile
+hda.o .eh_frame
+hda.o text hda_cap_running
+hid_proto.o .eh_frame
+http.o .eh_frame
+http.o text http_request
+httpd.o .eh_frame
+httpd.o rodata httpd_init.str1.1
+httpd.o text httpd_init
+hwinfo.o .eh_frame
+hwinfo.o rodata hw_fdt_parse.str1.1
+hwinfo.o text fdt_next
+hwinfo.o text fdt_open
+hwinfo.o text hw_fdt_find_reg
+hwinfo.o text hw_fdt_parse
+hwinfo.o text str_has
+hwmon.o .eh_frame
+hwscan.o .eh_frame
+i8042.o .eh_frame
+i8042.o text i8042_service
+idt.o bss timer_sleep_noirq_count
+idt.o .eh_frame
+idt.o text timer_sleep_ms
+idt.o text tss_init
+image.o .eh_frame
+image.o text image_render_alpha
+imgview.o .eh_frame
+ip.o .eh_frame
+ip.o rodata llm.0
+ip.o rodata net_run_ping_test.str1.1
+ip.o rodata net_run_ping_test.str1.8
+ip.o text net_run_ping_test
+iwl.o .eh_frame
+iwl.o text iwl_get
+iwl.o text iwl_wifi_saved_count
+iwl.o text iwl_wifi_saved_name
+iwl_fw.o .eh_frame
+jpeg_enc.o .eh_frame
+js_runtime.o .comment
+js_runtime.o .eh_frame
+js_runtime.o rodata js_runtime_eval.str1.1
+js_runtime.o text js_runtime_cleanup
+js_runtime.o text js_runtime_eval
+js_runtime.o text js_runtime_init
+js_runtime.o text soma_strstr
+kernel.o .eh_frame
+lang.o .eh_frame
+lang.o text lang_test_self
+layout.o .eh_frame
+layout.o text layout_get_prompt
+lexer.o .eh_frame
+lexer.o rodata CSWTCH.22
+lexer.o rodata str1.1
+lexer.o rodata token_type_name.str1.1
+lexer.o text token_type_name
+llm.o .eh_frame
+llm_proto.o .eh_frame
+mbox_proto.o .comment
+mbox_proto.o .eh_frame
+mbox_proto.o text mbox_fb_build
+mbox_proto.o text mbox_fb_build_getphys
+mbox_proto.o text mbox_fb_build_query
+mbox_proto.o text mbox_fb_consistent
+mbox_proto.o text mbox_fb_fix
+mbox_proto.o text mbox_fb_parse
+mbox_proto.o text mbox_fb_parse_any
+mbox_proto.o text mbox_fb_parse_phys
+media.o .eh_frame
+media.o text media_seek_abs
+media.o text media_seek_rel
+mem.o .eh_frame
+mem.o text kheap_check_quick
+mem.o text kheap_test_reentry
+memprot.o .eh_frame
+memview.o .eh_frame
+micrec.o .eh_frame
+mouse.o .eh_frame
+mouse.o text mouse_right_held
+mouse.o text trackpad_apply_config
+msc_proto.o .eh_frame
+mutex.o .eh_frame
+mutex.o text kmutex_long_waits
+mutex.o text kmutex_wait_register
+mutex.o text kmutex_wait_unregister
+mutex.o text kmutex_waiters
+nano.o .eh_frame
+net.o .eh_frame
+netif.o .eh_frame
+netmgr.o .eh_frame
+notepad.o .eh_frame
+notepad.o text notepad_handle_drag
+notepad.o text notepad_handle_mouse_up
+notepad.o text notepad_handle_right_click
+nvme.o .eh_frame
+nvme.o text nvme_flush
+nvme.o text nvme_ready
+nvme_proto.o .eh_frame
+paint.o .eh_frame
+panic.o .eh_frame
+panic.o text panic_hex64
+panic.o text panic_reset
+panic.o text wd_evaluate
+pci.o .eh_frame
+pcie_proto.o .comment
+pcie_proto.o .eh_frame
+pcie_proto.o rodata CSWTCH.12
+pcie_proto.o rodata pcie_class_name.str1.1
+pcie_proto.o rodata str1.1
+pcie_proto.o text pcie_align_up
+pcie_proto.o text pcie_alloc_bar
+pcie_proto.o text pcie_bar_size
+pcie_proto.o text pcie_class_name
+pcie_proto.o text pcie_ecfg_index
+pcie_proto.o text pcie_inbar_regs
+pcie_proto.o text pcie_outwin_regs
+pdf_sbx.o .eh_frame
+pdfview.o .eh_frame
+pmm.o .eh_frame
+png_enc.o .eh_frame
+png_enc.o text deflate_work_size
+png_enc.o text png_adler32
+png_enc.o text png_crc32
+ramstat.o .eh_frame
+recorder.o .eh_frame
+rng.o .eh_frame
+rp1_proto.o .comment
+rp1_proto.o .eh_frame
+rp1_proto.o rodata T
+rp1_proto.o rodata rp1_periph_name.str1.1
+rp1_proto.o rodata str1.1
+rp1_proto.o text rp1_is_rp1
+rp1_proto.o text rp1_periph_cpu
+rp1_proto.o text rp1_periph_len
+rp1_proto.o text rp1_periph_name
+rp1_proto.o text rp1_periph_off
+rtc.o .eh_frame
+sandbox.o .eh_frame
+sandbox_test.o .eh_frame
+savedlg.o .eh_frame
+scrcap.o .eh_frame
+scrcap_dsp.o .eh_frame
+sd_proto.o .comment
+sd_proto.o .eh_frame
+sd_proto.o rodata sd_cmd_word
+sd_proto.o text sd_clk_div
+sd_proto.o text sd_clock_reg
+sd_proto.o text sd_cmd_word
+sd_proto.o text sd_csd_sectors
+sdio_proto.o .comment
+sdio_proto.o .eh_frame
+sdio_proto.o rodata brcm_core_name.str1.1
+sdio_proto.o rodata mem.0
+sdio_proto.o rodata rpi_board_decode
+sdio_proto.o rodata rpi_board_decode.str1.1
+sdio_proto.o text brcm_chipid_decode
+sdio_proto.o text brcm_core_name
+sdio_proto.o text brcm_cr4_bank_bytes
+sdio_proto.o text brcm_erom_parse
+sdio_proto.o text brcm_is_nvram_token
+sdio_proto.o text brcm_nvram_pack
+sdio_proto.o text brcm_rambase
+sdio_proto.o text brcm_shared_parse
+sdio_proto.o text rpi_board_decode
+sdio_proto.o text sb_window
+sdio_proto.o text sdio_cis_manfid
+sdio_proto.o text sdio_cmd52_arg
+sdio_proto.o text sdio_cmd53_arg
+sdio_proto.o text sdio_r5_ok
+settings.o .eh_frame
+shell.o .eh_frame
+smp.o .eh_frame
+srcfs.o .eh_frame
+srcfs.o text srcfs_ls
+ssp.o .eh_frame
+ssp_init.o .eh_frame
+syn_gest.o .eh_frame
+sysinfo.o .eh_frame
+sysmon.o .eh_frame
+tcp.o .eh_frame
+tcp.o text tcp_get_stats
+term_core.o .eh_frame
+term_core.o text tc_rows_of
+term_core.o text tc_scroll_max
+term_core.o text tc_vis_len
+term_ui.o .eh_frame
+tex.o .eh_frame
+textfield.o .eh_frame
+textfield.o text tf_len
+thread.o .eh_frame
+tls13.o .eh_frame
+tls_trust.o .eh_frame
+tlscrypto.o .eh_frame
+uacpi_default_handlers.o .eh_frame
+uacpi_event.o .eh_frame
+uacpi_event.o rodata __FUNCTION__.1
+uacpi_event.o rodata __FUNCTION__.10
+uacpi_event.o rodata __FUNCTION__.11
+uacpi_event.o rodata __FUNCTION__.12
+uacpi_event.o rodata __FUNCTION__.13
+uacpi_event.o rodata __FUNCTION__.14
+uacpi_event.o rodata __FUNCTION__.15
+uacpi_event.o rodata __FUNCTION__.16
+uacpi_event.o rodata __FUNCTION__.17
+uacpi_event.o rodata __FUNCTION__.2
+uacpi_event.o rodata __FUNCTION__.20
+uacpi_event.o rodata __FUNCTION__.21
+uacpi_event.o rodata __FUNCTION__.22
+uacpi_event.o rodata __FUNCTION__.5
+uacpi_event.o rodata __FUNCTION__.6
+uacpi_event.o rodata __FUNCTION__.8
+uacpi_event.o rodata __FUNCTION__.9
+uacpi_event.o rodata do_install_gpe_handler.str1.1
+uacpi_event.o rodata do_install_gpe_handler.str1.8
+uacpi_event.o rodata gpe_mask_and_flush.str1.8
+uacpi_event.o rodata uacpi_gpe_triggering_to_string.str1.1
+uacpi_event.o rodata uacpi_setup_gpe_for_wake.str1.8
+uacpi_event.o text do_install_gpe_handler
+uacpi_event.o text gpe_enable_disable_for_wake
+uacpi_event.o text gpe_get_mask_unmask
+uacpi_event.o text gpe_mask_and_flush
+uacpi_event.o text gpe_mask_safe
+uacpi_event.o text gpe_mask_unmask
+uacpi_event.o text gpe_remove_user_unlocked
+uacpi_event.o text gpe_suspend_resume
+uacpi_event.o text maybe_dispatch_gpe.isra.0
+uacpi_event.o text sanitize_device_and_find_gpe
+uacpi_event.o text uacpi_clear_fixed_event
+uacpi_event.o text uacpi_clear_gpe
+uacpi_event.o text uacpi_disable_fixed_event
+uacpi_event.o text uacpi_disable_gpe
+uacpi_event.o text uacpi_disable_gpe_for_wake
+uacpi_event.o text uacpi_enable_all_runtime_gpes
+uacpi_event.o text uacpi_enable_fixed_event
+uacpi_event.o text uacpi_enable_gpe
+uacpi_event.o text uacpi_enable_gpe_for_wake
+uacpi_event.o text uacpi_events_restore_buttons_post_wake
+uacpi_event.o text uacpi_finish_handling_gpe
+uacpi_event.o text uacpi_fixed_event_info
+uacpi_event.o text uacpi_gpe_info
+uacpi_event.o text uacpi_gpe_triggering_to_string
+uacpi_event.o text uacpi_install_gpe_block
+uacpi_event.o text uacpi_install_gpe_handler
+uacpi_event.o text uacpi_install_gpe_handler_raw
+uacpi_event.o text uacpi_mask_gpe
+uacpi_event.o text uacpi_resume_gpe
+uacpi_event.o text uacpi_setup_gpe_for_wake
+uacpi_event.o text uacpi_suspend_gpe
+uacpi_event.o text uacpi_uninstall_gpe_block
+uacpi_event.o text uacpi_uninstall_gpe_handler
+uacpi_event.o text uacpi_unmask_gpe
+uacpi_interpreter.o .eh_frame
+uacpi_io.o .eh_frame
+uacpi_io.o text uacpi_builtin_mmio_read16
+uacpi_io.o text uacpi_builtin_mmio_read64
+uacpi_io.o text uacpi_builtin_mmio_read8
+uacpi_io.o text uacpi_builtin_mmio_write16
+uacpi_io.o text uacpi_builtin_mmio_write32
+uacpi_io.o text uacpi_builtin_mmio_write64
+uacpi_io.o text uacpi_builtin_mmio_write8
+uacpi_io.o text uacpi_gas_read
+uacpi_io.o text uacpi_gas_write
+uacpi_io.o text uacpi_map_gas
+uacpi_io.o text uacpi_unmap_gas
+uacpi_mutex.o .eh_frame
+uacpi_mutex.o rodata __FUNCTION__.0
+uacpi_mutex.o rodata __FUNCTION__.1
+uacpi_mutex.o rodata uacpi_acquire_global_lock.str1.1
+uacpi_mutex.o rodata uacpi_acquire_global_lock.str1.8
+uacpi_mutex.o text uacpi_acquire_global_lock
+uacpi_mutex.o text uacpi_release_global_lock
+uacpi_namespace.o .eh_frame
+uacpi_namespace.o rodata __FUNCTION__.0
+uacpi_namespace.o text uacpi_namespace_node_acquire_object
+uacpi_namespace.o text uacpi_namespace_node_depth
+uacpi_namespace.o text uacpi_namespace_node_is
+uacpi_namespace.o text uacpi_namespace_node_is_one_of
+uacpi_namespace.o text uacpi_namespace_node_is_one_of_unlocked
+uacpi_namespace.o text uacpi_namespace_node_is_predefined
+uacpi_namespace.o text uacpi_namespace_node_is_temporary
+uacpi_namespace.o text uacpi_namespace_node_next
+uacpi_namespace.o text uacpi_namespace_node_next_typed
+uacpi_namespace.o text uacpi_namespace_node_reacquire_object
+uacpi_namespace.o text uacpi_namespace_node_resolve_from_aml_namepath
+uacpi_namespace.o text uacpi_namespace_node_type_unlocked
+uacpi_notify.o .eh_frame
+uacpi_notify.o rodata __FUNCTION__.0
+uacpi_notify.o text uacpi_uninstall_notify_handler
+uacpi_opcodes.o .eh_frame
+uacpi_opregion.o .eh_frame
+uacpi_opregion.o text uacpi_uninstall_address_space_handler
+uacpi_osi.o .eh_frame
+uacpi_osi.o rodata __FUNCTION__.0
+uacpi_osi.o rodata __FUNCTION__.1
+uacpi_osi.o rodata __FUNCTION__.2
+uacpi_osi.o rodata __FUNCTION__.3
+uacpi_osi.o rodata __FUNCTION__.4
+uacpi_osi.o rodata configure_host_interface.str1.1
+uacpi_osi.o rodata configure_host_interface.str1.8
+uacpi_osi.o text configure_host_interface
+uacpi_osi.o text uacpi_bulk_configure_interfaces
+uacpi_osi.o text uacpi_disable_host_interface
+uacpi_osi.o text uacpi_enable_host_interface
+uacpi_osi.o text uacpi_install_interface
+uacpi_osi.o text uacpi_set_interface_query_handler
+uacpi_osi.o text uacpi_uninstall_interface
+uacpi_registers.o .eh_frame
+uacpi_resources.o .eh_frame
+uacpi_resources.o rodata accumulate_aml_buffer_size.str1.8
+uacpi_resources.o rodata accumulate_native_buffer_size.str1.8
+uacpi_resources.o rodata do_aml_resource_to_native
+uacpi_resources.o rodata do_aml_resource_to_native.str1.8
+uacpi_resources.o rodata do_native_resource_to_aml
+uacpi_resources.o rodata native_resource_to_type
+uacpi_resources.o rodata type_to_aml_resource
+uacpi_resources.o rodata uacpi_for_each_resource.str1.1
+uacpi_resources.o rodata uacpi_for_each_resource.str1.8
+uacpi_resources.o rodata uacpi_get_current_resources.str1.1
+uacpi_resources.o rodata uacpi_get_possible_resources.str1.1
+uacpi_resources.o rodata uacpi_native_resources_from_aml.str1.8
+uacpi_resources.o rodata uacpi_native_resources_to_aml.str1.8
+uacpi_resources.o rodata uacpi_set_resources.str1.1
+uacpi_resources.o text accumulate_aml_buffer_size
+uacpi_resources.o text accumulate_native_buffer_size
+uacpi_resources.o text do_aml_resource_to_native
+uacpi_resources.o text do_native_resource_to_aml
+uacpi_resources.o text extract_native_resources_from_method
+uacpi_resources.o text uacpi_for_each_device_resource
+uacpi_resources.o text uacpi_for_each_resource
+uacpi_resources.o text uacpi_free_resource
+uacpi_resources.o text uacpi_free_resources
+uacpi_resources.o text uacpi_get_current_resources
+uacpi_resources.o text uacpi_get_device_resources
+uacpi_resources.o text uacpi_get_possible_resources
+uacpi_resources.o text uacpi_get_resource_from_buffer
+uacpi_resources.o text uacpi_native_resources_from_aml
+uacpi_resources.o text uacpi_native_resources_to_aml
+uacpi_resources.o text uacpi_set_resources
+uacpi_sleep.o .eh_frame
+uacpi_sleep.o rodata __FUNCTION__.1
+uacpi_sleep.o rodata __FUNCTION__.2
+uacpi_sleep.o rodata uacpi_wake_from_sleep_state.str1.1
+uacpi_sleep.o text uacpi_enter_sleep_state_simple
+uacpi_sleep.o text uacpi_prepare_for_wake_from_sleep_state
+uacpi_sleep.o text uacpi_set_waking_vector
+uacpi_sleep.o text uacpi_wake_from_sleep_state
+uacpi_stdlib.o .eh_frame
+uacpi_tables.o .eh_frame
+uacpi_tables.o rodata CSWTCH.65
+uacpi_tables.o rodata __FUNCTION__.0
+uacpi_tables.o rodata __FUNCTION__.10
+uacpi_tables.o rodata __FUNCTION__.3
+uacpi_tables.o rodata __FUNCTION__.6
+uacpi_tables.o rodata __FUNCTION__.7
+uacpi_tables.o rodata __FUNCTION__.8
+uacpi_tables.o rodata __FUNCTION__.9
+uacpi_tables.o rodata str1.1
+uacpi_tables.o rodata uacpi_for_each_subtable.str1.8
+uacpi_tables.o rodata uacpi_setup_early_table_access.str1.1
+uacpi_tables.o rodata uacpi_setup_early_table_access.str1.8
+uacpi_tables.o text table_info_by_index_unchecked
+uacpi_tables.o text uacpi_for_each_subtable
+uacpi_tables.o text uacpi_for_each_table
+uacpi_tables.o text uacpi_set_table_installation_handler
+uacpi_tables.o text uacpi_setup_early_table_access
+uacpi_tables.o text uacpi_table_count
+uacpi_tables.o text uacpi_table_fadt
+uacpi_tables.o text uacpi_table_find_by_signature_at
+uacpi_tables.o text uacpi_table_find_next_with_same_signature
+uacpi_tables.o text uacpi_table_find_nth_by_signature
+uacpi_tables.o text uacpi_table_get_by_index
+uacpi_tables.o text uacpi_table_info_get_by_index
+uacpi_tables.o text uacpi_table_install
+uacpi_tables.o text uacpi_table_install_physical
+uacpi_tables.o text uacpi_table_load
+uacpi_tables.o text uacpi_table_ref
+uacpi_tables.o text uacpi_table_ref_by_index
+uacpi_tables.o text uacpi_table_subsystem_available
+uacpi_tables.o text uacpi_table_unref_by_index
+uacpi_types.o .eh_frame
+uacpi_types.o text uacpi_object_assign_buffer
+uacpi_types.o text uacpi_object_assign_integer
+uacpi_types.o text uacpi_object_assign_package
+uacpi_types.o text uacpi_object_assign_reference
+uacpi_types.o text uacpi_object_assign_string
+uacpi_types.o text uacpi_object_create_buffer
+uacpi_types.o text uacpi_object_create_cstring
+uacpi_types.o text uacpi_object_create_integer_safe
+uacpi_types.o text uacpi_object_create_package
+uacpi_types.o text uacpi_object_create_reference
+uacpi_types.o text uacpi_object_create_string
+uacpi_types.o text uacpi_object_create_uninitialized
+uacpi_types.o text uacpi_object_do_assign_buffer
+uacpi_types.o text uacpi_object_get_buffer
+uacpi_types.o text uacpi_object_get_dereferenced
+uacpi_types.o text uacpi_object_get_power_resource_info
+uacpi_types.o text uacpi_object_get_processor_info
+uacpi_types.o text uacpi_object_get_string
+uacpi_types.o text uacpi_object_get_type
+uacpi_types.o text uacpi_object_get_type_bit
+uacpi_types.o text uacpi_object_is_aml_namepath
+uacpi_types.o text uacpi_object_resolve_as_aml_namepath
+uacpi_uacpi.o .eh_frame
+uacpi_uacpi.o rodata __FUNCTION__.0
+uacpi_uacpi.o text uacpi_context_get_loop_timeout
+uacpi_uacpi.o text uacpi_context_set_log_level
+uacpi_uacpi.o text uacpi_context_set_loop_timeout
+uacpi_uacpi.o text uacpi_context_set_max_call_stack_depth
+uacpi_uacpi.o text uacpi_context_set_proactive_table_checksum
+uacpi_uacpi.o text uacpi_enter_acpi_mode
+uacpi_uacpi.o text uacpi_eval_buffer
+uacpi_uacpi.o text uacpi_eval_package
+uacpi_uacpi.o text uacpi_eval_simple
+uacpi_uacpi.o text uacpi_eval_simple_buffer
+uacpi_uacpi.o text uacpi_eval_simple_string
+uacpi_uacpi.o text uacpi_eval_simple_string_or_buffer
+uacpi_uacpi.o text uacpi_eval_simple_typed
+uacpi_uacpi.o text uacpi_eval_string
+uacpi_uacpi.o text uacpi_eval_string_or_buffer
+uacpi_uacpi.o text uacpi_execute
+uacpi_uacpi.o text uacpi_execute_simple
+uacpi_uacpi.o text uacpi_get_aml_bitness
+uacpi_uacpi.o text uacpi_is_platform_reduced_hardware
+uacpi_uacpi.o text uacpi_leave_acpi_mode
+uacpi_utilities.o .eh_frame
+uacpi_utilities.o rodata __FUNCTION__.0
+uacpi_utilities.o rodata uacpi_eval_adr.str1.1
+uacpi_utilities.o rodata uacpi_eval_cls.str1.1
+uacpi_utilities.o rodata uacpi_eval_dstate_method_template.str1.1
+uacpi_utilities.o rodata uacpi_eval_uid.str1.1
+uacpi_utilities.o rodata uacpi_eval_uid.str1.8
+uacpi_utilities.o rodata uacpi_get_pci_routing_table.str1.1
+uacpi_utilities.o rodata uacpi_get_pci_routing_table.str1.8
+uacpi_utilities.o text uacpi_eval_adr
+uacpi_utilities.o text uacpi_eval_cls
+uacpi_utilities.o text uacpi_eval_dstate_method_template
+uacpi_utilities.o text uacpi_eval_uid
+uacpi_utilities.o text uacpi_free_namespace_node_info
+uacpi_utilities.o text uacpi_free_pci_routing_table
+uacpi_utilities.o text uacpi_free_pnp_id_list
+uacpi_utilities.o text uacpi_get_namespace_node_info
+uacpi_utilities.o text uacpi_get_pci_routing_table
+udp.o .eh_frame
+usbdisk.o .eh_frame
+usbnet_proto.o .eh_frame
+usbnet_proto.o text rndis_parse_init_cmplt
+usermode.o .eh_frame
+usermode.o text user_pte_of
+usermode.o text usermode_cpu_features
+usermode.o text usermode_cur_index
+usermode_tests.o .eh_frame
+uvc.o .eh_frame
+virtio_blk.o .eh_frame
+virtio_blk.o text virtio_blk_alt_name
+virtio_net.o .eh_frame
+vm.o .eh_frame
+vmm.o .eh_frame
+wav.o .eh_frame
+web_css.o .eh_frame
+web_f64.o .eh_frame
+web_font.o .eh_frame
+web_font.o text wf_ui_set
+web_html.o .eh_frame
+web_html.o text wd_set_text
+web_img_sbx.o .eh_frame
+web_inflate_sbx.o .eh_frame
+web_js_api.o .eh_frame
+web_js_api.o text js_run_big
+web_js_api.o text wjs_gc_stats
+web_js_api.o text wjs_has_timers
+web_js_api.o text wjs_heap_used
+web_js_big.o .eh_frame
+web_js_big.o text js_big_from_i64
+web_js_big.o text js_big_from_u64
+web_js_bin.o .eh_frame
+web_js_bin.o text js_bin_buffer_new
+web_js_bin.o text js_bin_on
+web_js_bin.o text js_bin_u8_new
+web_js_bin.o text js_stream_on
+web_js_co.o .eh_frame
+web_js_dom.o .eh_frame
+web_js_gc.o .eh_frame
+web_js_gc.o text js_gc_count
+web_js_lib.o .eh_frame
+web_js_lib2.o .eh_frame
+web_js_lib3.o .eh_frame
+web_js_lib4.o .eh_frame
+web_js_module.o .eh_frame
+web_js_module.o text js_module_on
+web_js_parse.o .eh_frame
+web_js_proxy.o .eh_frame
+web_js_proxy.o text js_proxy_on
+web_js_regex.o .eh_frame
+web_js_run.o .eh_frame
+web_js_u16.o .eh_frame
+web_layout.o .eh_frame
+web_layout.o text wl_node_scroll_max
+web_net.o .eh_frame
+web_net.o text wn_cookie_clear
+web_net.o text wn_set_gateway
+web_net_sbx.o .eh_frame
+web_page.o .eh_frame
+web_page.o text wp_fs_read
+web_page.o text wp_log
+web_page.o text wp_post
+web_page.o text wp_status
+web_page.o text wp_stop
+web_regex.o .eh_frame
+web_regex.o text wre_match_at
+wpa.o .eh_frame
+wpa.o rodata LAYOUTS
+wpa.o text wifi_bss_sort
+wpa.o text wifi_chanspec
+wpa.o text wifi_escan_parse
+wpa.o text wpa_mic
+x509.o .eh_frame
+x509.o text sha384
+x509.o text sha512
+xhci.o .eh_frame
+xhci_proto.o .eh_frame

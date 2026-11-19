@@ -58,6 +58,7 @@ void bigfs_sys_probe(void)
            ? "formateada (SOMABIG1)\n" : "sin formatear (usa 'big format yes')\n");
 }
 
+static int g_repair_tried;     /* PARCHE 129 */
 struct bigfs *bigfs_sys(int *err)
 {
     int dummy; if (!err) err = &dummy;
@@ -65,6 +66,15 @@ struct bigfs *bigfs_sys(int *err)
     struct bigfs_dev d;
     if (!make_dev(&d)) { *err = BIGFS_E_NOSPC; return 0; }
     g_fs = bigfs_mount(&d, err);
+    /* PARCHE 129: un superbloque danado o borrado NO es motivo para perder los archivos: se reconstruye (una sola vez por arranque) */
+    if (!g_fs && (*err == BIGFS_E_CORRUPT || *err == BIGFS_E_NOTFMT) && !g_repair_tried) {
+        g_repair_tried = 1;
+        int rr = bigfs_repair_super(&d);
+        if (rr > 0) {
+            kprint(rr == 1 ? "BIGFS: superbloque danado: restaurado desde la copia de reserva\n" : "BIGFS: superbloque danado: reconstruido por la geometria automatica\n");
+            g_fs = bigfs_mount(&d, err);
+        }
+    }
     return g_fs;
 }
 
@@ -201,7 +211,8 @@ static int do_bench(struct ob *o, uint32_t mib)
 {
     int e; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) { ob_err(o, "big bench", e); return 1; }
-    if (mib < 1) mib = 4; if (mib > 64) mib = 64;
+    if (mib < 1) mib = 4;
+    if (mib > 64) mib = 64;
     const uint32_t CH = 65536;
     uint8_t *buf = (uint8_t *)kmalloc(CH);
     if (!buf) { ob_s(o, "big bench: sin memoria"); return 1; }
@@ -265,6 +276,7 @@ int bigfs_sys_command(const char *args, char *out, uint32_t max)
         ob_d(&o, i.free_clusters * i.cluster_bytes / 1048576); ob_s(&o, " MiB libres, inodos ");
         ob_d(&o, i.used_inodes); ob_s(&o, "/"); ob_d(&o, i.total_inodes);
         if (i.repaired) { ob_s(&o, ", DESCARTADOS al montar: "); ob_d(&o, i.repaired); ob_s(&o, " (ejecuta 'big fsck')"); }
+        ob_s(&o, ", cache de lectura: "); ob_d(&o, (uint32_t)i.cache_hits); ob_s(&o, " aciertos / "); ob_d(&o, (uint32_t)i.cache_misses); ob_s(&o, " fallos");
     } else if (str_eq(sub, "fsck")) {
         struct bigfs_dev d; struct bigfs_fsck_report rep;
         if (!make_dev(&d)) { ob_s(&o, "sin region"); } else {

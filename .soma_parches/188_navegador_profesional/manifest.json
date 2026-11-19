@@ -1,0 +1,138 @@
+{
+  "created": {
+    "docs/PARCHE_188_NAVEGADOR_PROFESIONAL.md": "5d4f4866cffa48495540613a37e5616e912df469d5fa6d327f2f5a9296688b32",
+    "src/apps/web_js_module.c": "e9e9b1e2f9607163e56e5253cb292f8cd02b100ef86c118ae9ade206f4eae4b9",
+    "src/apps/web_js_proxy.c": "924b3027eec6df5d3ef783bea1a9129e95e1ddb631205f643cacfcc5fe83c998",
+    "tests/test_web_js_188.c": "7b51f6f7b4cf828c0220c93c033eee33ca1c1cab50da337e53513e25f83eb543"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "728271c4c1022ed631a09cd6b3ebbb44056ab973f979353d24f962e086936193",
+      "old": "0b32976909f9e1bd6d98ea6039438d1fbe9dcfae51a90f9d3621082565bf86c6"
+    },
+    "src/apps/web_css.c": {
+      "backup": "original_10.bin",
+      "kind": "exacto",
+      "new": "d0188975d8d10ef8d9906fbc0fc1559c3cdece9462f2c195d140238d25d675fa",
+      "old": "67e9f7e2a43b146d99142f8c1425a46f672af0ae7335a6c18b4215d8b43f3560"
+    },
+    "src/apps/web_css.h": {
+      "backup": "original_15.bin",
+      "kind": "exacto",
+      "new": "19ba522e2201ce1bdf6ad4f83acebb847c92455498f1249d3bbfdede74d764e8",
+      "old": "3a23e523782cd9257985a10e7f8a2b158859d9ca5ce7f1f82135a28473aa5af1"
+    },
+    "src/apps/web_dom.h": {
+      "backup": "original_16.bin",
+      "kind": "exacto",
+      "new": "cbe34e9b3e258a905d832b2d608d431e9c2f55b664df177f8562e43e0f01e3bc",
+      "old": "f97759299639af9ba34a02f05d62098170c27153a43c1d162dac004c9098dc76"
+    },
+    "src/apps/web_html.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "de703c2d6d34bc49b357663b33fb5e8378de28ebfc085f5cfe8084bf36bbc03b",
+      "old": "e90ea4949262c5d3e6d7fce0129b00763d63ab9bcb5ed25ed78d001deb9d14ee"
+    },
+    "src/apps/web_js_api.c": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "557b2314b30b0a99fe1b22fb36d47bcbcd96594f497c406ad8df1a01670d725c",
+      "old": "3d75ab67d6463e10ea2b492c106cec1da276bf79a986a52667bb07279e7a7998"
+    },
+    "src/apps/web_js_co.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "b8d558c2abd2f8b643c1e4613904eb228f46a080f4564129a97b78bfd73ebce0",
+      "old": "5b9cc24a8e18daceeaccc483da560420406d167281323681bf6805829e32a3bf"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "163770073e13059fcc0b24ed0e4aad961dc074e6e9b10009533f6a4b7608d982",
+      "old": "26d94d9926e5e1ee92dc0cb0c29f0b7c372f0f7cd5653288cb293fd518cf9cf8"
+    },
+    "src/apps/web_js_i.h": {
+      "backup": "original_13.bin",
+      "kind": "exacto",
+      "new": "9f7a44c9d0e1eb8d1fcd874cc52322b7d443b31b94cd084ecd3b045ddc70e977",
+      "old": "a481748720fa6164c706ce0bcca33fce350e856b910a21f3e7d72fe116bb5b04"
+    },
+    "src/apps/web_js_lib.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "e4347481aca8e31d8f2fd1ae64dc984c2f2175d3fa3c32f6be81594ea8a3654f",
+      "old": "b661ef7a16f1c6f311b5dbad887fabf934a862cc6ee490e2c278884dfb9af44e"
+    },
+    "src/apps/web_js_lib2.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "2a7d753d848e6690e39adbd39d562a30b3a1d9a47df990133ddc41e54e65a1b3",
+      "old": "f0625e16a6f1c658cee42fea89199218ae39df04424b04b7eee68ed211662489"
+    },
+    "src/apps/web_js_parse.c": {
+      "backup": "original_19.bin",
+      "kind": "exacto",
+      "new": "97811a1089d5b7d8788b3961c21ce96156a7dd4ae928ccf220bda57d91270c3c",
+      "old": "b551f2b7d8f69a64e9af69dad6866b26f384b31bf6490fa8e58e2fa6c8c5b929"
+    },
+    "src/apps/web_js_prelude.h": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "be2ac27b6d7c627b54ed1b5a0ec60a3fc92cc4dd74b24755cfee970f8fe76fbf",
+      "old": "569ab425d6b63529a26dd07295f43583163d34b3d2f501ed0313046d31303d7e"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_18.bin",
+      "kind": "exacto",
+      "new": "5b6721b03f22d2e399ff4025a787ce2810ae1548a61a0c95ea2e59ad629c912a",
+      "old": "70fdc0a99511e064afda90e7354368a4a97c2b8dc1c124adf4e5065bcf2c84df"
+    },
+    "src/apps/web_layout.c": {
+      "backup": "original_11.bin",
+      "kind": "exacto",
+      "new": "e7ac7d8aa5c81b3fda09448c8486ac958bdca313cbae0cecad07f3d22ed9f8f7",
+      "old": "1be9deb7b28b5b79eae770e818cd9ab39bf48c231b882865e63cabb21aa49148"
+    },
+    "src/apps/web_layout.h": {
+      "backup": "original_12.bin",
+      "kind": "exacto",
+      "new": "3458c1872df58f2a3005b55535f070dedfba8e0940caaa2bb0698b17265bb66c",
+      "old": "10d7db7ac5ecf2fbb5e9516f4e482c4a235e30e202bcbe50643ab2cad5b6be8a"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_17.bin",
+      "kind": "exacto",
+      "new": "43c05cc42d6f574a5c3d84afc2b90a226e67faa75e75b0188bf7fc35b45b321a",
+      "old": "8771d414bca4575fb5e5aad557ed016417c2560e86df933866b902a860d605ae"
+    },
+    "src/apps/web_page.h": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "b0312efe274e67a55c3e49ade814184bf879d97eed1653ec9da146ebf2b03a86",
+      "old": "00366884712d8db2fb7f06cae607bd70c416d5107389a98014470f284b10caff"
+    },
+    "src/apps/web_ua.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "a881130629b385af824880d9bf3be9bf75a13f497cb1779dcb7e4a88eaea02dd",
+      "old": "1c9d14b607840d8ad40edb987f744be4946083865c2271612e3d1e47a686466c"
+    },
+    "src/apps/web_util.h": {
+      "backup": "original_14.bin",
+      "kind": "exacto",
+      "new": "3e7cdac624a94c3fe0f990c73fb5d27a6d7b0ccd5df626a37c5ac37089cc32fd",
+      "old": "25b5f78e9ea3eeb079c101f1a75ff67093b4a97c8458adac28ce21cbd4eba540"
+    },
+    "tests/layhost/fbhost.c": {
+      "backup": "original_20.bin",
+      "kind": "exacto",
+      "new": "415113e9d7c9c086494ebb8e95aed28bd663874e8426eba15520d8027e20f165",
+      "old": "f68dfddb25888e631dfbe043ee9370b71800e9fc259894522e03590ebf4179db"
+    }
+  },
+  "log": "20261117_102159 parche 188: navegador profesional: web components, modulos ES, Proxy, eval directo, pseudo-elementos, controles, innerText, CSS",
+  "version": 1
+}

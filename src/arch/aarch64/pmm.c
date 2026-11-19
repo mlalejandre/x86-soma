@@ -1,4 +1,5 @@
 #include "pmm.h"
+#include "console.h"
 #include <stddef.h>
 #include "platform.h"
 #include "dma_pool.h"
@@ -58,3 +59,5 @@ void pmm_get_stats(size_t *free_frames, size_t *used_frames, size_t *total_frame
 
 void pmm_dump_stats(void) {}
 int pmm_test_self(void) { return 1; }
+
+int pmm_bench(void) { kprint("[PMMBENCH] no aplica en AArch64 (asignador lineal)\n"); return 1; }

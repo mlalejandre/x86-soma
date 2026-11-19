@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "date": "20261119_194521",
+  "files": {
+    "src/apps/sysmon.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "53ddb85741a2d42513c35c1ff4d40e21bf27a1fd36aa2af100cdf53bd1be4123",
+      "old": "fd9af918135cfb379174b27478e138779c2e66dcede13a1a1aa2e0b9326ee8a1"
+    },
+    "src/apps/sysmon.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "73f4b87bea5e259044704f37b88c5eeddc2ca27becfe6e3b2eddd09045184af0",
+      "old": "286995eaa93196e9e95b4b4a8bbcf67f4a726179dd6c54cd7e7d8c7b1986148c"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "d35ba72bf7c487af1a21dfd77d193b63ac9d4c824a9d538093afdc7f83316385",
+      "old": "62aac72f4f7ebecb18b123c7b9af6946af08c0c6eed94d542b6639ef48869933"
+    }
+  },
+  "name": "216_orbe_fluido_monitor"
+}

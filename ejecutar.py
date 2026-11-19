@@ -300,7 +300,15 @@ def handle_mailbox(approve: bool) -> bool | None:
     show_diff(changes)
 
     if approve:
-        ans = input("\nAplicar este parche? [y/N] ").strip().lower()
+        # SOMA_191: sin terminal nadie puede confirmar -> se rechaza (para el modo desatendido existe --sin-aprobar)
+        if not sys.stdin.isatty():
+            print("[RECHAZADO] no hay terminal para confirmar el parche (usa --sin-aprobar para el modo desatendido)")
+            write_result("REJECTED", "sin terminal para la confirmacion humana")
+            return False
+        try:
+            ans = input("\nAplicar este parche? [y/N] ").strip().lower()
+        except EOFError:
+            ans = ""
         if ans != "y":
             write_result("REJECTED", "rechazado por el humano")
             return False
@@ -325,7 +333,7 @@ SRCFS_ENTRY = 64
 SRCFS_LIMIT_LBA = 16384
 SRCFS_DATA_SECTORS = SRCFS_LIMIT_LBA - (SRCFS_LBA + SRCFS_INDEX_SECTORS)
 # Tablas de datos (no son codigo): si las fuentes no caben, se omiten primero, las mas grandes antes.
-SRCFS_LOW_PRIORITY = ("fonts/", "icons/", "cursors/")
+SRCFS_LOW_PRIORITY = ("fonts/", "icons/", "cursors/", "arch/x86_64/sbx_testimg.h")   # PARCHE 138: imagenes de prueba (datos)
 
 
 # PARCHE 047: el indice SRCFS solo admite 63 entradas; no empaquetar la otra arquitectura.
@@ -340,6 +348,10 @@ def _otra_arch(p: Path) -> bool:
 
 
 def pack_sources() -> None:
+    """PARCHE 140: SRCFS v02. Cada archivo se guarda comprimido con zlib si asi ocupa menos (el codigo C ocupa ~4 veces menos).
+    Entrada de indice (64 bytes): name[48], u32 lba, u32 tamano original, u32 tamano guardado, u32 flags (bit 0 = zlib).
+    El kernel (src/fs/srcfs.c) descomprime en el servicio aislado zdec (x86_64) o directamente (aarch64). Lee tambien v01."""
+    import zlib
     files = sorted(p for p in SRC_DIR.rglob("*")
                    if p.is_file() and p.suffix.lower() in ALLOWED_EXT and not _otra_arch(p))
     max_entries = SRCFS_INDEX_SECTORS * SECTOR // SRCFS_ENTRY - 1
@@ -347,13 +359,19 @@ def pack_sources() -> None:
         print(f"[SRCFS] AVISO: {len(files)} archivos; solo caben {max_entries}")
         files = files[:max_entries]
 
+    stored = {}
+    for p in files:
+        data = p.read_bytes()
+        z = zlib.compress(data, 9)
+        stored[p] = (data, z, 1) if len(z) < len(data) else (data, data, 0)
+
     def _sectors(f: Path) -> int:
-        return (f.stat().st_size + SECTOR - 1) // SECTOR
+        return (len(stored[f][1]) + SECTOR - 1) // SECTOR
 
     need = sum(_sectors(f) for f in files)
     if need > SRCFS_DATA_SECTORS:
         bajos = sorted((f for f in files if f.relative_to(SRC_DIR).as_posix().startswith(SRCFS_LOW_PRIORITY)),
-                       key=lambda f: -f.stat().st_size)
+                       key=lambda f: -len(stored[f][1]))
         for f in bajos:
             if need <= SRCFS_DATA_SECTORS:
                 break
@@ -366,21 +384,25 @@ def pack_sources() -> None:
         print(f"[SRCFS] sin espacio: se omite {f.relative_to(SRC_DIR).as_posix()}")
 
     index = bytearray(SRCFS_INDEX_SECTORS * SECTOR)
-    index[0:8] = b"SRCFSv01"
+    index[0:8] = b"SRCFSv02"
     index[8:12] = len(files).to_bytes(4, "little")
 
     lba = SRCFS_LBA + SRCFS_INDEX_SECTORS
     blobs = []
+    total_orig = total_stored = 0
     for i, p in enumerate(files, 1):
-        data = p.read_bytes()
+        data, blob, flags = stored[p]
         rel_path = str(p.relative_to(SRC_DIR)).replace("\\", "/")
         name = rel_path.encode("utf-8")[:47]
         off = i * SRCFS_ENTRY
         index[off:off + len(name)] = name
         index[off + 48:off + 52] = lba.to_bytes(4, "little")
         index[off + 52:off + 56] = len(data).to_bytes(4, "little")
-        blobs.append((lba, data))
-        lba += (len(data) + SECTOR - 1) // SECTOR
+        index[off + 56:off + 60] = len(blob).to_bytes(4, "little")
+        index[off + 60:off + 64] = flags.to_bytes(4, "little")
+        blobs.append((lba, blob))
+        lba += (len(blob) + SECTOR - 1) // SECTOR
+        total_orig += len(data); total_stored += len(blob)
 
     if lba > SRCFS_LIMIT_LBA:
         print(f"[SRCFS] AVISO: las fuentes ocupan hasta LBA {lba} (limite {SRCFS_LIMIT_LBA}); truncando empaquetado seguro.")
@@ -393,7 +415,8 @@ def pack_sources() -> None:
         for blba, data in blobs:
             f.seek(blba * SECTOR)
             f.write(data + b"\x00" * (-len(data) % SECTOR))
-    print(f"[SRCFS] {len(files)} fuentes empaquetadas en LBA {SRCFS_LBA}..{lba - 1}")
+    print(f"[SRCFS] {len(files)} fuentes empaquetadas en LBA {SRCFS_LBA}..{lba - 1} "
+          f"({total_orig // 1024} KiB -> {total_stored // 1024} KiB comprimidas, {(SRCFS_LIMIT_LBA - lba) * SECTOR // 1024} KiB libres)")
 
 
 # ---------------------------------------------------------------- main
@@ -422,6 +445,7 @@ TARGETS = {
     "pi5-img": (None,      "Raspberry Pi 5: solo compilar kernel_2712.img (para una Pi real)"),
     "pi5-qemu": (None,     "Raspberry Pi 5: construir/actualizar el emulador (imagen Docker)"),
     "pi5-sd":  (None,      "Raspberry Pi 5 REAL: genera soma_pi5_sd.img para grabar en una microSD"),
+    "t480s-usb": (None,    "Lenovo ThinkPad T480s REAL: compila y copia SOMA a un pendrive USB (UEFI)"),
 }
 
 
@@ -430,7 +454,7 @@ def choose_target() -> str:
     keys = list(TARGETS)
     print("\nDestino de compilacion/ejecucion:")
     for i, k in enumerate(keys, 1):
-        print(f"  {i}) {k:<9} [{TARGETS[k][1]}]")
+        print(f"  {i}) {k:<10} [{TARGETS[k][1]}]")
     while True:
         try:
             c = input(f"\nElige destino [1-{len(keys)}, Enter=1]: ").strip()
@@ -459,6 +483,255 @@ def run_pi5(target: str) -> int:
         if run(["docker", "build", "--platform", "linux/amd64", "-t", DOCKER_IMAGE, "."], "CONSTRUYENDO TOOLCHAIN") != 0:
             return 1
     return subprocess.call([sys.executable, script, sub], cwd=str(ROOT), env=env)
+
+
+# ---------------------------------------------------------------- SOMA_155_T480S: pendrive para el ThinkPad T480s
+# Compila build/usb/EFI/BOOT/BOOTX64.EFI (GRUB + menu + nucleo en un solo archivo; make t480s-usb) y lo copia a un pendrive
+# FAT32 (lo que mejor arranca en el firmware de Lenovo). Solo ofrece discos EXTERNOS: el disco interno nunca aparece en la lista.
+# Si el pendrive ya tiene un volumen FAT32 "SOMA" solo se copia el archivo; si no, se formatea (pidiendo confirmacion).
+import hashlib
+import plistlib
+
+T480S_EFI = BUILD_DIR / "usb" / "EFI" / "BOOT" / "BOOTX64.EFI"
+T480S_LABEL = "SOMA"
+T480S_DATA = "SOMADATA"     # SOMA_162_T480S: particion donde SOMA guarda sus archivos (el nucleo la reclama al primer arranque)
+
+
+def _ask(msg: str, default: str = "") -> str:
+    try:
+        return input(msg).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+
+
+def t480s_build(uid: str, gid: str) -> int:
+    """Compila en Docker y genera el BOOTX64.EFI del pendrive."""
+    if not docker_image_exists() or subprocess.run(
+            ["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "test", "-d", "/usr/lib/grub/x86_64-efi"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        if run(["docker", "build", "--platform", "linux/amd64", "-t", DOCKER_IMAGE, "."],
+               "CONSTRUYENDO TOOLCHAIN (con GRUB para UEFI)") != 0:
+            return 1
+    if BUILD_DIR.exists():
+        shutil.rmtree(BUILD_DIR)
+    cflags = os.environ.get("SOMA_EXTRA_CFLAGS", "-DSOMA_WEB_ASYNC_IMAGES=1")
+    cmd = ["docker", "run", "--rm", "--platform", "linux/amd64", "-u", f"{uid}:{gid}", "-v", f"{ROOT}:/soma", "-w", "/soma",
+           DOCKER_IMAGE, "make", "ARCH=x86_64", "PLATFORM=qemu_virt", f"EXTRA_CFLAGS={cflags}", "t480s-usb"]
+    print(f"\n{'=' * 72}\nCOMPILANDO SOMA PARA EL THINKPAD T480s\n{'=' * 72}\n\n$ {' '.join(cmd)}\n")
+    p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    out = (p.stdout or "") + (p.stderr or "")
+    if p.returncode != 0 or not T480S_EFI.is_file():
+        print(out[-4000:])
+        print("\nERROR de compilacion:")
+        for l in summarize_errors(out):
+            print("  " + l)
+        return 1
+    print(f"[OK] {T480S_EFI.relative_to(ROOT)} ({T480S_EFI.stat().st_size / 1e6:.1f} MB)")
+    return 0
+
+
+def _plist(cmd: list[str]) -> dict:
+    out = subprocess.run(cmd, capture_output=True)
+    if out.returncode != 0:
+        return {}
+    try:
+        return plistlib.loads(out.stdout)
+    except Exception:
+        return {}
+
+
+def macos_usb_disks() -> list[dict]:
+    """Discos externos y fisicos (diskutil). Cada uno: id, size, name, volumes [(id, nombre, tipo, punto de montaje)]."""
+    lst = _plist(["diskutil", "list", "-plist", "external", "physical"])
+    disks = []
+    for d in lst.get("AllDisksAndPartitions", []):
+        dev = d.get("DeviceIdentifier", "")
+        if not re.fullmatch(r"disk\d+", dev):
+            continue
+        info = _plist(["diskutil", "info", "-plist", dev])
+        if not info or info.get("Internal", True):                       # doble comprobacion: nunca un disco interno
+            continue
+        if dev in ("disk0", "disk1"):
+            continue
+        vols = []
+        for part in d.get("Partitions", []) or ([d] if d.get("Content") else []):
+            vols.append((part.get("DeviceIdentifier", ""), part.get("VolumeName", "") or "",
+                         part.get("Content", "") or "", part.get("MountPoint", "") or ""))
+        disks.append({"id": dev, "size": int(info.get("TotalSize") or info.get("Size") or d.get("Size") or 0),
+                      "name": info.get("MediaName") or info.get("IORegistryEntryName") or "USB", "bus": info.get("BusProtocol", ""),
+                      "volumes": vols})
+    return disks
+
+
+def _soma_volume(disk: dict):
+    """Volumen FAT32 llamado SOMA ya preparado en este disco (o None)."""
+    for vid, name, content, mnt in disk["volumes"]:
+        if name.upper() == T480S_LABEL and ("DOS" in content.upper() or "FAT" in content.upper() or "Microsoft" in content):
+            return vid, mnt
+    return None
+
+
+def _data_partition(disk: dict):
+    """SOMA_162_T480S: particion SOMADATA. Recien creada se llama SOMADATA; despues de que SOMA la reclame ya no tiene volumen
+    legible para macOS, asi que tambien vale la segunda particion FAT sin nombre de un pendrive que tiene el volumen SOMA."""
+    vols = disk["volumes"]
+    for vid, name, content, mnt in vols:
+        if name.upper() == T480S_DATA:
+            return vid
+    if _soma_volume(disk):
+        for vid, name, content, mnt in vols:
+            if vid.endswith("s2") and not name and ("DOS" in content.upper() or "FAT" in content.upper()):
+                return vid
+    return None
+
+
+def _t480s_partition(dev: str, size: int) -> int:
+    """SOMA_162_T480S: MBR con SOMA (arranque, FAT32), SOMADATA (disco de SOMA) y DATOS (el resto, FAT32 para el Mac)."""
+    gb = size / 1e9
+    if gb >= 7:
+        cmd = ["diskutil", "partitionDisk", f"/dev/{dev}", "3", "MBR", "FAT32", T480S_LABEL, "1G", "FAT32", T480S_DATA, "4G", "FAT32", "DATOS", "R"]
+        msg = "SOMA 1 GB (arranque) + SOMADATA 4 GB (archivos de SOMA) + DATOS (el resto, para ti)"
+    else:
+        cmd = ["diskutil", "partitionDisk", f"/dev/{dev}", "2", "MBR", "FAT32", T480S_LABEL, "512M", "FAT32", T480S_DATA, "R"]
+        msg = "SOMA 512 MB (arranque) + SOMADATA (el resto, archivos de SOMA)"
+    return run(cmd, f"PREPARANDO /dev/{dev}: {msg}")
+
+
+def _mount_point(vid: str) -> str:
+    info = _plist(["diskutil", "info", "-plist", vid])
+    mnt = info.get("MountPoint") or ""
+    if not mnt:
+        subprocess.run(["diskutil", "mount", vid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        mnt = _plist(["diskutil", "info", "-plist", vid]).get("MountPoint") or ""
+    return mnt
+
+
+def _sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for blk in iter(lambda: f.read(1 << 20), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def t480s_copy(mnt: str) -> int:
+    dst_dir = Path(mnt) / "EFI" / "BOOT"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / "BOOTX64.EFI"
+    print(f"Copiando BOOTX64.EFI a {dst} ...")
+    shutil.copyfile(T480S_EFI, dst)
+    os.sync()
+    if _sha256(dst) != _sha256(T480S_EFI):
+        print("ERROR: la copia en el pendrive no coincide con el original (pendrive defectuoso o lleno).")
+        return 1
+    if shutil.which("dot_clean"):                                     # quita los ._* que deja macOS
+        subprocess.run(["dot_clean", "-m", mnt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("[OK] Copia verificada (SHA-256 identico).")
+    return 0
+
+
+def t480s_usb_macos(args) -> int:
+    disks = macos_usb_disks()
+    if not disks:
+        print("\nNo hay ningun pendrive conectado (discos externos). Conectalo y vuelve a ejecutar.")
+        return 1
+    if args.disco:
+        sel = [d for d in disks if d["id"] == args.disco.replace("/dev/", "").replace("rdisk", "disk")]
+        if not sel:
+            print(f"\n{args.disco} no es un disco externo conectado. Externos: {', '.join(d['id'] for d in disks)}")
+            return 1
+        disk = sel[0]
+    else:
+        print("\nPendrives / discos externos conectados:")
+        for i, d in enumerate(disks, 1):
+            vols = ", ".join(v[1] or v[2] for v in d["volumes"] if v[1] or v[2]) or "sin volumenes"
+            print(f"  {i}) /dev/{d['id']:<7} {d['size'] / 1e9:6.1f} GB  {d['name']}  ({vols})")
+        c = _ask(f"\nElige el pendrive [1-{len(disks)}] (Enter = cancelar): ")
+        if not (c.isdigit() and 1 <= int(c) <= len(disks)):
+            print("Cancelado.")
+            return 1
+        disk = disks[int(c) - 1]
+    dev = disk["id"]
+    soma = _soma_volume(disk)
+    data = _data_partition(disk)
+    reformat = args.formatear or not soma
+    if soma and not data and not args.formatear:
+        print(f"\n/dev/{dev} tiene el volumen '{T480S_LABEL}' pero no la particion {T480S_DATA}: SOMA arrancara, pero lo que guardes")
+        print("se perdera al apagar. Para anadirla hay que volver a preparar el pendrive (se borra todo lo que tenga).")
+        if not args.si and _ask("Escribe BORRAR para prepararlo ahora, o pulsa Enter para solo actualizar SOMA: ") == "BORRAR":
+            reformat = True
+    if not reformat:
+        vid, _ = soma
+        print(f"\n/dev/{dev} ya tiene el volumen FAT32 '{T480S_LABEL}': solo se actualiza SOMA (no se borra nada mas"
+              + (f"; tus archivos de SOMA siguen en {T480S_DATA})." if data else ")."))
+    else:
+        if not (soma and not data and not args.formatear):      # (en ese caso ya se pidio BORRAR arriba)
+            print(f"\nATENCION: se BORRARA TODO el contenido de /dev/{dev} ({disk['size'] / 1e9:.1f} GB, {disk['name']}),")
+            print(f"incluidos los archivos que SOMA guardo en {T480S_DATA}.")
+            if not args.si and _ask("Escribe BORRAR para prepararlo: ") != "BORRAR":
+                print("Cancelado: no se ha tocado el pendrive.")
+                return 1
+        if _t480s_partition(dev, disk["size"]) != 0:
+            print("ERROR al preparar el pendrive (¿esta protegido o en uso?).")
+            return 1
+        disk = next((d for d in macos_usb_disks() if d["id"] == dev), None)
+        soma = _soma_volume(disk) if disk else None
+        if not soma:
+            print("ERROR: no aparece el volumen SOMA tras formatear.")
+            return 1
+        vid, _ = soma
+    mnt = _mount_point(vid)
+    if not mnt:
+        print(f"ERROR: no se pudo montar {vid}.")
+        return 1
+    if t480s_copy(mnt) != 0:
+        return 1
+    subprocess.run(["diskutil", "eject", f"/dev/{dev}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"[OK] /dev/{dev} expulsado. Ya puedes desconectarlo.")
+    return 0
+
+
+def t480s_usb_linux(args) -> int:
+    """Linux: copia a una particion FAT montada con etiqueta SOMA (formatear requiere root: se indican las ordenes)."""
+    out = subprocess.run(["lsblk", "-J", "-o", "NAME,LABEL,FSTYPE,MOUNTPOINT,TRAN,RM,SIZE"], capture_output=True, text=True)
+    import json
+    try:
+        devs = json.loads(out.stdout).get("blockdevices", [])
+    except Exception:
+        devs = []
+    for d in devs:
+        if d.get("tran") != "usb":
+            continue
+        for part in d.get("children", []) or []:
+            if (part.get("label") or "").upper() == T480S_LABEL and part.get("fstype") == "vfat" and part.get("mountpoint"):
+                return t480s_copy(part["mountpoint"])
+    print("\nNo hay un pendrive USB montado con un volumen FAT32 'SOMA'. Preparalo una vez (cambia sdX por tu pendrive; SE BORRA):")
+    print("  sudo parted -s /dev/sdX mklabel msdos mkpart primary fat32 1MiB 1025MiB mkpart primary fat32 1025MiB 5121MiB mkpart primary fat32 5121MiB 100%")
+    print("  sudo mkfs.vfat -F 32 -n SOMA /dev/sdX1; sudo mkfs.vfat -F 32 -n SOMADATA /dev/sdX2; sudo mkfs.vfat -F 32 -n DATOS /dev/sdX3")
+    print("  (SOMADATA es donde SOMA guarda sus archivos; montalo SOMA y vuelve a ejecutar esta opcion)")
+    print(f"Mientras tanto, el archivo esta en {T480S_EFI.relative_to(ROOT)} (va en EFI/BOOT/ del pendrive).")
+    return 1
+
+
+def run_t480s_usb(args) -> int:
+    print("\nSOMA para el Lenovo ThinkPad T480s: compilar + copiar al pendrive")
+    if not shutil.which("docker"):
+        print("ERROR: falta Docker.")
+        return 1
+    uid, gid = get_host_uid_gid()
+    if not args.sin_compilar and t480s_build(uid, gid) != 0:
+        return 1
+    if not T480S_EFI.is_file():
+        print(f"ERROR: no existe {T480S_EFI.relative_to(ROOT)} (ejecuta sin --sin-compilar).")
+        return 1
+    rc = t480s_usb_macos(args) if sys.platform == "darwin" else t480s_usb_linux(args)
+    if rc == 0:
+        print("\nEn el portatil: enciende pulsando F12, elige el USB y despues 'SOMA - Lenovo ThinkPad T480s'.")
+        print(f"SOMA guarda tus archivos en la particion {T480S_DATA} del pendrive. Si macOS dice que no puede leerla: 'Ignorar'")
+        print("(nunca 'Inicializar': borraria lo que SOMA guardo).")
+        print("(Si el USB no aparece en F12: BIOS con F1 -> F9 Setup Defaults -> Secure Boot Disabled -> F10.)")
+    return rc
 
 
 def audio_args() -> list[str]:
@@ -554,7 +827,7 @@ def get_qemu_commands(arch: str) -> tuple[str, list[str], list[str]]:
     if arch == "x86_64":
         qemu_bin = "qemu-system-x86_64"
         canary = [
-            qemu_bin, "-machine", x86_machine(), "-m", os.environ.get("SOMA_MEM", "512M"), "-no-reboot",
+            qemu_bin, "-machine", x86_machine(), "-m", os.environ.get("SOMA_MEM", "512M"), 
             "-cdrom", "build/soma.iso", "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:8090-:80",
             "-device", "virtio-net-pci,netdev=net0",
             "-drive", "file=hdd.img,format=raw,if=virtio",
@@ -562,7 +835,8 @@ def get_qemu_commands(arch: str) -> tuple[str, list[str], list[str]]:
             "-serial", "stdio", "-display", "none",
         ] + sata_args() + nvme_args() + usb_args()
         main_cmd = [
-            qemu_bin, "-machine", x86_machine(), "-m", os.environ.get("SOMA_MEM", "512M"), "-no-reboot", "-d", "guest_errors,cpu_reset", "-D", "build/qemu.log",
+            # SOMA 188B: 4 GiB por defecto en la sesion interactiva (con 512 MB el navegador no puede con Google: su portada gasta 260 MiB de JavaScript)
+            qemu_bin, "-machine", x86_machine(), "-m", os.environ.get("SOMA_MEM", "4G"), "-d", "guest_errors,cpu_reset", "-D", "build/qemu.log",
             "-cdrom", "build/soma.iso", "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:8090-:80", "-device", "virtio-net-pci,netdev=net0",
             "-drive", "file=hdd.img,format=raw,if=virtio",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
@@ -572,7 +846,7 @@ def get_qemu_commands(arch: str) -> tuple[str, list[str], list[str]]:
     else:  # aarch64 – virtio-mmio (más simple y fiable en QEMU virt)
         qemu_bin = "qemu-system-aarch64"
         canary = [
-            qemu_bin, "-M", aarch64_machine(), "-cpu", "cortex-a72", "-m", "256M", "-smp", os.environ.get("SOMA_SMP", "4"), "-no-reboot", "-semihosting",
+            qemu_bin, "-M", aarch64_machine(), "-cpu", "cortex-a72", "-m", "256M", "-smp", os.environ.get("SOMA_SMP", "4"), "-semihosting",
             "-kernel", "build/aarch64/soma.elf",
             "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:8090-:80",
             "-device", "virtio-net-device,netdev=net0",
@@ -581,7 +855,7 @@ def get_qemu_commands(arch: str) -> tuple[str, list[str], list[str]]:
             "-serial", "stdio", "-display", "none",
         ]
         main_cmd = [
-            qemu_bin, "-M", aarch64_machine(), "-cpu", "cortex-a72", "-m", "256M", "-smp", os.environ.get("SOMA_SMP", "4"), "-no-reboot", "-semihosting",
+            qemu_bin, "-M", aarch64_machine(), "-cpu", "cortex-a72", "-m", "256M", "-smp", os.environ.get("SOMA_SMP", "4"), "-semihosting",
             "-kernel", "build/aarch64/soma.elf",
             "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:8090-:80",
             "-device", "virtio-net-device,netdev=net0",
@@ -597,9 +871,12 @@ def main() -> int:
     ap.add_argument("-a", "--arch", choices=["x86_64", "aarch64"], default=None,
                     help="arquitectura objetivo (x86_64 o aarch64)")
     ap.add_argument("-t", "--target", choices=list(TARGETS), default=None,
-                    help="destino: x86_64, virt (aarch64 QEMU virt), pi5, pi5-rp1, pi5-img, pi5-qemu, pi5-sd (Raspberry Pi 5)")
+                    help="destino: x86_64, virt (aarch64 QEMU virt), pi5, pi5-rp1, pi5-img, pi5-qemu, pi5-sd (Raspberry Pi 5), t480s-usb (ThinkPad T480s)")
+    # SOMA_191: la confirmacion humana es el comportamiento POR DEFECTO (antes habia que pedirla con --aprobar).
     ap.add_argument("--aprobar", action="store_true",
-                    help="mostrar el diff y pedir confirmacion antes de aplicar")
+                    help="(por defecto desde el parche 191) mostrar el diff y pedir confirmacion antes de aplicar")
+    ap.add_argument("--sin-aprobar", dest="sin_aprobar", action="store_true",
+                    help="PELIGROSO: aplicar los parches de la IA sin confirmacion humana (modo desatendido)")
     ap.add_argument("--max-ciclos", type=int, default=10,
                     help="maximo de ciclos compilar/arrancar (por defecto 10)")
     ap.add_argument("--snapshot", type=str, metavar="NAME",
@@ -608,6 +885,14 @@ def main() -> int:
                     help="restaura un snapshot completo (src + hdd.img)")
     ap.add_argument("--snapshots", action="store_true",
                     help="lista todos los snapshots guardados")
+    ap.add_argument("--disco", type=str, metavar="diskN",
+                    help="t480s-usb: pendrive de destino (p. ej. disk4) sin preguntar cual")
+    ap.add_argument("--formatear", action="store_true",
+                    help="t480s-usb: formatear el pendrive aunque ya tenga el volumen SOMA")
+    ap.add_argument("--si", action="store_true",
+                    help="t480s-usb: no pedir la confirmacion BORRAR al formatear (cuidado)")
+    ap.add_argument("--sin-compilar", action="store_true",
+                    help="t480s-usb: copiar el BOOTX64.EFI ya compilado, sin volver a compilar")
     llm_server.add_arguments(ap)
     search_proxy.add_arguments(ap)
     args = ap.parse_args()
@@ -655,6 +940,8 @@ def main() -> int:
         target = "x86_64" if args.arch == "x86_64" else "virt"
     if not target:
         target = choose_target() if sys.stdin.isatty() else "x86_64"
+    if target == "t480s-usb":
+        return run_t480s_usb(args)
     if TARGETS[target][0] is None:
         return run_pi5(target)
     arch = TARGETS[target][0]
@@ -763,7 +1050,7 @@ def main() -> int:
             print("\nQEMU detenido por el usuario.")
             break
 
-        outcome = handle_mailbox(args.aprobar)
+        outcome = handle_mailbox(not args.sin_aprobar)   # SOMA_191
 
         if outcome is None:
             if rc == QEMU_EXIT_PANIC:

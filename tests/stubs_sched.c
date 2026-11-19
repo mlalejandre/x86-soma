@@ -30,3 +30,7 @@ int  net_poll(void) { return 0; }
 int  vfs_write(const char *n, const char *d, uint32_t len) { (void)n; (void)d; return (int)len; }
 /* PARCHE 089: lo define mem.c, que estas pruebas no enlazan */
 volatile unsigned char kheap_owner;
+
+
+/* SOMA_192: thread.c llama a cpu_idle() desde el parche 166 (cpupower.c, que estas pruebas no enlazan): test_sched y test_mutex no enlazaban */
+void cpu_idle(void) { }

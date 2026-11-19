@@ -4,6 +4,29 @@
 .long 0x00000000
 .long -(0x1BADB002 + 0x00000000)
 
+/* SOMA_154_T480S: cabecera Multiboot 2 (GRUB la usa con la orden "multiboot2", tambien en UEFI). Pide un framebuffer
+ * lineal de 32 bits sin imponer tamano (GRUB usa gfxpayload/gfxmode, o el modo nativo del firmware). La cabecera
+ * Multiboot 1 de arriba sigue sirviendo para la entrada de QEMU de siempre ("multiboot"). */
+.align 8
+mb2_header_start:
+.long 0xE85250D6
+.long 0
+.long mb2_header_end - mb2_header_start
+.long -(0xE85250D6 + 0 + (mb2_header_end - mb2_header_start))
+.align 8
+mb2_tag_fb:
+.short 5
+.short 1
+.long 20
+.long 0
+.long 0
+.long 32
+.align 8
+.short 0
+.short 0
+.long 8
+mb2_header_end:
+
 .section .text
 .code32
 
@@ -16,6 +39,23 @@ _start:
     /* Preservar informacion de arranque entregada por GRUB/Multiboot */
     movl %eax, multiboot_magic
     movl %ebx, multiboot_info_addr
+
+    /* SOMA_154_T480S: con Multiboot 2 la estructura de informacion puede estar en cualquier sitio por debajo de 4 GiB
+     * (en UEFI, a menudo por encima del primer GiB, que es lo unico que se proyecta al entrar en modo largo). Aqui, en
+     * modo protegido de 32 bits sin paginacion, se copia entera a memoria del nucleo. */
+    cmpl $0x36D76289, %eax
+    jne 1f
+    movl (%ebx), %ecx
+    cmpl $32768, %ecx
+    jbe 2f
+    movl $32768, %ecx
+2:
+    movl %ebx, %esi
+    movl $mb2_copy, %edi
+    cld
+    rep movsb
+    movl $mb2_copy, multiboot_info_addr
+1:
 
     movl $stack_top, %esp
 
@@ -140,6 +180,7 @@ long_mode_start:
 
     andq $-16, %rsp
 
+    call ssp_randomize          /* PARCHE 132: canario aleatorio ANTES de que haya funciones protegidas en curso */
     call kernel_main
 
 halt:
@@ -287,6 +328,11 @@ multiboot_magic:
 multiboot_info_addr:
     .long 0
 
+.section .bss
+.align 8
+.global mb2_copy
+mb2_copy:
+    .space 32768
 .section .bss
 
 .align 16

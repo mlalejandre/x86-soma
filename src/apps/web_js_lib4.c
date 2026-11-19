@@ -209,8 +209,10 @@ jv js_await(struct jrt *rt, jv v)
     jobj *p;
     if (v.t == JT_OBJ && v.u.o->cls == JC_PROMISE) p = v.u.o;
     else if (v.t == JT_OBJ && js_is_callable(js_get(rt, v, rt->s_then))) p = to_promise(rt, v);
+    else if (rt->cur_co && js_co_available()) p = to_promise(rt, v);   /* SOMA_183: await de un valor corriente tambien cede un turno de microtareas */
     else return v;
     p->u.prom.handled |= 1;
+    { jv res; if (js_co_await(rt, p, &res)) return res; }   /* SOMA_183: dentro de una corrutina el await suspende de verdad */
     rt->timer_depth++;
     uint32_t guard = 0;
     while (p->u.prom.state == 0) {
@@ -227,9 +229,30 @@ jv js_await(struct jrt *rt, jv v)
 
 /* ------------------------------ Map / Set ------------------------------ */
 enum { MP_GET, MP_SET, MP_HAS, MP_DELETE, MP_CLEAR, MP_SIZE, MP_FOREACH, MP_KEYS, MP_VALUES, MP_ENTRIES, SP_ADD };
-static int find_key(jobj *m, jv k, int stride)
+/* SOMA 189: Map/Set guardan las entradas en orden en el array el[]; buscar era lineal (17 % del tiempo en Google). Con mas de 16
+ * entradas se mantiene un indice de dispersion clave -> posicion. Anadir lo amplia; borrar lo invalida y se rehace al buscar. */
+static uint32_t key_hash(jv k)
 {
-    for (uint32_t i = 0; i < m->alen; i += (uint32_t)stride) if (js_same_zero(m->el[i], k)) return (int)i;
+    switch (k.t) {
+    case JT_STR: return k.u.s->hash * 2654435761u + 1;
+    case JT_NUM: { f64 n = k.u.n; if (f64_abs(n) == 0) n = 0; if (f64_is_nan(n)) n = 0x7FF8000000000000ULL; return (uint32_t)((n ^ (n >> 29)) * 0x9E3779B97F4A7C15ULL >> 32); }
+    case JT_OBJ: if (k.u.o->cls == JC_BIGINT) return (uint32_t)(js_big_low64(k) * 0x9E3779B97F4A7C15ULL >> 32); return (uint32_t)(((uintptr_t)k.u.o >> 4) * 2654435761u);
+    case JT_BOOL: return k.u.b ? 0x51ED270Bu : 0x2545F491u;
+    default: return k.t * 0x9E3779B1u;
+    }
+}
+static int find_key(struct jrt *rt, jobj *m, jv k, int stride)
+{
+    uint32_t n = m->alen / (uint32_t)stride;
+    if (n <= 16) { m->u.map.h = 0; for (uint32_t i = 0; i < m->alen; i += (uint32_t)stride) if (js_same_zero(m->el[i], k)) return (int)i; return -1; }
+    if (!m->u.map.h || m->u.map.hcap < n * 2u) {
+        uint32_t hc = 64; while (hc < n * 4u) hc *= 2;
+        m->u.map.h = (uint32_t *)js_alloc(rt, hc * (uint32_t)sizeof(uint32_t)); m->u.map.hcap = hc; m->u.map.hcount = 0;
+    } else if (m->u.map.hcount > n) { memset(m->u.map.h, 0, (size_t)m->u.map.hcap * sizeof(uint32_t)); m->u.map.hcount = 0; }   /* hubo un borrado: se rehace */
+    uint32_t *h = m->u.map.h, mask = m->u.map.hcap - 1;
+    for (uint32_t e = m->u.map.hcount; e < n; e++) { uint32_t p = key_hash(m->el[e * (uint32_t)stride]) & mask; while (h[p]) p = (p + 1) & mask; h[p] = e + 1; }
+    m->u.map.hcount = n;
+    for (uint32_t p = key_hash(k) & mask; h[p]; p = (p + 1) & mask) { uint32_t i = (h[p] - 1) * (uint32_t)stride; if (js_same_zero(m->el[i], k)) return (int)i; }
     return -1;
 }
 jv js_make_iterator(struct jrt *rt, jv src, int kind);
@@ -239,9 +262,9 @@ static int mapinit_cb(struct jrt *rt, jv item, void *ud)
     struct mapinit *mi = (struct mapinit *)ud;
     if (mi->is_map) {
         if (item.t != JT_OBJ) js_throw_err(rt, E_TYPE, "El elemento del iterable no es un par clave-valor");
-        jv k = js_getv(rt, item, jint(0)), v = js_getv(rt, item, jint(1)); int ix = find_key(mi->m, k, 2);
+        jv k = js_getv(rt, item, jint(0)), v = js_getv(rt, item, jint(1)); int ix = find_key(rt, mi->m, k, 2);
         if (ix >= 0) mi->m->el[ix + 1] = v; else { js_arr_push(rt, mi->m, k); js_arr_push(rt, mi->m, v); }
-    } else if (find_key(mi->m, item, 1) < 0) js_arr_push(rt, mi->m, item);
+    } else if (find_key(rt, mi->m, item, 1) < 0) js_arr_push(rt, mi->m, item);
     return 1;
 }
 static jv mapset_ctor(struct jrt *rt, jv thisv, jv *args, int argc, int magic)   /* 0 Map, 1 Set, 2 WeakMap, 3 WeakSet */
@@ -257,12 +280,12 @@ static jv mapset_proto(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     if (thisv.t != JT_OBJ || (thisv.u.o->cls != JC_MAP && thisv.u.o->cls != JC_SET)) js_throw_err(rt, E_TYPE, "Metodo de Map/Set llamado sobre un objeto incompatible");
     jobj *m = thisv.u.o; int is_map = m->cls == JC_MAP; int st = is_map ? 2 : 1;
     switch (magic) {
-    case MP_GET: { int i = find_key(m, ARG(0), st); return i >= 0 ? m->el[i + 1] : jundef(); }
-    case MP_SET: { if (m->flag && ARG(0).t != JT_OBJ) js_throw_err(rt, E_TYPE, "Clave de WeakMap no valida"); int i = find_key(m, ARG(0), 2); if (i >= 0) m->el[i + 1] = ARG(1); else { js_arr_push(rt, m, ARG(0)); js_arr_push(rt, m, ARG(1)); } return thisv; }
-    case SP_ADD: if (find_key(m, ARG(0), 1) < 0) js_arr_push(rt, m, ARG(0)); return thisv;
-    case MP_HAS: return jbool(find_key(m, ARG(0), st) >= 0);
-    case MP_DELETE: { int i = find_key(m, ARG(0), st); if (i < 0) return jbool(0); memmove(&m->el[i], &m->el[i + st], (m->alen - (uint32_t)i - (uint32_t)st) * sizeof(jv)); m->alen -= (uint32_t)st; return jbool(1); }
-    case MP_CLEAR: m->alen = 0; return jundef();
+    case MP_GET: { int i = find_key(rt, m, ARG(0), st); return i >= 0 ? m->el[i + 1] : jundef(); }
+    case MP_SET: { if (m->flag && ARG(0).t != JT_OBJ) js_throw_err(rt, E_TYPE, "Clave de WeakMap no valida"); int i = find_key(rt, m, ARG(0), 2); if (i >= 0) m->el[i + 1] = ARG(1); else { js_arr_push(rt, m, ARG(0)); js_arr_push(rt, m, ARG(1)); } return thisv; }
+    case SP_ADD: if (find_key(rt, m, ARG(0), 1) < 0) js_arr_push(rt, m, ARG(0)); return thisv;
+    case MP_HAS: return jbool(find_key(rt, m, ARG(0), st) >= 0);
+    case MP_DELETE: { int i = find_key(rt, m, ARG(0), st); if (i < 0) return jbool(0); m->u.map.hcount = 0xFFFFFFFFu; memmove(&m->el[i], &m->el[i + st], (m->alen - (uint32_t)i - (uint32_t)st) * sizeof(jv)); m->alen -= (uint32_t)st; return jbool(1); }
+    case MP_CLEAR: m->alen = 0; m->u.map.h = 0; m->u.map.hcount = 0; return jundef();
     case MP_SIZE: return jint(m->alen / (uint32_t)st);
     case MP_FOREACH:
         if (!js_is_callable(ARG(0))) js_throw_err(rt, E_TYPE, "El callback no es una funcion");

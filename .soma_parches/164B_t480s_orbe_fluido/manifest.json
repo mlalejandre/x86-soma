@@ -1,0 +1,33 @@
+{
+  "created": {
+    "docs/PARCHE_164B_T480S_ORBE_FLUIDO.md": "2bcbe1ca3bddaa4167fc3e7beee474bf897a9f8dae78b18b8d439735dc1b5f24"
+  },
+  "files": {
+    "docs/PLAN_T480S.md": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "3a314beda242db9906c74176a9379a771a4d39d81d4b007b20e64197e6f107d9",
+      "old": "6ef6c43b8f0e2245a25b8849a0db731487b48b9c1b5978625a43576d33f9915c"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "13ed81af910a18c86ecb3abe3301699c310f5c42446e64143e96871e70f71aa3",
+      "old": "3eeb13b1497f39264d4f0cfba9b69324f55d332c426a7aad6e266ba8289c3e1e"
+    },
+    "src/drivers/fb.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "5046abe0499f60b2ecee27daeab086c4ce93f49cd42110e8e9e5f11db0a070da",
+      "old": "3aaa5e0073686c7ae38283cb76ae56f75df669f933a206abc061b3f039332d5b"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "bec901030f1627b8c8fbb5e2288ce26d67b3778d256a53cbfe2b042582b67505",
+      "old": "13ea6e4413e8424c52127ea2fadd9b374da2c3a5a2e520590caa22ed2976b863"
+    }
+  },
+  "log": "20261115_213559 parche 164B: orbe, borrado y mezcla translucida repartidos entre los nucleos (identico pixel a pixel), freno del 155D suavizado con SMP, orden orbe",
+  "version": 1
+}

@@ -76,6 +76,31 @@ int main(void)
         for (int it = 0; it < 20000; it++) { for (int k = 0; k < 64; k++) rnd[k] = (uint8_t)rand(); rnd[1] = 2; xhci_parse_config(rnd, 64, f, 4); }
         CHECK(usb_class_str(3, 1, 1)[0] == 'H' && usb_class_str(9, 0, 0)[0] == 'h');
     }
+    {   /* SOMA_178_T480S: extremo isocrono IN (camara UVC) */
+        for (int cs64 = 0; cs64 < 2; cs64++) {
+            uint32_t cs = cs64 ? 64u : 32u; static uint8_t in[33 * 64], out[64];
+            memset(out, 0, sizeof out); ((uint32_t *)out)[0] = (3u << 20) | (1u << 27); ((uint32_t *)out)[1] = 5u << 16;
+            xhci_build_cfg_isoc_input(in, cs64, out, 3, 0x1400 | 0x0000, 0, 0x123456000ull);       /* 1024 x 3 transacciones, cada microtrama */
+            const uint32_t *icc = (const uint32_t *)in, *sl = (const uint32_t *)(in + cs), *ep = (const uint32_t *)(in + 4 * cs);
+            CHECK(icc[0] == 0 && icc[1] == (1u | 8u));
+            CHECK(((sl[0] >> 27) & 31) == 3 && ((sl[0] >> 20) & 15) == 3 && sl[1] == (5u << 16));          /* entradas de contexto sube a 3, se conserva lo demas */
+            CHECK(((ep[0] >> 16) & 255) == 0 && ((ep[0] >> 8) & 3) == 2);                                    /* intervalo 0, Mult 2 (3 transacciones) */
+            CHECK(((ep[1] >> 3) & 7) == 5 && ((ep[1] >> 1) & 3) == 0 && (ep[1] >> 16) == 1024 && ((ep[1] >> 8) & 255) == 0);
+            CHECK(ep[2] == (0x23456000u | 1u) && ep[3] == 1u);
+            CHECK((ep[4] & 0xFFFF) == 3072 && (ep[4] >> 16) == 3072);
+            xhci_build_cfg_isoc_input(in, cs64, out, 5, 0x0380, 3, 0x1000);
+            ep = (const uint32_t *)(in + 6 * cs);
+            CHECK(((ep[0] >> 8) & 3) == 0 && ((ep[0] >> 16) & 255) == 3 && (ep[1] >> 16) == 896 && (ep[4] & 0xFFFF) == 896);
+            sl = (const uint32_t *)(in + cs); CHECK(((sl[0] >> 27) & 31) == 5);
+            xhci_build_drop_ep_input(in, cs64, out, 3);
+            icc = (const uint32_t *)in; sl = (const uint32_t *)(in + cs);
+            CHECK(icc[0] == 8u && icc[1] == 1u && sl[1] == (5u << 16) && ((sl[0] >> 27) & 31) == 1);
+        }
+        CHECK(xhci_isoc_d3(3, 1, 1) == (TRB_TYPE(TRB_ISOCH) | 32u | (2u << 16) | 0x80000000u));
+        CHECK(xhci_isoc_d3(1, 0, 0) == TRB_TYPE(TRB_ISOCH) && TRB_GET_TYPE(xhci_isoc_d3(2, 1, 0)) == TRB_ISOCH);
+        CHECK(xhci_isoc_d3(0, 1, 0) == (TRB_TYPE(TRB_ISOCH) | 32u));
+        CHECK(xhci_ep_interval(3, 1) == 0 && xhci_ep_interval(3, 4) == 3);
+    }
     printf(fails ? "xhci_proto: %d FALLOS\n" : "xhci_proto: todo correcto\n", fails);
     free(mem); free(em);
     return fails != 0;

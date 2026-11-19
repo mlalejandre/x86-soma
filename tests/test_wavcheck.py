@@ -8,6 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+if not (ROOT / "tools" / "wavcheck.py").exists():      # PARCHE 138
+    print("[wavcheck] OMITIDO (falta tools/wavcheck.py)"); sys.exit(0)
 import wavcheck as W  # noqa: E402
 
 fails = 0

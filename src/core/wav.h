@@ -23,5 +23,7 @@ struct wav_info {
 
 int wav_parse(const uint8_t *buf, size_t len, struct wav_info *out);
 const char *wav_strerror(int code);
+/* SOMA_177_T480S: cabecera canonica de 44 bytes (PCM de 16 bits) para un WAV de `data_bytes` bytes de datos */
+void wav_make_header(uint8_t out[44], uint16_t channels, uint32_t rate, uint32_t data_bytes);
 
 #endif

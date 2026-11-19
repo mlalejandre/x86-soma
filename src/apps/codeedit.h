@@ -50,4 +50,10 @@ int  ce_prompt_kind(void);
 const char *ce_prompt_value(void);
 void ce_find_next(int dir);
 void ce_toggle_comment(void);
+/* SOMA_216_STUDIO: un editor por ventana */
+int  ce_inst_new(void);
+void ce_select(int slot);
+void ce_inst_drop(int slot);
+const char *ce_inst_path(int slot);
+int  ce_inst_dirty(int slot);                    /* SOMA_219_AVISO: 1 = cambios sin guardar */
 #endif

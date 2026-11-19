@@ -36,9 +36,27 @@ enum soma_font_id {
     FONT_TREBUCHET           = 29,
     FONT_UBUNTU              = 30,
     FONT_COMIC               = 31,
-    FONT_VECTOR              = 32,
-    FONT_COUNT               = 33
+    FONT_VECTOR              = 32,     /* TrueType: DejaVu Sans Mono */
+    FONT_DEJAVU_SANS         = 33,     /* SOMA_184: TrueType proporcional (la de la web y la interfaz) */
+    FONT_LIBERATION          = 34,     /* SOMA_184: Liberation Sans (anchos de Arial) */
+    FONT_LIBERATION_BOLD     = 35,     /* SOMA_184: Liberation Sans Negrita */
+    FONT_COUNT               = 36
 };
+
+/* SOMA_184: caras TrueType del catalogo. Son las mismas que usa el navegador (una sola copia de cada fuente en el kernel). */
+enum soma_font_face {
+    FFACE_MONO       = 0,   /* DejaVu Sans Mono (la del terminal y el editor) */
+    FFACE_DEJAVU     = 1,   /* DejaVu Sans */
+    FFACE_LIBERATION = 2,   /* Liberation Sans */
+    FFACE_LIBERATION_BOLD = 3,
+    FFACE_COUNT      = 4
+};
+int         font_face_of(int font_id);            /* cara TrueType de una entrada del catalogo (-1 = fuente de mapa de bits) */
+int         font_face_catalog_id(int face);       /* entrada del catalogo que corresponde a una cara */
+const char *font_face_name(int face);             /* nombre para mostrar ("Liberation Sans") */
+int         font_sysfont_off(void);               /* 1 con soma.sysfont=off (o modo seguro): sin las fuentes TrueType anadidas al catalogo */
+int         font_vec_em(int face, int em);        /* tamano em equivalente en esa cara para una rejilla pensada para la mono */
+void        font_vec_draw_face(int face, int32_t x, int32_t y, uint32_t cp, uint32_t fg, int em, int cell_w, int baseline);
 
 /* Control de selección de fuente activa */
 int         font_set(int font_id);

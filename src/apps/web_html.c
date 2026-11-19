@@ -163,6 +163,7 @@ static void mark_indoc(struct wnode *n, int on)
     struct wnode *c = n;
     while (c) {
         if (on) c->flags |= WNF_INDOC; else c->flags &= (uint16_t)~WNF_INDOC;
+        if (c->type == WN_ELEM && c->shadow) mark_indoc(c->shadow, on);   /* SOMA_188 */
         if (c->first) { c = c->first; continue; }
         while (c && c != n && !c->next) c = c->parent;
         if (!c || c == n) break;
@@ -178,6 +179,7 @@ void wd_remove(struct wnode *c)
     if (c->next) c->next->prev = c->prev; else p->last = c->prev;
     c->parent = c->prev = c->next = 0;
     mark_indoc(c, 0);
+    p->flags |= WNF_DIRTY; /* SOMA_146: invalidar layout al eliminar un hijo */
 }
 
 void wd_insert_before(struct wnode *p, struct wnode *c, struct wnode *ref)
@@ -329,6 +331,7 @@ struct ps {
     struct wnode *stk[MAX_DEPTH + 4];
     int sp;
     int body_started, frag, skip_nl;
+    int keep_comments;   /* SOMA_188 */
     struct wb txt;
 };
 
@@ -361,6 +364,7 @@ static void ensure_body(struct ps *s)
 {
     if (s->frag || s->body_started) return;
     ensure_html(s);
+    if (!s->d->head && !web_feat_off("htmlparse")) ensure_head(s);   /* SOMA_188: <head> implicito (vacio) antes del cuerpo, como el algoritmo HTML */
     s->body_started = 1;
     while (s->sp > 2) s->sp--;
     if (s->sp == 3) s->sp--;
@@ -368,6 +372,16 @@ static void ensure_body(struct ps *s)
     s->d->body = b; push(s, b);
 }
 
+/* SOMA_188: interruptores de arranque soma.<nombre>=off de las funciones nuevas del navegador */
+#if defined(WEB_HOST_TEST) || defined(SOMA_HOST_TEST)
+int (*g_web_feat_hook)(const char *name);
+int web_feat_off(const char *n) { return g_web_feat_hook ? g_web_feat_hook(n) : 0; }
+#elif defined(__x86_64__)
+extern int bootinfo_disabled(const char *name);
+int web_feat_off(const char *n) { return bootinfo_disabled(n); }
+#else
+int web_feat_off(const char *n) { (void)n; return 0; }
+#endif
 static void flush_text(struct ps *s)
 {
     if (!s->txt.len) return;
@@ -496,13 +510,29 @@ static void parse_core(struct ps *s, const char *html, uint32_t len)
         /* comentarios / doctype / basura */
         if (end - p >= 4 && p[1] == '!' && p[2] == '-' && p[3] == '-') {
             flush_text(s);
-            const char *q = p + 4;
-            while (q + 2 < end && !(q[0] == '-' && q[1] == '-' && q[2] == '>')) q++;
-            p = (q + 2 < end) ? q + 3 : end; continue;
+            const char *cs = p + 4, *q = cs, *cz;
+            if (q < end && *q == '>') { cz = q; p = q + 1; }                                   /* <!--> */
+            else if (q + 1 < end && q[0] == '-' && q[1] == '>') { cz = q; p = q + 2; }       /* <!---> */
+            else {
+                while (q + 2 < end && !(q[0] == '-' && q[1] == '-' && q[2] == '>')) q++;
+                if (q + 2 < end) { cz = q; p = q + 3; } else { cz = end; p = end; }
+            }
+            if (s->keep_comments) {   /* SOMA_188: el comentario queda en el DOM (lit-html, Vue, etc. lo usan como ancla) */
+                struct wnode *cm = wd_new_text(s->d, cs, (uint32_t)(cz - cs));
+                if (cm) { cm->type = WN_COMMENT; wd_append(cur(s), cm); }
+            }
+            continue;
         }
         if (p + 1 < end && (p[1] == '!' || p[1] == '?')) {
             flush_text(s);
             const char *q = p + 2; while (q < end && *q != '>') q++;
+            /* SOMA_188: "comentario falso" del algoritmo HTML: <?...> (dato con el '?') y <!...> que no es DOCTYPE.
+               lit-html marca asi las partes de texto (<?lit$123$>): sin el comentario no rellenaba listas ni contadores */
+            if (s->keep_comments && !(p[1] == '!' && end - p >= 9 && wu_strnieq(p + 2, "doctype", 7))) {
+                const char *cs = p[1] == '?' ? p + 1 : p + 2;
+                struct wnode *cm = wd_new_text(s->d, cs, (uint32_t)(q - cs));
+                if (cm) { cm->type = WN_COMMENT; wd_append(cur(s), cm); }
+            }
             p = q < end ? q + 1 : end; continue;
         }
         int closing = (p + 1 < end && p[1] == '/');
@@ -578,7 +608,7 @@ static void parse_core(struct ps *s, const char *html, uint32_t len)
             if (s->d->html) for (struct wattr *a = el->attrs; a; a = a->next) if (!wd_attr(s->d->html, a->name)) wd_set_attr(s->d, s->d->html, a->name, a->val);
             continue;
         }
-        if (tag == WT_HEAD) { ensure_head(s); continue; }
+        if (tag == WT_HEAD) { if (!s->body_started) ensure_head(s); continue; }   /* SOMA_188: un <head> tras empezar el cuerpo se ignora */
         if (tag == WT_BODY) {
             if (s->body_started && s->d->body) { for (struct wattr *a = el->attrs; a; a = a->next) if (!wd_attr(s->d->body, a->name)) wd_set_attr(s->d, s->d->body, a->name, a->val); continue; }
             ensure_body(s);
@@ -597,7 +627,9 @@ static void parse_core(struct ps *s, const char *html, uint32_t len)
         if (foreign_leaf) { if (s->sp > 1 && cur(s) == el) s->sp--; continue; }
 
         /* elementos de texto crudo */
-        if (tag == WT_SCRIPT || tag == WT_STYLE || tag == WT_TEXTAREA || tag == WT_TITLE || tag == WT_NOSCRIPT || tag == WT_IFRAME ||
+        int in_svg = 0; if (tag == WT_TITLE || tag == WT_STYLE) for (int i = s->sp - 2; i > 0; i--) if (s->stk[i]->tag == WT_SVG) { in_svg = 1; break; }   /* SOMA_188: <title> de SVG no es el del documento */
+        if (in_svg && tag == WT_TITLE) { /* elemento normal dentro de <svg> */ }
+        else if (tag == WT_SCRIPT || tag == WT_STYLE || tag == WT_TEXTAREA || tag == WT_TITLE || tag == WT_NOSCRIPT || tag == WT_IFRAME ||
             (tag == WT_NONE && (wu_streq(lname, "xmp") || wu_streq(lname, "noembed") || wu_streq(lname, "noframes") || wu_streq(lname, "plaintext")))) {
             const char *close = find_close(p, end, lname, ll);
             if (close > p) {
@@ -622,7 +654,7 @@ void wd_parse(struct wdoc *d, const char *html, uint32_t len)
 {
     struct ps *s = (struct ps *)kmalloc(sizeof(struct ps)); if (!s) return;
     memset(s, 0, sizeof(*s));
-    s->d = d; s->stk[0] = d->root; s->sp = 1;
+    s->d = d; s->stk[0] = d->root; s->sp = 1; s->keep_comments = !web_feat_off("htmlparse");
     parse_core(s, html, len);
     if (!d->html) ensure_html(s);
     if (!d->head) ensure_head(s);
@@ -634,7 +666,7 @@ void wd_parse_fragment(struct wdoc *d, struct wnode *ctx, const char *html, uint
 {
     struct ps *s = (struct ps *)kmalloc(sizeof(struct ps)); if (!s) return;
     memset(s, 0, sizeof(*s));
-    s->d = d; s->stk[0] = ctx; s->sp = 1; s->frag = 1; s->body_started = 1;
+    s->d = d; s->stk[0] = ctx; s->sp = 1; s->frag = 1; s->body_started = 1; s->keep_comments = !web_feat_off("htmlparse");
     parse_core(s, html, len);
     wb_free(&s->txt); kfree(s);
 }

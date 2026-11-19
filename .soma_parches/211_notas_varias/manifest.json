@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "date": "20261119_185025",
+  "files": {
+    "src/apps/notepad.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "a646248ec2bbdc330bf6d97c2187b372d456a63b780357348c20ac03b6bcc1fa",
+      "old": "d3d576c301102e1dfe6cf90fc5ef06a0be9e065553b61288e589bd6ec35a55cb"
+    },
+    "src/apps/notepad.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "74824d2f77a97745534c9a1dd7ecb991049c605ce1f2792002bd7969fc4733e0",
+      "old": "bf3fa7b13e1bf996d402bc115ac53bd86243b1ab19a748833ab99238f62eba21"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "295b5d5173798863569e2f353505907ce4f95539156797d06acd819efeb68502",
+      "old": "3089221cbfb77f070b9fcb93279bc3450b999e9f14651ca464b6681d4bbc0010"
+    }
+  },
+  "name": "211_notas_varias"
+}

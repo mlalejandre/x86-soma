@@ -38,5 +38,7 @@ int jpeg_decode(const uint8_t *data, size_t len, uint32_t *out, uint32_t out_str
 
 const char *jpeg_strerror(int code);
 
-void jpeg_yield_hook(void);    /* SOMA_PARCHE_028_UI: punto de cesion durante la decodificacion (debil) */
+void jpeg_yield_hook(void);
+/* PARCHE 139: igual que jpeg_decode, pero en x86_64 se ejecuta en el servicio aislado imgdec (src/apps/web_img_sbx.c). Lo usa el kernel. */
+int jpeg_decode_isolated(const uint8_t *data, size_t len, uint32_t *out, uint32_t out_stride, uint32_t out_max_height, struct jpeg_info *info);    /* SOMA_PARCHE_028_UI: punto de cesion durante la decodificacion (debil) */
 #endif

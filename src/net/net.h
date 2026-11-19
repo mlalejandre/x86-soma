@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 extern uint8_t net_mac[6];
+void net_arp_flush(void);                       /* SOMA_170: olvida las MAC aprendidas (cambio de red) */
 extern uint8_t net_ip[4];
 extern uint8_t net_gateway[4];
 extern uint8_t net_netmask[4];    /* PARCHE 081 */
@@ -33,4 +34,5 @@ int arp_format_cache(char *out, uint32_t max);
 /* Prueba de la capa Ethernet/ARP. */
 void net_run_arp_test(void);
 
+const char *net_describe(void);          /* SOMA_162: IP y tarjeta, para la portada */
 #endif

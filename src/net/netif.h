@@ -16,6 +16,9 @@ struct netif_ops {
 };
 #define NETIF_MAX 4
 int  netif_register(const struct netif_ops *o);                   /* por orden de preferencia; 0 = bien */
+int  netif_start(int i);                                          /* SOMA_170: arranca la i-esima sin cambiar la activa; 1 = operativa */
+void netif_retry(int i);                                         /* SOMA_171: permite volver a intentar arrancarla */
+void netif_mark_down(int i);                                     /* SOMA_171: el dispositivo desaparecio (USB desenchufado) */
 int  netif_start_first(void);                                     /* arranca el primero que funcione; 1 = hay interfaz activa */
 int  netif_use(const char *name);                                 /* 1 = cambiada; 0 = no existe o no arranca (se queda la anterior) */
 const struct netif_ops *netif_active(void);

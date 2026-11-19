@@ -16,6 +16,11 @@ uintptr_t pmm_alloc_frame(void);
 void pmm_inject_oom_after(long n);
 unsigned long pmm_inject_oom_hits(void);
 
+/* SOMA_157_T480S: marco de la reserva ALTA (por encima de 512 MiB; si no hay, de la baja). Solo para memoria que se usa a traves
+ * de una proyeccion (el montón): NO es accesible por identidad. Las tablas de paginas y el DMA siguen usando pmm_alloc_frame. */
+uintptr_t pmm_alloc_frame_high(void);
+void pmm_get_pools(size_t *low_free, size_t *high_free);
+
 /* Libera un marco fisico de 4 KiB */
 void pmm_free_frame(uintptr_t phys_addr);
 
@@ -30,4 +35,6 @@ void pmm_dump_stats(void);
 /* Auto-test de asignacion, alineacion y liberacion */
 int pmm_test_self(void);
 
+int pmm_bench(void);   /* PARCHE 127: compara el escaneo antiguo y el nuevo; 1 = correcto */
+int pmm_range_is_ram(uint64_t base, uint64_t len);   /* SOMA_159: RAM utilizable segun el mapa del firmware */
 #endif

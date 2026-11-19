@@ -74,6 +74,8 @@ enum { D_NONE = 0, D_PAINT, D_SHAPE, D_HAND, D_SV, D_HUE, D_SIZE };
 static int drag, sx0, sy0, sx1, sy1, last_x = -1, last_y = -1, hand_mx, hand_my;
 static int hover_btn = -1;
 static int g_last_z = 100;            /* zoom efectivo del ultimo dibujo (para + y - del teclado) */
+static int p_named;                   /* SOMA_215_PAINT: 1 = 'path' es un archivo abierto o guardado */
+static int p_dirty;                   /* SOMA_219_AVISO: 1 = hay cambios sin guardar */
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void s_cpy(char *d, const char *s, int max) { int i = 0; while (s && s[i] && i + 1 < max) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -145,6 +147,7 @@ static void undo_push(void)
     u_top = (u_top + 1) % UNDO_N;
     if (u_count < UNDO_N) u_count++;
     r_count = 0;
+    p_dirty = 1;                                                  /* SOMA_219_AVISO: cada cambio guarda antes un paso de deshacer */
 }
 static void swap_with(int slot)
 {
@@ -163,12 +166,12 @@ static void do_undo(void)
 {
     if (!u_count) { say("No hay nada que deshacer", 0); return; }
     u_top = (u_top + UNDO_N - 1) % UNDO_N; u_count--; r_count++;
-    swap_with(u_top); say("Deshecho", 1);
+    swap_with(u_top); p_dirty = 1; say("Deshecho", 1);
 }
 static void do_redo(void)
 {
     if (!r_count) { say("No hay nada que rehacer", 0); return; }
-    swap_with(u_top); u_top = (u_top + 1) % UNDO_N; u_count++; r_count--; say("Rehecho", 1);
+    swap_with(u_top); u_top = (u_top + 1) % UNDO_N; u_count++; r_count--; p_dirty = 1; say("Rehecho", 1);
 }
 
 void paint_init(void)
@@ -179,7 +182,7 @@ void paint_init(void)
     tool = T_BRUSH; bsize = 4; zoom = 0; pan_x = pan_y = 0; drag = D_NONE;
     set_color(0x003B82F6, 1);
     if (!n_recent) { recent[0] = 0x000F172A; recent[1] = 0x00DC2626; recent[2] = 0x0016A34A; n_recent = 3; }
-    s_cpy(path, "/workspace/dibujo.png", sizeof path);
+    s_cpy(path, "/workspace/dibujo.png", sizeof path); p_named = 0; p_dirty = 0;
     say("Lienzo nuevo de 320 x 240", 1);
 }
 
@@ -303,10 +306,11 @@ static void do_save(void)
     if (r == -3 && bmp) {                                         /* el BMP no cabe en RamFS: se guarda como PNG al lado */
         int n = s_len(path); path[n - 3] = 'p'; path[n - 2] = 'n'; path[n - 1] = 'g';
         r = save_png();
-        if (r > 0) { char m[96] = "BMP demasiado grande: guardado como "; s_cat(m, path, sizeof m); say(m, 1); return; }
+        if (r > 0) { p_dirty = 0; char m[96] = "BMP demasiado grande: guardado como "; s_cat(m, path, sizeof m); say(m, 1); return; }
     }
     if (r == -3) { say("No se pudo comprimir la imagen", 0); return; }
     if (r < 0) { say("Error al guardar (sin memoria?)", 0); return; }
+    p_named = 1; p_dirty = 0;
     char m[96] = "Guardado: "; s_cat(m, path, sizeof m); s_cat(m, " (", sizeof m); s_num(m, sizeof m, (r + 1023) / 1024); s_cat(m, " KiB)", sizeof m);
     say(m, 1);
 }
@@ -340,9 +344,9 @@ void paint_open_file(const char *p)
 {
     if (!p || !*p) return;
     if (!cv) paint_init();
-    s_cpy(path, p, sizeof path);
+    s_cpy(path, p, sizeof path); p_named = 1;
     int r = load_file(path);
-    if (r == 0) { char m[96] = "Abierto: "; s_cat(m, path, sizeof m); say(m, 1); }
+    if (r == 0) { p_dirty = 0; char m[96] = "Abierto: "; s_cat(m, path, sizeof m); say(m, 1); }
     else say(r == -2 ? "Formato no reconocido (PNG, BMP, JPEG o GIF)" : "No existe todavia: se guardara con ese nombre", r == -1);
 }
 
@@ -809,4 +813,94 @@ int paint_clip_op(int op)
     if (op == CLIP_OP_CUT) { undo_push(); for (int i = 0; i < cw * ch; i++) cv[i] = 0x00FFFFFF; say("Lienzo cortado", 1); clip_toast("Lienzo cortado"); }
     else { say("Lienzo copiado", 1); clip_toast("Lienzo copiado"); }
     return 1;
+}
+
+
+
+/* SOMA_215_PAINT: varias ventanas de Paint. Cada ventana tiene su lienzo, su deshacer, su herramienta, sus colores, su zoom y su
+ * archivo. Al cambiar de ventana se guarda el estado de la anterior y se carga el de la nueva (unos cientos de bytes; el lienzo
+ * y los pasos de deshacer van por puntero y nunca se copian). */
+#define PT_FIELDS X(cv) X(pv) X(cw) X(ch) X(undo_buf) X(undo_w) X(undo_h) X(u_top) X(u_count) X(r_count) X(tool) X(prev_tool) \
+    X(bsize) X(color) X(recent) X(n_recent) X(hue) X(sat) X(val) X(zoom) X(pan_x) X(pan_y) X(path) X(msg) X(msg_until) X(msg_ok) \
+    X(cur_x) X(cur_y) X(drag) X(sx0) X(sy0) X(sx1) X(sy1) X(last_x) X(last_y) X(hand_mx) X(hand_my) X(hover_btn) X(g_last_z) X(p_named) X(p_dirty)
+struct pt_inst {
+#define X(f) __typeof__(f) f;
+    PT_FIELDS
+#undef X
+};
+#define PT_INST_MAX 8
+static struct pt_inst pt_insts[PT_INST_MAX + 1];
+static int pt_used[PT_INST_MAX + 1], pt_live;
+static void pt_save(struct pt_inst *q)
+{
+#define X(f) memcpy(&q->f, &f, sizeof f);
+    PT_FIELDS
+#undef X
+}
+static void pt_load(const struct pt_inst *q)
+{
+#define X(f) memcpy(&f, &q->f, sizeof f);
+    PT_FIELDS
+#undef X
+}
+static void pt_blank(void)                                  /* estado de un Paint sin lienzo (lo crea paint_ensure) */
+{
+    cv = 0; pv = 0; cw = 320; ch = 240;
+    for (int i = 0; i < UNDO_N; ++i) { undo_buf[i] = 0; undo_w[i] = undo_h[i] = 0; }
+    u_top = u_count = r_count = 0; tool = prev_tool = T_BRUSH; bsize = 4; color = 0x003B82F6; n_recent = 0;
+    hue = 1024; sat = 200; val = 246; zoom = 0; pan_x = pan_y = 0;
+    s_cpy(path, "/workspace/dibujo.png", sizeof path); msg[0] = 0; msg_until = 0; msg_ok = 1;
+    cur_x = cur_y = -1; drag = 0; sx0 = sy0 = sx1 = sy1 = 0; last_x = last_y = -1; hand_mx = hand_my = 0; hover_btn = -1; g_last_z = 100; p_named = 0; p_dirty = 0;
+}
+void paint_select(int slot)
+{
+    if (slot < 1 || slot > PT_INST_MAX || !pt_used[slot] || slot == pt_live) return;
+    if (pt_live) pt_save(&pt_insts[pt_live]);
+    pt_load(&pt_insts[slot]);
+    pt_live = slot;
+}
+int paint_inst_new(void)
+{
+    for (int k = 1; k <= PT_INST_MAX; ++k) {
+        if (pt_used[k]) continue;
+        if (pt_live) pt_save(&pt_insts[pt_live]);
+        else if (cv) { if (cv) kfree(cv); if (pv) kfree(pv); for (int i = 0; i < UNDO_N; ++i) if (undo_buf[i]) kfree(undo_buf[i]); }   /* lienzo sin ventana */
+        pt_blank();
+        pt_used[k] = 1; pt_live = k;
+        pt_save(&pt_insts[k]);
+        return k;
+    }
+    return 0;
+}
+void paint_inst_drop(int slot)
+{
+    if (slot < 1 || slot > PT_INST_MAX || !pt_used[slot]) return;
+    int back = pt_live != slot ? pt_live : 0;
+    paint_select(slot);
+    if (cv) kfree(cv);
+    if (pv) kfree(pv);
+    for (int i = 0; i < UNDO_N; ++i) if (undo_buf[i]) kfree(undo_buf[i]);
+    pt_blank();
+    pt_used[slot] = 0; pt_live = 0;
+    if (back) paint_select(back);
+}
+static const char *pt_path_of(int k) { return k == pt_live ? path : pt_insts[k].path; }
+static int pt_named_of(int k) { return k == pt_live ? p_named : pt_insts[k].p_named; }
+int paint_inst_dirty(int slot) { return slot >= 1 && slot <= PT_INST_MAX && pt_used[slot] ? (slot == pt_live ? p_dirty : pt_insts[slot].p_dirty) : 0; }   /* SOMA_219_AVISO */
+int paint_inst_find(const char *file)
+{
+    for (int k = 1; k <= PT_INST_MAX; ++k) {
+        if (!pt_used[k] || !pt_named_of(k) || !file) continue;
+        const char *a = pt_path_of(k), *b = file;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b) return k;
+    }
+    return 0;
+}
+const char *paint_inst_name(int slot)
+{
+    if (slot < 1 || slot > PT_INST_MAX || !pt_used[slot] || !pt_named_of(slot)) return "";
+    const char *p = pt_path_of(slot), *n = p;
+    for (; *p; ++p) if (*p == '/') n = p + 1;
+    return n;
 }

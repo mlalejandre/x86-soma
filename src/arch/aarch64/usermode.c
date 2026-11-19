@@ -17,3 +17,9 @@ int usermode_exec(const char *name, const void *img, size_t len, uint32_t max_ms
 int64_t usermode_wait(int idx) { (void)idx; return -1; }
 int usermode_format_table(char *out, uint32_t max, int reap) { (void)reap; if (max) out[0] = 0; return 0; }
 void usermode_install_programs(void) { }
+
+/* PARCHE 126: sin ring 3 no hay nada que probar (los comandos usfuzz/oomtest existen en ambas arquitecturas) */
+int usermode_fuzz(int nproc, uint32_t iters, uint32_t seed)
+{ (void)nproc; (void)iters; (void)seed; kprint("[USFUZZ] no disponible en AArch64 (sin EL0)\n"); return 1; }
+int usermode_oomtest(void) { kprint("[OOM] procesos: no disponible en AArch64 (sin EL0)\n"); return 1; }
+int usermode_oomtest_mem(void) { return 1; }

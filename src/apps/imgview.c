@@ -30,16 +30,60 @@
 #define MAXG 160
 #define NMIP 7
 
-static char g_path[128];
-static uint32_t *g_px; static int g_w, g_h, g_nw, g_nh; static uint32_t g_fsize; static char g_fmt[16];
-static uint32_t *g_mip[NMIP]; static int g_mw[NMIP], g_mh[NMIP];
-static int g_zoom = 0;              /* 0 = ajustar, si no 1/1000 */
-static int g_ox, g_oy;              /* desplazamiento del centro (px de pantalla) */
-static int g_bg, g_strip = 1, g_drag, g_dx, g_dy, g_dox, g_doy, g_alpha;
-static char g_status[140] = "Visor de imagenes"; static int g_st_ok = 1;
-static char g_gal[MAXG][96]; static int g_ng, g_gi = -1, g_strip_scroll;
+/* SOMA_212_IMAGENES: varias ventanas del visor. Lo que es de una ventana (imagen, zoom, desplazamiento, fondo, posicion en la
+ * galeria...) vive en una instancia; la galeria y sus miniaturas se comparten. La GUI elige la instancia con imgview_select(). */
+struct iv_inst {
+    char g_path[128];
+    uint32_t *g_px; int g_w, g_h, g_nw, g_nh; uint32_t g_fsize; char g_fmt[16];
+    uint32_t *g_mip[NMIP]; int g_mw[NMIP], g_mh[NMIP];
+    int g_zoom, g_ox, g_oy;
+    int g_bg, g_strip, g_drag, g_dx, g_dy, g_dox, g_doy, g_alpha;
+    char g_status[140]; int g_st_ok;
+    int g_gi, g_strip_scroll;
+    int g_last_vw, g_last_vh;
+};
+#define IV_INST_MAX 8
+static struct iv_inst iv_insts[IV_INST_MAX + 1];
+static int iv_used[IV_INST_MAX + 1];
+static struct iv_inst *IV = &iv_insts[1];
+static void iv_defaults(struct iv_inst *p)
+{
+    char *b = (char *)p; for (size_t i = 0; i < sizeof *p; ++i) b[i] = 0;
+    p->g_strip = 1; p->g_st_ok = 1; p->g_gi = -1; p->g_last_vw = 800; p->g_last_vh = 600;
+    const char *t = "Visor de imagenes"; int k = 0; while (t[k] && k < 139) { p->g_status[k] = t[k]; k++; } p->g_status[k] = 0;
+}
+static int iv_ready;
+static void iv_boot(void) { if (!iv_ready) { iv_ready = 1; iv_defaults(&iv_insts[1]); } }
+#define g_path (IV->g_path)
+#define g_px (IV->g_px)
+#define g_w (IV->g_w)
+#define g_h (IV->g_h)
+#define g_nw (IV->g_nw)
+#define g_nh (IV->g_nh)
+#define g_fsize (IV->g_fsize)
+#define g_fmt (IV->g_fmt)
+#define g_mip (IV->g_mip)
+#define g_mw (IV->g_mw)
+#define g_mh (IV->g_mh)
+#define g_zoom (IV->g_zoom)
+#define g_ox (IV->g_ox)
+#define g_oy (IV->g_oy)
+#define g_bg (IV->g_bg)
+#define g_strip (IV->g_strip)
+#define g_drag (IV->g_drag)
+#define g_dx (IV->g_dx)
+#define g_dy (IV->g_dy)
+#define g_dox (IV->g_dox)
+#define g_doy (IV->g_doy)
+#define g_alpha (IV->g_alpha)
+#define g_status (IV->g_status)
+#define g_st_ok (IV->g_st_ok)
+#define g_gi (IV->g_gi)
+#define g_strip_scroll (IV->g_strip_scroll)
+#define g_last_vw (IV->g_last_vw)
+#define g_last_vh (IV->g_last_vh)
+static char g_gal[MAXG][96]; static int g_ng;
 static uint32_t *g_th[MAXG]; static uint8_t g_thw[MAXG], g_thh[MAXG], g_thfail[MAXG];
-static int g_last_vw = 800, g_last_vh = 600;
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void s_cpy(char *d, const char *s, int max) { int i = 0; while (s && s[i] && i + 1 < max) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -88,6 +132,7 @@ static void after_load(void)
 }
 void imgview_load_file(const char *path)
 {
+    iv_boot();
     free_img();
     s_cpy(g_path, path, sizeof g_path);
     g_gi = -1; for (int i = 0; i < g_ng; i++) if (str_eq(g_gal[i], path)) { g_gi = i; break; }
@@ -151,6 +196,7 @@ static void make_thumb(int i)
 }
 void imgview_init(void)
 {
+    iv_boot();
     scan_gallery();
     if (!g_px) {
         if (g_ng > 0) imgview_load_file(g_gal[0]);
@@ -450,4 +496,71 @@ int imgview_clip_op(int op)
     s_cpy(msg, "Imagen copiada ", sizeof msg); s_num(msg, sizeof msg, g_w); s_cat(msg, "x", sizeof msg); s_num(msg, sizeof msg, g_h);
     clip_toast(msg); status(msg, 1);
     return 1;
+}
+
+
+
+#undef g_path
+#undef g_px
+#undef g_w
+#undef g_h
+#undef g_nw
+#undef g_nh
+#undef g_fsize
+#undef g_fmt
+#undef g_mip
+#undef g_mw
+#undef g_mh
+#undef g_zoom
+#undef g_ox
+#undef g_oy
+#undef g_bg
+#undef g_strip
+#undef g_drag
+#undef g_dx
+#undef g_dy
+#undef g_dox
+#undef g_doy
+#undef g_alpha
+#undef g_status
+#undef g_st_ok
+#undef g_gi
+#undef g_strip_scroll
+#undef g_last_vw
+#undef g_last_vh
+/* SOMA_212_IMAGENES: instancias */
+int imgview_inst_new(void)
+{
+    iv_boot();
+    for (int k = 1; k <= IV_INST_MAX; ++k) {
+        if (iv_used[k]) continue;
+        iv_used[k] = 1;
+        IV = &iv_insts[k];
+        if (IV->g_px) free_img();
+        iv_defaults(IV);
+        return k;
+    }
+    return 0;
+}
+void imgview_select(int slot) { iv_boot(); if (slot >= 1 && slot <= IV_INST_MAX) IV = &iv_insts[slot]; }
+void imgview_inst_drop(int slot)
+{
+    if (slot < 1 || slot > IV_INST_MAX || !iv_used[slot]) return;
+    struct iv_inst *keep = IV;
+    IV = &iv_insts[slot]; if (IV->g_px) free_img(); iv_defaults(IV);
+    iv_used[slot] = 0;
+    IV = keep == &iv_insts[slot] ? &iv_insts[1] : keep;
+}
+int imgview_inst_find(const char *path)
+{
+    for (int k = 1; k <= IV_INST_MAX; ++k)
+        if (iv_used[k] && iv_insts[k].g_px && path && str_eq(iv_insts[k].g_path, path)) return k;
+    return 0;
+}
+const char *imgview_inst_name(int slot)
+{
+    if (slot < 1 || slot > IV_INST_MAX || !iv_insts[slot].g_px) return "";
+    const char *p = iv_insts[slot].g_path, *n = p;
+    for (; *p; ++p) if (*p == '/') n = p + 1;
+    return n;
 }

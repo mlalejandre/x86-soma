@@ -17,4 +17,10 @@
 #define xhci_msc_write  xhci2_msc_write
 #define xhci_probe      xhci2_probe
 #define xhci_rescan     xhci2_rescan
+#define xhci_msc_write_nosync xhci2_msc_write_nosync   /* SOMA_162_T480S */
+#define xhci_msc_sync         xhci2_msc_sync
+#define xhci_msc_generation   xhci2_msc_generation
+#define xhci_rescanning       xhci2_rescanning
+#define xhci_autostart_early  xhci2_autostart_early
+#define xhci_msc_report       xhci2_msc_report       /* SOMA_175A: la del 171B (en ARM se compilaba dos veces) */
 #include "../x86_64/xhci.c"

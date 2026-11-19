@@ -16,6 +16,7 @@ struct image {
 };
 
 int  image_decode(const uint8_t *data, size_t size, struct image *img);
+int  bmp_decode(const uint8_t *data, size_t size, struct image *img);   /* PARCHE 138: bmp_dec.c (pura) */
 void image_free(struct image *img);
 
 void image_render(const struct image *img, int32_t dx, int32_t dy, int32_t dw, int32_t dh);

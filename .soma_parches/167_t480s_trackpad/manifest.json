@@ -1,0 +1,54 @@
+{
+  "created": {
+    "docs/PARCHE_167_T480S_TRACKPAD.md": "513ba605902d47080ad9d7bc86a15d0dbac4e589251db8af2a34b53667706ba0",
+    "src/drivers/syn_gest.c": "ded953ac14083d5e8fb9d241394745e5bc682a66ded5a2cfe6568df2712f3eba",
+    "src/drivers/syn_gest.h": "e1f7bb18563affc5f8c23db1c7bbb16338e3df267228d0fd19118c81c620b3f1",
+    "tests/test_syn_167.c": "e2cdac7d6a21eb811fc284a0d3dc7991973b74addce9816a7dc936efbbe3fb53"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "bc17f670882237a8bce508a2db98198f8aa8ed8210f9ed5d11775190882043df",
+      "old": "e4db93ebf5175afaa6babe441549609ac19a0b2ff9fffb14e9f75db86adb6e8e"
+    },
+    "docs/PLAN_T480S.md": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "aebf88d098c0cbb902a6d7537ad25328b4bf8fb2dac468db60420dbb9828e4f2",
+      "old": "e7608b457819fdc0c53c7b6cd864775fad998e5d7abf185c7eb16f4f137bf79e"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "c2669645f610f06afe9614d060f0b5197463cb5b282888067572404ce7eb309d",
+      "old": "467c70d93bf435c89ad6b3642b6c54345ee3e701d3b66ba43dcc7b12a93917d8"
+    },
+    "src/arch/x86_64/i8042.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "e69befc254a75b2bd388dcd7973045379b6d1a1611fb9adc09bcb8a18f976917",
+      "old": "769f7fade9df8064cbfaf651903456c25fc2250d79055c277b4309d913900463"
+    },
+    "src/arch/x86_64/i8042.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "deb8df9c604947aca47c5df24547beb4e2978e35ef0c1f1b89323b74378fb5a3",
+      "old": "3b02b74aa1b4477cb353dae0ab3e6d43e032dcbfd14cf0f8bb1bce4230e88968"
+    },
+    "src/drivers/mouse.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "32e52c206db6abe4b1a9bf20a9b7a2b1479383a90dbc234f9624565dfd224155",
+      "old": "8c787b6a85bc2b2abc9a4753e13ea22b2aab2d2efe21d38bc2a02ff2ecf035f0"
+    },
+    "tests/test_i8042_155.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "67cffbac51bf742c41b6b3a2c30ea7e7e612e7af17e0a29bb8d6db26e20e9b9c",
+      "old": "026572f092ea067a3000773e03693b511745143f85bdc4439ee6c5650c40736c"
+    }
+  },
+  "log": "20261115_230248 parche 167: trackpad Synaptics en modo absoluto con gestos (dos dedos desplazan, toque con dos dedos = clic derecho, palma, TrackPoint por pass-through), /etc/trackpad.conf y orden trackpad",
+  "version": 1
+}

@@ -93,8 +93,13 @@ static const char *owner_name(int o)
     }
 }
 
+/* SOMA_216_RENDIMIENTO: cambia cada vez que lo dibujado puede cambiar (muestra nueva, clic, tecla, rueda). La GUI copia el
+ * contenido de la ventana de la ultima pintura mientras no cambie, en vez de redibujarlo en cada fotograma. */
+static uint32_t g_ver = 1;
+uint32_t sysmon_version(void) { return g_ver; }
 static void sample(void)
 {
+    g_ver++;
     uint64_t now = acct_now(), ms = timer_get_uptime_ms();
     uint64_t idle = acct_owner_cycles(ACCT_IDLE);
     struct sysinfo si; sysinfo_get(&si);
@@ -285,7 +290,7 @@ static void s_uptime(char *d, int max)
 }
 static void sec_summary(int x, int y, int w, int h)
 {
-    char sub[120] = "SOMA 0.2  -  "; s_cat(sub, g_cpu.arch, sizeof sub); s_cat(sub, "  -  encendido hace ", sizeof sub); s_uptime(sub, sizeof sub);
+    char sub[120] = "SOMA 0.3 pre-beta  -  "; s_cat(sub, g_cpu.arch, sizeof sub); s_cat(sub, "  -  encendido hace ", sizeof sub); s_uptime(sub, sizeof sub);
     hdr(x, y, "Resumen del sistema", sub);
     int cy = y + 66, cw = (w - 36) / 4, ch = 200;
     if (cw < 150) cw = (w - 12) / 2;
@@ -551,7 +556,7 @@ static void sec_hw(int x, int y, int w, int h)
     if (g_board.serial[0]) { kv(kx, ky, kw, "Numero de serie", g_board.serial); ky += 30; }
     kv(kx, ky, kw, "Procesador", g_cpu.brand); ky += 30;
     kv(kx, ky, kw, "Graficos", g_gpu.name); ky += 30;
-    v[0] = 0; s_cat(v, "SOMA 0.2 ", sizeof v); s_cat(v, g_cpu.arch, sizeof v); kv(kx, ky, kw, "Sistema", v); ky += 30;
+    v[0] = 0; s_cat(v, "SOMA 0.3 pre-beta ", sizeof v); s_cat(v, g_cpu.arch, sizeof v); kv(kx, ky, kw, "Sistema", v); ky += 30;
     v[0] = 0; s_uptime(v, sizeof v); kv(kx, ky, kw, "Tiempo encendido", v);
     int dx = x + lw + 12, dw = w - lw - 12;
     card(dx, ty, dw, ch); { char t[48] = "Dispositivos ("; s_num(t, sizeof t, (uint64_t)g_ndev); s_cat(t, ")", sizeof t); tx(dx + 16, ty + 8, 26, t, 13, KC_TXT, 1); }
@@ -608,6 +613,7 @@ void sysmon_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, in
 }
 int sysmon_handle_click(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh)
 {
+    g_ver++;
     int x = (int)wx, y = (int)wy, w = (int)ww, h = (int)wh;
     if (mx < x + SIDE) {
         int s = (my - (y + 84)) / 42;
@@ -642,6 +648,7 @@ int sysmon_handle_click(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint32
 }
 void sysmon_handle_key(char ch)
 {
+    g_ver++;
     int c = (uint8_t)ch;
     if (c >= '1' && c <= '8') { g_sec = c - '1'; g_scroll = 0; g_sel = -1; }
     else if (c == 9 || c == 14) { g_sec = (g_sec + 1) % S_N; g_scroll = 0; g_sel = -1; }
@@ -655,6 +662,6 @@ int sysmon_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uin
 {
     (void)mx; (void)my; (void)x; (void)y; (void)w; (void)h;
     if (!wheel) return 0;
-    if (g_sec == S_PROC || g_sec == S_HW) { g_scroll += wheel > 0 ? 3 : -3; if (g_scroll < 0) g_scroll = 0; return 1; }
+    if (g_sec == S_PROC || g_sec == S_HW) { g_scroll += wheel > 0 ? 3 : -3; if (g_scroll < 0) g_scroll = 0; g_ver++; return 1; }
     return 0;
 }

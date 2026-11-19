@@ -8,6 +8,7 @@
 #include "mouse.h"
 #include "gui.h"
 #include "web_font.h"
+#include "settings.h"
 
 /* SOMA_PARCHE_028_UI: el raton llega por eventos reales de la GUI (notepad_handle_click / notepad_mouse). Antes se
  * consultaban mouse_get_x()/mouse_get_y(), que en este kernel son los valores fijos de relleno de la maquina virtual
@@ -16,40 +17,15 @@ extern void gui_open_browser(const char *path) __attribute__((weak));
 uint64_t timer_get_uptime_ms(void);
 
 #define NP_MAX_SIZE 131072                 /* PARCHE 087: 128 KiB (antes 16 KiB, el tope de RamFS) */
-static char np_text[NP_MAX_SIZE];
-static uint32_t np_len = 0;
-static uint32_t np_cursor = 0;
-static char np_path[128] = "/workspace/notas.txt";
-static int np_scroll = 0;
-static char np_status[64] = "Listo";
-static int np_dirty = 0;
 
 /* Seleccion de texto y arrastre del raton */
-static int np_sel = -1;                 /* -1: sin seleccion; >=0: indice de ancla */
-static int np_dragging = 0;
-static int np_sel_mode = 0;             /* 0 por letras, 1 por palabras (doble clic), 2 por lineas (triple clic o margen) */
-static uint32_t np_anchor_lo = 0, np_anchor_hi = 0;   /* tramo inicial del arrastre (letra, palabra o linea) */
-static int np_click_count = 0;
-static uint64_t np_last_click_time = 0;
-static int32_t np_last_click_x = 0, np_last_click_y = 0;
 static int32_t np_mx = -1, np_my = -1;  /* ultima posicion REAL del puntero (la da la GUI) */
 static int np_prev_left = 0;
-static int np_swallow_click = 0;
-static int np_sb_drag = 0, np_sb_grab = 0;
 static int np_hover_btn = -1;
-static uint64_t np_caret_t = 0;         /* ultima actividad: el cursor de texto no parpadea mientras se escribe */
-static int np_goal_col = -1;            /* columna deseada al subir/bajar por filas visuales */
 
 /* Estado para acentos y teclas muertas (Dead Keys) */
-static int np_dead_key = 0;             /* 1: acento agudo, 2: tilde (~), 3: diéresis (") */
-static uint8_t np_utf8_lead = 0;        /* Buffer para caracteres UTF-8 multibyte */
 
 /* SOMA Live Typewriter Hook (IA) */
-static int np_follow = 0;
-static int np_live = 0;
-static const char *np_live_src = 0;
-static uint32_t np_live_len = 0;
-static uint32_t np_live_pos = 0;
 
 /* Geometria visual */
 #define NP_TOOLBAR_H   40
@@ -81,10 +57,6 @@ static uint32_t np_live_pos = 0;
 /* -------------------------------------------------------------------------
  * MENU CONTEXTUAL FLOTANTE (clic derecho)
  * ------------------------------------------------------------------------- */
-static int np_ctx_open = 0;
-static int32_t np_ctx_x = 0;
-static int32_t np_ctx_y = 0;
-static int np_ctx_hover = -1;
 #define CTX_W       252
 #define CTX_ITEM_H  26
 #define CTX_SEP_H   9
@@ -115,10 +87,6 @@ enum np_dialog_mode {
     NP_DLG_SAVE_AS
 };
 
-static enum np_dialog_mode dlg_mode = NP_DLG_NONE;
-static char dlg_folder[128] = "/documentos";
-static char dlg_filename[64] = "notas.txt";
-static uint32_t dlg_filename_len = 9;
 
 #define DLG_MAX_FILES 64
 struct dlg_item {
@@ -126,12 +94,91 @@ struct dlg_item {
     uint32_t size;
     int is_dir;
 };
-static struct dlg_item dlg_items[DLG_MAX_FILES];
-static int dlg_item_count = 0;
-static int dlg_sel_idx = -1;
-static int dlg_scroll = 0;
-static uint64_t dlg_last_click = 0;
 static char ram_buf[4096];
+
+/* SOMA_211_NOTAS: varias ventanas del Bloc de notas. Todo lo que es de un documento (texto, ruta, cursor, seleccion, menu,
+ * dialogo de abrir/guardar...) vive en una instancia; la GUI elige la de cada ventana con notepad_select() antes de dibujarla
+ * o de pasarle eventos. Elegir es cambiar un puntero: no se copia el texto. La instancia 1 usa la memoria estatica de siempre;
+ * las demas se reservan al abrir la ventana y se liberan al cerrarla. */
+struct np_inst {
+    char np_text[NP_MAX_SIZE];
+    uint32_t np_len, np_cursor;
+    char np_path[128];
+    int np_scroll;
+    char np_status[64];
+    int np_dirty;
+    int np_sel, np_dragging, np_sel_mode;
+    uint32_t np_anchor_lo, np_anchor_hi;
+    int np_click_count;
+    uint64_t np_last_click_time;
+    int32_t np_last_click_x, np_last_click_y;
+    int np_swallow_click, np_sb_drag, np_sb_grab;
+    uint64_t np_caret_t;
+    int np_goal_col, np_dead_key;
+    uint8_t np_utf8_lead;
+    int np_follow, np_live;
+    const char *np_live_src;
+    uint32_t np_live_len, np_live_pos;
+    int np_ctx_open; int32_t np_ctx_x, np_ctx_y; int np_ctx_hover;
+    enum np_dialog_mode dlg_mode;
+    char dlg_folder[128], dlg_filename[64];
+    uint32_t dlg_filename_len;
+    struct dlg_item dlg_items[DLG_MAX_FILES];
+    int dlg_item_count, dlg_sel_idx, dlg_scroll;
+    uint64_t dlg_last_click;
+    uint32_t np_cols_last;
+    int np_named;                      /* 1 = la ruta es la de un archivo abierto o guardado */
+};
+#define NP_INST_MAX 8
+static struct np_inst np_inst1 = {
+    .np_path = "/workspace/notas.txt", .np_status = "Listo", .np_sel = -1, .np_goal_col = -1, .np_ctx_hover = -1,
+    .dlg_mode = NP_DLG_NONE, .dlg_folder = "/documentos", .dlg_filename = "notas.txt", .dlg_filename_len = 9, .dlg_sel_idx = -1,
+};
+static struct np_inst *np_insts[NP_INST_MAX + 1] = { 0, &np_inst1 };
+static struct np_inst *NP = &np_inst1;
+#define np_text (NP->np_text)
+#define np_len (NP->np_len)
+#define np_cursor (NP->np_cursor)
+#define np_path (NP->np_path)
+#define np_scroll (NP->np_scroll)
+#define np_status (NP->np_status)
+#define np_dirty (NP->np_dirty)
+#define np_sel (NP->np_sel)
+#define np_dragging (NP->np_dragging)
+#define np_sel_mode (NP->np_sel_mode)
+#define np_anchor_lo (NP->np_anchor_lo)
+#define np_anchor_hi (NP->np_anchor_hi)
+#define np_click_count (NP->np_click_count)
+#define np_last_click_time (NP->np_last_click_time)
+#define np_last_click_x (NP->np_last_click_x)
+#define np_last_click_y (NP->np_last_click_y)
+#define np_swallow_click (NP->np_swallow_click)
+#define np_sb_drag (NP->np_sb_drag)
+#define np_sb_grab (NP->np_sb_grab)
+#define np_caret_t (NP->np_caret_t)
+#define np_goal_col (NP->np_goal_col)
+#define np_dead_key (NP->np_dead_key)
+#define np_utf8_lead (NP->np_utf8_lead)
+#define np_follow (NP->np_follow)
+#define np_live (NP->np_live)
+#define np_live_src (NP->np_live_src)
+#define np_live_len (NP->np_live_len)
+#define np_live_pos (NP->np_live_pos)
+#define np_ctx_open (NP->np_ctx_open)
+#define np_ctx_x (NP->np_ctx_x)
+#define np_ctx_y (NP->np_ctx_y)
+#define np_ctx_hover (NP->np_ctx_hover)
+#define dlg_mode (NP->dlg_mode)
+#define dlg_folder (NP->dlg_folder)
+#define dlg_filename (NP->dlg_filename)
+#define dlg_filename_len (NP->dlg_filename_len)
+#define dlg_items (NP->dlg_items)
+#define dlg_item_count (NP->dlg_item_count)
+#define dlg_sel_idx (NP->dlg_sel_idx)
+#define dlg_scroll (NP->dlg_scroll)
+#define dlg_last_click (NP->dlg_last_click)
+#define np_cols_last (NP->np_cols_last)
+#define np_named (NP->np_named)
 
 /* -------------------------------------------------------------------------
  * Utilidades de Cadena y Codificación UTF-8
@@ -327,6 +374,7 @@ static void dlg_open_documents_folder(void) {
  * Ciclo de Vida y Persistencia
  * ------------------------------------------------------------------------- */
 void notepad_init(void) {
+    np_named = 0;
     np_follow = 0;
     np_live = 0;
     np_len = 0;
@@ -352,7 +400,7 @@ void notepad_init(void) {
 
 void notepad_load_file(const char *path) {
     notepad_init();
-    str_copy(np_path, path, sizeof(np_path));
+    np_named = 1, str_copy(np_path, path, sizeof(np_path));
 
     int r = vfs_read(np_path, np_text, NP_MAX_SIZE - 1);
     if (r >= 0) {
@@ -479,7 +527,6 @@ struct np_geo {
     uint32_t cols;                      /* caracteres por fila */
 };
 
-static uint32_t np_cols_last = 0;         /* columnas del ultimo dibujo (para mover el cursor por filas con el teclado) */
 static void np_geo_of(struct np_geo *g, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h)
 {
     g->x = (int32_t)win_x; g->y = (int32_t)win_y; g->w = (int32_t)win_w; g->h = (int32_t)win_h;
@@ -943,7 +990,7 @@ static void np_draw_cp(int32_t x, int32_t y, const uint8_t *s, uint32_t len, uin
         if (len == 2) cp = ((uint32_t)(s[0] & 0x1F) << 6) | (s[1] & 0x3Fu);
         else if (len == 3) cp = ((uint32_t)(s[0] & 0x0F) << 12) | ((uint32_t)(s[1] & 0x3Fu) << 6) | (s[2] & 0x3Fu);
         else if (len == 4) cp = '?';
-        if (cp > 32 && cp != 127) font_vec_draw(x, y, cp, fg, NP_EM, NP_CELL_W, NP_BASE);
+        if (cp > 32 && cp != 127) { int ff = settings_editor_face(); font_vec_draw_face(ff, x, y, cp, fg, font_vec_em(ff, NP_EM), NP_CELL_W, NP_BASE); }   /* SOMA_184: fuente del editor (Ajustes > Fuentes) */
         return;
     }
     draw_editor_glyph((uint32_t)x, (uint32_t)(y + 3), s, len, (uint32_t)g->ed_y, (uint32_t)g->ed_h, fg, bg);
@@ -1374,7 +1421,7 @@ int notepad_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y,
                         char target[128];
                         path_join(dlg_folder, dlg_filename, target, sizeof(target));
                         if (dlg_mode == NP_DLG_OPEN) notepad_load_file(target);
-                        else { str_copy(np_path, target, sizeof(np_path)); notepad_save(); }
+                        else { np_named = 1, str_copy(np_path, target, sizeof(np_path)); notepad_save(); }
                         dlg_mode = NP_DLG_NONE;
                     }
                 }
@@ -1417,7 +1464,7 @@ int notepad_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y,
 
             path_join(dlg_folder, final_name, target, sizeof(target));
             if (dlg_mode == NP_DLG_OPEN) notepad_load_file(target);
-            else { str_copy(np_path, target, sizeof(np_path)); notepad_save(); }
+            else { np_named = 1, str_copy(np_path, target, sizeof(np_path)); notepad_save(); }
             dlg_mode = NP_DLG_NONE;
             return 1;
         }
@@ -1628,7 +1675,7 @@ void notepad_handle_key(char c) {
 
             path_join(dlg_folder, final_name, target, sizeof(target));
             if (dlg_mode == NP_DLG_OPEN) notepad_load_file(target);
-            else { str_copy(np_path, target, sizeof(np_path)); notepad_save(); }
+            else { np_named = 1, str_copy(np_path, target, sizeof(np_path)); notepad_save(); }
             dlg_mode = NP_DLG_NONE;
             return;
         }
@@ -1861,7 +1908,7 @@ void notepad_live_begin(const char *path, const char *data, uint32_t len) {
     if (!data) { data = ""; len = 0; }
     if (len > NP_MAX_SIZE - 2) len = NP_MAX_SIZE - 2;
 
-    str_copy(np_path, path, sizeof(np_path));
+    np_named = 1, str_copy(np_path, path, sizeof(np_path));
     np_len = 0;
     np_text[0] = '\0';
     np_cursor = 0;
@@ -1899,3 +1946,106 @@ void notepad_live_end(void) {
     np_dirty = 0;
     str_copy(np_status, "Archivo generado por SOMA", sizeof(np_status));
 }
+
+
+
+#undef np_text
+#undef np_len
+#undef np_cursor
+#undef np_path
+#undef np_scroll
+#undef np_status
+#undef np_dirty
+#undef np_sel
+#undef np_dragging
+#undef np_sel_mode
+#undef np_anchor_lo
+#undef np_anchor_hi
+#undef np_click_count
+#undef np_last_click_time
+#undef np_last_click_x
+#undef np_last_click_y
+#undef np_swallow_click
+#undef np_sb_drag
+#undef np_sb_grab
+#undef np_caret_t
+#undef np_goal_col
+#undef np_dead_key
+#undef np_utf8_lead
+#undef np_follow
+#undef np_live
+#undef np_live_src
+#undef np_live_len
+#undef np_live_pos
+#undef np_ctx_open
+#undef np_ctx_x
+#undef np_ctx_y
+#undef np_ctx_hover
+#undef dlg_mode
+#undef dlg_folder
+#undef dlg_filename
+#undef dlg_filename_len
+#undef dlg_items
+#undef dlg_item_count
+#undef dlg_sel_idx
+#undef dlg_scroll
+#undef dlg_last_click
+#undef np_cols_last
+#undef np_named
+/* SOMA_211_NOTAS: instancias */
+static void np_inst_defaults(struct np_inst *p)
+{
+    memset(p, 0, sizeof *p);
+    str_copy(p->np_path, "/workspace/notas.txt", sizeof p->np_path);
+    str_copy(p->np_status, "Nuevo documento", sizeof p->np_status);
+    p->np_sel = -1; p->np_goal_col = -1; p->np_ctx_hover = -1;
+    p->dlg_mode = NP_DLG_NONE;
+    str_copy(p->dlg_folder, "/documentos", sizeof p->dlg_folder);
+    str_copy(p->dlg_filename, "notas.txt", sizeof p->dlg_filename);
+    p->dlg_filename_len = 9; p->dlg_sel_idx = -1;
+}
+static int np_inst_used[NP_INST_MAX + 1];
+int notepad_inst_new(void)
+{
+    for (int k = 1; k <= NP_INST_MAX; ++k) {
+        if (np_inst_used[k]) continue;
+        if (!np_insts[k]) {
+            np_insts[k] = (struct np_inst *)kmalloc(sizeof(struct np_inst));
+            if (!np_insts[k]) return 0;
+        }
+        np_inst_defaults(np_insts[k]);
+        np_inst_used[k] = 1;
+        NP = np_insts[k];
+        return k;
+    }
+    return 0;
+}
+void notepad_select(int slot)
+{
+    if (slot >= 1 && slot <= NP_INST_MAX && np_insts[slot]) NP = np_insts[slot];
+}
+void notepad_inst_drop(int slot)
+{
+    if (slot < 1 || slot > NP_INST_MAX || !np_inst_used[slot]) return;
+    np_inst_used[slot] = 0;
+    if (NP == np_insts[slot]) NP = &np_inst1;
+    if (slot != 1 && np_insts[slot]) { kfree(np_insts[slot]); np_insts[slot] = 0; }
+}
+int notepad_inst_find(const char *path)
+{
+    for (int k = 1; k <= NP_INST_MAX; ++k) {
+        if (!np_inst_used[k] || !np_insts[k] || !path || !np_insts[k]->np_named) continue;
+        const char *a = np_insts[k]->np_path, *b = path;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b) return k;
+    }
+    return 0;
+}
+const char *notepad_inst_name(int slot)
+{
+    if (slot < 1 || slot > NP_INST_MAX || !np_insts[slot] || !np_insts[slot]->np_named) return "";
+    const char *p = np_insts[slot]->np_path, *n = p;
+    for (; *p; ++p) if (*p == '/') n = p + 1;
+    return n;
+}
+int notepad_inst_dirty(int slot) { return slot >= 1 && slot <= NP_INST_MAX && np_insts[slot] ? np_insts[slot]->np_dirty : 0; }

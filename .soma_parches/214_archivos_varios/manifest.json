@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "date": "20261119_192407",
+  "files": {
+    "src/apps/fm.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "13b6874de3494df089f7ef3f5d3155a5f0da56d9f663e0d8e1da40cc706b6e76",
+      "old": "7ea41a7f2e163243f3ccc2215d604fd4e41dfb7b9435046773d54a2ec5d97913"
+    },
+    "src/apps/fm.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "4ac4eed96c6d8d8029b20580d913289a7a91e27b6434c43b8d5872b76df339ae",
+      "old": "b817559c59bccdf936a8a007ade2beb226d52a4c1571eb8508f0e13908caf385"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "8a456b1a3c99d8bfa8d55c0cbff9b9f82735376da8f98de139ae7efcbc0e8115",
+      "old": "e3e28d5e8a2fb6e9246cafe0a18d0cd352b8325c2250f0a1d88114c6a6d8cf67"
+    }
+  },
+  "name": "214_archivos_varios"
+}

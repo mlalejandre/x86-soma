@@ -1,6 +1,7 @@
 /* SOMA_PARCHE_024_TERM: ver term_ui.h */
 #include "term_ui.h"
 #include "term_core.h"
+#include "mem.h" /* SOMA_203_INSTANCIAS */
 #include "fb.h"
 #include "gui_font.h"
 #include "mouse.h"
@@ -14,7 +15,14 @@
 #define PROMPT    "\033[1;36msoma\033[1;32m>\033[0m "
 #define PROMPT_VIS 6
 
-static struct term_core TC;
+/* SOMA_203_INSTANCIAS: nucleo separado por terminal; sin copiar un buffer de
+ * 224 KiB en cada fotograma. Solo cambia el puntero del contexto activo. */
+#define TERM_SLOT_MAX 16
+static struct term_core TC_default;
+static struct term_core *TC = &TC_default;
+static struct term_core *term_slots[TERM_SLOT_MAX];
+static int term_slot_inited[TERM_SLOT_MAX];
+static int term_active_slot;
 static int g_inited;
 static int live_on;                       /* la ultima linea del nucleo es la del prompt */
 static int vec_mode = 1;                  /* 1 = fuente vectorial suave (zoom continuo); 0 = la fuente del sistema a escala entera (si no hay vectorial) */
@@ -43,6 +51,31 @@ static int thumb_grab;                    /* distancia del clic al inicio del pu
 static uint64_t last_click_ms; static int last_click_x, last_click_y, click_count;
 static uint32_t last_cursor_ms;
 
+int term_ui_select(int slot)
+{
+    if (slot < 0 || slot >= TERM_SLOT_MAX) return 0;
+    if (slot == 0) { TC = &TC_default; term_active_slot = 0; g_inited = term_slot_inited[0]; }
+    else {
+        if (!term_slots[slot]) {
+            term_slots[slot] = (struct term_core *)kmalloc(sizeof(struct term_core));
+            if (!term_slots[slot]) return 0;
+            tc_init(term_slots[slot], 80);
+            term_slot_inited[slot] = 1;
+        }
+        TC = term_slots[slot]; term_active_slot = slot; g_inited = term_slot_inited[slot];
+    }
+    popup = 0; drag = 0; G.valid = 0;
+    return 1;
+}
+
+void term_ui_drop(int slot)
+{
+    if (slot <= 0 || slot >= TERM_SLOT_MAX) return;
+    if (term_active_slot == slot) (void)term_ui_select(0);
+    if (term_slots[slot]) { kfree(term_slots[slot]); term_slots[slot] = 0; }
+    term_slot_inited[slot] = 0;
+}
+
 static void dbg_u(const char *k, int v) { kprint(k); kprint_dec((uint32_t)(v < 0 ? 0 : v)); }
 
 /* ---------- utilidades ---------- */
@@ -50,26 +83,26 @@ static int slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
 void term_set_debug(int on) { g_debug = on; G.valid = 0; }
 
-static void ensure_init(void) { if (!g_inited) { tc_init(&TC, 80); g_inited = 1; } }
+static void ensure_init(void) { if (!g_inited) { tc_init(TC, 80); g_inited = 1; term_slot_inited[term_active_slot] = 1; } }
 
-void term_ui_init(void) { ensure_init(); tc_clear(&TC); live_on = 0; popup = 0; drag = 0; }
+void term_ui_init(void) { ensure_init(); tc_clear(TC); live_on = 0; popup = 0; drag = 0; }
 
-void term_clear(void) { ensure_init(); tc_clear(&TC); live_on = 0; }
+void term_clear(void) { ensure_init(); tc_clear(TC); live_on = 0; }
 
 void term_print(const char *raw)
 {
     ensure_init();
-    if (live_on) { tc_pop(&TC); live_on = 0; }
+    if (live_on) { tc_pop(TC); live_on = 0; }
     int n = slen(raw);
-    if (n <= 200) { tc_add(&TC, raw); return; }
+    if (n <= 200) { tc_add(TC, raw); return; }
     for (int i = 0; i < n; i += 200) {            /* las lineas muy largas se parten en trozos (el nucleo admite 223 bytes) */
         char tmp[204]; int k = 0;
         while (k < 200 && raw[i + k]) { tmp[k] = raw[i + k]; k++; }
-        tmp[k] = 0; tc_add(&TC, tmp);
+        tmp[k] = 0; tc_add(TC, tmp);
     }
 }
 
-void term_note_input(void) { ensure_init(); TC.scroll = 0; tc_sel_clear(&TC); }
+void term_note_input(void) { ensure_init(); TC->scroll = 0; tc_sel_clear(TC); }
 
 static void metrics(void)
 {
@@ -167,7 +200,7 @@ static int menu_height(void) { int h = 12; for (int k = 0; k < MENU_N; ++k) h +=
 static int has_sel(void)
 {
     char t[8];
-    return TC.sel_active && tc_sel_text(&TC, t, 2) > 0;
+    return TC->sel_active && tc_sel_text(TC, t, 2) > 0;
 }
 
 static const char SYM[] = "<>|&~`\\/{}[]()$#^_-+=*\"';:%@!?,.";
@@ -215,7 +248,7 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
     int old_cols = G.cols, old_cw = G.cw, old_valid = G.valid, ow = G.w, oh = G.h;
     layout(x, y, w, h);
     if (g_debug && (!old_valid || old_cols != G.cols || old_cw != G.cw || ow != G.w || oh != G.h)) print_geom();
-    tc_set_cols(&TC, G.cols);
+    tc_set_cols(TC, G.cols);
 
     /* la linea del prompt es la ultima linea del nucleo */
     {
@@ -223,7 +256,7 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
         for (const char *s = PROMPT; *s && p < TC_RAW - 1; ++s) live[p++] = *s;
         for (uint32_t i = 0; i < cmd_len && p < TC_RAW - 1; ++i) live[p++] = cmd[i];
         live[p] = 0;
-        if (live_on) tc_replace_last(&TC, live); else { tc_add(&TC, live); live_on = 1; }
+        if (live_on) tc_replace_last(TC, live); else { tc_add(TC, live); live_on = 1; }
     }
 
     /* marco y cabecera */
@@ -247,34 +280,34 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
     fb_set_clip(G.tx, G.ty, G.tw, G.th);
     int cur_row = -1, cur_col = 0;
     {
-        int live_idx = TC.count - 1;
+        int live_idx = TC->count - 1;
         /* columna visual del cursor: caracteres (no bytes) desde el inicio de la orden */
         int vc = PROMPT_VIS;
         for (uint32_t i = 0; i < cursor_pos && i < cmd_len; ++i) { uint8_t b = (uint8_t)cmd[i]; if ((b & 0xC0) != 0x80) vc++; }
         for (int r = 0; r < G.rows; ++r) {
             int idx, sub;
-            if (!tc_screen_row(&TC, G.rows, r, &idx, &sub)) continue;
+            if (!tc_screen_row(TC, G.rows, r, &idx, &sub)) continue;
             struct tc_cell cells[256];
-            int n = tc_row_cells(&TC, idx, sub, cells, G.cols < 256 ? G.cols : 256);
+            int n = tc_row_cells(TC, idx, sub, cells, G.cols < 256 ? G.cols : 256);
             int ry = G.ty + r * G.ch;
             for (int i = 0; i < n; ++i) {
                 int rx = G.tx + i * G.cw;
                 uint32_t col = color_of(&cells[i]);
-                if (tc_is_selected(&TC, idx, sub * G.cols + i)) { fb_fill_rect((uint32_t)rx, (uint32_t)ry, (uint32_t)G.cw, (uint32_t)G.ch, 0x001E40AF); col = 0x00FFFFFF; }
+                if (tc_is_selected(TC, idx, sub * G.cols + i)) { fb_fill_rect((uint32_t)rx, (uint32_t)ry, (uint32_t)G.cw, (uint32_t)G.ch, 0x001E40AF); col = 0x00FFFFFF; }
                 draw_cell(rx, ry, &cells[i], col);
             }
             if (idx == live_idx && vc / G.cols == sub) { cur_row = r; cur_col = vc % G.cols; }
         }
     }
-    if (focused && cur_row >= 0 && TC.scroll == 0 && !popup) {
+    if (focused && cur_row >= 0 && TC->scroll == 0 && !popup) {
         uint32_t now = timer_get_uptime_ms();
         if (now - last_cursor_ms < 1200 || ((now / 500) & 1) == 0) {
             int cx = G.tx + cur_col * G.cw, cy = G.ty + cur_row * G.ch;
             fb_fill_rect((uint32_t)cx, (uint32_t)cy + 1, (uint32_t)G.cw, (uint32_t)G.ch - 2, 0x0038BDF8);
             /* el caracter bajo el cursor, en negro */
             struct tc_cell cc; int idx, sub;
-            if (tc_screen_row(&TC, G.rows, cur_row, &idx, &sub)) {
-                struct tc_cell cells[256]; int n = tc_row_cells(&TC, idx, sub, cells, G.cols < 256 ? G.cols : 256);
+            if (tc_screen_row(TC, G.rows, cur_row, &idx, &sub)) {
+                struct tc_cell cells[256]; int n = tc_row_cells(TC, idx, sub, cells, G.cols < 256 ? G.cols : 256);
                 if (cur_col < n) { cc = cells[cur_col]; draw_cell(cx, cy, &cc, 0x00000000); }
             }
         }
@@ -294,7 +327,7 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
             fb_fill_rect((uint32_t)(tx + 7 - i), (uint32_t)(track_y + track_h - 5 - i), (uint32_t)(2 * i + 1), 1, 0x0094A3B8);
         }
         int ty, th;
-        if (tc_thumb(&TC, G.rows, G.sbh, 24, &ty, &th)) {
+        if (tc_thumb(TC, G.rows, G.sbh, 24, &ty, &th)) {
             int hot = drag == 2 || in_rect(hover_x, hover_y, tx, G.sby + ty, SB_W, th);
             fb_fill_rounded_rect(tx + 2, G.sby + ty, SB_W - 4, th, 4, hot ? 0x0064748B : 0x00475569);
         }
@@ -303,11 +336,11 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
     if (popup) draw_popup();
     if (g_debug) {
         static int ls = -1, lt = -1, lz = -1, lm = -1, lsel = -1, lpop = -1;
-        int total = tc_total_rows(&TC), z = (vec_mode && font_vec_available()) ? zoom_vec : zoom_bmp, m = vec_mode && font_vec_available();
-        char tmp[4]; int sel = TC.sel_active ? tc_sel_text(&TC, tmp, 2) > 0 : 0;
-        if (ls != TC.scroll || lt != total || lz != z || lm != m || lsel != sel || lpop != popup) {
-            ls = TC.scroll; lt = total; lz = z; lm = m; lsel = sel; lpop = popup;
-            kprint("[term] estado scroll "); kprint_dec((uint32_t)TC.scroll); kprint(" total "); kprint_dec((uint32_t)total);
+        int total = tc_total_rows(TC), z = (vec_mode && font_vec_available()) ? zoom_vec : zoom_bmp, m = vec_mode && font_vec_available();
+        char tmp[4]; int sel = TC->sel_active ? tc_sel_text(TC, tmp, 2) > 0 : 0;
+        if (ls != TC->scroll || lt != total || lz != z || lm != m || lsel != sel || lpop != popup) {
+            ls = TC->scroll; lt = total; lz = z; lm = m; lsel = sel; lpop = popup;
+            kprint("[term] estado scroll "); kprint_dec((uint32_t)TC->scroll); kprint(" total "); kprint_dec((uint32_t)total);
             kprint(" vista "); kprint_dec((uint32_t)G.rows); kprint(" zoom "); kprint_dec((uint32_t)z); kprint(m ? " vector" : " bitmap");
             kprint(sel ? " con-seleccion" : " sin-seleccion"); kprint(popup == 1 ? " menu" : popup == 2 ? " simbolos" : ""); kprint("\n");
         }
@@ -318,7 +351,7 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
 static void copy_selection(void)
 {
     static char buf[TC_CLIP_MAX + 1];
-    int n = tc_sel_text(&TC, buf, sizeof buf);
+    int n = tc_sel_text(TC, buf, sizeof buf);
     if (n <= 0) return;
     tc_clip_set(buf, n);
     if (g_debug) {
@@ -388,14 +421,14 @@ static void open_symbols(void)
 void term_popup_close(void) { popup = 0; }
 int term_popup_open(void) { return popup != 0; }
 
-static void go_bottom(void) { TC.scroll = 0; }
+static void go_bottom(void) { TC->scroll = 0; }
 
 static int menu_action(int i, struct term_edit *ed)
 {
     switch (i) {
     case 0: copy_selection(); break;
     case 1: do_paste(ed); break;
-    case 2: tc_select_all(&TC); break;
+    case 2: tc_select_all(TC); break;
     case 3: term_clear(); break;
     case 5: zoom(1); break;
     case 6: zoom(-1); break;
@@ -416,7 +449,7 @@ static int text_hit(int mx, int my, int *idx, int *vcol, int clamp)
     if (!clamp && (mx < G.tx || mx >= G.tx + G.tw || my < G.ty || my >= G.ty + G.th)) return 0;
     if (col < 0) col = 0;
     if (col >= G.cols) col = G.cols - 1;
-    return tc_hit(&TC, G.rows, row, col, idx, vcol);
+    return tc_hit(TC, G.rows, row, col, idx, vcol);
 }
 
 int term_mouse_down(int32_t mx, int32_t my, uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, struct term_edit *ed)
@@ -460,14 +493,14 @@ int term_mouse_down(int32_t mx, int32_t my, uint32_t ux, uint32_t uy, uint32_t u
     }
     /* barra de desplazamiento */
     if (in_rect(mx, my, G.sbx, G.ty, SB_W, G.sth)) {
-        if (my < G.ty + 16) { tc_scroll_by(&TC, 3, G.rows); return 1; }
-        if (my >= G.ty + G.sth - 16) { tc_scroll_by(&TC, -3, G.rows); return 1; }
+        if (my < G.ty + 16) { tc_scroll_by(TC, 3, G.rows); return 1; }
+        if (my >= G.ty + G.sth - 16) { tc_scroll_by(TC, -3, G.rows); return 1; }
         int ty, th;
-        if (tc_thumb(&TC, G.rows, G.sbh, 24, &ty, &th)) {
+        if (tc_thumb(TC, G.rows, G.sbh, 24, &ty, &th)) {
             int rel = my - G.sby;
             if (rel >= ty && rel < ty + th) { drag = 2; thumb_grab = rel - ty; }
-            else if (rel < ty) tc_scroll_by(&TC, G.rows - 1, G.rows);
-            else tc_scroll_by(&TC, -(G.rows - 1), G.rows);
+            else if (rel < ty) tc_scroll_by(TC, G.rows - 1, G.rows);
+            else tc_scroll_by(TC, -(G.rows - 1), G.rows);
         }
         return 1;
     }
@@ -478,9 +511,9 @@ int term_mouse_down(int32_t mx, int32_t my, uint32_t ux, uint32_t uy, uint32_t u
         int near = (mx - last_click_x) * (mx - last_click_x) + (my - last_click_y) * (my - last_click_y) < 25 * 25;
         click_count = (now - last_click_ms < 450 && near) ? click_count + 1 : 1;
         last_click_ms = now; last_click_x = mx; last_click_y = my;
-        if (click_count == 2) { tc_select_word(&TC, idx, vcol); drag = 0; }
-        else if (click_count >= 3) { tc_select_line(&TC, idx); drag = 0; click_count = 3; }
-        else { tc_sel_clear(&TC); drag = 1; drag_anchor_idx = idx; drag_anchor_col = vcol; drag_started = 0; }
+        if (click_count == 2) { tc_select_word(TC, idx, vcol); drag = 0; }
+        else if (click_count >= 3) { tc_select_line(TC, idx); drag = 0; click_count = 3; }
+        else { tc_sel_clear(TC); drag = 1; drag_anchor_idx = idx; drag_anchor_col = vcol; drag_started = 0; }
         return 1;
     }
     return 1;
@@ -493,19 +526,19 @@ int term_mouse_move(int32_t mx, int32_t my, int left_held)
     if (!left_held) { if (drag) { drag = 0; redraw = 1; } return redraw; }
     if (drag == 2) {
         int ty, th;
-        if (tc_thumb(&TC, G.rows, G.sbh, 24, &ty, &th)) {
-            int s = tc_scroll_from_thumb(&TC, G.rows, G.sbh, 24, (my - G.sby) - thumb_grab);
-            tc_scroll_set(&TC, s, G.rows);
+        if (tc_thumb(TC, G.rows, G.sbh, 24, &ty, &th)) {
+            int s = tc_scroll_from_thumb(TC, G.rows, G.sbh, 24, (my - G.sby) - thumb_grab);
+            tc_scroll_set(TC, s, G.rows);
         }
         return 1;
     }
     if (drag == 1) {
-        if (my < G.ty) tc_scroll_by(&TC, 1, G.rows);                  /* arrastrar fuera de la zona: se desplaza solo */
-        else if (my >= G.ty + G.th) tc_scroll_by(&TC, -1, G.rows);
+        if (my < G.ty) tc_scroll_by(TC, 1, G.rows);                  /* arrastrar fuera de la zona: se desplaza solo */
+        else if (my >= G.ty + G.th) tc_scroll_by(TC, -1, G.rows);
         int idx, vcol;
         if (text_hit(mx, my, &idx, &vcol, 1)) {
-            if (!drag_started && (idx != drag_anchor_idx || vcol != drag_anchor_col)) { drag_started = 1; tc_sel_begin(&TC, drag_anchor_idx, drag_anchor_col); }
-            if (drag_started) tc_sel_extend(&TC, idx, vcol);
+            if (!drag_started && (idx != drag_anchor_idx || vcol != drag_anchor_col)) { drag_started = 1; tc_sel_begin(TC, drag_anchor_idx, drag_anchor_col); }
+            if (drag_started) tc_sel_extend(TC, idx, vcol);
         }
         return 1;
     }
@@ -532,7 +565,7 @@ int term_wheel(int notches)
 {
     ensure_init();
     if (popup) return 0;
-    tc_scroll_by(&TC, notches * 3, G.rows > 0 ? G.rows : 10);
+    tc_scroll_by(TC, notches * 3, G.rows > 0 ? G.rows : 10);
     return 1;
 }
 
@@ -542,8 +575,8 @@ int term_key(char c, struct term_edit *ed)
     ensure_init();
     int rows = G.rows > 0 ? G.rows : 10;
     switch ((unsigned char)c) {
-    case 28: tc_scroll_by(&TC, rows - 1, rows); return 1;                      /* RePag */
-    case 29: tc_scroll_by(&TC, -(rows - 1), rows); return 1;                   /* AvPag */
+    case 28: tc_scroll_by(TC, rows - 1, rows); return 1;                      /* RePag */
+    case 29: tc_scroll_by(TC, -(rows - 1), rows); return 1;                   /* AvPag */
     case 30: zoom(-1); return 1;                                               /* Ctrl - */
     case 31: zoom(1); return 1;                                                /* Ctrl + */
     case 3:  if (has_sel()) copy_selection(); return 1;                        /* Ctrl+C: copia (si no hay seleccion, no hace nada) */

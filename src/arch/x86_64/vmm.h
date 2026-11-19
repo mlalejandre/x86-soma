@@ -23,6 +23,7 @@ int vmm_map_page(uint64_t virt_addr, uint64_t phys_addr, uint64_t flags);
 
 /* Desmapea una pagina virtual de 4 KiB */
 int vmm_unmap_page(uint64_t virt_addr);
+uint64_t vmm_as_unmap(uint64_t as, uint64_t virt_addr);   /* PARCHE 139: quita la pagina de un espacio de proceso (inactivo); devuelve el marco o 0 */
 
 /* SOMA_PARCHE_017_AS: espacios de direcciones por proceso.
  * Cada proceso tiene su propia PML4 (CR3). Copia las entradas del kernel (se comparten por puntero: lo que

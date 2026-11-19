@@ -18,6 +18,9 @@ void        browser_js_eval(const char *code);
 
 
 /* SOMA_PARCHE_NAVEGADOR: hover, rueda y arrastre de la barra de desplazamiento (opcional; lo llama gui.c) */
+int  browser_frame_dirty(uint32_t win_w, uint32_t win_h);   /* SOMA_152_WEB_FLUIDO */
+int  browser_hot(void);
+int  browser_loading(void);   /* SOMA_190 */
 void browser_mouse(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h, int wheel, int held);
 
 #endif

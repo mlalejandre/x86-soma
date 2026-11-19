@@ -7,39 +7,24 @@
 #include "console.h"
 
 #ifndef SOMA_HOST_TEST /* en pruebas en host se usa la libc */
+#if defined(__x86_64__)
+#include "memfn.h"            /* SOMA_199: memcpy, memmove, memset y memcmp de x86_64 */
+#else
 void *memcpy(void *dst, const void *src, size_t n)
 {
     void *ret = dst;
-#ifdef __x86_64__
-    __asm__ volatile (
-        "rep movsb"
-        : "+D"(dst), "+S"(src), "+c"(n)
-        :
-        : "memory"
-    );
-#else
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     while (n--) *d++ = *s++;
-#endif
     return ret;
 }
 
 void *memset(void *dst, int value, size_t n)
 {
     void *ret = dst;
-#ifdef __x86_64__
-    __asm__ volatile (
-        "rep stosb"
-        : "+D"(dst), "+c"(n)
-        : "a"(value)
-        : "memory"
-    );
-#else
     uint8_t *d = (uint8_t *)dst;
     uint8_t v = (uint8_t)value;
     while (n--) *d++ = v;
-#endif
     return ret;
 }
 
@@ -53,31 +38,9 @@ void *memmove(void *dst, const void *src, size_t n)
     }
 
     if (d < s) {
-#ifdef __x86_64__
-        __asm__ volatile (
-            "rep movsb"
-            : "+D"(d), "+S"(s), "+c"(n)
-            :
-            : "memory"
-        );
-#else
         for (size_t i = 0; i < n; i++) d[i] = s[i];
-#endif
     } else {
-#ifdef __x86_64__
-        d += n - 1;
-        s += n - 1;
-        __asm__ volatile (
-            "std\n\t"
-            "rep movsb\n\t"
-            "cld"
-            : "+D"(d), "+S"(s), "+c"(n)
-            :
-            : "memory"
-        );
-#else
         for (size_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
-#endif
     }
     return dst;
 }
@@ -95,11 +58,12 @@ int memcmp(const void *a, const void *b, size_t n)
     return 0;
 }
 
+#endif /* x86_64 */
 #endif /* SOMA_HOST_TEST */
 
 /*
  * Heap Dinamico de MYOS respaldado por el VMM y PMM
- * Base Virtual: 0x20000000 (512 MiB virtual, desacoplado de direcciones fisicas fijas)
+ * Base Virtual: KHEAP_START (x86_64: 256 GiB desde el parche 157; desacoplado de direcciones fisicas fijas)
  * Proteccion de Hardware: Paginas de 4 KiB con bits PRESENT | WRITABLE | NX
  *
  * SOMA_PARCHE_005_HEAP: endurecimiento del asignador
@@ -111,11 +75,18 @@ int memcmp(const void *a, const void *b, size_t n)
  */
 #ifndef KHEAP_START
 #ifdef __x86_64__
-#define KHEAP_START        0x20000000ULL
+/* SOMA_157_T480S: el montón se muda de 0x20000000 (dentro del primer GiB proyectado en identidad, con sitio para 256 MiB) a una
+ * ventana propia a 256 GiB, lejos de la identidad, de las tablas del firmware (1-4 GiB) y del framebuffer: puede crecer varios
+ * GiB. Sigue dentro de PML4[0], que comparten todos los espacios de direcciones. Sus marcos salen de la reserva ALTA del PMM. */
+#define KHEAP_START        0x0000004000000000ULL
+#define KHEAP_FRAME()      pmm_alloc_frame_high()
 #else
 #include "platform.h"
 #define KHEAP_START        SOMA_HEAP_START /* PARCHE 060: por plataforma (QEMU virt: 0x41000000; Pi 5: 0x18000000) */
 #endif
+#endif
+#ifndef KHEAP_FRAME
+#define KHEAP_FRAME()      pmm_alloc_frame()
 #endif
 #ifndef KHEAP_MAX_SIZE
 #define KHEAP_MAX_SIZE     (64 * 1024 * 1024ULL) /* Limite de expansion: 64 MiB */
@@ -151,6 +122,7 @@ static uint64_t heap_current_brk = 0;
 static size_t   heap_mapped_bytes = 0;
 static int      heap_initialized = 0;
 static struct kheap_counters heap_ctr;
+static size_t   heap_free_bytes;   /* PARCHE 128: suma de `size` de los bloques libres, al dia en bin_insert/bin_remove (kheap_stats ya no recorre el monton) */
 
 /* PARCHE 030: indices de bloques libres. Antes kmalloc y kfree recorrian la lista entera (coste O(n) por llamada: con
  * 20.000 bloques vivos, ~0,5 ms por par kfree+kmalloc en el anfitrion). Ahora los libres cuelgan de listas por tamano
@@ -245,6 +217,7 @@ static void bin_insert(struct block_header *b)
     if (f->fnext) FN(f->fnext)->fprev = b;
     heap_bins[k] = b;
     heap_bin_mask[k >> 6] |= 1ULL << (k & 63);
+    heap_free_bytes += b->size;
 }
 
 static int bin_remove(struct block_header *b)
@@ -259,6 +232,7 @@ static int bin_remove(struct block_header *b)
     if (p) FN(p)->fnext = n; else heap_bins[k] = n;
     if (n) FN(n)->fprev = p;
     if (!heap_bins[k]) heap_bin_mask[k >> 6] &= ~(1ULL << (k & 63));
+    heap_free_bytes -= b->size;
     return 1;
 }
 
@@ -294,7 +268,7 @@ static int kheap_expand(size_t min_bytes)
     uint64_t new_pages_start = heap_current_brk;
 
     for (size_t i = 0; i < pages_needed; ++i) {
-        uintptr_t frame = pmm_alloc_frame();
+        uintptr_t frame = KHEAP_FRAME();
         if (!frame) {
             for (size_t j = 0; j < i; ++j) {
                 uint64_t va = new_pages_start + j * VMM_PAGE_SIZE;
@@ -351,11 +325,14 @@ void kheap_init(void)
     if (heap_initialized) return;
 
 #if defined(__x86_64__) && !defined(SOMA_HOST_TEST)
-    {   /* PARCHE 086: limite segun la RAM */
+    {   /* PARCHE 086 / SOMA_157_T480S: limite segun la RAM: la mitad, hasta 8 GiB (el T480s de 16 GiB: 7,8 GiB; antes 256 MiB).
+         * Con RAM de 512 MiB o menos queda como antes (la mitad, como mucho 256 MiB). */
         size_t fr = 0, us = 0, tot = 0; pmm_get_stats(&fr, &us, &tot);
         uint64_t ram = (uint64_t)tot * 4096u;
-        if (ram && ram <= 0x20000000ULL) {
-            uint64_t lim = ram / 2; if (lim > (256ULL << 20)) lim = 256ULL << 20;
+        if (ram) {
+            uint64_t lim = ram / 2;
+            if (ram <= 0x20000000ULL && lim > (256ULL << 20)) lim = 256ULL << 20;
+            if (lim > (8ULL << 30)) lim = 8ULL << 30;
             if (lim > kheap_limit) kheap_limit = (size_t)lim;
         }
     }
@@ -375,6 +352,7 @@ void kheap_init(void)
 
     heap_initialized = 1;
     kprint("KHEAP: Inicializado en 0x");
+    if ((uint64_t)KHEAP_START >> 32) kprint_hex32((uint32_t)((uint64_t)KHEAP_START >> 32));   /* SOMA_157: base de 64 bits */
     kprint_hex32((uint32_t)KHEAP_START);
     kprint(" (NX activo, ");
     kprint_dec((uint32_t)(heap_mapped_bytes / 1024));
@@ -529,6 +507,7 @@ static void kfree_impl(void *ptr)
  * parche 072): ninguna IRQ ni punto de desalojo debe caer dentro de kmalloc/kfree. Si algun dia ocurre (una IRQ que reserva memoria, un
  * hilo desalojado a mitad), en vez de corromper las listas en silencio se rechaza la llamada reentrante y se cuenta en reentries. */
 static volatile int heap_busy;
+int kheap_busy(void) { return heap_busy; }      /* SOMA_198 */
 void *kmalloc(size_t size)
 {
     if (heap_busy) { heap_ctr.reentries++; return 0; }
@@ -571,21 +550,20 @@ void kheap_stats(size_t *used, size_t *free_bytes)
 {
     if (!heap_initialized) kheap_init();
 
-    size_t u = 0;
-    size_t f = 0;
+    /* PARCHE 128: O(1). kheap_check() comprueba que los contadores coinciden con un recorrido completo. */
+    if (used) *used = (size_t)heap_ctr.used_bytes;
+    if (free_bytes) *free_bytes = heap_free_bytes;
+}
 
-    struct block_header *curr = heap_head;
-    while (curr) {
-        if (curr->is_free) {
-            f += curr->size;
-        } else {
-            u += curr->size + sizeof(struct block_header);
-        }
-        curr = curr->next;
-    }
-
-    if (used) *used = u;
-    if (free_bytes) *free_bytes = f;
+/* PARCHE 128: comprobacion barata (O(1)) para llamarla a menudo: el ultimo bloque cierra la region mapeada y los contadores son plausibles. */
+int kheap_check_quick(void)
+{
+    if (!heap_initialized) return 0;
+    if (!heap_tail || !hdr_in_heap(heap_tail) || !block_valid(heap_tail)) return 1;
+    if ((uintptr_t)(heap_tail + 1) + heap_tail->size != (uintptr_t)heap_current_brk) return 1;
+    if (heap_ctr.used_bytes + heap_free_bytes > heap_mapped_bytes) return 1;
+    if (heap_ctr.used_bytes < heap_ctr.live_blocks * (sizeof(struct block_header) + KHEAP_MIN_PAYLOAD)) return 1;
+    return 0;
 }
 
 /* PARCHE 089: bytes vivos (con cabecera) por dueno */
@@ -657,6 +635,14 @@ int kheap_check(void)
         }
     }
     if (en_listas != libres) { kheap_report("las listas de libres no coinciden con la lista fisica", 0); problems++; }
+    {   /* PARCHE 128: los contadores incrementales deben coincidir con lo que dice el recorrido */
+        uint64_t u = 0, f = 0, vivos = 0;
+        for (struct block_header *c = heap_head; c; c = c->next) {
+            if (c->is_free) f += c->size; else { u += c->size + sizeof(struct block_header); vivos++; }
+        }
+        if (u != heap_ctr.used_bytes || vivos != heap_ctr.live_blocks) { kheap_report("contador de bytes usados desviado", 0); problems++; }
+        if (f != heap_free_bytes) { kheap_report("contador de bytes libres desviado", 0); problems++; }
+    }
     return problems;
 }
 
@@ -667,7 +653,7 @@ void kheap_dump_stats(void)
 
     kprint("\nESTADO DEL HEAP (kmalloc Dinamico VMM):\n");
     kprint("----------------------------------------\n");
-    kprint("Base Virtual:       0x"); kprint_hex32((uint32_t)KHEAP_START); kprint(" (512 MiB virtual)\n");
+    kprint("Base Virtual:       0x"); if ((uint64_t)KHEAP_START >> 32) kprint_hex32((uint32_t)((uint64_t)KHEAP_START >> 32)); kprint_hex32((uint32_t)KHEAP_START); kprint("\n");
     kprint("Alineacion:         16 bytes estricta\n");
     kprint("Proteccion MMU:     Read-Write + No-Execute (NX ACTIVO)\n");
     kprint("Paginas Mapeadas:   "); kprint_dec((uint32_t)(heap_mapped_bytes / 1024)); kprint(" KiB (");
@@ -709,7 +695,7 @@ int kheap_test_self(void)
     }
 
     if ((uintptr_t)p1 < KHEAP_START || (uintptr_t)p2 < KHEAP_START) {
-        kprint("  FALLO: punteros fuera del rango virtual 0x20000000\n");
+        kprint("  FALLO: punteros fuera del rango virtual del heap\n");
         return 0;
     }
 
@@ -722,6 +708,14 @@ int kheap_test_self(void)
      * ningun bloque libre existente y tenga que llamar a kheap_expand().
      */
     size_t big_size = free_before + 4096;
+    /* SOMA_157: con un montón grande puede haber mucha memoria ya proyectada y libre (p. ej. tras "ramtest"); pedir mas que
+     * todo eso superaria el limite y la prueba fallaria sin que el montón tenga ningun problema. Entonces se omite. */
+    if (heap_mapped_bytes + big_size + (64u << 10) > kheap_limit) {
+        kprint("  (expansion omitida: lo ya proyectado y libre ocupa casi todo el limite del montón)\n");
+        kfree(p1); kfree(p2);
+        kprint("[HEAP AUTO-TEST] SUPERADO (sin margen para forzar la expansion).\n\n");
+        return 1;
+    }
     void *p_big = kmalloc(big_size);
     if (!p_big) {
         kprint("  FALLO: kmalloc expansion dinamica no pudo crecer\n");

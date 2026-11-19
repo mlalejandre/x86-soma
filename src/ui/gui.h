@@ -12,6 +12,9 @@ void gui_open_settings(void);
 void gui_open_web(void);
 void gui_open_pdf(const char *path);        /* PARCHE 088 */
 void gui_open_sysmon(void);                  /* PARCHE 089 */
+void gui_open_recorder(void);                /* SOMA_177_T480S */
+void gui_open_capture(void);                /* SOMA_179_T480S */
+void gui_open_camera(void);                  /* SOMA_178_T480S */
 const char *gui_app_title(int app);
 int  gui_app_list(int *apps, int max);
 int  gui_close_app(int app);

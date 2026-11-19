@@ -1,0 +1,19 @@
+{
+  "created": {},
+  "date": "20261118_235831",
+  "files": {
+    "src/agent/shell.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "ad50e5e25763e648beefb5c64d62f0e916f128527bc48bec34a217f08790a681",
+      "old": "6414bf9f7faf9b547c3dedebf11654219c1712a021865630ec389462a1ad6f1e"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "3807ca175c0e519439910bafff266b340944af21de3d49af25c2b7e7f4c0e9e6",
+      "old": "c254a844c0ff00a23203f0fe10557897a714066f4518db03e5d8f3f4089ee519"
+    }
+  },
+  "name": "207_capa_fondo"
+}

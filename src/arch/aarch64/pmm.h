@@ -28,4 +28,5 @@ void pmm_dump_stats(void);
 /* Auto-test de asignacion, alineacion y liberacion */
 int pmm_test_self(void);
 
+int pmm_bench(void);   /* PARCHE 127: compara el escaneo antiguo y el nuevo; 1 = correcto */
 #endif

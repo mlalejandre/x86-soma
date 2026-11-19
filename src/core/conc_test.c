@@ -110,6 +110,9 @@ int conc_selftest(void)
     struct kheap_counters h0, h1;
     kprint("\n[CONCTEST] "); kprint_dec(CT_THREADS); kprint(" hilos compitiendo por mutex, heap y VFS (con cesiones de CPU a mitad de operacion)...\n");
 
+    /* SOMA_199: antes de contar bloques se recogen los hilos que ya habian muerto (sus pilas se liberan en diferido): si se
+     * liberaban durante la prueba, la cuenta bajaba y la prueba daba un fallo falso la primera vez tras usar la red o el navegador. */
+    for (int i = 0; i < 4; ++i) { thread_reap_dead(); thread_sleep(5); }
     kheap_get_counters(&h0);
     kmutex_init(&ct_lock, "conc_lock"); kmutex_init(&ct_orphan, "conc_orphan");
     ct_counter = 0; ct_done = 0; ct_started = 0; ct_err_mutex = ct_err_heap = ct_err_vfs = ct_errors = 0;
@@ -137,8 +140,10 @@ int conc_selftest(void)
     int hc = kheap_check();
     ct_say("heap: estructura consistente (kheap_check)", hc != 0);
     kheap_get_counters(&h1);
-    int fuga = h1.live_blocks != h0.live_blocks;
+    for (int i = 0; i < 20 && h1.live_blocks > h0.live_blocks; ++i) { thread_sleep(50); thread_reap_dead(); kheap_get_counters(&h1); }   /* SOMA_199: lo que otros hilos tengan a medias */
+    int fuga = h1.live_blocks > h0.live_blocks;        /* SOMA_199: una fuga es que queden MAS bloques vivos (otros hilos pueden liberar los suyos mientras tanto) */
     ct_say("heap: sin bloques perdidos", fuga);
+    if (fuga) { kprint("    bloques vivos antes "); kprint_dec((uint32_t)h0.live_blocks); kprint(", despues "); kprint_dec((uint32_t)h1.live_blocks); kprint(" (si al repetir la prueba sale bien, era una reserva unica de otro hilo, no una fuga)\n"); }
     ct_say("heap: sin llamadas reentrantes", h1.reentries != h0.reentries);
     int leak_files = 0; for (int t = 0; t < 400; ++t) for (int f = 0; f < CT_FILES; ++f) { char nm[32]; ct_name(nm, (uint32_t)t, f); if (vfs_size(nm) >= 0) leak_files++; }
     ct_say("VFS: sin archivos de prueba huerfanos", leak_files != 0);

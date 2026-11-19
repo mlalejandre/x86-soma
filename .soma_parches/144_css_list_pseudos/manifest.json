@@ -1,0 +1,14 @@
+{
+  "tag": "SOMA_144_CSS_LIST_PSEUDOS_V1",
+  "edit": {
+    "src/apps/web_css.c": {
+      "before": "79e404aae176ac11062b46cf5bed5a0fb6b3a6bd9327e83405619cab7ac8404c",
+      "after": "fc78b57201395dbcbeeebeb540cec1217ce7b27b50d39356d187d9b93daba0e1",
+      "mode": 420
+    }
+  },
+  "new": {
+    "tests/test_web_css_selectors_144.c": "dfbc9437e7ac80e60a3a0df031cfe7e0ea364930511d1b457ffc2dc9dd1fefb3",
+    "docs/PARCHE_144_COMPATIBILIDAD_CSS.md": "8f594bfbf3c8fbfe8dd99dd34fbd83dfa139e45a2be1213be3cc1f0d9502c79f"
+  }
+}

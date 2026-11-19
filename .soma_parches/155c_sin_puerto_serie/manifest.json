@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "files": {
+    "src/core/kernel.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "597dcc94c103d83739ebe83fd319ce774aa889805077e839700acb2091b64f57",
+      "old": "885b3df11dd42c47dd471dc5dbeac95d110c4626c098903371757803813ea623"
+    },
+    "src/ui/console.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "536d1106d85bb32b96baa0a5f0cd452bde25038ba2d029b6fa47f55eb7fd9933",
+      "old": "a6167b43f2a410610ea43eadd8b2d5b7449a02e3623b6e7968ffd384b47a8a99"
+    },
+    "src/ui/console.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "b1feb36d299a7bd5394b35a029c859099de6352cbe40b99b6a94cb1a1795aaf8",
+      "old": "4b21bd0abcfb7b440cb36acad59bdde23e1580d3cfeefa7b58c6b3e7ba7a83a8"
+    }
+  },
+  "log": "20261115_115512 parche 155C: deteccion de COM1; sin puerto serie (T480s) la entrada ya no se inunda de 0xFF y el teclado escribe con normalidad",
+  "version": 1
+}

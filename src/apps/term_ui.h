@@ -8,6 +8,10 @@
  * linea de ordenes sigue en la GUI (buf/len/cur); aqui solo se lee y se modifica a traves de struct term_edit. */
 struct term_edit { char *buf; uint32_t *len; uint32_t *cur; uint32_t cap; };
 
+/* SOMA_203_INSTANCIAS: contexto de salida de cada terminal. */
+int term_ui_select(int slot); /* 0 por defecto; 1..15 sesiones independientes */
+void term_ui_drop(int slot);
+
 void term_ui_init(void);                          /* vacia el historial visible y activa los valores por defecto */
 void term_print(const char *raw_line);            /* anade una linea (admite codigos ANSI de color); las largas se parten */
 void term_clear(void);

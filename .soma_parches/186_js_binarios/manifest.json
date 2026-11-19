@@ -1,0 +1,53 @@
+{
+  "created": {
+    "docs/PARCHE_186_JS_BINARIOS.md": "56de7b4af87b55765952e8a2ddd5a80fe80ce5eae375b6cdfcc3de1d1172a78c",
+    "src/apps/web_js_bin.c": "d33538ae7ad0ac27a14ff22cab220417ac14647e76bde76326da6411fd34b03c",
+    "tests/test_web_js_186.c": "dcdd665e50d746340f5871c3a6787c3340dec11b82a18048e7caf1750264d007"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "c681037f89acad210d90ffdc39efb0676783b2b5e43cb7a96121bb8cc9ec0a2c",
+      "old": "6caee67554e3de5f097bac79549aa0e56a88051fe4d3defe94c0914f089f7ba5"
+    },
+    "src/apps/web_js_i.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "f3a7aa0e8edb12b7626b99dbbe4cc05a713842005b859a507df79a162f9834dd",
+      "old": "ada74d22e6572a42ad1b60d4f3f54a84b14982738a805f419cd10bd8fb0e9425"
+    },
+    "src/apps/web_js_lib.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "4808c470b5ad702ba6477b7b8ab017aa801e7577a8d6eb40c08ddd76b1e878b2",
+      "old": "1fd6c3831a3b56bcb13be4cc98856f0c559a78874d4a65a32e7302141c227041"
+    },
+    "src/apps/web_js_lib2.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "be55d34064fb69c466ec6f1d83ea934e877a8bdc867793bce7d20563c4f5aed4",
+      "old": "d38749957153ea4ecfe2035b1cc7db6db4137de88d8ed2050a7d8b2681414f89"
+    },
+    "src/apps/web_js_lib3.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "a075250114ba9d9219acc4f5e357122b38aaff052d8b9f61d16231bfe9db38b9",
+      "old": "572f71a9054c568c93543ef02caf67ae998e0f43fa22bd8bb988d213b9b6e656"
+    },
+    "src/apps/web_js_prelude.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "e42dce115d4945e2c780f09e7a5cd3d4ea10681e4da386eef0d696291c24d353",
+      "old": "5e1fbb0533007cd4a9e761ca05acca97e033377ceac82dfceab51d14c75e037b"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "c8205b4262be002a9077d1b11b6f05f2e9a1f3e2ccfe33ecc84058465247239b",
+      "old": "dd21b3ef81662537dd80b348c4b4fbce5ad3a5260af5023195916deff0d7536c"
+    }
+  },
+  "log": "20261116_230905 parche 186: motor JavaScript: ArrayBuffer, arrays tipados, DataView, TextEncoder/TextDecoder, Blob y cuerpos binarios reales",
+  "version": 1
+}

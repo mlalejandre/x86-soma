@@ -8,6 +8,8 @@
 #include "soma_test.h"
 #include "host_stubs.h"
 #include "srcfs.h"
+uint64_t web_now_ms(void) { return 0; }   /* PARCHE 140: el lector usa wz_inflate (web_inflate.c) */
+void web_yield(void) { }
 
 typedef struct { char name[64]; uint32_t size; } entry_t;
 static entry_t ent[512];

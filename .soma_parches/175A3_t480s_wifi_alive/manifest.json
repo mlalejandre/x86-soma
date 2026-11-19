@@ -1,0 +1,21 @@
+{
+  "created": {
+    "docs/PARCHE_175A3_T480S_WIFI_ALIVE.md": "fdf1cc91b636e4535471f03498bd3ab83566049bedbdc6767768d0467eb31182"
+  },
+  "files": {
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "5265aade82e20f28055610cf3bfc4d72962d9b453f508bd99e8b840a6abdee3d",
+      "old": "4900f11c5bd71814340e7662cc60733b52dee4fae11e865d1625aeeea5832e94"
+    },
+    "src/arch/x86_64/iwl.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "18ca4dce467addfa6fefd92aea395abb1f279a594aa59fe0ddb70421441e93b8",
+      "old": "7d2a5535c1c3fd2f98673a1ec083d412efc8c1f4a0b2e24ca0d80a54cb52e1c7"
+    }
+  },
+  "log": "20261116_093728 parche 175A3: WiFi: tx_init como Linux (SCD, keep-warm, 31 anillos TFD), espera de ALIVE de 5 s y diagnostico de arranque seguro, WFPM y RX; wifi arrancar sinreset",
+  "version": 1
+}

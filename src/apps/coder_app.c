@@ -759,7 +759,7 @@ static void cdr_write_report(const char *target, int ok, int repairs, const char
     cdr_cat(cdr_report, sizeof(cdr_report), "\nPlan: ");
     cdr_cat(cdr_report, sizeof(cdr_report), cdr_plan_w[0] ? cdr_plan_w : "(sin plan)");
     cdr_cat(cdr_report, sizeof(cdr_report), "\nRevision estatica:\n");
-    for (i = 0; i < cdr_rep.count; ++i) {
+    for (i = 0; i < (int)cdr_rep.count; ++i) {
         cdr_cat(cdr_report, sizeof(cdr_report), "  ");
         cdr_cat(cdr_report, sizeof(cdr_report), cdr_rep.msg[i]);
         cdr_cat(cdr_report, sizeof(cdr_report), "\n");
@@ -1612,7 +1612,8 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
     ui_list_x = x0 + 8; ui_list_y = y0 + 78; ui_list_w = lw - 16; ui_list_h = y1 - 8 - ui_list_y;
     ui_proj_rows = ui_list_h / 40;
     int vis = 0; for (int i = 0; i < project_count; i++) if (ui_proj_visible(i)) vis++;
-    if (ui_proj_scroll > vis - ui_proj_rows) ui_proj_scroll = vis - ui_proj_rows; if (ui_proj_scroll < 0) ui_proj_scroll = 0;
+    if (ui_proj_scroll > vis - ui_proj_rows) ui_proj_scroll = vis - ui_proj_rows;
+    if (ui_proj_scroll < 0) ui_proj_scroll = 0;
     int ry = ui_list_y, k = 0;
     for (int i = 0; i < project_count; i++) {
         if (!ui_proj_visible(i)) continue;
@@ -1679,7 +1680,8 @@ static void ui_render_log(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
     { int bw = cdr_tw("Copiar") + 28; bx -= bw; ui_btn(bx, y0 + 6, "Copiar", UB_LCOPY, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
     { int bw = cdr_tw("Traza completa") + 28; bx -= bw + 8; ui_btn(bx, y0 + 6, "Traza completa", UB_LTRACE, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
     int rows = (lh - 56) / 18;
-    if (ui_log_scroll > sn->log_n - rows) ui_log_scroll = sn->log_n - rows; if (ui_log_scroll < 0) ui_log_scroll = 0;
+    if (ui_log_scroll > sn->log_n - rows) ui_log_scroll = sn->log_n - rows;
+    if (ui_log_scroll < 0) ui_log_scroll = 0;
     int ty = y0 + 46;
     fb_set_clip(x0 + 8, ty, w - 16, lh - 52);
     for (int i = ui_log_scroll; i < sn->log_n && i < ui_log_scroll + rows; i++) {
@@ -2050,4 +2052,94 @@ int coder_run_mission(const char *target_in, const char *mission, char *out, uin
         cm_puts(out, max, &p, m);
     }
     return cr.ok;
+}
+
+
+
+/* SOMA_217_STUDIO: varias ventanas de SOMA Studio. Cada ventana tiene su editor (codeedit, por puntero) y su estado de interfaz:
+ * pestana, campo de peticion a SOMA, mensajes, problemas, explorador y seguimiento del trabajo del agente. Ese estado (unos
+ * pocos KiB) se guarda y se carga al cambiar de ventana. Los proyectos, la pestana Crear y el trabajo del agente son comunes:
+ * cuando el agente termina, recarga el archivo la ventana que lo tiene abierto. */
+#define CS_FIELDS X(ide_inited) X(cdr_tab_cur) X(ide_focus) X(ide_ia) X(ide_ia_len) X(ide_msg) X(ide_msg_col) X(ide_prob) \
+    X(ide_prob_line) X(ide_prob_n) X(ide_prob_ok) X(ide_was_working) X(ide_job_mine) X(ide_job_target) X(ide_ex_scroll) \
+    X(ide_ex_armed) X(ide_ex_hover) X(tf_ia)
+struct cs_inst {
+#define X(f) __typeof__(f) f;
+    CS_FIELDS
+#undef X
+};
+#define CS_INST_MAX 6
+static struct cs_inst cs_insts[CS_INST_MAX + 1];
+static int cs_used[CS_INST_MAX + 1], cs_live;
+static void cs_save(struct cs_inst *q)
+{
+#define X(f) memcpy(&q->f, &f, sizeof f);
+    CS_FIELDS
+#undef X
+}
+static void cs_load(const struct cs_inst *q)
+{
+#define X(f) memcpy(&f, &q->f, sizeof f);
+    CS_FIELDS
+#undef X
+}
+static void cs_blank(void)
+{
+    ui_tf_init();
+    ide_inited = 0; cdr_tab_cur = CDR_TAB_EDITOR; ide_focus = 0;
+    ide_ia[0] = 0; ide_ia_len = 0; tf_set(&tf_ia, "");
+    ide_msg[0] = 0; ide_msg_col = CDR_C_GRAY; ide_prob_n = 0; ide_prob_ok = -1;
+    ide_was_working = 0; ide_job_mine = 0; ide_job_target[0] = 0;
+    ide_ex_scroll = 0; ide_ex_armed = -1; ide_ex_hover = -1;
+}
+void coder_app_select(int slot)
+{
+    if (slot < 1 || slot > CS_INST_MAX || !cs_used[slot]) return;
+    ce_select(slot);
+    if (slot == cs_live) return;
+    if (cs_live) cs_save(&cs_insts[cs_live]);
+    cs_load(&cs_insts[slot]);
+    cs_live = slot;
+}
+int coder_app_inst_new(void)
+{
+    int k = ce_inst_new();                       /* deja elegido el editor nuevo */
+    if (!k) return 0;
+    if (k > CS_INST_MAX) { ce_inst_drop(k); return 0; }
+    if (cs_live) cs_save(&cs_insts[cs_live]);
+    cs_blank();
+    cs_used[k] = 1; cs_live = k;
+    cs_save(&cs_insts[k]);
+    return k;
+}
+void coder_app_inst_drop(int slot)
+{
+    if (slot < 1 || slot > CS_INST_MAX || !cs_used[slot]) return;
+    ce_inst_drop(slot);
+    cs_used[slot] = 0;
+    if (cs_live == slot) cs_live = 0;
+}
+int coder_app_inst_find(const char *path)
+{
+    for (int k = 1; k <= CS_INST_MAX; ++k) {
+        if (!cs_used[k] || !path) continue;
+        const char *a = ce_inst_path(k), *b = path;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b) return k;
+    }
+    return 0;
+}
+const char *coder_app_inst_name(int slot)
+{
+    if (slot < 1 || slot > CS_INST_MAX || !cs_used[slot]) return "";
+    const char *p = ce_inst_path(slot), *n = p;
+    for (; *p; ++p) if (*p == '/') n = p + 1;
+    return n;
+}
+void coder_app_open_path(const char *path)
+{
+    if (!path || !*path) return;
+    cdr_ensure_init(); ui_tf_init();
+    cdr_load_mod_file(path);
+    ide_open(path); ide_inited = 1; cdr_tab_cur = CDR_TAB_EDITOR;
 }

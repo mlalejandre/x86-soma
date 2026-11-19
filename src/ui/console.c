@@ -1,8 +1,12 @@
+#ifdef __x86_64__
+#include "bootfb.h"   /* SOMA_154_T480S */
+#endif
 #include "arch/aarch64/rpi_fb.h"
 volatile int console_muted = 0;
 #include "arch.h"
 #include "thread.h"
 #include "console.h"
+#include "mem.h"      /* SOMA_156: kmalloc para el registro */
 #include "shell.h"
 #include "io.h"
 #include "fs.h"
@@ -200,6 +204,65 @@ void console_capture_begin(char *buf, uint32_t cap, const char *input)
 }
 uint32_t console_capture_end(void) { uint32_t n = cap_len; cap_buf = 0; cap_owner = 0; cap_in = 0; return n; }
 void console_capture_abort(void) { cap_buf = 0; cap_owner = 0; cap_in = 0; }
+int console_capture_active(void) { return cap_buf != 0; }   /* SOMA_156B: la captura no se anida */
+
+/* PARCHE 132: la espera del transmisor es ACOTADA. Antes, un UART que nunca declara "vacio" (modulo desconectado, control de flujo, hardware raro)
+ * colgaba el sistema entero en la primera impresion. Tras dos esperas agotadas se da por muerto y se sigue sin el. */
+#define UART_SPIN_MAX 20000
+static unsigned uart_timeouts;
+static int uart_dead;
+#ifdef __x86_64__
+/* SOMA_155B_T480S: los portatiles (el T480s incluido) no tienen COM1. En un puerto inexistente el bus devuelve 0xFF: el bit
+ * "hay dato" de LSR parece siempre activo y kgetc() leia 0xFF sin fin (la primera tecla salia y despues la entrada quedaba
+ * inundada de bytes basura). Deteccion como el 8250 de Linux: el registro de prueba (scratch) debe devolver lo escrito. */
+static int uart_absent;
+void console_serial_probe(void)
+{
+    outb(COM1 + 7, 0x5A);
+    uint8_t a = inb(COM1 + 7);
+    outb(COM1 + 7, 0xA5);
+    uint8_t b = inb(COM1 + 7);
+    uart_absent = (a != 0x5A || b != 0xA5 || inb(COM1 + 5) == 0xFF);
+    if (uart_absent) uart_dead = 1;                         /* tampoco se escribe en el: arranque mas rapido */
+}
+int console_serial_present(void) { return !uart_absent; }
+#endif
+unsigned console_uart_timeouts(void) { return uart_timeouts; }
+int console_uart_dead(void) { return uart_dead; }
+/* SOMA_156_T480S: registro del nucleo ("dmesg"). El portatil no tiene puerto serie y el arranque pasa demasiado deprisa para
+ * leerlo: todo lo que sale por kputc se guarda aqui. 16 KiB estaticos al principio; en cuanto hay montón, 256 KiB. */
+#define KLOG_EARLY 16384u
+#define KLOG_BIG   (256u * 1024u)
+static char klog_early[KLOG_EARLY];
+static char *klog = klog_early;
+static uint32_t klog_cap = KLOG_EARLY;
+static volatile uint64_t klog_total;          /* caracteres escritos desde el arranque (la posicion es total % cap) */
+static volatile int klog_paused;              /* mientras "dmesg" imprime el propio registro */
+static void klog_putc(char c)
+{
+    if (klog_paused) return;
+    klog[klog_total % klog_cap] = c;
+    klog_total++;
+}
+void klog_grow(void)
+{
+    char *nb = (char *)kmalloc(KLOG_BIG);
+    if (!nb) return;
+    uint64_t have = klog_total < klog_cap ? klog_total : klog_cap;
+    for (uint64_t i = 0; i < have; i++) nb[i] = klog[(klog_total - have + i) % klog_cap];
+    klog = nb; klog_cap = KLOG_BIG; klog_total = have;
+}
+uint32_t klog_snapshot(char *out, uint32_t max)       /* copia lo mas reciente que quepa, en orden */
+{
+    if (!out || !max) return 0;
+    uint64_t have = klog_total < klog_cap ? klog_total : klog_cap;
+    if (have > max - 1) have = max - 1;
+    for (uint64_t i = 0; i < have; i++) out[i] = klog[(klog_total - have + i) % klog_cap];
+    out[have] = 0;
+    return (uint32_t)have;
+}
+uint64_t klog_written(void) { return klog_total; }
+void klog_pause(int on) { klog_paused = on; }
 
 void kputc(char c)
 {
@@ -207,14 +270,24 @@ void kputc(char c)
         if (cap_len + 1 < cap_cap) { cap_buf[cap_len++] = c; cap_buf[cap_len] = 0; }
         return;
     }
+    klog_putc(c);
     if (console_muted) return;
 #ifdef __x86_64__
-    while ((inb(COM1 + 5) & 0x20) == 0) {}
-    outb(COM1, (uint8_t)c);
-    vga_putc(c);
+    if (!uart_dead) {
+        unsigned spin = 0;
+        while ((inb(COM1 + 5) & 0x20) == 0 && spin < UART_SPIN_MAX) spin++;
+        if (spin >= UART_SPIN_MAX) { if (++uart_timeouts >= 2) uart_dead = 1; }
+        else outb(COM1, (uint8_t)c);
+    }
+    if (bootfb_use_firmware()) bootfb_putc(c);   /* SOMA_154_T480S: en UEFI no hay modo texto VGA */
+    else vga_putc(c);
 #else
-    while (*PL011_UARTFR & (1 << 5)) {}
-    *PL011_UARTDR = (uint32_t)(uint8_t)c;
+    if (!uart_dead) {
+        unsigned spin = 0;
+        while ((*PL011_UARTFR & (1 << 5)) && spin < UART_SPIN_MAX) spin++;
+        if (spin >= UART_SPIN_MAX) { if (++uart_timeouts >= 2) uart_dead = 1; }
+        else *PL011_UARTDR = (uint32_t)(uint8_t)c;
+    }
     rpi_fb_putc(c);
 #endif
 }
@@ -299,8 +372,13 @@ static volatile uint8_t kbd_mod[KBD_BUF_SIZE];   /* PARCHE 094: Ctrl/Mayus en el
 static volatile uint8_t kbd_last_mod;
 static int shift_active;
 static int ctrl_active;
+static int altgr_active;                /* SOMA_155_T480S: AltGr (E0 38) */
+static int kbd_layout_es;               /* SOMA_155_T480S */
+static volatile uint32_t kbd_events;      /* SOMA_155D: pulsaciones recibidas (la GUI cede la CPU mientras se teclea) */
+uint32_t console_kbd_events(void) { return kbd_events; }
 static void kbd_push_byte(char ch)
 {
+    kbd_events++;
     uint32_t next = (kbd_head + 1) % KBD_BUF_SIZE;
     if (next != kbd_tail) {
         kbd_mod[kbd_head] = (uint8_t)((ctrl_active ? 1 : 0) | (shift_active ? 2 : 0));
@@ -367,6 +445,103 @@ static const char kbd_us_upper[128] = {
 
 static void keyboard_scancode(uint8_t sc);
 
+/* ---------------------------------------------------------------- SOMA_155_T480S: distribucion espanola (ISO)
+ * Teclado del ThinkPad T480s en Espana. Juego 1 de codigos (el que deja el 8042 tras traducir). Cada tecla: normal, Mayus,
+ * AltGr. Las teclas muertas (acento agudo/dieresis junto a la n, grave/circunflejo junto a la P) se combinan con la vocal
+ * siguiente; con espacio sale el propio signo. La salida es UTF-8, como el resto de la consola. */
+#define DK_ACUTE 0x110001u
+#define DK_DIAER 0x110002u
+#define DK_GRAVE 0x110004u
+#define DK_CIRC  0x110005u
+struct es_key { uint8_t sc; uint32_t n, s, a; };
+static const struct es_key es_keys[] = {
+    { 0x29, 0xBA, 0xAA, '\\' },        /* º ª \ */
+    { 0x02, '1', '!', '|' },  { 0x03, '2', '"', '@' },  { 0x04, '3', 0xB7, '#' },   /* 3 · # */
+    { 0x05, '4', '$', '~' },  { 0x06, '5', '%', 0x20AC }, { 0x07, '6', '&', 0xAC }, /* 5 % EUR, 6 & not */
+    { 0x08, '7', '/', 0 },    { 0x09, '8', '(', 0 },    { 0x0A, '9', ')', 0 },
+    { 0x0B, '0', '=', 0 },    { 0x0C, '\'', '?', 0 },   { 0x0D, 0xA1, 0xBF, 0 },    /* inv. exclamacion / interrogacion */
+    { 0x1A, DK_GRAVE, DK_CIRC, '[' }, { 0x1B, '+', '*', ']' },
+    { 0x28, DK_ACUTE, DK_DIAER, '{' }, { 0x2B, 0xE7, 0xC7, '}' },                    /* c cedilla */
+    { 0x56, '<', '>', 0 },    { 0x33, ',', ';', 0 },    { 0x34, '.', ':', 0 },    { 0x35, '-', '_', 0 },
+    { 0x12, 0, 0, 0x20AC },                                                         /* AltGr+E = EUR */
+};
+static void kbd_push_cp(uint32_t cp)
+{
+    if (cp < 0x80u) { kbd_push_byte((char)cp); return; }
+    if (cp < 0x800u) { kbd_push_byte((char)(0xC0u | (cp >> 6))); kbd_push_byte((char)(0x80u | (cp & 0x3Fu))); return; }
+    kbd_push_byte((char)(0xE0u | (cp >> 12))); kbd_push_byte((char)(0x80u | ((cp >> 6) & 0x3Fu))); kbd_push_byte((char)(0x80u | (cp & 0x3Fu)));
+}
+static uint32_t es_dead_alone(int dk) { return dk == 1 ? 0xB4u : dk == 2 ? 0xA8u : dk == 4 ? '`' : '^'; }
+static uint32_t es_compose(int dk, uint32_t c)
+{
+    static const char vow[] = "aeiouAEIOU";
+    static const uint8_t ac[10] = { 0xE1, 0xE9, 0xED, 0xF3, 0xFA, 0xC1, 0xC9, 0xCD, 0xD3, 0xDA };
+    static const uint8_t di[10] = { 0xE4, 0xEB, 0xEF, 0xF6, 0xFC, 0xC4, 0xCB, 0xCF, 0xD6, 0xDC };
+    static const uint8_t gr[10] = { 0xE0, 0xE8, 0xEC, 0xF2, 0xF9, 0xC0, 0xC8, 0xCC, 0xD2, 0xD9 };
+    static const uint8_t ci[10] = { 0xE2, 0xEA, 0xEE, 0xF4, 0xFB, 0xC2, 0xCA, 0xCE, 0xD4, 0xDB };
+    for (int i = 0; i < 10; i++) if ((uint32_t)(unsigned char)vow[i] == c)
+        return dk == 1 ? ac[i] : dk == 2 ? di[i] : dk == 4 ? gr[i] : ci[i];
+    return 0;
+}
+static void es_emit(uint32_t cp)
+{
+    if (kbd_dead_key) {
+        int dk = kbd_dead_key; kbd_dead_key = 0;
+        if (cp == ' ') { kbd_push_cp(es_dead_alone(dk)); return; }
+        uint32_t c = es_compose(dk, cp);
+        if (c) { kbd_push_cp(c); return; }
+        kbd_push_cp(es_dead_alone(dk));
+    }
+    kbd_push_cp(cp);
+}
+/* Pulsacion (sin Ctrl) con la distribucion espanola. 1 = tratada. */
+static int kbd_es_press(uint8_t sc)
+{
+    for (unsigned i = 0; i < sizeof(es_keys) / sizeof(es_keys[0]); i++) {
+        if (es_keys[i].sc != sc) continue;
+        uint32_t cp = altgr_active ? es_keys[i].a : (shift_active ? es_keys[i].s : es_keys[i].n);
+        if (sc == 0x2B && !altgr_active && caps_active) cp = shift_active ? 0xE7u : 0xC7u;   /* BloqMayus en la c cedilla */
+        if (!cp) {
+            if (altgr_active) return 1;                          /* AltGr + tecla sin signo: nada */
+            break;                                               /* (AltGr+E sin AltGr): letra normal */
+        }
+        if (cp >= 0x110000u) {                                   /* tecla muerta */
+            int dk = (int)(cp - 0x110000u);
+            if (kbd_dead_key) { int prev = kbd_dead_key; kbd_dead_key = 0; kbd_push_cp(es_dead_alone(prev)); if (prev == dk) { kbd_push_cp(es_dead_alone(dk)); return 1; } }
+            kbd_dead_key = dk;
+            return 1;
+        }
+        es_emit(cp);
+        return 1;
+    }
+    if (altgr_active) return 1;
+    if (sc == 0x27) {                                            /* n con tilde */
+        es_emit((shift_active ^ caps_active) ? 0xD1u : 0xF1u);
+        return 1;
+    }
+    if (sc >= sizeof(kbd_us_lower)) return 1;
+    char ch = shift_active ? kbd_us_upper[sc] : kbd_us_lower[sc];
+    if (!ch) return 1;
+    if (caps_active) {
+        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+        else if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+    }
+    if (ch == '\b' || ch == '\r' || ch == '\t' || ch == 27) { kbd_dead_key = 0; kbd_push_byte(ch); return 1; }
+    es_emit((uint32_t)(unsigned char)ch);
+    return 1;
+}
+
+void keyboard_set_layout(int es) { kbd_layout_es = es ? 1 : 0; kbd_dead_key = 0; }
+int  keyboard_get_layout(void) { return kbd_layout_es; }
+void keyboard_layout_auto(void)
+{
+#ifdef __x86_64__
+    if (bootinfo_has_option("soma.teclado=us")) keyboard_set_layout(0);
+    else if (bootinfo_has_option("soma.teclado=es") || bootinfo_has_option("soma.maquina=t480s")) keyboard_set_layout(1);
+    kprint(kbd_layout_es ? "TECLADO: distribucion espanola (AltGr, acentos, n, c cedilla)\n" : "");
+#endif
+}
+
 #ifdef __x86_64__
 void keyboard_irq_handler(void)
 {
@@ -396,14 +571,34 @@ void keyboard_inject_scancode(uint8_t sc)
 #endif
 }
 
+extern void scrcap_hotkey(int ctrl) __attribute__((weak));       /* SOMA_179_T480S: scrcap.c */
+extern void hotkey_post(int code) __attribute__((weak));   /* SOMA_168_T480S: backlight.c (solo x86_64) */
+/* SOMA_168B_ORBE: la tecla Windows (E0 5B / E0 5C) llama al orbe. En el emulador del Mac, Option (Alt izquierdo, 0x38)
+ * pulsada y soltada SOLA hace lo mismo; Option + otra tecla no cuenta (asi no estorba a ningun atajo). La GUI lo recoge. */
+static volatile uint32_t kbd_super_count;
+static int lalt_down, lalt_other;
+uint32_t console_take_super(void) { return __sync_lock_test_and_set(&kbd_super_count, 0); }
 static void keyboard_scancode(uint8_t sc)
 {
     if (sc == 0xE0) {
         e0_prefix = 1;
         return;
     }
+    if (lalt_down && !(sc & 0x80) && (sc != 0x38 || e0_prefix)) lalt_other = 1;   /* SOMA_168B: Option acompanada */
     if (e0_prefix) {
         e0_prefix = 0;
+        if (sc == 0x5B || sc == 0x5C) { kbd_super_count++; kbd_events++; return; }   /* SOMA_168B: tecla Windows */
+        if (sc == 0xDB || sc == 0xDC) return;
+        if (sc == 0x38) { altgr_active = 1; return; }            /* SOMA_155_T480S: AltGr */
+        if (sc == 0xB8) { altgr_active = 0; return; }
+        if (sc == 0x37) { if (scrcap_hotkey) scrcap_hotkey(ctrl_active); return; }   /* SOMA_179_T480S: ImprPant (con Control: video) */
+        if (sc == 0x30 || sc == 0x2E || sc == 0x20) {            /* SOMA_168_T480S: volumen +, volumen -, silencio (Fn+F3/F2/F1) */
+            if (hotkey_post) hotkey_post(sc == 0x30 ? 3 : sc == 0x2E ? 4 : 5);
+            return;
+        }
+        if (sc == 0xB0 || sc == 0xAE || sc == 0xA0) return;
+        if (sc == 0x1D) { ctrl_active = 1; return; }             /* Ctrl derecho */
+        if (sc == 0x9D) { ctrl_active = 0; return; }
         char k = 0;
         if (sc == 0x48) k = 16;
         else if (sc == 0x50) k = 14;
@@ -417,6 +612,8 @@ static void keyboard_scancode(uint8_t sc)
         if (k != 0) kbd_push_byte(k);   /* PARCHE 094: con sus modificadores */
         return;
     }
+    if (sc == 0x38) { if (!lalt_down) { lalt_down = 1; lalt_other = 0; } return; }     /* SOMA_168B: Option / Alt izquierdo */
+    if (sc == 0xB8) { if (lalt_down && !lalt_other) { kbd_super_count++; kbd_events++; } lalt_down = 0; return; }
     if (sc == 0x1D) {
         ctrl_active = 1;
         return;
@@ -439,6 +636,12 @@ static void keyboard_scancode(uint8_t sc)
     }
     if (sc & 0x80) {
         return;
+    }
+    if (kbd_layout_es) {                                          /* SOMA_155_T480S */
+        if (ctrl_active) {
+            if (sc == 0x1B || sc == 0x4E) { kbd_dead_key = 0; kbd_push_byte((char)31); return; }   /* Ctrl + (tecla + espanola) */
+            if (sc == 0x35 || sc == 0x4A) { kbd_dead_key = 0; kbd_push_byte((char)30); return; }   /* Ctrl - */
+        } else if (kbd_es_press(sc)) return;
     }
     if (sc < sizeof(kbd_us_lower)) {
         /* Soporte de teclado español estándar & dead-keys */
@@ -529,6 +732,7 @@ void keyboard_reset_state(void)
     shift_active = 0;
     caps_active = 0;
     ctrl_active = 0;
+    altgr_active = 0;
     e0_prefix = 0;
     kbd_head = 0;
     kbd_tail = 0;
@@ -542,7 +746,9 @@ int kgetc_ready(void)
     if (kbd_head != kbd_tail) {
         return 1;
     }
-    return (inb(COM1 + 5) & 0x01) != 0;
+    if (uart_absent) return 0;                              /* SOMA_155B_T480S: sin puerto serie (portatil) */
+    uint8_t lsr = inb(COM1 + 5);
+    return lsr != 0xFF && (lsr & 0x01) != 0;
 #else
     if (kbd_head != kbd_tail) return 1;
     return !(*PL011_UARTFR & (1 << 4));
@@ -583,9 +789,35 @@ static char cmd_history[CMD_HISTORY_MAX][CMD_LINE_MAX];
 static int history_count = 0;
 static int history_tail = 0;
 
+/* SOMA_193: el historial se guarda en /etc/history.txt. `wifi conectar <red> <clave>` y `wpa psk <ssid> <clave>` dejaban la
+ * contrasena en claro en el disco. Se guarda la orden con la clave sustituida por ***; al cargar un historial antiguo se limpia igual. */
+static const char *history_scrub(const char *cmd, char *tmp, uint32_t cap)
+{
+    static const char *const pre[] = { "wifi conectar ", "wpa psk ", "llm-config clave ", "llm-config lanzador clave ", 0 };   /* SOMA_195: tambien la clave de la API del LLM */
+    static const int skip[] = { 1, 1, 0, 0 };                       /* palabras que van antes del secreto (el nombre de la red) */
+    const char *s = cmd; while (*s == ' ') s++;
+    for (int k = 0; pre[k]; ++k) {
+        uint32_t n = 0; while (pre[k][n] && s[n] == pre[k][n]) n++;
+        if (pre[k][n]) continue;
+        const char *a = s + n; while (*a == ' ') a++;
+        if (!skip[k]) { a = s + n - 1; }
+        else if (*a == '"' || *a == '\'') { char q = *a++; while (*a && *a != q) a++; if (*a) a++; }      /* nombre de red entre comillas */
+        else while (*a && *a != ' ') a++;
+        const char *after = a; while (*after == ' ') after++;
+        if (!*after) return cmd;                                                                    /* sin clave: nada que ocultar */
+        uint32_t o = 0;
+        for (const char *c = s; c < a && o < cap - 5; ++c) tmp[o++] = *c;
+        tmp[o++] = ' '; tmp[o++] = '*'; tmp[o++] = '*'; tmp[o++] = '*'; tmp[o] = '\0';
+        return tmp;
+    }
+    return cmd;
+}
+
 static void history_add(const char *cmd)
 {
     if (!cmd || cmd[0] == '\0') return;
+    static char scrub_tmp[160];
+    cmd = history_scrub(cmd, scrub_tmp, sizeof scrub_tmp);
 
     if (history_count > 0) {
         int last_idx = (history_tail - 1 + CMD_HISTORY_MAX) % CMD_HISTORY_MAX;

@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "date": "20261118_100403",
+  "files": {
+    "src/apps/web_css.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "3ffcadb760a6085d41383be9ea220f5d3bf56debf00dc91814ddd32846d49be2",
+      "old": "071d2dde91957203a95e281223c853d993d2cf948fc46260a9d495645fa93e18"
+    },
+    "tests/fuzz_web_200.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "83143ed8ef3e4c7d8db6ee3389565084221f1e7527a4248144f9eb2ade513aa7",
+      "old": "c5a2a33129defbc85bf31f5f8495142b2249c0103f645b0a71ead9a65e25ee46"
+    },
+    "tests/test_web_fluido_152.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "0c16743210b1615a796af9cf00fde091c66724c4bb8b3db598ef282abf2c9e56",
+      "old": "d805198a8a10b6131f3afe2637ef05089513b75b0e74d732da93fd0062f4d3f0"
+    }
+  },
+  "name": "204_css_has_hover"
+}

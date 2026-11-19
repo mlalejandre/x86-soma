@@ -26,16 +26,56 @@ static void parse_madt(const uint8_t *t, uint32_t len, struct hw_acpi *o)
 {
     if (len < ACPI_HDR + 8) return;
     o->has_madt = 1; o->lapic_addr = le32(t + ACPI_HDR);
+    o->nmi_lint = -1;
     uint32_t p = ACPI_HDR + 8;
     while (p + 2 <= len) {
         uint8_t ty = t[p], l = t[p + 1];
         if (l < 2 || p + l > len) break;
-        if (ty == 0 && l >= 8 && (le32(t + p + 4) & 3)) o->ncpu++;                        /* LAPIC habilitado o capaz de habilitarse */
-        else if (ty == 1 && l >= 12 && o->nioapic < HW_MAX_IOAPIC) o->ioapic_addr[o->nioapic++] = le32(t + p + 4);
+        if ((ty == 0 && l >= 8) || (ty == 9 && l >= 16)) {                                   /* LAPIC / x2APIC local */
+            uint32_t fl = le32(t + p + (ty == 0 ? 4 : 8));
+            uint32_t id = ty == 0 ? t[p + 3] : le32(t + p + 4);
+            uint32_t uid = ty == 0 ? t[p + 2] : le32(t + p + 12);
+            int dup = 0;                                                                      /* el mismo nucleo puede salir en 0 y en 9 */
+            for (int k = 0; k < o->nlapic; k++) if (o->lapic[k].apic_id == id) dup = 1;
+            if (!dup && (fl & 3)) o->ncpu++;                                                  /* habilitado o capaz de habilitarse */
+            if (!dup && o->nlapic < HW_MAX_CPU) {
+                int k = o->nlapic++;
+                o->lapic[k].apic_id = id; o->lapic[k].uid = uid;
+                o->lapic[k].enabled = (uint8_t)(fl & 1); o->lapic[k].online_capable = (uint8_t)((fl >> 1) & 1);
+            }
+        }
+        else if (ty == 1 && l >= 12 && o->nioapic < HW_MAX_IOAPIC) {
+            int k = o->nioapic++;
+            o->ioapic_id[k] = t[p + 2]; o->ioapic_addr[k] = le32(t + p + 4); o->ioapic_gsi[k] = le32(t + p + 8);
+        }
+        else if ((ty == 4 && l >= 6) || (ty == 0x0A && l >= 12)) {                            /* NMI del LAPIC (todos o uno) */
+            o->nmi_flags = (uint16_t)(t[p + 3] | t[p + 4] << 8);
+            o->nmi_lint = ty == 4 ? (t[p + 5] & 1) : (t[p + 10] & 1);
+        }
         else if (ty == 2 && l >= 10 && o->nirq_ovr < 16) { int i = o->nirq_ovr++; o->irq_ovr[i].src = t[p + 3]; o->irq_ovr[i].gsi = le32(t + p + 4); o->irq_ovr[i].flags = (uint16_t)(t[p + 8] | t[p + 9] << 8); }
         else if (ty == 5 && l >= 12) o->lapic_addr = (uint32_t)le64(t + p + 4);           /* sustituto de 64 bits (se guarda truncado) */
         p += l;
     }
+}
+
+void hw_isa_irq_route(const struct hw_acpi *o, uint8_t irq, uint32_t *gsi, int *low, int *level)
+{
+    *gsi = irq; *low = 0; *level = 0;                                 /* ISA: flanco, activa alta */
+    for (int i = 0; o && i < o->nirq_ovr && i < 16; i++) {
+        if (o->irq_ovr[i].src != irq) continue;
+        uint16_t f = o->irq_ovr[i].flags;
+        *gsi = o->irq_ovr[i].gsi;
+        if ((f & 3) == 3) *low = 1;                                   /* polaridad: 00 = la del bus (ISA alta), 01 alta, 11 baja */
+        if (((f >> 2) & 3) == 3) *level = 1;                          /* disparo: 00 = el del bus (ISA flanco), 01 flanco, 11 nivel */
+        return;
+    }
+}
+int hw_ioapic_for_gsi(const struct hw_acpi *o, uint32_t gsi)
+{
+    int best = -1;
+    for (int i = 0; o && i < o->nioapic && i < HW_MAX_IOAPIC; i++)
+        if (o->ioapic_gsi[i] <= gsi && (best < 0 || o->ioapic_gsi[i] > o->ioapic_gsi[best])) best = i;
+    return best;
 }
 
 static void parse_mcfg(const uint8_t *t, uint32_t len, struct hw_acpi *o)
@@ -246,4 +286,124 @@ int hw_virtio_caps(const uint8_t cfg[256], struct hw_virtio_cap *out, int max)
         ptr = next;
     }
     return n;
+}
+
+/* ===================================================================== SOMA_156_T480S: SMBIOS
+ * Especificacion DMTF DSP0134. Cada estructura: tipo (1), longitud de la parte fija (1), asa (2), campos; despues las
+ * cadenas, terminadas cada una en NUL y el conjunto en un NUL extra. Los campos de cadena son indices (1 = primera). */
+static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+int hw_smbios_entry(const uint8_t *ep, size_t avail, uint64_t *table_phys, uint32_t *table_len, uint8_t *major, uint8_t *minor)
+{
+    if (!ep) return -1;
+    if (avail >= 24 && meq(ep, "_SM3_", 5)) {                     /* SMBIOS 3.x: tabla de 64 bits */
+        uint8_t l = ep[6];
+        if (l < 24 || l > avail || !sum_ok(ep, l)) return -1;
+        *major = ep[7]; *minor = ep[8];
+        *table_len = le32(ep + 12); *table_phys = le64(ep + 16);
+        return *table_phys && *table_len ? 0 : -1;
+    }
+    if (avail >= 31 && meq(ep, "_SM_", 4)) {                      /* SMBIOS 2.x */
+        uint8_t l = ep[5];
+        if (l < 31 || l > avail || !sum_ok(ep, l) || !meq(ep + 16, "_DMI_", 5)) return -1;
+        *major = ep[6]; *minor = ep[7];
+        *table_len = le16(ep + 22); *table_phys = le32(ep + 24);
+        return *table_phys && *table_len ? 0 : -1;
+    }
+    return -1;
+}
+/* Cadena numero `idx` del conjunto que empieza en `s` (hasta `end`). Copia saneada (solo ASCII imprimible, sin espacios
+ * sobrantes al final). Indice 0 o fuera de rango: cadena vacia. */
+static void smb_str(const uint8_t *s, const uint8_t *end, uint8_t idx, char *d, size_t dmax)
+{
+    d[0] = 0;
+    if (!idx) return;
+    for (uint8_t k = 1; s < end && *s; k++) {
+        const uint8_t *e = s;
+        while (e < end && *e) e++;
+        if (e >= end) return;
+        if (k == idx) {
+            size_t n = 0;
+            for (const uint8_t *c = s; c < e && n + 1 < dmax; c++) d[n++] = (*c >= 32 && *c < 127) ? (char)*c : '?';
+            while (n && d[n - 1] == ' ') n--;
+            d[n] = 0;
+            return;
+        }
+        s = e + 1;
+    }
+}
+const char *hw_smbios_memtype(uint8_t t)
+{
+    switch (t) {
+    case 0x12: return "DDR"; case 0x13: return "DDR2"; case 0x18: return "DDR3"; case 0x1A: return "DDR4";
+    case 0x1B: return "LPDDR"; case 0x1C: return "LPDDR2"; case 0x1D: return "LPDDR3"; case 0x1E: return "LPDDR4";
+    case 0x22: return "DDR5"; case 0x23: return "LPDDR5";
+    default: return "?";
+    }
+}
+int hw_smbios_parse(const uint8_t *t, size_t len, uint8_t major, uint8_t minor, struct hw_smbios *o)
+{
+    for (size_t i = 0; i < sizeof *o; i++) ((uint8_t *)o)[i] = 0;
+    o->major = major; o->minor = minor;
+    if (!t) return -1;
+    const uint8_t *p = t, *end = t + len;
+    while (p + 4 <= end) {
+        uint8_t type = p[0], fl = p[1];
+        if (fl < 4 || p + fl > end) break;                        /* estructura truncada o corrupta: se para */
+        const uint8_t *str = p + fl, *q = str;                     /* fin del conjunto de cadenas: doble NUL */
+        while (q + 1 < end && !(q[0] == 0 && q[1] == 0)) q++;
+        if (q + 1 >= end) break;
+        const uint8_t *next = q + 2;
+        o->nstructs++;
+        switch (type) {
+        case 0:
+            if (fl >= 9) { smb_str(str, q + 1, p[4], o->bios_vendor, sizeof o->bios_vendor);
+                           smb_str(str, q + 1, p[5], o->bios_version, sizeof o->bios_version);
+                           smb_str(str, q + 1, p[8], o->bios_date, sizeof o->bios_date); }
+            break;
+        case 1:
+            if (fl >= 8) { smb_str(str, q + 1, p[4], o->sys_vendor, sizeof o->sys_vendor);
+                           smb_str(str, q + 1, p[5], o->sys_product, sizeof o->sys_product);
+                           smb_str(str, q + 1, p[6], o->sys_version, sizeof o->sys_version); }
+            if (fl >= 0x1B) smb_str(str, q + 1, p[0x1A], o->sys_family, sizeof o->sys_family);
+            break;
+        case 2:
+            if (fl >= 6 && !o->board_product[0]) smb_str(str, q + 1, p[5], o->board_product, sizeof o->board_product);
+            break;
+        case 4:
+            if (fl >= 0x1A && !o->cpu_name[0]) {
+                smb_str(str, q + 1, p[0x10], o->cpu_name, sizeof o->cpu_name);
+                o->cpu_max_mhz = le16(p + 0x14); o->cpu_cur_mhz = le16(p + 0x16);
+                if (fl >= 0x26) { o->cpu_cores = p[0x23]; o->cpu_threads = p[0x25]; }
+            }
+            break;
+        case 16:
+            if (fl >= 0x0B) {
+                uint32_t kb = le32(p + 7);
+                uint64_t mb = (kb == 0x80000000u && fl >= 0x17) ? le64(p + 0x0F) >> 20 : (uint64_t)kb >> 10;
+                o->mem_max_mb += mb;
+            }
+            break;
+        case 17:
+            if (fl >= 0x15 && o->nmem < HW_SMBIOS_MAX_MEM) {
+                int k = o->nmem++;
+                uint16_t sz = le16(p + 0x0C);
+                uint32_t mb = 0;
+                if (sz == 0x7FFF && fl >= 0x20) mb = le32(p + 0x1C) & 0x7FFFFFFFu;
+                else if (sz != 0xFFFF) mb = (sz & 0x8000) ? (uint32_t)(sz & 0x7FFF) / 1024u : sz;
+                o->mem[k].size_mb = mb;
+                o->mem[k].type = p[0x12];
+                smb_str(str, q + 1, p[0x10], o->mem[k].locator, sizeof o->mem[k].locator);
+                o->mem[k].mhz = le16(p + 0x15);
+                if (fl >= 0x22 && le16(p + 0x20)) o->mem[k].mhz = le16(p + 0x20);   /* velocidad configurada (la real) */
+                if (fl >= 0x1B) smb_str(str, q + 1, p[0x1A], o->mem[k].part, sizeof o->mem[k].part);
+            }
+            break;
+        case 127:
+            o->ok = o->nstructs > 0;
+            return o->ok ? 0 : -1;
+        }
+        p = next;
+    }
+    o->ok = o->nstructs > 0;
+    return o->ok ? 0 : -1;
 }

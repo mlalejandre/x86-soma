@@ -30,4 +30,31 @@ void apic_route_off(void);
 int  apic_routed(void);
 uint32_t apic_eoi_count(void);
 void apic_eoi(void);                                    /* EOI del LAPIC si el enrutado esta activo; si no, no hace nada */
+
+/* SOMA_158_T480S: modo APIC del sistema (por defecto si hay MADT con IOAPIC). Tras activar interrupciones y el i8042:
+ * LAPIC encendido, teclado y trackpad por el IOAPIC, reloj por el temporizador del LAPIC (1 kHz, calibrado con el TSC) o por
+ * el PIT via IOAPIC si no hay ARAT, PIC 8259 enmascarado. Si el reloj no avanza, vuelve solo al PIC.
+ * 0 = activo; -1 = no se intento (ver why); -2 = se intento y se deshizo. Interruptores: soma.apic=off, soma.apic=pit. */
+struct apic_sys_info {
+    int active, x2apic, arat, timer_lapic;
+    uint32_t lapic_id, ioapic_addr, ioapic_id, ticks_per_ms, verify_ticks;
+    uint32_t gsi[3], io_index[3];          /* IRQ ISA 0 (PIT), 1 (teclado), 12 (trackpad) */
+    int low[3], level[3], io_used[3];
+    uint8_t pic_m, pic_s;
+    const char *why;
+    uint64_t tsc0, ticks0;
+};
+int  apic_system_start(void);
+int  apic_system_active(void);
+const struct apic_sys_info *apic_system_info(void);
+uint64_t apic_io_redir(uint32_t idx);
+void apic_clock_drift(uint64_t *ticks_ms, uint64_t *tsc_ms);                  /* entrada de redireccion del IOAPIC del sistema (orden irq) */
+/* SOMA_159_T480S: arranque de los demas nucleos (smp.c) */
+struct hw_acpi;
+const struct hw_acpi *apic_system_acpi(void);   /* tabla MADT ya analizada; 0 si el sistema no esta en modo APIC */
+int apic_lapic_x2(void);
+uint32_t apic_lapic_mmio(void);
+uint32_t apic_this_id(void);
+int apic_send_ipi(uint32_t dest, uint32_t icr_lo);
+void apic_ap_setup(void);
 #endif

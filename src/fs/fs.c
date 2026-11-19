@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include "console.h"
 #include "fs.h"
+#include "acct.h"          /* SOMA_198: ACCT_WEB */
+#include "rng.h"
 #include "mem.h"
 #include "virtio_blk.h"
 #include "slotio.h"
@@ -26,6 +28,10 @@
 #define FS_CHECKPOINT_LBA    SOMA_LBA_CHECKPOINT
 #define FS_JOURNAL_LBA       SOMA_LBA_FS_JOURNAL
 #define FS_TOTAL_SECTORS     (1 + FS_DISK_SLOTS * FS_SECTORS_PER_FILE)
+_Static_assert(SOMA_LBA_CKPT_B_SPLIT < FS_TOTAL_SECTORS && SOMA_LBA_CKPT_B_DATA + SOMA_LBA_CKPT_B_SPLIT == SOMA_LBA_SRCFS_INDEX &&
+               SOMA_LBA_CKPT_B_DATA2 + (FS_TOTAL_SECTORS - SOMA_LBA_CKPT_B_SPLIT) == SOMA_LBA_CHECKPOINT - 1, "ranura B del checkpoint: tramos fuera de sitio");
+static struct ckpt_slot fs_ckpt_a(void) { return ckpt_linear(FS_CHECKPOINT_LBA - 1, FS_CHECKPOINT_LBA, FS_TOTAL_SECTORS); }
+static struct ckpt_slot fs_ckpt_b(void) { struct ckpt_slot x; x.marker = SOMA_LBA_CKPT_B_MARKER; x.base = SOMA_LBA_CKPT_B_DATA; x.split = SOMA_LBA_CKPT_B_SPLIT; x.base2 = SOMA_LBA_CKPT_B_DATA2; return x; }
 
 struct fs_superblock {
     char     magic[8];       /* "SOMAFS02" */
@@ -165,6 +171,21 @@ int vfs_is_hidden(const char *name)
     return 0;
 }
 
+/* SOMA_193 (seguridad): archivos con secretos que un AGENTE no puede LEER por ninguna via (cat, grep, cp, head, source, busquedas...):
+ * la clave de la WiFi (/etc/wifi.conf guarda la PMK, equivalente a la contrasena), el historial del terminal (puede llevar
+ * contrasenas tecleadas), la configuracion del LLM y todo lo que el usuario ponga en /etc/secreto/. Se decide aqui, en el VFS, y no
+ * en cada orden: asi no hay orden que se lo salte. El usuario (terminal, aplicaciones) no se ve afectado. */
+int vfs_agent_secret(const char *name)
+{
+    static const char *const secret[] = { "/etc/wifi.conf", "/etc/history.txt", "/etc/llm.conf", 0 };
+    struct tcb *t = thread_current();
+    if (!t || !name) return 0;
+    if (!t->agent_mode && t->owner != ACCT_WEB) return 0;                  /* SOMA_198: tampoco el motor del navegador (file:///etc/llm.conf) */
+    if (fs_strstr(name, "/etc/secreto/") == name) return 1;
+    for (int i = 0; secret[i]; ++i) if (vfs_names_equal(secret[i], name)) return 1;
+    return 0;
+}
+
 static int agent_path_denied(const char *name)
 {
     static const char *const deny_exact[] = {
@@ -191,13 +212,17 @@ static int agent_path_denied(const char *name)
     return deny;
 }
 
-static uint64_t rng_state = 0x88888888ULL;
-static uint64_t xorshift64(void)
+/* SOMA_192: /dev/urandom salia de un xorshift con semilla CONSTANTE (0x88888888): la misma secuencia en cada arranque.
+ * Ahora sale del generador unico del nucleo, sin sesgo (se descartan los valores 62 y 63 de cada 6 bits). */
+static void urandom_text(char *out, uint32_t n)
 {
-    if (rng_state == 0) rng_state = arch_cycle_counter();
-    uint64_t x = rng_state;
-    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
-    return rng_state = x;
+    static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    uint8_t r[64]; uint32_t have = 0, i = 0;
+    while (i < n) {
+        if (!have) { rng_bytes(r, sizeof r); have = sizeof r; }
+        uint8_t v = r[--have] & 63;
+        if (v < 62) out[i++] = charset[v];
+    }
 }
 
 static int read_proc_file(const char *name, char *buf_out, uint32_t max_len)
@@ -257,8 +282,7 @@ static int read_dev_file(const char *name, char *buf_out, uint32_t max_len)
     }
     if (str_eq(name, "/dev/urandom")) {
         uint32_t n = 64; if (n >= max_len) n = max_len - 1;
-        const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        for (uint32_t i = 0; i < n; ++i) buf_out[i] = charset[xorshift64() % (sizeof(charset) - 1)];
+        urandom_text(buf_out, n);
         buf_out[n] = '\0'; return (int)n;
     }
     if (str_eq(name, "/dev/rtc")) {
@@ -661,7 +685,8 @@ void vfs_init(void)
     kmutex_init(&vfs_mutex, "vfs_lock");
 
     if (virtio_blk_capacity() > 0) {                              /* PARCHE 120: una restauracion de checkpoint interrumpida se completa ANTES de leer nada */
-        int cr = ckpt_recover(&fs_dev, FS_CHECKPOINT_LBA, FS_SUPER_LBA, FS_TOTAL_SECTORS, FS_CHECKPOINT_LBA - 1, SOMA_LBA_CKPT_INTENT, FS_JOURNAL_LBA);
+        struct ckpt_slot ca = fs_ckpt_a(), cb = fs_ckpt_b();
+        int cr = ckpt_recover(&fs_dev, &ca, &cb, FS_SUPER_LBA, FS_TOTAL_SECTORS, SOMA_LBA_CKPT_INTENT, FS_JOURNAL_LBA);
         if (cr == 1) kprint("VFS: se completo una restauracion de checkpoint interrumpida\n");
         else if (cr == 2) kprint("VFS: marca de restauracion sin checkpoint valido (descartada)\n");
     }
@@ -777,6 +802,7 @@ int vfs_read(const char *name, char *buf_out, uint32_t max_len)
 
     if (is_proc_path(name)) return read_proc_file(name, buf_out, max_len);
     if (is_dev_path(name))  return read_dev_file(name, buf_out, max_len);
+    if (vfs_agent_secret(name)) { buf_out[0] = '\0'; return -1; }          /* SOMA_193 */
 
     kmutex_lock(&vfs_mutex);
     int r = vfs_read_unlocked(name, buf_out, max_len);
@@ -1035,6 +1061,7 @@ int vfs_search_bm25(const char *query, const char *path_prefix, char *out, uint3
         }
 
         if (vfs_is_hidden(fn) && (!path_prefix || !*path_prefix)) continue;
+        if (vfs_agent_secret(fn)) continue;                                  /* SOMA_193: las busquedas de un agente no ven los secretos */
 
         uint32_t score = 0;
         uint32_t unique_hits = 0;
@@ -1180,6 +1207,7 @@ int vfs_grep_all(const char *pat, int ignore_case, int list_only,
 
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         if (!files[i].used || !files[i].data) continue;
+        if (vfs_agent_secret(files[i].name)) continue;                      /* SOMA_193 */
 
         const char *data = files[i].data;
         uint32_t size = files[i].size;
@@ -1314,13 +1342,12 @@ int vfs_create(const char *name, const char *initial_data)
 }
 
 /* PARCHE 120: checkpoint con CRC, barreras y restauracion reanudable (src/fs/ckptio.h) */
-static uint32_t fs_ckpt_seq;
 int vfs_checkpoint_save(void)
 {
     if (!fs_initialized) vfs_init();
     kmutex_lock(&vfs_mutex);
     int rc = vfs_sync_unlocked();                                  /* antes se ignoraba el resultado */
-    if (rc == 0) rc = ckpt_save(&fs_dev, FS_SUPER_LBA, FS_CHECKPOINT_LBA, FS_TOTAL_SECTORS, FS_CHECKPOINT_LBA - 1, ++fs_ckpt_seq);
+    if (rc == 0) { struct ckpt_slot a = fs_ckpt_a(), b = fs_ckpt_b(); rc = ckpt_save(&fs_dev, FS_SUPER_LBA, &a, &b, FS_TOTAL_SECTORS); }
     kmutex_unlock(&vfs_mutex);
     return rc == 0 ? 0 : -1;
 }
@@ -1329,7 +1356,8 @@ int vfs_checkpoint_restore(void)
 {
     if (!fs_initialized) vfs_init();
     kmutex_lock(&vfs_mutex);
-    int rc = ckpt_restore(&fs_dev, FS_CHECKPOINT_LBA, FS_SUPER_LBA, FS_TOTAL_SECTORS, FS_CHECKPOINT_LBA - 1, SOMA_LBA_CKPT_INTENT, FS_JOURNAL_LBA);
+    struct ckpt_slot a = fs_ckpt_a(), b = fs_ckpt_b();
+    int rc = ckpt_restore(&fs_dev, &a, &b, FS_SUPER_LBA, FS_TOTAL_SECTORS, SOMA_LBA_CKPT_INTENT, FS_JOURNAL_LBA);
     if (rc == 0) for (int i = 0; i < FS_DISK_SLOTS; ++i) load_file_from_disk(i);
     kmutex_unlock(&vfs_mutex);
     return rc == 0 ? 0 : -1;
@@ -1358,6 +1386,7 @@ char *vfs_read_alloc(const char *name, uint32_t *len_out)
         if (len_out) *len_out = (uint32_t)r;
         return b;
     }
+    if (vfs_agent_secret(name)) return 0;                                    /* SOMA_193 */
     kmutex_lock(&vfs_mutex);
     char *b = 0;
     for (int i = 0; i < FS_MAX_FILES; ++i) {
@@ -1393,21 +1422,43 @@ int vfs_checkpoint_selftest(void)
     if (vfs_checkpoint_restore() != 0) { kprint("[CKPT] FALLO: restaurar\n"); bad++; }
     memset(rb, 0, sizeof rb); int n = vfs_read(path, rb, sizeof rb - 1);
     if (n != 9 || memcmp(rb, "version-1", 9) != 0) { kprint("[CKPT] FALLO: tras restaurar el archivo no vuelve a version-1\n"); bad++; }
-    /* corrupcion: se estropea un byte de la copia, el VFS vivo no debe tocarse */
+    /* corrupcion: se estropea un byte de las DOS ranuras, el VFS vivo no debe tocarse (PARCHE 130: con una sola ranura corrupta se usaria la otra) */
     vfs_write(path, "version-3", 9);
     static uint8_t sec[512] __attribute__((aligned(16)));
-    uint64_t cl = FS_CHECKPOINT_LBA + 40;
-    if (virtio_blk_read(cl, sec) == 0) {
-        uint8_t keep = sec[7]; sec[7] ^= 0x55; virtio_blk_write(cl, sec); virtio_blk_flush();
+    struct ckpt_slot s0a = fs_ckpt_a(), s0b = fs_ckpt_b();
+    uint64_t cl = ckpt_lba(&s0a, 40), cl_b = ckpt_lba(&s0b, 40);
+    static uint8_t sec_b[512] __attribute__((aligned(16)));
+    if (virtio_blk_read(cl, sec) == 0 && virtio_blk_read(cl_b, sec_b) == 0) {
+        uint8_t keep = sec[7], keep_b = sec_b[7]; sec[7] ^= 0x55; sec_b[7] ^= 0x55;
+        virtio_blk_write(cl, sec); virtio_blk_write(cl_b, sec_b); virtio_blk_flush();
         int r = vfs_checkpoint_restore();
         memset(rb, 0, sizeof rb); n = vfs_read(path, rb, sizeof rb - 1);
         if (r == 0) { kprint("[CKPT] FALLO: restauro un checkpoint corrupto\n"); bad++; }
         if (n != 9 || memcmp(rb, "version-3", 9) != 0) { kprint("[CKPT] FALLO: un checkpoint corrupto altero el VFS vivo\n"); bad++; }
-        sec[7] = keep; virtio_blk_write(cl, sec); virtio_blk_flush();
+        sec[7] = keep; sec_b[7] = keep_b; virtio_blk_write(cl, sec); virtio_blk_write(cl_b, sec_b); virtio_blk_flush();
         if (vfs_checkpoint_restore() != 0) { kprint("[CKPT] FALLO: con la copia reparada no restaura\n"); bad++; }
     } else bad++;
+    {   /* PARCHE 130: dos generaciones. Se guardan "gen-A" y "gen-B" (van a ranuras distintas); si la mas reciente se corrompe, se restaura la anterior */
+        struct ckpt_slot sa = fs_ckpt_a(), sb = fs_ckpt_b(); uint32_t qa = 0, qb = 0;
+        vfs_write(path, "gen-A", 5); if (vfs_checkpoint_save() != 0) { kprint("[CKPT] FALLO: guardar gen-A\n"); bad++; }
+        vfs_write(path, "gen-B", 5); if (vfs_checkpoint_save() != 0) { kprint("[CKPT] FALLO: guardar gen-B\n"); bad++; }
+        int ia = ckpt_slot_info(&fs_dev, &sa, FS_TOTAL_SECTORS, &qa), ib = ckpt_slot_info(&fs_dev, &sb, FS_TOTAL_SECTORS, &qb);
+        if (ia != 2 || ib != 2) { kprint("[CKPT] FALLO: tras dos guardados las dos ranuras deben ser validas\n"); bad++; }
+        else {
+            const struct ckpt_slot *nuevo = (int32_t)(qa - qb) > 0 ? &sa : &sb;
+            uint64_t cl2 = ckpt_lba(nuevo, 100);
+            if (virtio_blk_read(cl2, sec) == 0) {
+                uint8_t keep = sec[3]; sec[3] ^= 0x7F; virtio_blk_write(cl2, sec); virtio_blk_flush();
+                vfs_write(path, "gen-C", 5);
+                if (vfs_checkpoint_restore() != 0) { kprint("[CKPT] FALLO: con la ranura nueva corrupta no cayo a la anterior\n"); bad++; }
+                memset(rb, 0, sizeof rb); n = vfs_read(path, rb, sizeof rb - 1);
+                if (n != 5 || memcmp(rb, "gen-A", 5) != 0) { kprint("[CKPT] FALLO: la ranura anterior no devolvio gen-A\n"); bad++; }
+                sec[3] = keep; virtio_blk_write(cl2, sec); virtio_blk_flush();
+            } else bad++;
+        }
+    }
     vfs_delete(path); vfs_checkpoint_save();
-    kprint(bad == 0 ? "[CKPT] TODO OK: guardar/restaurar y rechazo de copia corrupta\n" : "[CKPT] HAY FALLOS\n");
+    kprint(bad == 0 ? "[CKPT] TODO OK: guardar/restaurar, rechazo de copia corrupta y dos generaciones\n" : "[CKPT] HAY FALLOS\n");
     return bad == 0;
 }
 

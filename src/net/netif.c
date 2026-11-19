@@ -20,6 +20,9 @@ static int start(int i)
     g_up[i] = g_if[i]->init && g_if[i]->init() ? 1 : 0;
     return g_up[i];
 }
+void netif_retry(int i) { if (i >= 0 && i < g_n && !g_up[i]) g_tried[i] = 0; }   /* SOMA_171: dispositivos que aparecen en caliente */
+void netif_mark_down(int i) { if (i >= 0 && i < g_n) { g_up[i] = 0; g_tried[i] = 0; } }
+int netif_start(int i) { return i >= 0 && i < g_n ? start(i) : 0; }   /* SOMA_170: arrancar sin activarla */
 int netif_start_first(void)
 {
     if (g_active >= 0) return 1;

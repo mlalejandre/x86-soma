@@ -1,0 +1,16 @@
+{
+  "created": {
+    "docs/PARCHE_153_ORBE_OCULTO.md": "82ccdb2bd2045c209b3a676ff979ee1510cb7996ac5e7648ae301a851c29efbd",
+    "tools/desk_bench.py": "98979fa83878dc600d37ecd8309f7683d542fd877acda9ddf849db097c1f95ea"
+  },
+  "files": {
+    "src/ui/gui.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "ae853b87e0435d5e322da99a740aaab20a68c40ab66fda53c39c05cb24055614",
+      "old": "9755cf281868f2daa18196e11eba474de4a4e4ebfaf7d947166f5c646c66320e"
+    }
+  },
+  "log": "20261115_013357 parche 153: el orbe no se calcula bajo una ventana opaca (fotogramas del escritorio un 33% mas baratos) + tools/desk_bench.py",
+  "version": 1
+}

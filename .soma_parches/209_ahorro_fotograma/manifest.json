@@ -1,0 +1,31 @@
+{
+  "created": {},
+  "date": "20261119_184913",
+  "files": {
+    "src/agent/shell.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "c2eb255f2f079cd2128d0b301c1ea8c035d1f6b63a97cedd30d16f162c698690",
+      "old": "cc1c7cbd7f85e1288482142a57cf4c5bfbecb00ed11b0e8d635247ccc6bb0e3e"
+    },
+    "src/drivers/fb.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "8314a8e5e10020dcb3a5ac078ac544fb8670a330d888d673e7929ce5a5917439",
+      "old": "905bb09a6618055aa090a49e7d58f30ca79f5e3b251e97c9b049a7af2c33e70d"
+    },
+    "src/drivers/fb.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "09568f2372961c42d2306bcdd6e0aba41f4d8fb8c788340ea49f5b3f20a7b95b",
+      "old": "e359d3dcc276a27df12ffdc4308ce5c67f3a2550a890775397cd2ebdf905931a"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "535dba5589f9f3634aa1f808b6efb595c9c5779958f4fd4bddf20358c429e9c4",
+      "old": "3d2924efa1daeb2dea604e6bcf83797c8ea1ea8098f3092b9c6c74d23f3a7289"
+    }
+  },
+  "name": "209_ahorro_fotograma"
+}

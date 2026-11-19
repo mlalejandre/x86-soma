@@ -48,11 +48,17 @@ static uint32_t hsl_to_rgb(int h, int s, int l)   /* h 0..359, s,l 0..1000 */
     return ((uint32_t)clamp255((r + m) * 255 / 1000) << 16) | ((uint32_t)clamp255((g + m) * 255 / 1000) << 8) | (uint32_t)clamp255((b + m) * 255 / 1000);
 }
 
-uint32_t wc_parse_color(const char *s, int *ok)
+#include "web_color.inc"
+static uint32_t wc_parse_color_ex(const char *s, int *ok)
 {
     int dummy; if (!ok) ok = &dummy;
     *ok = 0;
     while (wu_isspace(*s)) s++;
+    if (!g_wl181_off && (wu_startsi(s, "hwb(") || wu_startsi(s, "oklch(") || wu_startsi(s, "oklab(") || wu_startsi(s, "lab(") || wu_startsi(s, "lch(") || wu_startsi(s, "color(") || wu_startsi(s, "color-mix(") || wu_startsi(s, "light-dark("))) {
+        uint32_t c = 0; if (c181_func(s, &c)) { *ok = 1; return c; }
+        return 0;
+    }
+    if (c181_cur_set && wu_startsi(s, "currentcolor")) { *ok = 1; return c181_cur; }
     if (*s == '#') {
         const char *h = s + 1; uint32_t n = 0; while (wu_ishex(h[n])) n++;
         uint32_t v = 0;
@@ -102,6 +108,8 @@ uint32_t wc_parse_color(const char *s, int *ok)
     }
     return 0;
 }
+
+uint32_t wc_parse_color(const char *s, int *ok) { return wc_parse_color_ex(s, ok); }
 
 /* ============================ tokens y longitudes ============================ */
 struct lctx { int font_px, root_px, vw, vh; };
@@ -162,11 +170,15 @@ static int calc_factor(const char **pp, const char *end, const struct lctx *cx, 
     else if (ul == 2 && wu_strnieq(p, "em", 2)) o->px = (int64_t)v * cx->font_px;
     else if (ul == 3 && wu_strnieq(p, "rem", 3)) o->px = (int64_t)v * cx->root_px;
     else if (ul == 2 && wu_strnieq(p, "pt", 2)) o->px = (int64_t)v * 4 / 3;
+    else if (ul == 3 && (wu_lower(p[0]) == 'd' || wu_lower(p[0]) == 's' || wu_lower(p[0]) == 'l') && wu_strnieq(p + 1, "vh", 2) && !g_wl181_off) o->px = (int64_t)v * cx->vh / 100;   /* SOMA_181: dvh/svh/lvh */
+    else if (ul == 3 && (wu_lower(p[0]) == 'd' || wu_lower(p[0]) == 's' || wu_lower(p[0]) == 'l') && wu_strnieq(p + 1, "vw", 2) && !g_wl181_off) o->px = (int64_t)v * cx->vw / 100;
+    else if (ul == 2 && wu_strnieq(p, "lh", 2) && !g_wl181_off) o->px = (int64_t)v * cx->font_px * 118 / 100;
+    else if (ul == 3 && wu_strnieq(p, "rlh", 3) && !g_wl181_off) o->px = (int64_t)v * cx->root_px * 118 / 100;
     else if (ul == 2 && wu_strnieq(p, "vw", 2)) o->px = (int64_t)v * cx->vw / 100;
     else if (ul == 2 && wu_strnieq(p, "vh", 2)) o->px = (int64_t)v * cx->vh / 100;
     else if (ul == 4 && wu_strnieq(p, "vmin", 4)) o->px = (int64_t)v * (cx->vw < cx->vh ? cx->vw : cx->vh) / 100;
     else if (ul == 4 && wu_strnieq(p, "vmax", 4)) o->px = (int64_t)v * (cx->vw > cx->vh ? cx->vw : cx->vh) / 100;
-    else if (ul == 2 && wu_strnieq(p, "ch", 2)) o->px = (int64_t)v * cx->font_px / 2;
+    else if (ul == 2 && wu_strnieq(p, "ch", 2)) o->px = (int64_t)v * cx->font_px * (g_wl181_off ? 500 : 636) / 1000;   /* SOMA_181: ancho del 0 de la fuente (antes media em) */
     else if (ul == 2 && wu_strnieq(p, "ex", 2)) o->px = (int64_t)v * cx->font_px / 2;
     else if (ul == 2 && wu_strnieq(p, "cm", 2)) o->px = (int64_t)v * 3780 / 100;
     else if (ul == 2 && wu_strnieq(p, "mm", 2)) o->px = (int64_t)v * 378 / 100;
@@ -248,10 +260,12 @@ int wc_line_px(const struct wstyle *s)
 {
     if (s->lh_mode == 2) return s->lh_val;
     if (s->lh_mode == 1) return (s->font_px * s->lh_val + 50) / 100;
-    return (s->font_px * 118 + 50) / 100;
+    return (s->font_px * (g_wf182_on ? 115 : 118) + 50) / 100;   /* SOMA_182: 'normal' de Liberation Sans/Arial = 1,149 */
 }
 
 /* ============================ propiedades ============================ */
+int g_wf182_on;                          /* SOMA_182: contenido web con Liberation Sans (lo fija web_page.c; 0 = DejaVu como antes) */
+int g_wl181_off;                         /* SOMA_181: soma.weblayout=off (o modo seguro) deja la maquetacion como antes del parche 181 */
 #define PROPLIST(X) \
  X(DISPLAY,"display") X(POSITION,"position") X(FLOAT,"float") X(CLEAR,"clear") X(VISIBILITY,"visibility") X(OVERFLOW,"overflow") \
  X(OVERFLOW_X,"overflow-x") X(OVERFLOW_Y,"overflow-y") X(Z_INDEX,"z-index") X(TOP,"top") X(RIGHT,"right") X(BOTTOM,"bottom") X(LEFT,"left") \
@@ -276,7 +290,11 @@ int wc_line_px(const struct wstyle *s)
  X(CURSOR,"cursor") X(TOP_LEFT_RADIUS,"border-top-left-radius") X(TOP_RIGHT_RADIUS,"border-top-right-radius") X(BOTTOM_LEFT_RADIUS,"border-bottom-left-radius") \
  X(BOTTOM_RIGHT_RADIUS,"border-bottom-right-radius") X(PLACE_ITEMS,"place-items") X(INSET_BLOCK_START,"inset-block-start") X(MARGIN_INLINE,"margin-inline") \
  X(MARGIN_BLOCK,"margin-block") X(PADDING_INLINE,"padding-inline") X(PADDING_BLOCK,"padding-block") X(BACKGROUND_POSITION_X,"background-position-x") \
- X(BOX_SHADOW,"box-shadow")
+ X(BOX_SHADOW,"box-shadow") \
+ X(TRANSFORM,"transform") X(TRANSLATE,"translate") X(ASPECT_RATIO,"aspect-ratio") X(OBJECT_FIT,"object-fit") X(OBJECT_POSITION,"object-position") X(LINE_CLAMP,"line-clamp") \
+ X(GRID_TEMPLATE_ROWS,"grid-template-rows") X(GRID_AUTO_ROWS,"grid-auto-rows") X(GRID_AUTO_COLUMNS,"grid-auto-columns") X(GRID_TEMPLATE_AREAS,"grid-template-areas") X(GRID_AREA,"grid-area") X(GRID_ROW,"grid-row") \
+ X(GRID_COLUMN_START,"grid-column-start") X(GRID_COLUMN_END,"grid-column-end") X(GRID_ROW_START,"grid-row-start") X(GRID_ROW_END,"grid-row-end") \
+ X(JUSTIFY_ITEMS,"justify-items") X(JUSTIFY_SELF,"justify-self") X(PLACE_SELF,"place-self") X(CLIP,"clip") X(CLIP_PATH,"clip-path") X(POINTER_EVENTS,"pointer-events") X(CONTENT,"content") X(COUNTER_RESET,"counter-reset") X(COUNTER_INCREMENT,"counter-increment") X(COUNTER_SET,"counter-set") X(FILL,"fill") X(STROKE,"stroke") X(STROKE_WIDTH,"stroke-width") X(GRID_AUTO_FLOW,"grid-auto-flow") X(TRANSITION,"transition") X(TRANSITION_PROPERTY,"transition-property") X(TRANSITION_DURATION,"transition-duration") X(TRANSITION_DELAY,"transition-delay") X(ANIMATION,"animation") X(ANIMATION_NAME,"animation-name") X(ANIMATION_DURATION,"animation-duration") X(ANIMATION_DELAY,"animation-delay") X(ANIMATION_ITER,"animation-iteration-count") X(PLACE_CONTENT,"place-content") X(INSET_INLINE,"inset-inline") X(INSET_BLOCK,"inset-block")
 static const char *findn(const char *h, uint32_t hl, const char *n);   /* SOMA_PARCHE_028_UI (definida mas abajo) */
 enum { PR_NONE = 0,
 #define X(a, b) PR_##a,
@@ -297,6 +315,21 @@ static int prop_id(const char *n, uint32_t l)
     for (uint32_t i = 0; i < l; i++) b[i] = (char)wu_lower(n[i]);
     b[l] = 0;
     for (int i = 1; i < PR__COUNT; i++) if (wu_streq(prop_names[i], b)) return i;
+    /* SOMA_181: propiedades logicas (escritura de izquierda a derecha) */
+    static const struct { const char *a, *b; } alias[] = {
+        {"margin-inline-start", "margin-left"}, {"margin-inline-end", "margin-right"}, {"margin-block-start", "margin-top"}, {"margin-block-end", "margin-bottom"},
+        {"padding-inline-start", "padding-left"}, {"padding-inline-end", "padding-right"}, {"padding-block-start", "padding-top"}, {"padding-block-end", "padding-bottom"},
+        {"inset-inline-start", "left"}, {"inset-inline-end", "right"}, {"inset-block-end", "bottom"}, {"inline-size", "width"}, {"block-size", "height"},
+        {"min-inline-size", "min-width"}, {"max-inline-size", "max-width"}, {"min-block-size", "min-height"}, {"max-block-size", "max-height"},
+        {"border-inline-start-width", "border-left-width"}, {"border-inline-end-width", "border-right-width"}, {"border-block-start-width", "border-top-width"}, {"border-block-end-width", "border-bottom-width"},
+        /* SOMA_188: mas alias logicos y nombres antiguos */
+        {"inset-block-end", "bottom"}, {"grid-row-gap", "row-gap"}, {"grid-column-gap", "column-gap"},
+        {"border-start-start-radius", "border-top-left-radius"}, {"border-start-end-radius", "border-top-right-radius"}, {"border-end-start-radius", "border-bottom-left-radius"}, {"border-end-end-radius", "border-bottom-right-radius"},
+        {"border-inline-start", "border-left"}, {"border-inline-end", "border-right"}, {"border-block-start", "border-top"}, {"border-block-end", "border-bottom"},
+        {"border-inline-start-color", "border-left-color"}, {"border-inline-end-color", "border-right-color"}, {"border-block-start-color", "border-top-color"}, {"border-block-end-color", "border-bottom-color"},
+        {"border-inline-start-style", "border-left-style"}, {"border-inline-end-style", "border-right-style"}, {"border-block-start-style", "border-top-style"}, {"border-block-end-style", "border-bottom-style"},
+    };
+    for (unsigned k = 0; k < sizeof alias / sizeof alias[0]; k++) if (wu_streq(alias[k].a, b)) { for (int i = 1; i < PR__COUNT; i++) if (wu_streq(prop_names[i], alias[k].b)) return i; }
     return 0;
 }
 
@@ -307,6 +340,7 @@ struct wrule { struct wsel *sel; struct wdecl *decls; uint16_t nd; uint8_t origi
 
 struct wcss {
     struct wdoc *d;
+    struct wstyle *phst;   /* SOMA_188: estilo temporal de ::placeholder */
     struct wrule **rules; int nrules, cap;
     struct wrule *univ; struct wrule *tagt[WT_COUNT]; struct wrule *idt[128]; struct wrule *clst[128];
     char **imports; int nimp, cimp, imp_next;
@@ -316,6 +350,12 @@ struct wcss {
     char *scratch;                 /* expansion de var() */
     struct wlen cur_tmp;
     int pe_seen;
+    /* SOMA_188: generado por ::before/::after y contadores CSS */
+    char pc[512]; int pc_len;      /* ultimo valor de content aplicado (-1 = no hay) */
+    char creset[160], cinc[160], cset[160];
+    struct { char name[24]; int val; } cnt[24]; int ncnt;
+    struct wvar **vtab;            /* SOMA_152: variables CSS internadas (sin fuga de arena por cada recalculo) */
+    struct wsel **stab; const char **stab_key; /* SOMA_152: cache de selectores de querySelector/matches */
 };
 
 /* ---------------- aplicar propiedades ---------------- */
@@ -325,9 +365,12 @@ static int is_kw(const char *t, uint32_t n, const char *k) { return wu_strlen(k)
 static int tok_is_color(const char *t, uint32_t n) { char b[64]; if (n >= sizeof(b)) return 0; memcpy(b, t, n); b[n] = 0; int ok; wc_parse_color(b, &ok); return ok; }
 static uint32_t tok_color(const char *t, uint32_t n, uint32_t cur, int *ok)
 {
-    char b[64]; *ok = 0; if (n >= sizeof(b)) return 0; memcpy(b, t, n); b[n] = 0;
+    char b[160]; *ok = 0; if (n >= sizeof(b)) return 0; memcpy(b, t, n); b[n] = 0;
     if (wu_strieq(b, "currentcolor")) { *ok = 1; return cur; }
-    return wc_parse_color(b, ok);
+    c181_cur_set = 1; c181_cur = cur;                   /* SOMA_181: currentcolor dentro de color-mix() */
+    uint32_t r = wc_parse_color(b, ok);
+    c181_cur_set = 0;
+    return r;
 }
 
 static void set_len4(struct wlen *arr, int side_mask, const struct wlen *l) { for (int i = 0; i < 4; i++) if (side_mask & (1 << i)) arr[i] = *l; }
@@ -351,6 +394,8 @@ static int border_style_of(const char *t, uint32_t n)
     if (is_kw(t, n, "none") || is_kw(t, n, "hidden")) return 0;
     if (is_kw(t, n, "dashed")) return 2;
     if (is_kw(t, n, "dotted")) return 3;
+    if (is_kw(t, n, "-soma-field")) return 4;    /* SOMA_188: borde de control (UA): 2px de caja, se pinta como el tema */
+    if (is_kw(t, n, "-soma-button")) return 5;
     if (is_kw(t, n, "solid") || is_kw(t, n, "double") || is_kw(t, n, "groove") || is_kw(t, n, "ridge") || is_kw(t, n, "inset") || is_kw(t, n, "outset")) return 1;
     return -1;
 }
@@ -372,6 +417,30 @@ static void apply_border_one(struct actx *a, struct wstyle *st, int mask, const 
     for (int i = 0; i < 4; i++) if (mask & (1 << i)) { st->border_w[i] = (int16_t)(sty ? w : 0); st->border_style[i] = (uint8_t)sty; st->border_color[i] = col; }
 }
 
+/* SOMA_188: escapes CSS en url()/cadenas: "\00003c" -> '<' (hasta 6 cifras hex + un espacio opcional), "\X" -> 'X'.
+   Google y YouTube ponen asi sus iconos SVG: data:image/svg+xml,\00003csvg ... (antes: "formato desconocido") */
+static char *css_unescape188(struct wa_arena *ar, const char *s, uint32_t n)
+{
+    int has = 0; for (uint32_t i = 0; i < n; i++) if (s[i] == '\\') { has = 1; break; }
+    if (!has || g_wl181_off) return wa_strndup(ar, s, n);
+    char *o = (char *)wa_alloc(ar, n + 1); if (!o) return 0; uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (s[i] != '\\' || i + 1 >= n) { o[k++] = s[i]; continue; }
+        i++;
+        if (wu_ishex((unsigned char)s[i])) {
+            uint32_t cp = 0; int d = 0; while (i < n && d < 6 && wu_ishex((unsigned char)s[i])) { cp = cp * 16 + (uint32_t)wu_hexval(s[i]); i++; d++; }
+            if (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n')) i++;
+            i--;
+            if (cp == 0 || cp > 0x10FFFF) cp = 0xFFFD;
+            if (cp < 0x80) o[k++] = (char)cp;
+            else if (cp < 0x800) { o[k++] = (char)(0xC0 | (cp >> 6)); o[k++] = (char)(0x80 | (cp & 63)); }
+            else if (cp < 0x10000) { o[k++] = (char)(0xE0 | (cp >> 12)); o[k++] = (char)(0x80 | ((cp >> 6) & 63)); o[k++] = (char)(0x80 | (cp & 63)); }
+            else { o[k++] = (char)(0xF0 | (cp >> 18)); o[k++] = (char)(0x80 | ((cp >> 12) & 63)); o[k++] = (char)(0x80 | ((cp >> 6) & 63)); o[k++] = (char)(0x80 | (cp & 63)); }
+        } else if (s[i] == '\n') { /* continuacion de linea */ }
+        else o[k++] = s[i];
+    }
+    o[k] = 0; return o;
+}
 static void apply_bg_token(struct actx *a, struct wstyle *st, const char *ts, uint32_t tl, struct wcss *c)
 {
     (void)c;
@@ -380,8 +449,8 @@ static void apply_bg_token(struct actx *a, struct wstyle *st, const char *ts, ui
     if (tl > 4 && wu_strnieq(ts, "url(", 4)) {
         const char *p = ts + 4, *e = ts + tl - 1; while (p < e && wu_isspace(*p)) p++;
         char q = 0; if (p < e && (*p == '"' || *p == '\'')) q = *p++;
-        const char *s = p; while (p < e && (q ? *p != q : !wu_isspace(*p))) p++;
-        st->bg_image = wa_strndup(&a->c->d->ar, s, (uint32_t)(p - s)); return;
+        const char *s = p; while (p < e && (q ? *p != q : !wu_isspace(*p))) { if (*p == '\\' && p + 1 < e) p++; p++; }
+        st->bg_image = css_unescape188(&a->c->d->ar, s, (uint32_t)(p - s)); return;
     }
     if (tl > 16 && (wu_strnieq(ts, "linear-gradient(", 16) || wu_strnieq(ts, "repeating-linear-gradient(", 26) || 0)) {
         const char *p = ts + 16, *e = ts + tl - 1; const char *s2; uint32_t l2; int n = 0; uint32_t first = 0, last = 0; int dir = 0, rev = 0;
@@ -414,6 +483,82 @@ static void apply_bg_token(struct actx *a, struct wstyle *st, const char *ts, ui
     else if (is_kw(ts, tl, "center")) { st->bg_pos_x = 50; st->bg_pos_y = 50; }
     else if (is_kw(ts, tl, "left")) st->bg_pos_x = 0; else if (is_kw(ts, tl, "right")) st->bg_pos_x = 100;
     else if (is_kw(ts, tl, "top")) st->bg_pos_y = 0; else if (is_kw(ts, tl, "bottom")) st->bg_pos_y = 100;
+}
+
+
+/* SOMA_181: posicion y tamano de fondo completos (keywords, porcentajes y desplazamientos en px, "x / tamano") */
+enum { BK_NONE = 0, BK_L, BK_R, BK_T, BK_B, BK_C };
+struct bgpt { uint8_t kw; uint8_t has_len; struct wlen len; };
+static int bg_kw_of(const char *t, uint32_t n)
+{
+    if (is_kw(t, n, "left")) return BK_L;
+    if (is_kw(t, n, "right")) return BK_R;
+    if (is_kw(t, n, "top")) return BK_T;
+    if (is_kw(t, n, "bottom")) return BK_B;
+    if (is_kw(t, n, "center")) return BK_C;
+    return BK_NONE;
+}
+static int bg_is_lenlike(const char *t, uint32_t n) { return n && (wu_isdigit(t[0]) || t[0] == '.' || t[0] == '-' || t[0] == '+' || (n > 5 && (wu_strnieq(t, "calc(", 5) || wu_strnieq(t, "var(", 4)))); }
+static void bg_axis(const struct bgpt *p, int *pct, int *off)
+{
+    if (p->kw) { *pct = p->kw == BK_L || p->kw == BK_T ? 0 : p->kw == BK_C ? 50 : 100; *off = 0; return; }
+    if (p->has_len && p->len.kind == LK_VAL) { *pct = p->len.pct / 100; *off = p->len.px; return; }
+    *pct = 50; *off = 0;
+}
+static void bg_set_pos(struct wstyle *st, const struct bgpt *pt, int n)
+{
+    int xp = 50, yp = 50, xo = 0, yo = 0;
+    if (n == 1) {
+        if (pt[0].kw == BK_T || pt[0].kw == BK_B) bg_axis(&pt[0], &yp, &yo); else bg_axis(&pt[0], &xp, &xo);
+    } else if (n == 2) {
+        const struct bgpt *a = &pt[0], *b = &pt[1];
+        if (a->kw == BK_T || a->kw == BK_B || b->kw == BK_L || b->kw == BK_R) { const struct bgpt *t = a; a = b; b = t; }
+        bg_axis(a, &xp, &xo); bg_axis(b, &yp, &yo);
+    } else {
+        int sx = 0, sy = 0;
+        for (int i = 0; i < n; i++) {
+            if (!pt[i].kw) continue;
+            int off = 0, has = 0; if (i + 1 < n && !pt[i + 1].kw && pt[i + 1].has_len && pt[i + 1].len.kind == LK_VAL) { off = pt[i + 1].len.px; has = 1; }
+            int isy = pt[i].kw == BK_T || pt[i].kw == BK_B || (pt[i].kw == BK_C && sx);
+            int pc = pt[i].kw == BK_L || pt[i].kw == BK_T ? 0 : pt[i].kw == BK_C ? 50 : 100;
+            if (pt[i].kw == BK_R || pt[i].kw == BK_B) off = -off;
+            if (isy && !sy) { yp = pc; yo = off; sy = 1; } else if (!isy && !sx) { xp = pc; xo = off; sx = 1; }
+            if (has) i++;
+        }
+    }
+    st->bg_pos_x = (int16_t)xp; st->bg_pos_y = (int16_t)yp;
+    st->bg_off_x = (int16_t)(xo < -30000 ? -30000 : xo > 30000 ? 30000 : xo); st->bg_off_y = (int16_t)(yo < -30000 ? -30000 : yo > 30000 ? 30000 : yo);
+}
+/* una componente de background-size; devuelve 1 si el token lo era */
+static int bg_size_tok(struct actx *a, struct wstyle *st, const char *ts, uint32_t tl, int *idx)
+{
+    struct wlen l;
+    if (is_kw(ts, tl, "cover")) { st->bg_size_mode = 1; *idx = 2; return 1; }
+    if (is_kw(ts, tl, "contain")) { st->bg_size_mode = 2; *idx = 2; return 1; }
+    int isauto = is_kw(ts, tl, "auto");
+    if (!isauto && !(bg_is_lenlike(ts, tl) && parse_len(ts, tl, &a->lc, &l, 1) && l.kind == LK_VAL)) return 0;
+    if (isauto) { l.kind = LK_AUTO; l.px = 0; l.pct = 0; }
+    if (*idx == 0) { st->bg_w = l; st->bg_h.kind = LK_AUTO; st->bg_size_mode = 3; } else if (*idx == 1) st->bg_h = l;
+    (*idx)++; return 1;
+}
+/* "background" (todo = 1) o background-position/-size: reparte los tokens */
+static void apply_bg_geometry(struct actx *a, struct wstyle *st, const char *v, uint32_t vl, int todo, int only_size)
+{
+    struct bgpt pt[4]; int np = 0, after_slash = 0, sidx = 0; const char *p = v, *e = v + vl, *ts; uint32_t tl; struct wlen l;
+    int have_pos = 0;
+    while ((p = next_tok(p, e, &ts, &tl))) {
+        if (tl == 1 && ts[0] == '/') { after_slash = 1; sidx = 0; continue; }
+        if (tl == 1 && ts[0] == ',') break;                         /* varias capas: solo la primera */
+        if (only_size) { bg_size_tok(a, st, ts, tl, &sidx); continue; }
+        if (after_slash && bg_size_tok(a, st, ts, tl, &sidx)) continue;
+        after_slash = 0;
+        int kw = bg_kw_of(ts, tl);
+        if (kw && np < 4) { pt[np].kw = (uint8_t)kw; pt[np].has_len = 0; np++; have_pos = 1; continue; }
+        if (!kw && bg_is_lenlike(ts, tl) && np < 4 && parse_len(ts, tl, &a->lc, &l, 1) && l.kind == LK_VAL) { pt[np].kw = 0; pt[np].has_len = 1; pt[np].len = l; np++; have_pos = 1; continue; }
+        if (todo) apply_bg_token(a, st, ts, tl, a->c);
+        else if (!todo && (is_kw(ts, tl, "no-repeat") || is_kw(ts, tl, "repeat"))) apply_bg_token(a, st, ts, tl, a->c);
+    }
+    if (have_pos && !only_size) bg_set_pos(st, pt, np);
 }
 
 static int family_is_mono(const char *v, uint32_t vl)
@@ -506,37 +651,72 @@ static int align_of(const char *t, uint32_t n)
     return -1;
 }
 
-static void apply_grid_cols(struct actx *a, struct wstyle *st, const char *v, uint32_t vl)
+/* lista de pistas ("200px 1fr repeat(3, 1fr) minmax(0, 1fr) auto"); SOMA_181: hasta max pistas y minmax con su minimo (repeat(auto-fill, minmax(N, 1fr))) */
+static int parse_tracks(struct actx *a, const char *v, uint32_t vl, struct wlen *out, int max, int *auto_min)
 {
     const char *p = v, *e = v + vl, *ts; uint32_t tl; int n = 0;
-    memset(st->grid_tracks, 0, sizeof(st->grid_tracks)); st->grid_cols = 0; st->grid_auto_min = 0;
-    while (n < 8 && (p = next_tok(p, e, &ts, &tl))) {
+    if (auto_min) *auto_min = 0;
+    while (n < max && (p = next_tok(p, e, &ts, &tl))) {
         if (tl > 7 && wu_strnieq(ts, "repeat(", 7)) {
-            const char *q = ts + 7, *qe = ts + tl - 1, *s2; uint32_t l2; int cnt = 0; int autoc = 0;
+            const char *q = ts + 7, *qe = ts + tl - 1, *s2; uint32_t l2; int cnt = 0; int autoc = 0; int minpx = 0;
             q = next_tok(q, qe, &s2, &l2); if (!q) continue;
             if (is_kw(s2, l2, "auto-fill") || is_kw(s2, l2, "auto-fit")) autoc = 1; else cnt = wu_atoi(s2);
             q = next_tok(q, qe, &s2, &l2); /* coma */
             struct wlen tr[4]; int nt = 0;
             while (nt < 4 && (q = next_tok(q, qe, &s2, &l2))) {
+                if (l2 == 1 && s2[0] == ',') continue;
                 if (l2 > 7 && wu_strnieq(s2, "minmax(", 7)) {
-                    const char *m = s2 + 7, *me = s2 + l2 - 1, *s3; uint32_t l3; m = next_tok(m, me, &s3, &l3); m = next_tok(m, me, &s3, &l3); m = next_tok(m, me, &s3, &l3);
-                    if (m || l3) { if (!parse_len(s3, l3, &a->lc, &tr[nt], 0)) { tr[nt].kind = LK_FR; tr[nt].px = 100; } nt++; }
-                } else if (parse_len(s2, l2, &a->lc, &tr[nt], 0)) nt++;
+                    const char *m = s2 + 7, *me = s2 + l2 - 1, *s3, *s4; uint32_t l3, l4 = 0; struct wlen mn;
+                    m = next_tok(m, me, &s3, &l3);                 /* minimo */
+                    s4 = 0; if (m) { m = next_tok(m, me, &s4, &l4); if (m) m = next_tok(m, me, &s4, &l4); }   /* coma y maximo */
+                    if (autoc && nt == 0 && parse_len(s3, l3, &a->lc, &mn, 0) && mn.kind == LK_VAL && mn.px > 0) minpx = mn.px;
+                    if (s4 && parse_len(s4, l4, &a->lc, &tr[nt], 0) && tr[nt].kind != LK_NONE) nt++; else { tr[nt].kind = LK_FR; tr[nt].px = 100; tr[nt].pct = 0; nt++; }
+                } else if (parse_len(s2, l2, &a->lc, &tr[nt], 0)) { if (autoc && nt == 0 && tr[0].kind == LK_VAL && tr[0].px > 0) minpx = tr[0].px; nt++; }
             }
-            if (autoc) { int w = tr[0].kind == LK_VAL && tr[0].px > 0 ? tr[0].px : 200; st->grid_auto_min = (int16_t)(w > 4000 ? 4000 : w); cnt = a->c->vw / (w + 16); if (cnt < 1) cnt = 1; if (cnt > 8) cnt = 8; if (tr[0].kind == LK_VAL) { tr[0].kind = LK_FR; tr[0].px = 100; } }
-            for (int c2 = 0; c2 < cnt && n < 8; c2++) for (int k = 0; k < nt && n < 8; k++) st->grid_tracks[n++] = tr[k];
+            if (nt == 0) continue;
+            if (autoc) { int w = minpx > 0 ? minpx : 200; if (auto_min) *auto_min = (int)(w > 4000 ? 4000 : w); cnt = a->c->vw / (w + 16); if (cnt < 1) cnt = 1; if (cnt > max) cnt = max; if (tr[0].kind == LK_VAL) { tr[0].kind = LK_FR; tr[0].px = 100; } }
+            for (int c2 = 0; c2 < cnt && n < max; c2++) for (int k = 0; k < nt && n < max; k++) out[n++] = tr[k];
             continue;
         }
         if (tl > 7 && wu_strnieq(ts, "minmax(", 7)) {
             const char *m = ts + 7, *me = ts + tl - 1, *s3; uint32_t l3; m = next_tok(m, me, &s3, &l3); m = next_tok(m, me, &s3, &l3); m = next_tok(m, me, &s3, &l3);
-            if (!parse_len(s3, l3, &a->lc, &st->grid_tracks[n], 0)) { st->grid_tracks[n].kind = LK_FR; st->grid_tracks[n].px = 100; }
+            if (!parse_len(s3, l3, &a->lc, &out[n], 0) || out[n].kind == LK_NONE) { out[n].kind = LK_FR; out[n].px = 100; out[n].pct = 0; }
             n++; continue;
         }
         if (is_kw(ts, tl, "none")) continue;
         if (ts[0] == '[') continue;
-        if (parse_len(ts, tl, &a->lc, &st->grid_tracks[n], 0)) n++;
+        if (is_kw(ts, tl, "min-content") || is_kw(ts, tl, "max-content") || is_kw(ts, tl, "auto")) { memset(&out[n], 0, sizeof out[n]); out[n].kind = LK_AUTO; n++; continue; }
+        if (tl > 4 && wu_strnieq(ts, "fit-content(", 12)) { memset(&out[n], 0, sizeof out[n]); out[n].kind = LK_AUTO; n++; continue; }
+        if (parse_len(ts, tl, &a->lc, &out[n], 0)) n++;
     }
-    st->grid_cols = (int16_t)n;
+    return n;
+}
+static void apply_grid_cols(struct actx *a, struct wstyle *st, const char *v, uint32_t vl)
+{
+    int am = 0;
+    memset(st->grid_tracks, 0, sizeof(st->grid_tracks)); st->grid_cols = 0; st->grid_auto_min = 0;
+    st->grid_cols = (int16_t)parse_tracks(a, v, vl, st->grid_tracks, GRID_MAX_TRACKS, &am); st->grid_auto_min = (int16_t)am;
+}
+static struct wgx *gx_of(struct actx *a, struct wstyle *st)
+{
+    if (!st->gx) { st->gx = (struct wgx *)wa_alloc(&a->c->d->ar, sizeof(struct wgx)); if (st->gx) { memset(st->gx, 0, sizeof *st->gx); st->gx->auto_rows.kind = LK_AUTO; } }
+    return st->gx;
+}
+/* "a / b" de grid-column / grid-row: 2, span 2, 1 / 3, 1 / span 2, 1 / -1 */
+static void grid_place(const char *v, uint32_t vl, int16_t *gs, int16_t *ge, int16_t *gsp)
+{
+    const char *p = v, *e = v + vl, *ts; uint32_t tl; int part = 0, span_next = 0;
+    *gs = *ge = *gsp = 0;
+    while ((p = next_tok(p, e, &ts, &tl))) {
+        if (tl == 1 && ts[0] == '/') { part = 1; span_next = 0; continue; }
+        if (is_kw(ts, tl, "span")) { span_next = 1; continue; }
+        if (is_kw(ts, tl, "auto")) continue;
+        char b[16]; if (tl >= sizeof b) continue; memcpy(b, ts, tl); b[tl] = 0;
+        if (!(wu_isdigit(b[0]) || b[0] == '-' || b[0] == '+')) continue;      /* lineas con nombre: sin soporte */
+        int nv = wu_atoi(b); if (nv > 1000) nv = 1000; if (nv < -1000) nv = -1000;
+        if (span_next) { *gsp = (int16_t)(nv < 1 ? 1 : nv); span_next = 0; }
+        else if (part == 0) *gs = (int16_t)nv; else *ge = (int16_t)nv;
+    }
 }
 
 static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *v, uint32_t vl, const char *cname, uint32_t cnl)
@@ -544,6 +724,11 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
     while (vl && wu_isspace(v[0])) { v++; vl--; }
     while (vl && wu_isspace(v[vl - 1])) vl--;
     if (!vl && prop != PR_CUSTOM) return;
+    if (prop == PR_CONTENT) { struct wcss *cc = a->c; uint32_t n = vl < sizeof cc->pc - 1 ? vl : (uint32_t)sizeof cc->pc - 1; memcpy(cc->pc, v, n); cc->pc[n] = 0; cc->pc_len = (int)n; return; }   /* SOMA_188 */
+    if (prop == PR_COUNTER_RESET || prop == PR_COUNTER_INCREMENT || prop == PR_COUNTER_SET) {
+        struct wcss *cc = a->c; char *dst = prop == PR_COUNTER_RESET ? cc->creset : prop == PR_COUNTER_SET ? cc->cset : cc->cinc;
+        uint32_t n = vl < 159 ? vl : 159; memcpy(dst, v, n); dst[n] = 0; return;
+    }
     const struct wstyle *par = a->par;
     struct wlen l; const char *ts; uint32_t tl; int ok;
     int inherit = is_kw(v, vl, "inherit");
@@ -552,11 +737,12 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
         if (inherit || is_kw(v, vl, "unset")) {
             switch (prop) {
             case PR_COLOR: st->color = par->color; return;
-            case PR_FONT_SIZE: st->font_px = par->font_px; return;
+            case PR_FONT_SIZE: st->font_px = par->font_px; st->fs_zero = par->fs_zero; return;
             case PR_FONT_WEIGHT: st->bold = par->bold; return;
             case PR_TEXT_ALIGN: st->text_align = par->text_align; return;
             case PR_BACKGROUND_COLOR: st->bg_color = par->bg_color; return;
             case PR_VISIBILITY: st->visibility = par->visibility; return;
+            case PR_POINTER_EVENTS: st->no_ptr = par->no_ptr; return;
             case PR_LINE_HEIGHT: st->lh_mode = par->lh_mode; st->lh_val = par->lh_val; return;
             case PR_DISPLAY: st->display = par->display; return;
             case PR_WIDTH: st->width = par->width; return;
@@ -587,6 +773,23 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
     case PR_FLOAT: st->floating = is_kw(v, vl, "left") || is_kw(v, vl, "inline-start") ? FL_LEFT : is_kw(v, vl, "right") || is_kw(v, vl, "inline-end") ? FL_RIGHT : FL_NONE; return;
     case PR_CLEAR: st->clear = is_kw(v, vl, "left") ? 1 : is_kw(v, vl, "right") ? 2 : is_kw(v, vl, "both") ? 3 : 0; return;
     case PR_VISIBILITY: st->visibility = !is_kw(v, vl, "visible"); return;
+    case PR_CLIP: case PR_CLIP_PATH: {   /* SOMA_187A: solo el idioma "visualmente oculto" (rect(0,0,0,0), inset(50%)); el recorte general no se dibuja */
+        int hide = 0;
+        if (prop == PR_CLIP && vl > 5 && !memcmp(v, "rect(", 5)) {
+            hide = 1; int num = 0, any = 0;
+            for (uint32_t i = 5; i < vl && v[i] != ')'; i++) {
+                char c = v[i];
+                if (c >= '0' && c <= '9') { num = num * 10 + (c - '0'); any = 1; if (num > 1) hide = 0; }
+                else if (c == ' ' || c == ',' || c == 'p' || c == 'x') { if (c == ' ' || c == ',') num = 0; }
+                else hide = 0;
+            }
+            if (!any) hide = 0;
+        } else if (prop == PR_CLIP_PATH) {
+            static const char *const CP[] = { "inset(50%)", "inset(100%)", "circle(0", "inset(50% 50%", 0 };
+            for (int k = 0; CP[k]; k++) { uint32_t cl = (uint32_t)wu_strlen(CP[k]); if (vl >= cl && !memcmp(v, CP[k], cl)) hide = 1; }
+        }
+        if (hide) st->visibility = 1;
+        return; }
     case PR_OVERFLOW: case PR_OVERFLOW_X: case PR_OVERFLOW_Y: {
         const char *p = next_tok(v, v + vl, &ts, &tl); if (!p) return;
         uint8_t o = (is_kw(ts, tl, "hidden") || is_kw(ts, tl, "clip")) ? 1 : (is_kw(ts, tl, "scroll") || is_kw(ts, tl, "auto")) ? 2 : 0;
@@ -601,21 +804,27 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
     case PR_LEFT: if (parse_len(v, vl, &a->lc, &l, 1)) st->left = l; return;
     case PR_INSET: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->top = b4[0]; st->right = b4[1]; st->bottom = b4[2]; st->left = b4[3]; return; }
     case PR_INSET_BLOCK_START: if (parse_len(v, vl, &a->lc, &l, 1)) st->top = l; return;
-    case PR_WIDTH: if (parse_len(v, vl, &a->lc, &l, 0) && !(l.kind == LK_VAL && l.px < 0 && l.pct <= 0)) st->width = l; return;
+    case PR_INSET_INLINE: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->left = b4[0]; st->right = b4[1]; return; }   /* SOMA_188 */
+    case PR_INSET_BLOCK: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->top = b4[0]; st->bottom = b4[1]; return; }
+    case PR_WIDTH:
+        if (!g_wl181_off && (is_kw(v, vl, "fit-content") || is_kw(v, vl, "max-content") || is_kw(v, vl, "-moz-fit-content") || (vl > 12 && wu_strnieq(v, "fit-content(", 12)))) { memset(&st->width, 0, sizeof st->width); st->width.kind = LK_FIT; return; }
+        if (!g_wl181_off && is_kw(v, vl, "min-content")) { memset(&st->width, 0, sizeof st->width); st->width.kind = LK_MINC; return; }
+        if (parse_len(v, vl, &a->lc, &l, 0) && !(l.kind == LK_VAL && l.px < 0 && l.pct <= 0)) st->width = l;
+        return;
     case PR_HEIGHT: if (parse_len(v, vl, &a->lc, &l, 0) && !(l.kind == LK_VAL && l.px < 0 && l.pct <= 0)) st->height = l; return;
     case PR_MIN_WIDTH: if (parse_len(v, vl, &a->lc, &l, 0)) { if (l.kind != LK_VAL) { l.kind = LK_VAL; l.px = 0; l.pct = 0; } st->min_w = l; } return;
     case PR_MIN_HEIGHT: if (parse_len(v, vl, &a->lc, &l, 0)) { if (l.kind != LK_VAL) { l.kind = LK_VAL; l.px = 0; l.pct = 0; } st->min_h = l; } return;
     case PR_MAX_WIDTH: if (parse_len(v, vl, &a->lc, &l, 0)) { if (l.kind == LK_AUTO) l.kind = LK_NONE; st->max_w = l; } return;
     case PR_MAX_HEIGHT: if (parse_len(v, vl, &a->lc, &l, 0)) { if (l.kind == LK_AUTO) l.kind = LK_NONE; st->max_h = l; } return;
     case PR_MARGIN: apply_box4(a, st->margin, v, vl, 1); return;
-    case PR_MARGIN_INLINE: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->margin[1] = b4[1]; st->margin[3] = b4[3]; return; }
-    case PR_MARGIN_BLOCK: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->margin[0] = b4[0]; st->margin[2] = b4[2]; return; }
+    case PR_MARGIN_INLINE: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->margin[3] = b4[0]; st->margin[1] = b4[1]; return; }   /* SOMA_188: inicio fin */
+    case PR_MARGIN_BLOCK: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 1); st->margin[0] = b4[0]; st->margin[2] = b4[1]; return; }
     case PR_MARGIN_TOP: case PR_MARGIN_RIGHT: case PR_MARGIN_BOTTOM: case PR_MARGIN_LEFT:
         if (parse_len(v, vl, &a->lc, &l, 1)) st->margin[prop - PR_MARGIN_TOP] = l;
         return;
     case PR_PADDING: apply_box4(a, st->padding, v, vl, 0); return;
-    case PR_PADDING_INLINE: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 0); st->padding[1] = b4[1]; st->padding[3] = b4[3]; return; }
-    case PR_PADDING_BLOCK: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 0); st->padding[0] = b4[0]; st->padding[2] = b4[2]; return; }
+    case PR_PADDING_INLINE: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 0); st->padding[3] = b4[0]; st->padding[1] = b4[1]; return; }
+    case PR_PADDING_BLOCK: { struct wlen b4[4]; apply_box4(a, b4, v, vl, 0); st->padding[0] = b4[0]; st->padding[2] = b4[1]; return; }
     case PR_PADDING_TOP: case PR_PADDING_RIGHT: case PR_PADDING_BOTTOM: case PR_PADDING_LEFT:
         if (parse_len(v, vl, &a->lc, &l, 1) && l.kind == LK_VAL && l.px >= 0) st->padding[prop - PR_PADDING_TOP] = l;
         return;
@@ -670,7 +879,61 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
     case PR_JUSTIFY_CONTENT: { int al = align_of(v, vl); if (al < 0) return;
         st->justify = (uint8_t)(al >= 10 ? al - 10 : (al == AI_START ? JC_START : al == AI_END ? JC_END : al == AI_CENTER ? JC_CENTER : JC_START)); return; }
     case PR_ALIGN_ITEMS: { int al = align_of(v, vl); if (al >= 0 && al < 10) st->align_items = (uint8_t)al; return; }
-    case PR_PLACE_ITEMS: { int al = align_of(v, vl); if (al >= 0 && al < 10) st->align_items = (uint8_t)al; return; }
+    /* SOMA_188: transiciones y animaciones: no se animan, pero se emiten transitionend/animationend a su tiempo */
+    case PR_TRANSITION: case PR_TRANSITION_DURATION: case PR_TRANSITION_DELAY: case PR_ANIMATION: case PR_ANIMATION_DURATION: case PR_ANIMATION_DELAY: case PR_ANIMATION_ITER: case PR_TRANSITION_PROPERTY: case PR_ANIMATION_NAME: {
+        if (g_wl181_off) return;
+        int isan = prop == PR_ANIMATION || prop == PR_ANIMATION_DURATION || prop == PR_ANIMATION_DELAY || prop == PR_ANIMATION_ITER || prop == PR_ANIMATION_NAME;
+        if (prop == PR_TRANSITION_PROPERTY) { st->tr_prop = is_kw(v, vl, "all") ? 0 : wa_strndup(&a->c->d->ar, v, vl); if (is_kw(v, vl, "none")) st->tr_ms = 0; return; }
+        if (prop == PR_ANIMATION_NAME) { st->an_name = is_kw(v, vl, "none") ? 0 : wa_strndup(&a->c->d->ar, v, vl); return; }
+        /* lista separada por comas: cada elemento aporta [propiedad|nombre] duracion [funcion] [retardo] [repeticiones] */
+        int best = 0, cur_d = -1, cur_l = 0, iters = 1, inf = 0; const char *p = v, *e = v + vl; char names[96]; uint32_t nn = 0; names[0] = 0;
+        int single_d = prop == PR_TRANSITION_DURATION || prop == PR_ANIMATION_DURATION, single_l = prop == PR_TRANSITION_DELAY || prop == PR_ANIMATION_DELAY;
+        for (;;) {
+            const char *np = next_tok(p, e, &ts, &tl); int end = !np || (tl == 1 && ts[0] == ',');
+            if (end) {
+                int tot = (cur_d < 0 ? 0 : cur_d) * (inf ? 1 : iters) + (cur_l > 0 ? cur_l : 0);
+                if (single_d) tot = cur_d < 0 ? 0 : cur_d;
+                if (single_l) tot = cur_l;
+                if (tot > best) best = tot;
+                if (!np) break;
+                p = np; cur_d = -1; cur_l = 0; iters = 1; if (nn && nn + 1 < sizeof names) names[nn++] = ','; continue;
+            }
+            p = np;
+            if (tl && (wu_isdigit((unsigned char)ts[0]) || ts[0] == '.') ) {
+                uint32_t k = 0; int ip = 0, fr = 0, fd = 0; while (k < tl && wu_isdigit((unsigned char)ts[k])) ip = ip * 10 + (ts[k++] - '0');
+                if (k < tl && ts[k] == '.') { k++; while (k < tl && wu_isdigit((unsigned char)ts[k])) { if (fd < 3) { fr = fr * 10 + (ts[k] - '0'); fd++; } k++; } }
+                while (fd < 3) { fr *= 10; fd++; }
+                int ms = -1;
+                if (k + 2 == tl && ts[k] == 'm' && ts[k + 1] == 's') ms = ip + fr / 1000;
+                else if (k + 1 == tl && (ts[k] == 's' || ts[k] == 'S')) ms = ip * 1000 + fr;
+                else if (k == tl && isan) { iters = ip > 0 ? ip : 1; continue; }
+                if (ms >= 0) { if (single_l || (cur_d >= 0 && !single_d)) cur_l = ms; else cur_d = ms; }
+                continue;
+            }
+            if (is_kw(ts, tl, "infinite")) { inf = 1; continue; }
+            static const char *const kw[] = { "ease", "linear", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end", "normal", "reverse", "alternate", "alternate-reverse", "none", "forwards", "backwards", "both", "running", "paused", "initial", "inherit", 0 };
+            int isk = 0; for (int q = 0; kw[q]; q++) if (is_kw(ts, tl, kw[q])) isk = 1;
+            if (isk || (tl > 6 && (wu_strnieq(ts, "cubic-", 6) || wu_strnieq(ts, "steps(", 6)))) continue;
+            if (nn + tl + 2 < sizeof names) { for (uint32_t q = 0; q < tl; q++) names[nn++] = ts[q]; names[nn] = 0; }
+        }
+        if (best > 60000) best = 60000;
+        if (isan) {
+            if (prop == PR_ANIMATION_ITER) { st->an_inf = (uint8_t)inf; if (!inf && st->an_ms) st->an_ms = (uint16_t)(st->an_ms * (iters > 0 ? iters : 1) > 60000 ? 60000 : st->an_ms * (iters > 0 ? iters : 1)); return; }
+            if (prop == PR_ANIMATION) { st->an_inf = (uint8_t)inf; st->an_name = nn && !is_kw(names, nn, "none") ? wa_strndup(&a->c->d->ar, names, nn) : 0; st->an_ms = (uint16_t)best; return; }
+            if (prop == PR_ANIMATION_DELAY) { st->an_ms = (uint16_t)(st->an_ms + best > 60000 ? 60000 : st->an_ms + best); return; }
+            st->an_ms = (uint16_t)best; return;
+        }
+        if (prop == PR_TRANSITION) { st->tr_prop = nn && !is_kw(names, nn, "all") ? wa_strndup(&a->c->d->ar, names, nn) : 0; if (nn && is_kw(names, nn, "none")) { st->tr_ms = 0; return; } st->tr_ms = (uint16_t)best; return; }
+        if (prop == PR_TRANSITION_DELAY) { st->tr_ms = (uint16_t)(st->tr_ms + best > 60000 ? 60000 : st->tr_ms + best); return; }
+        st->tr_ms = (uint16_t)best; return; }
+    case PR_GRID_AUTO_FLOW: st->grid_flow = (uint8_t)((findn(v, vl, "column") ? 1 : 0) | (findn(v, vl, "dense") ? 2 : 0)); return;   /* SOMA_188 */
+    case PR_PLACE_CONTENT: {   /* SOMA_188: <align-content> [<justify-content>] */
+        const char *sp = v; while (sp < v + vl && !wu_isspace(*sp)) sp++;
+        uint32_t l1 = (uint32_t)(sp - v); const char *v2 = sp; while (v2 < v + vl && wu_isspace(*v2)) v2++; uint32_t l2 = (uint32_t)(v + vl - v2); if (!l2) { v2 = v; l2 = l1; }
+        int al = align_of(v, l1); if (al >= 0) st->align_content = (uint8_t)(al >= 10 ? al - 10 : al);
+        int aj = align_of(v2, l2); if (aj >= 0) st->justify = (uint8_t)(aj >= 10 ? aj - 10 : (aj == AI_START ? JC_START : aj == AI_END ? JC_END : aj == AI_CENTER ? JC_CENTER : JC_START));
+        return; }
+    case PR_PLACE_ITEMS: { int al = align_of(v, vl); if (al >= 0 && al < 10) st->align_items = (uint8_t)al; st->justify_items = al == AI_START ? 1 : al == AI_END ? 2 : al == AI_CENTER ? 3 : 0; return; }
     case PR_ALIGN_SELF: { int al = align_of(v, vl); if (al >= 0 && al < 10) st->align_self = (uint8_t)al; return; }
     case PR_ALIGN_CONTENT: { int al = align_of(v, vl); if (al >= 0) st->align_content = (uint8_t)(al >= 10 ? al - 10 : al); return; }
     case PR_ORDER: st->order = (int16_t)wu_atoi(v); return;
@@ -682,9 +945,28 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
     case PR_ROW_GAP: if (parse_len(v, vl, &a->lc, &l, 0)) st->gap_r = l; return;
     case PR_COLUMN_GAP: if (parse_len(v, vl, &a->lc, &l, 0)) st->gap_c = l; return;
     case PR_GRID_TEMPLATE_COLUMNS: apply_grid_cols(a, st, v, vl); return;
-    case PR_GRID_COLUMN: { const char *q = findn(v, vl, "span"); if (q) { st->col_span = (int16_t)wu_atoi(q + 4); } else st->col_span = 1; return; }
+    case PR_GRID_COLUMN: { const char *q = findn(v, vl, "span"); if (q) { st->col_span = (int16_t)wu_atoi(q + 4); } else st->col_span = 1; grid_place(v, vl, &st->gs[0], &st->ge[0], &st->gsp[0]); if (st->gsp[0] > 0) st->col_span = st->gsp[0]; return; }
+    case PR_GRID_ROW: grid_place(v, vl, &st->gs[1], &st->ge[1], &st->gsp[1]); return;
+    case PR_GRID_COLUMN_START: { int16_t e2, sp; int16_t a1 = st->gs[0]; grid_place(v, vl, &st->gs[0], &e2, &sp); if (sp) st->gsp[0] = sp; (void)a1; return; }
+    case PR_GRID_COLUMN_END: { int16_t s2, sp; grid_place(v, vl, &s2, &st->ge[0], &sp); if (!st->ge[0] && s2) st->ge[0] = s2; if (sp) st->gsp[0] = sp; return; }
+    case PR_GRID_ROW_START: { int16_t e2, sp; grid_place(v, vl, &st->gs[1], &e2, &sp); if (sp) st->gsp[1] = sp; return; }
+    case PR_GRID_ROW_END: { int16_t s2, sp; grid_place(v, vl, &s2, &st->ge[1], &sp); if (!st->ge[1] && s2) st->ge[1] = s2; if (sp) st->gsp[1] = sp; return; }
+    case PR_GRID_AREA: {
+        const char *p = v, *e = v + vl; int hasslash = 0; for (const char *q = v; q < e; q++) if (*q == '/') hasslash = 1;
+        if (!hasslash) { const char *s1; uint32_t l1; if (next_tok(p, e, &s1, &l1) && !wu_isdigit(s1[0]) && !is_kw(s1, l1, "auto") && !is_kw(s1, l1, "span")) { st->garea = wa_strndup(&a->c->d->ar, s1, l1); } return; }
+        int16_t vals[4] = { 0, 0, 0, 0 }; int k = 0; const char *ts; uint32_t tl;
+        while (k < 4 && (p = next_tok(p, e, &ts, &tl))) { if (tl == 1 && ts[0] == '/') { k++; continue; } if (is_kw(ts, tl, "auto") || is_kw(ts, tl, "span")) continue; char b[12]; if (tl < sizeof b) { memcpy(b, ts, tl); b[tl] = 0; if (wu_isdigit(b[0]) || b[0] == '-') vals[k] = (int16_t)wu_atoi(b); } }
+        st->gs[1] = vals[0]; st->gs[0] = vals[1]; st->ge[1] = vals[2]; st->ge[0] = vals[3]; return; }
+    case PR_GRID_TEMPLATE_ROWS: { struct wgx *g = gx_of(a, st); if (g) { memset(g->rows, 0, sizeof g->rows); int am; g->nrows = (int8_t)parse_tracks(a, v, vl, g->rows, GRID_MAX_ROWS, &am); } return; }
+    case PR_GRID_AUTO_ROWS: { struct wgx *g = gx_of(a, st); if (g) { struct wlen t[2]; int am; int n = parse_tracks(a, v, vl, t, 1, &am); g->auto_rows = n ? t[0] : g->auto_rows; if (n && t[0].kind == LK_NONE) g->auto_rows.kind = LK_AUTO; } return; }
+    case PR_GRID_AUTO_COLUMNS: return;
+    case PR_GRID_TEMPLATE_AREAS: { struct wgx *g = gx_of(a, st); if (g) g->areas = is_kw(v, vl, "none") ? 0 : wa_strndup(&a->c->d->ar, v, vl); return; }
+    case PR_JUSTIFY_ITEMS: case PR_JUSTIFY_SELF: case PR_PLACE_SELF: {
+        int al = align_of(v, vl); uint8_t m = al == AI_START ? 1 : al == AI_END ? 2 : al == AI_CENTER ? 3 : 0;
+        if (prop == PR_JUSTIFY_ITEMS) st->justify_items = m; else { st->justify_self = m; if (prop == PR_PLACE_SELF && al >= 0 && al < 10) st->align_self = (uint8_t)al; }
+        return; }
     case PR_COLOR: { uint32_t c = tok_color(v, vl, par->color, &ok); if (ok) st->color = c; return; }
-    case PR_FONT_SIZE: { int px; if (font_size_of(a, v, vl, &px)) { st->font_px = (int16_t)(px < 1 ? 1 : (px > 400 ? 400 : px)); a->lc.font_px = st->font_px; } return; }
+    case PR_FONT_SIZE: { int px; if (font_size_of(a, v, vl, &px)) { st->font_px = (int16_t)(px < 1 ? 1 : (px > 400 ? 400 : px)); st->fs_zero = (uint8_t)(px < 1 && !g_wl181_off); a->lc.font_px = st->font_px; } return; }
     case PR_FONT_WEIGHT: if (is_kw(v, vl, "bold") || is_kw(v, vl, "bolder")) st->bold = 1; else if (is_kw(v, vl, "normal") || is_kw(v, vl, "lighter")) st->bold = 0; else st->bold = wu_atoi(v) >= 600; return;
     case PR_FONT_STYLE: st->italic = is_kw(v, vl, "italic") || is_kw(v, vl, "oblique"); return;
     case PR_FONT_FAMILY: st->mono = (uint8_t)family_is_mono(v, vl); return;
@@ -715,40 +997,126 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
         }
         return; }
     case PR_BACKGROUND: {
-        st->bg_color = 0; st->bg_image = 0; st->has_grad = 0; st->bg_repeat = 0; st->bg_size_mode = 0; st->bg_pos_x = 0; st->bg_pos_y = 0;
-        const char *p = v, *e = v + vl;
-        while ((p = next_tok(p, e, &ts, &tl))) apply_bg_token(a, st, ts, tl, a->c);
+        st->bg_color = 0; st->bg_image = 0; st->has_grad = 0; st->bg_repeat = 0; st->bg_size_mode = 0; st->bg_pos_x = 0; st->bg_pos_y = 0; st->bg_off_x = st->bg_off_y = 0;
+        apply_bg_geometry(a, st, v, vl, 1, 0);
         return; }
     case PR_BACKGROUND_COLOR: { uint32_t c = tok_color(v, vl, st->color, &ok); if (ok) st->bg_color = c; return; }
     case PR_BACKGROUND_IMAGE: { st->bg_image = 0; st->has_grad = 0; const char *p = v, *e = v + vl; while ((p = next_tok(p, e, &ts, &tl))) { if (ts[0] != ',') apply_bg_token(a, st, ts, tl, a->c); } return; }
-    case PR_BACKGROUND_REPEAT: case PR_BACKGROUND_SIZE: case PR_BACKGROUND_POSITION: case PR_BACKGROUND_POSITION_X: {
-        const char *p = v, *e = v + vl; int idx = 0;
+    case PR_BACKGROUND_REPEAT: { const char *p = v, *e = v + vl; int rx = -1, ry = -1;
         while ((p = next_tok(p, e, &ts, &tl))) {
-            apply_bg_token(a, st, ts, tl, a->c);
-            if (prop == PR_BACKGROUND_SIZE && parse_len(ts, tl, &a->lc, &l, 0) && l.kind != LK_NONE) { if (idx == 0) { st->bg_w = l; st->bg_h = l; st->bg_h.kind = LK_AUTO; st->bg_size_mode = 3; } else st->bg_h = l; idx++; }
-            if (prop == PR_BACKGROUND_POSITION && parse_len(ts, tl, &a->lc, &l, 0) && l.kind == LK_VAL) { int pv = l.pct ? l.pct / 100 : 0; if (idx == 0) st->bg_pos_x = (int16_t)pv; else st->bg_pos_y = (int16_t)pv; idx++; }
+            if (is_kw(ts, tl, "repeat-x")) { rx = 1; ry = 0; } else if (is_kw(ts, tl, "repeat-y")) { rx = 0; ry = 1; } else if (is_kw(ts, tl, "no-repeat")) { if (rx < 0) rx = 0; else ry = 0; if (ry < 0) ry = 0; }
+            else if (is_kw(ts, tl, "repeat") || is_kw(ts, tl, "round") || is_kw(ts, tl, "space")) { if (rx < 0) rx = 1; else ry = 1; if (ry < 0) ry = 1; }
         }
+        if (rx >= 0) st->bg_repeat = (uint8_t)(rx && ry ? 0 : rx ? 1 : ry ? 2 : 3);
         return; }
+    case PR_BACKGROUND_SIZE: apply_bg_geometry(a, st, v, vl, 0, 1); return;
+    case PR_BACKGROUND_POSITION: st->bg_off_x = st->bg_off_y = 0; apply_bg_geometry(a, st, v, vl, 0, 0); return;
+    case PR_BACKGROUND_POSITION_X: { struct bgpt pt[1]; const char *p = next_tok(v, v + vl, &ts, &tl); if (p) { int kw = bg_kw_of(ts, tl); pt[0].kw = (uint8_t)kw; pt[0].has_len = 0;
+            if (!kw && parse_len(ts, tl, &a->lc, &l, 1) && l.kind == LK_VAL) { pt[0].has_len = 1; pt[0].len = l; }
+            int xp, xo; bg_axis(&pt[0], &xp, &xo); st->bg_pos_x = (int16_t)xp; st->bg_off_x = (int16_t)xo; } return; }
+    case PR_TRANSFORM: case PR_TRANSLATE: {
+        /* SOMA_181: solo desplazamientos (translate/translateX/translateY/translate3d); rotate/scale no se dibujan */
+        struct wlen zx, zy; memset(&zx, 0, sizeof zx); memset(&zy, 0, sizeof zy); zx.kind = zy.kind = LK_VAL; int any = 0;
+        const char *p = v, *e = v + vl;
+        if (prop == PR_TRANSLATE) {
+            int idx = 0; const char *q = p; while ((q = next_tok(q, e, &ts, &tl)) && idx < 2) { if (is_kw(ts, tl, "none")) break; if (!parse_len(ts, tl, &a->lc, &l, 1) || l.kind != LK_VAL) break; if (idx == 0) zx = l; else zy = l; idx++; any = 1; }
+        } else { st->rot10 = 0; st->sc_x = st->sc_y = 0; } if (prop != PR_TRANSLATE) while (p < e) {
+            while (p < e && !wu_isalpha(*p)) p++;
+            const char *fs = p; while (p < e && (wu_isalpha(*p) || wu_isdigit(*p))) p++;
+            uint32_t fl = (uint32_t)(p - fs); if (p >= e || *p != '(') continue;
+            const char *as = ++p; int dep = 1; while (p < e && dep) { if (*p == '(') dep++; else if (*p == ')') dep--; p++; }
+            const char *ae = p - 1; if (ae < as) ae = as;
+            int tx = fl == 10 && wu_strnieq(fs, "translateX", 10) ? 1 : fl == 10 && wu_strnieq(fs, "translateY", 10) ? 2 : (fl == 9 && wu_strnieq(fs, "translate", 9)) || (fl == 11 && wu_strnieq(fs, "translate3d", 11)) ? 3 : 0;
+            if (!tx) {   /* SOMA_188: rotate()/rotateZ() y scale()/scaleX()/scaleY() */
+                char ab[40]; uint32_t al = (uint32_t)(ae - as); if (al > 39) al = 39; memcpy(ab, as, al); ab[al] = 0;
+                if ((fl == 6 && wu_strnieq(fs, "rotate", 6)) || (fl == 7 && wu_strnieq(fs, "rotateZ", 7))) {
+                    const char *q = ab; while (*q == ' ') q++; int neg = *q == '-'; if (*q == '-' || *q == '+') q++;
+                    int64_t ip = 0, fr = 0, fd = 1; while (*q >= '0' && *q <= '9') ip = ip * 10 + (*q++ - '0'); if (*q == '.') { q++; while (*q >= '0' && *q <= '9' && fd < 100000) { fr = fr * 10 + (*q++ - '0'); fd *= 10; } }
+                    int64_t milli = ip * 1000 + fr * 1000 / fd;   /* milesimas de la unidad */
+                    int64_t d10 = wu_strnieq(q, "turn", 4) ? milli * 3600 / 1000 : wu_strnieq(q, "rad", 3) ? milli * 18000 / 31416 / 10 : wu_strnieq(q, "grad", 4) ? milli * 9 / 1000 : milli / 100;
+                    if (neg) d10 = -d10;
+                    st->rot10 = (int16_t)(((st->rot10 + d10) % 3600 + 3600) % 3600); any = 1;
+                } else if ((fl == 5 && wu_strnieq(fs, "scale", 5)) || (fl == 6 && (wu_strnieq(fs, "scaleX", 6) || wu_strnieq(fs, "scaleY", 6))) || (fl == 7 && wu_strnieq(fs, "scale3d", 7))) {
+                    int vals[2] = { 100, 100 }, nv = 0; const char *q = ab;
+                    while (*q && nv < 2) { while (*q == ' ' || *q == ',') q++; if (!*q) break; int neg = *q == '-'; if (neg) q++; int ip = 0, fr = 0, fd = 1; while (*q >= '0' && *q <= '9') ip = ip * 10 + (*q++ - '0'); if (*q == '.') { q++; while (*q >= '0' && *q <= '9' && fd < 1000) { fr = fr * 10 + (*q++ - '0'); fd *= 10; } } int pc = ip * 100 + fr * 100 / fd; if (*q == '%') { pc = ip; q++; } vals[nv++] = neg ? -pc : pc; while (*q && *q != ' ' && *q != ',') q++; }
+                    if (!nv) continue;
+                    int sx2 = vals[0], sy2 = nv > 1 ? vals[1] : vals[0];
+                    if (fl == 6 && (fs[5] == 'X' || fs[5] == 'x')) sy2 = 100; else if (fl == 6) { sy2 = vals[0]; sx2 = 100; }
+                    int cx = st->sc_x ? st->sc_x : 100, cy = st->sc_y ? st->sc_y : 100; cx = cx * sx2 / 100; cy = cy * sy2 / 100;
+                    st->sc_x = (int16_t)(cx == 0 ? -32768 : cx); st->sc_y = (int16_t)(cy == 0 ? -32768 : cy); any = 1;
+                }
+                continue;
+            }
+            struct wlen a2[2]; int n2 = 0; const char *q = as, *ts2; uint32_t tl2;
+            while (n2 < 2 && (q = next_tok(q, ae, &ts2, &tl2))) { if (tl2 == 1 && ts2[0] == ',') continue; if (!parse_len(ts2, tl2, &a->lc, &a2[n2], 1) || a2[n2].kind != LK_VAL) { n2 = -1; break; } n2++; }
+            if (n2 <= 0) continue;
+            if (tx == 1) { zx.px += a2[0].px; zx.pct += a2[0].pct; } else if (tx == 2) { zy.px += a2[0].px; zy.pct += a2[0].pct; }
+            else { zx.px += a2[0].px; zx.pct += a2[0].pct; if (n2 > 1) { zy.px += a2[1].px; zy.pct += a2[1].pct; } }
+            any = 1;
+        }
+        if (is_kw(v, vl, "none")) { st->rot10 = 0; st->sc_x = st->sc_y = 0; }
+        if (any || is_kw(v, vl, "none")) { st->tr_x = zx; st->tr_y = zy; if (!any) st->tr_x.kind = st->tr_y.kind = LK_AUTO; }
+        return; }
+    case PR_ASPECT_RATIO: {
+        const char *p = v, *e = v + vl; int32_t n1 = 0, n2 = 0, k = 0; st->ar_w = st->ar_h = 0;
+        while ((p = next_tok(p, e, &ts, &tl))) {
+            if (tl == 1 && ts[0] == '/') continue;
+            char b[24]; if (tl >= sizeof b) return; memcpy(b, ts, tl); b[tl] = 0; const char *q = b; int32_t nv;
+            if (!(wu_isdigit(b[0]) || b[0] == '.')) continue;                       /* "auto" */
+            if (!parse_num(&q, &nv) || nv <= 0) return;
+            if (k == 0) n1 = nv; else if (k == 1) n2 = nv; k++;
+        }
+        if (k == 0) return;
+        if (k == 1) n2 = 1000;
+        while (n1 > 60000 || n2 > 60000) { n1 /= 2; n2 /= 2; }
+        if (n1 > 0 && n2 > 0) { st->ar_w = (uint16_t)n1; st->ar_h = (uint16_t)n2; }
+        return; }
+    case PR_OBJECT_FIT: st->obj_fit = is_kw(v, vl, "contain") ? 1 : is_kw(v, vl, "cover") ? 2 : is_kw(v, vl, "none") ? 3 : is_kw(v, vl, "scale-down") ? 4 : 0; return;
+    case PR_OBJECT_POSITION: {
+        struct bgpt pt[2]; int np = 0; const char *p = v, *e = v + vl;
+        while (np < 2 && (p = next_tok(p, e, &ts, &tl))) { int kw = bg_kw_of(ts, tl); pt[np].kw = (uint8_t)kw; pt[np].has_len = 0; if (!kw && parse_len(ts, tl, &a->lc, &l, 1) && l.kind == LK_VAL) { pt[np].has_len = 1; pt[np].len = l; } np++; }
+        if (np) { struct wstyle tmp; memset(&tmp, 0, sizeof tmp); bg_set_pos(&tmp, pt, np); st->obj_pos_x = (int8_t)(tmp.bg_pos_x > 100 ? 100 : tmp.bg_pos_x < 0 ? 0 : tmp.bg_pos_x); st->obj_pos_y = (int8_t)(tmp.bg_pos_y > 100 ? 100 : tmp.bg_pos_y < 0 ? 0 : tmp.bg_pos_y); }
+        return; }
+    case PR_LINE_CLAMP: { int n = is_kw(v, vl, "none") ? 0 : wu_atoi(v); st->line_clamp = (uint8_t)(n < 0 ? 0 : n > 255 ? 255 : n); return; }
     case PR_BORDER_COLLAPSE: st->border_collapse = is_kw(v, vl, "collapse"); return;
     case PR_BORDER_SPACING: if (parse_len(v, vl, &a->lc, &l, 0) && l.kind == LK_VAL) { st->spacing_h = (int16_t)l.px; st->spacing_v = (int16_t)l.px;
             const char *p = next_tok(v, v + vl, &ts, &tl); if (p && next_tok(p, v + vl, &ts, &tl) && parse_len(ts, tl, &a->lc, &l, 0)) st->spacing_v = (int16_t)l.px; } return;
     case PR_CURSOR: st->pointer = is_kw(v, vl, "pointer"); return;
+    case PR_POINTER_EVENTS: st->no_ptr = is_kw(v, vl, "none"); return;   /* SOMA_188 */
+    case PR_FILL: case PR_STROKE: {   /* SOMA_188: color de iconos SVG desde CSS */
+        uint32_t *dst = prop == PR_FILL ? &st->svg_fill : &st->svg_stroke;
+        if (is_kw(v, vl, "none") || is_kw(v, vl, "transparent")) { *dst = 1; return; }
+        if (is_kw(v, vl, "currentcolor")) { *dst = 2; return; }   /* se resuelve con el color de cada elemento al dibujar */
+        if (vl > 4 && wu_strnieq(v, "url(", 4)) return;
+        int ok2; uint32_t c2 = tok_color(v, vl, st->color, &ok2); if (ok2) *dst = (c2 >> 24) ? (0xFF000000u | (c2 & 0xFFFFFF)) : 1;
+        return; }
+    case PR_STROKE_WIDTH: { char b[24]; uint32_t n = vl < 23 ? vl : 23; memcpy(b, v, n); b[n] = 0; int w = 0, frac = 0, d = 0; const char *q = b; while (*q >= '0' && *q <= '9') w = w * 10 + (*q++ - '0'); if (*q == '.') { q++; while (*q >= '0' && *q <= '9' && d < 2) { frac = frac * 10 + (*q++ - '0'); d++; } } while (d < 2) { frac *= 10; d++; } st->svg_sw = (int16_t)(w * 100 + frac); if (!st->svg_sw) st->svg_sw = 1; return; }
     case PR_BOX_SHADOW: {
-        /* SOMA_PARCHE_028_UI: primera sombra exterior de la lista (las interiores, "inset", no se dibujan) */
-        const char *p = v, *e = v + vl; int nl = 0, vals[4] = { 0, 0, 0, 0 }, inset = 0, got = 0; uint32_t col = 0x59000000u;
-        st->shadow_color = 0;
-        while ((p = next_tok(p, e, &ts, &tl))) {
-            if (tl == 1 && ts[0] == ',') { if (!inset && got) break; nl = 0; inset = 0; got = 0; vals[0] = vals[1] = vals[2] = vals[3] = 0; col = 0x59000000u; continue; }
+        /* SOMA_PARCHE_028_UI: primera sombra exterior de la lista. SOMA_188: y la primera interior ("inset") */
+        const char *p = v, *e = v + vl; int nl = 0, vals[4] = { 0, 0, 0, 0 }, inset = 0, got = 0, have_out = 0, have_in = 0; uint32_t col = 0x59000000u;
+        st->shadow_color = 0; st->ish_color = 0; st->xsh_c[0] = st->xsh_c[1] = st->xsh_c[2] = st->xsh_c[3] = 0; int nxsh = 0;
+        for (;;) {
+            const char *np = next_tok(p, e, &ts, &tl);
+            int end = !np || (tl == 1 && ts[0] == ',');
+            if (end) {
+                if (got && nl >= 2 && (col >> 24)) {
+                    for (int i = 0; i < 4; i++) { if (vals[i] > 160) vals[i] = 160; if (vals[i] < -160) vals[i] = -160; }
+                    if (vals[2] < 0) vals[2] = 0;
+                    if (!inset && !have_out) { have_out = 1; st->shadow_x = (int16_t)vals[0]; st->shadow_y = (int16_t)vals[1]; st->shadow_blur = (int16_t)vals[2]; st->shadow_spread = (int16_t)vals[3]; st->shadow_color = col; }
+                    else if (!inset && nxsh < 4) { int k = nxsh++; int cv[4]; for (int q = 0; q < 4; q++) cv[q] = vals[q] > 120 ? 120 : vals[q] < -120 ? -120 : vals[q];
+                        st->xsh_x[k] = (int8_t)cv[0]; st->xsh_y[k] = (int8_t)cv[1]; st->xsh_b[k] = (int8_t)cv[2]; st->xsh_s[k] = (int8_t)cv[3]; st->xsh_c[k] = col; }
+                    else if (inset && !have_in) { have_in = 1; for (int i = 0; i < 4; i++) { if (vals[i] > 60) vals[i] = 60; if (vals[i] < -60) vals[i] = -60; } st->ish_x = (int8_t)vals[0]; st->ish_y = (int8_t)vals[1]; st->ish_blur = (int8_t)vals[2]; st->ish_spread = (int8_t)vals[3]; st->ish_color = col; }
+                }
+                if (!np || (have_out && have_in && nxsh >= 4)) break;
+                p = np; nl = 0; inset = 0; got = 0; vals[0] = vals[1] = vals[2] = vals[3] = 0; col = 0x59000000u; continue;
+            }
+            p = np;
             if (is_kw(ts, tl, "none")) return;
             if (is_kw(ts, tl, "inset")) { inset = 1; continue; }
             int ok; uint32_t c2 = tok_color(ts, tl, st->color, &ok);
             if (ok) { col = c2; got = 1; continue; }
             if (nl < 4 && parse_len(ts, tl, &a->lc, &l, 1) && l.kind == LK_VAL) { vals[nl++] = l.px; got = 1; }
         }
-        if (inset || nl < 2 || !(col >> 24)) return;
-        for (int i = 0; i < 4; i++) { if (vals[i] > 160) vals[i] = 160; if (vals[i] < -160) vals[i] = -160; }
-        if (vals[2] < 0) vals[2] = 0;
-        st->shadow_x = (int16_t)vals[0]; st->shadow_y = (int16_t)vals[1]; st->shadow_blur = (int16_t)vals[2]; st->shadow_spread = (int16_t)vals[3]; st->shadow_color = col;
         return; }
     default: break;
     }
@@ -781,7 +1149,12 @@ struct wsimple {
     uint32_t pseudo;
     int16_t nth_a, nth_b;
     struct wsimple *not_;
+    struct wlist *lists;                 /* SOMA 144: grupos funcionales :is/:where/:not */
+    uint8_t list_calls;                 /* max 4 por compuesto */
+    uint8_t cmask_ok;                   /* SOMA_152: cmask calculada */
+    uint64_t cmask;                     /* SOMA_152: bits de Bloom de sus clases */
 };
+struct wlist { struct wlist *next; struct wsimple *items; uint8_t count, mode; struct wsel **hsel; };   /* SOMA_188: mode 3..6 = :has() (descendiente, hijo, +, ~) con hsel[count] */
 struct wsel { struct wsimple *parts; uint8_t n; uint32_t spec; uint8_t pe; };
 
 static int is_ident_ch(int c) { return wu_isalnum(c) || c == '-' || c == '_' || (unsigned char)c >= 0x80 || c == '\\'; }
@@ -812,6 +1185,7 @@ static int parse_nth(const char *s, int16_t *a, int16_t *b)
     *a = (int16_t)(hasn ? av : 0); *b = (int16_t)bv; return 1;
 }
 
+static struct wsel *compile_selector(struct wcss *c, const char *s, uint32_t n);   /* SOMA_188: :has() */
 static const char *parse_compound(struct wcss *c, const char *p, const char *e, struct wsimple *s, uint32_t *spec, int in_not)
 {
     char id[64]; int any = 0;
@@ -857,7 +1231,8 @@ static const char *parse_compound(struct wcss *c, const char *p, const char *e, 
             int dbl = (p + 1 < e && p[1] == ':');
             char nm[32]; p = read_ident(p + 1 + dbl, e, nm, sizeof(nm));
             for (char *q = nm; *q; q++) *q = (char)wu_lower(*q);
-            if (wu_streq(nm, "before") || wu_streq(nm, "after")) { c->pe_seen = 1; any = 1; continue; }
+            if (wu_streq(nm, "before") || wu_streq(nm, "after")) { c->pe_seen = nm[0] == 'b' ? 1 : 2; any = 1; continue; }
+            if (wu_streq(nm, "placeholder") || wu_streq(nm, "-webkit-input-placeholder") || wu_streq(nm, "-moz-placeholder") || wu_streq(nm, "-ms-input-placeholder")) { c->pe_seen = 3; any = 1; continue; }   /* SOMA_188: ::placeholder */
             if (dbl) return 0;
             const char *arg = 0; uint32_t argl = 0;
             if (p < e && *p == '(') {
@@ -880,19 +1255,73 @@ static const char *parse_compound(struct wcss *c, const char *p, const char *e, 
                 char *of = (char *)wu_find(tmp, " of "); if (of) *of = 0;
                 if (!parse_nth(tmp, &s->nth_a, &s->nth_b)) return 0;
                 s->pseudo |= PF_NTH; s->nth_kind = (uint8_t)(wu_streq(nm, "nth-child") ? 1 : wu_streq(nm, "nth-last-child") ? 2 : wu_streq(nm, "nth-of-type") ? 3 : 4);
-            } else if (wu_streq(nm, "not") || wu_streq(nm, "is") || wu_streq(nm, "where") || wu_streq(nm, "matches")) {
-                if (!arg || in_not) return 0;
-                struct wsimple *ns = (struct wsimple *)wa_zalloc(&c->d->ar, sizeof(*ns)); if (!ns) return 0;
-                uint32_t sp2 = 0; const char *q = arg, *qe = arg + argl; while (q < qe && wu_isspace(*q)) q++;
-                const char *r = parse_compound(c, q, qe, ns, &sp2, 1);
-                if (!r) return 0;
-                while (r < qe && wu_isspace(*r)) r++;
-                if (r != qe) return 0;         /* listas con comas / combinadores no soportadas */
-                if (wu_streq(nm, "not")) { s->not_ = ns; *spec += sp2; }
-                else { /* :is / :where : fusionar en este compuesto si este esta vacio */
-                    if (s->tag || s->name || s->id || s->ncls || s->nattr || s->pseudo) return 0;
-                    *s = *ns; if (wu_streq(nm, "is")) *spec += sp2; *spec -= 0x100;
+            } else if (wu_streq(nm, "has") && !g_wl181_off) {
+                /* SOMA_188: :has() con selectores relativos completos: "x" (descendiente), "> x", "+ x", "~ x" */
+                if (!arg || !argl || in_not || s->list_calls >= 4) return 0;
+                struct wsel **hs = (struct wsel **)wa_zalloc(&c->d->ar, sizeof(*hs) * 8u); if (!hs) return 0;
+                const char *q = arg, *qe = arg + argl; uint8_t count = 0, mode = 0; int spe = c->pe_seen;
+                while (q < qe && count < 8) {
+                    while (q < qe && wu_isspace(*q)) q++;
+                    const char *end = q; int depth = 0; char quote = 0;
+                    for (; end < qe; end++) {
+                        if (quote) { if (*end == '\\' && end + 1 < qe) { end++; continue; } if (*end == quote) quote = 0; continue; }
+                        if (*end == '\'' || *end == '"') { quote = *end; continue; }
+                        if (*end == '[' || *end == '(') depth++; else if (*end == ']' || *end == ')') depth--; else if (*end == ',' && !depth) break;
+                    }
+                    uint8_t m = 3; if (q < end && (*q == '>' || *q == '+' || *q == '~')) { m = *q == '>' ? 4 : *q == '+' ? 5 : 6; q++; }
+                    if (count && m != mode) return 0;   /* modos mezclados: no soportado */
+                    mode = m;
+                    struct wsel *sl = compile_selector(c, q, (uint32_t)(end - q)); if (!sl || sl->pe) return 0;
+                    hs[count++] = sl;
+                    if (end >= qe) break;
+                    q = end + 1;
                 }
+                c->pe_seen = spe;
+                if (!count) return 0;
+                struct wlist *l = (struct wlist *)wa_zalloc(&c->d->ar, sizeof(*l)); if (!l) return 0;
+                l->hsel = hs; l->count = count; l->mode = mode;
+                l->next = s->lists; s->lists = l; s->list_calls++;
+            } else if (wu_streq(nm, "not") || wu_streq(nm, "is") || wu_streq(nm, "where") || wu_streq(nm, "matches")) {
+                /* SOMA 144: listas de compuestos de CSS Selectors Level 4.
+                 * Hasta cuatro llamadas por compuesto mantienen acotadas
+                 * memoria y recursion. No admitimos selectores relativos. */
+                if (!arg || !argl || in_not || s->list_calls >= 4) return 0;
+                struct wsimple *lst = (struct wsimple *)wa_zalloc(&c->d->ar, sizeof(*lst) * 8u);
+                if (!lst) return 0;
+                const char *q = arg, *qe = arg + argl;
+                uint32_t max_sp = 0; uint8_t count = 0;
+                while (q < qe) {
+                    while (q < qe && wu_isspace(*q)) q++;
+                    if (q >= qe || count >= 8) return 0;
+                    const char *end = q; int depth = 0; char quote = 0;
+                    for (; end < qe; end++) {
+                        if (quote) { if (*end == '\\' && end + 1 < qe) { end++; continue; } if (*end == quote) quote = 0; continue; }
+                        if (*end == '\'' || *end == '"') { quote = *end; continue; }
+                        if (*end == '[' || *end == '(') depth++;
+                        else if (*end == ']' || *end == ')') { if (depth == 0) return 0; depth--; }
+                        else if (*end == ',' && !depth) break;
+                    }
+                    if (quote || depth) return 0;
+                    uint32_t sp2 = 0;
+                    const char *r = parse_compound(c, q, end, &lst[count], &sp2, 1);
+                    if (!r) return 0;
+                    while (r < end && wu_isspace(*r)) r++;
+                    if (r != end) return 0;
+                    if (sp2 > max_sp) max_sp = sp2;
+                    count++;
+                    if (end == qe) break;
+                    q = end + 1;
+                    if (q == qe) return 0; /* coma terminal */
+                }
+                if (!count) return 0;
+                struct wlist *l = (struct wlist *)wa_zalloc(&c->d->ar, sizeof(*l));
+                if (!l) return 0;
+                l->items = lst; l->count = count;
+                l->mode = (uint8_t)(wu_streq(nm, "not") ? 2 : 1);
+                l->next = s->lists; s->lists = l; s->list_calls++;
+                /* Quitar especificidad de la pseudoclase funcional. */
+                *spec -= 0x100;
+                if (!wu_streq(nm, "where")) *spec += max_sp;
             } else return 0;
             continue;
         }
@@ -955,10 +1384,47 @@ static int attr_match(const struct wattrsel *a, const struct wnode *n)
 
 static int nth_ok(int idx, int a, int b) { if (a == 0) return idx == b; int d = idx - b; return d % a == 0 && d / a >= 0; }
 
+/* SOMA_152_WEB_FLUIDO: filtro de Bloom de clases. Cada elemento resume sus clases en 64 bits (2 bits por clase) y cada
+ * compuesto del selector guarda los bits de las suyas: si faltan bits, el compuesto no puede encajar y se descarta sin
+ * buscar el atributo class ni comparar cadenas. Es la comprobacion mas repetida del calculo de estilos (cada regla
+ * candidata y cada ancestro en los combinadores descendientes). La generacion avanza en cada entrada publica (calculo,
+ * querySelector, matches): dentro de ellas el DOM no cambia; entre ellas JS puede cambiar class y el filtro se rehace. */
+static uint32_t s_cb_gen152 = 1;
+static uint64_t cls_bits152(const char *s, uint32_t n)
+{
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < n; i++) { h ^= (uint8_t)s[i]; h *= 16777619u; }
+    return (1ull << (h & 63)) | (1ull << ((h >> 6) & 63));
+}
+static uint64_t node_bloom152(struct wnode *n)
+{
+    if (n->cbloom_gen == s_cb_gen152) return n->cbloom;
+    uint64_t b = 0; const char *c = wd_attr(n, "class");
+    if (c) while (*c) {
+        while (wu_isspace(*c)) c++;
+        const char *t = c; while (*c && !wu_isspace(*c)) c++;
+        if (c > t) b |= cls_bits152(t, (uint32_t)(c - t));
+    }
+    n->cbloom = b; n->cbloom_gen = s_cb_gen152;
+    return b;
+}
+static uint64_t simple_mask152(const struct wsimple *s)
+{
+    if (!s->cmask_ok) {
+        uint64_t m = 0;
+        for (int i = 0; i < s->ncls; i++) m |= cls_bits152(s->cls[i], wu_strlen(s->cls[i]));
+        ((struct wsimple *)s)->cmask = m; ((struct wsimple *)s)->cmask_ok = 1;
+    }
+    return s->cmask;
+}
+static void cbloom_new_gen152(void) { if (++s_cb_gen152 == 0) s_cb_gen152 = 1; }
+
+static int match_from(const struct wsel *sel, int i, struct wnode *n);
 static int match_simple(const struct wsimple *s, struct wnode *n)
 {
     if (s->tag) { if (n->tag != s->tag) return 0; }
     else if (s->name && !wu_streq(n->name, s->name)) return 0;
+    if (s->ncls) { uint64_t m = simple_mask152(s); if ((node_bloom152(n) & m) != m) return 0; }   /* SOMA_152 */
     if (s->id) { const char *v = wd_attr(n, "id"); if (!v || !wu_streq(v, s->id)) return 0; }
     for (int i = 0; i < s->ncls; i++) if (!wd_has_class(n, s->cls[i])) return 0;
     for (int i = 0; i < s->nattr; i++) if (!attr_match(&s->at[i], n)) return 0;
@@ -992,6 +1458,29 @@ static int match_simple(const struct wsimple *s, struct wnode *n)
         }
     }
     if (s->not_ && match_simple(s->not_, n)) return 0;
+    for (const struct wlist *l = s->lists; l; l = l->next) {
+        int any = 0;
+        if (l->mode >= 3) {   /* SOMA_188: :has() */
+            for (uint8_t i = 0; i < l->count && !any; i++) {
+                const struct wsel *hs = l->hsel[i];
+                if (l->mode == 4) { for (struct wnode *k = n->first; k && !any; k = k->next) if (k->type == WN_ELEM && match_from(hs, 0, k)) any = 1; }
+                else if (l->mode == 5) { struct wnode *k = n->next; while (k && k->type != WN_ELEM) k = k->next; if (k && match_from(hs, 0, k)) any = 1; }
+                else if (l->mode == 6) { for (struct wnode *k = n->next; k && !any; k = k->next) if (k->type == WN_ELEM && match_from(hs, 0, k)) any = 1; }
+                else { int budget = 4000; for (struct wnode *k = n->first; k && budget-- > 0 && !any; ) {
+                        if (k->type == WN_ELEM && match_from(hs, 0, k)) any = 1;
+                        if (k->first) { k = k->first; continue; }
+                        while (k && k != n && !k->next) k = k->parent;
+                        if (!k || k == n) break;
+                        k = k->next; } }
+            }
+            if (!any) return 0;
+            continue;
+        }
+        for (uint8_t i = 0; i < l->count; i++) {
+            if (l->items && match_simple(&l->items[i], n)) { any = 1; break; }
+        }
+        if (l->mode == 2 ? any : !any) return 0;
+    }
     return 1;
 }
 
@@ -1002,11 +1491,65 @@ static int match_from(const struct wsel *sel, int i, struct wnode *n)
     uint8_t cb = sel->parts[i].comb;
     struct wnode *q;
     switch (cb) {
-    case '>': q = n->parent; return q && q->type == WN_ELEM && match_from(sel, i + 1, q);
+    case '>': q = n->parent; if (wd_is_shadow_root(q)) q = q->parent;   /* SOMA_188: CSS acotado: el hijo directo de la raiz sombra cuelga del anfitrion */
+              return q && q->type == WN_ELEM && match_from(sel, i + 1, q);
     case '+': q = prev_elem(n); return q && match_from(sel, i + 1, q);
     case '~': for (q = prev_elem(n); q; q = prev_elem(q)) if (match_from(sel, i + 1, q)) return 1; return 0;
-    default: for (q = n->parent; q && q->type == WN_ELEM; q = q->parent) if (match_from(sel, i + 1, q)) return 1; return 0;
+    default: for (q = n->parent; q && q->type == WN_ELEM; q = q->parent) if (!wd_is_shadow_root(q) && match_from(sel, i + 1, q)) return 1; return 0;
     }
+}
+
+/* SOMA_152_WEB_FLUIDO: invalidacion selectiva por :hover.
+ * Antes, con cualquier regla :hover en la pagina, cada cambio del elemento bajo el puntero recalculaba los estilos y
+ * maquetaba el documento entero (decenas de ms en paginas con Bootstrap). Un compuesto con :hover solo puede cambiar su
+ * resultado en un nodo cuyo estado hover cambio; si ninguno de esos nodos encaja con el compuesto (sin contar el propio
+ * :hover), ninguna regla cambia y no hace falta reestilar. Ante :hover dentro de :not()/:is() se responde "si". */
+static int hover_nested152(const struct wsimple *s, int depth)
+{
+    if (!s || depth > 6) return 1;
+    if (s->not_ && ((s->not_->pseudo & PF_HOVER) || hover_nested152(s->not_, depth + 1))) return 1;
+    for (const struct wlist *l = s->lists; l; l = l->next) {
+        /* SOMA_204: las listas de :has() (modo >= 3, parche 188) no tienen `items` sino `hsel`: selectores completos. Aqui se leia
+         * items[0] siendo NULL: bastaba una hoja con :has() y mover el raton para tumbar el motor (fallo de pagina en 0x61). */
+        if (l->mode >= 3) {
+            for (uint8_t i = 0; l->hsel && i < l->count; i++) {
+                const struct wsel *hs = l->hsel[i]; if (!hs || !hs->parts) continue;
+                for (int k = 0; k < hs->n; k++) if ((hs->parts[k].pseudo & PF_HOVER) || hover_nested152(&hs->parts[k], depth + 1)) return 1;
+            }
+            continue;
+        }
+        for (uint8_t i = 0; l->items && i < l->count; i++)
+            if ((l->items[i].pseudo & PF_HOVER) || hover_nested152(&l->items[i], depth + 1)) return 1;
+    }
+    return 0;
+}
+static int on_chain152(struct wnode *chain, struct wnode *n) { for (; chain; chain = chain->parent) if (chain == n) return 1; return 0; }
+static int compound_hits152(const struct wsimple *s, struct wnode *a, struct wnode *b)
+{
+    for (struct wnode *n = a; n; n = n->parent) {
+        if (n->type != WN_ELEM || on_chain152(b, n)) continue;    /* solo los nodos cuyo estado hover cambio */
+        uint16_t f = n->flags; n->flags = (uint16_t)(n->flags | WNF_HOVER);
+        int m = match_simple(s, n);
+        n->flags = f;
+        if (m) return 1;
+    }
+    return 0;
+}
+int wc_hover_affects(struct wcss *c, struct wnode *old_hover, struct wnode *new_hover)
+{
+    if (!c) return 1;
+    if (old_hover == new_hover) return 0;
+    cbloom_new_gen152();
+    for (int i = 0; i < c->nrules; i++) {
+        const struct wsel *sel = c->rules[i]->sel; if (!sel) continue;
+        for (int k = 0; k < sel->n; k++) {
+            const struct wsimple *s = &sel->parts[k];
+            if (hover_nested152(s, 0)) return 1;
+            if (!(s->pseudo & PF_HOVER)) continue;
+            if (compound_hits152(s, old_hover, new_hover) || compound_hits152(s, new_hover, old_hover)) return 1;
+        }
+    }
+    return 0;
 }
 
 /* ============================ hojas ============================ */
@@ -1030,9 +1573,14 @@ struct wcss *wc_new(struct wdoc *d)
     if (!c->match || !c->scratch) { wc_free(c); return 0; }
     return c;
 }
+static void vcache_clear152(void);
 void wc_free(struct wcss *c)
 {
     if (!c) return;
+    vcache_clear152();
+    if (c->vtab) kfree(c->vtab);
+    if (c->stab) kfree(c->stab);
+    if (c->stab_key) kfree(c->stab_key);
     if (c->rules) kfree(c->rules);
     if (c->match) kfree(c->match);
     if (c->scratch) kfree(c->scratch);
@@ -1137,7 +1685,14 @@ static void parse_rules(struct wcss *c, const char *s, const char *e, int origin
 {
     const char *p = s;
     while (p < e) {
-        while (p < e && (wu_isspace(*p) || (*p == '<' && p + 3 < e && p[1] == '!') )) { if (*p == '<') { while (p < e && *p != '>') p++; } p++; }
+        /* SOMA_188: solo los tokens CDO "<!--" y CDC "-->" se ignoran (antes se saltaba hasta el siguiente '>': con
+           "<![CDATA[" se retomaba a media regla y salian selectores universales, p. ej. "* {display:table-cell}") */
+        for (;;) {
+            while (p < e && wu_isspace(*p)) p++;
+            if (p + 3 < e && p[0] == '<' && p[1] == '!' && p[2] == '-' && p[3] == '-') { p += 4; continue; }
+            if (p + 2 < e && p[0] == '-' && p[1] == '-' && p[2] == '>') { p += 3; continue; }
+            break;
+        }
         if (p >= e) break;
         if (*p == '@') {
             const char *ns = ++p; while (p < e && (wu_isalpha(*p) || *p == '-')) p++;
@@ -1192,7 +1747,7 @@ static void parse_rules(struct wcss *c, const char *s, const char *e, int origin
             const char *r = q; int d2 = 0;
             while (r < se && !(*r == ',' && !d2)) { if (*r == '(' || *r == '[') d2++; else if (*r == ')' || *r == ']') d2--; r++; }
             struct wsel *sel = compile_selector(c, q, (uint32_t)(r - q));
-            if (sel && sel->pe) { int hasclear = 0; for (int di = 0; di < nd; di++) if (dl[di].prop == PR_CLEAR && !is_kw(dl[di].val, dl[di].vlen, "none")) hasclear = 1; if (!hasclear) sel = 0; }
+            if (sel && sel->pe) { int hasclear = 0; for (int di = 0; di < nd; di++) if (dl[di].prop == PR_CLEAR && !is_kw(dl[di].val, dl[di].vlen, "none")) hasclear = 1; if (hasclear) sel->pe |= 4; }   /* SOMA_188: se conservan (contenido generado) */
             if (sel) {
                 struct wrule *ru = (struct wrule *)wa_zalloc(&c->d->ar, sizeof(*ru));
                 if (!ru) return;
@@ -1236,10 +1791,29 @@ static void build_index(struct wcss *c)
     }
 }
 
-static const struct wvar *find_var(const struct wvar *v, const char *name, uint32_t nl)
+static const struct wvar *find_var_slow(const struct wvar *v, const char *name, uint32_t nl)
 {
     for (; v; v = v->next) if (wu_strneq(v->name, name, nl) && v->name[nl] == 0) return v;
     return 0;
+}
+/* SOMA_152_WEB_FLUIDO: cache de var(). Las listas de variables son persistentes (cada elemento antepone las suyas a la
+ * lista del padre y los nodos existentes nunca cambian), asi que (cabeza de lista, nombre) -> resultado es estable durante
+ * un wc_compute. Con Bootstrap (~300 propiedades en :root) cada var() recorria la lista entera comparando cadenas: era la
+ * mayor parte del calculo de estilos. Se vacia al empezar cada wc_compute (las direcciones del arena pueden reutilizarse). */
+#define VC152 2048
+struct vc152 { const struct wvar *head, *res; uint64_t h; uint32_t nl; };
+static struct vc152 s_vc152[VC152];
+static void vcache_clear152(void) { memset(s_vc152, 0, sizeof s_vc152); }
+static const struct wvar *find_var(const struct wvar *v, const char *name, uint32_t nl)
+{
+    if (!v) return 0;
+    uint64_t h = 1469598103934665603ull;
+    for (uint32_t i = 0; i < nl; i++) { h ^= (uint8_t)name[i]; h *= 1099511628211ull; }
+    struct vc152 *e = &s_vc152[(h ^ ((uint64_t)(uintptr_t)v >> 4) ^ ((uint64_t)(uintptr_t)v >> 15)) & (VC152 - 1)];
+    if (e->head == v && e->h == h && e->nl == nl && (!e->res || (wu_strneq(e->res->name, name, nl) && e->res->name[nl] == 0))) return e->res;
+    const struct wvar *r = find_var_slow(v, name, nl);
+    e->head = v; e->res = r; e->h = h; e->nl = nl;
+    return r;
 }
 
 static int expand_vars(struct wcss *c, const struct wvar *vars, const char *in, uint32_t n, char *out, uint32_t max, int depth)
@@ -1254,7 +1828,7 @@ static int expand_vars(struct wcss *c, const struct wvar *vars, const char *in, 
             if (j < n && in[j] == ',') { j++; fb = in + j; uint32_t k = j; while (k < n) { if (in[k] == '(') d++; else if (in[k] == ')') { d--; if (!d) break; } k++; } fl = k - j; j = k; }
             while (j < n && d && in[j] != ')') j++;
             const struct wvar *v = find_var(vars, in + ns, nl);
-            if (depth > 6) return 0;
+            if (depth > 20) return 0;   /* SOMA_188: antes 6 (los sistemas de diseno encadenan muchas variables) */
             if (v) { int r = expand_vars(c, vars, v->val, wu_strlen(v->val), out + o, max - o, depth + 1); if (!r) return 0; o += (uint32_t)r - 1; }
             else if (fb) { int r = expand_vars(c, vars, fb, fl, out + o, max - o, depth + 1); if (!r) return 0; o += (uint32_t)r - 1; }
             else return 0;
@@ -1266,6 +1840,19 @@ static int expand_vars(struct wcss *c, const struct wvar *vars, const char *in, 
     out[o] = 0; return (int)o + 1;
 }
 
+/* SOMA_188: valor calculado de una propiedad personalizada (--x) para getComputedStyle().getPropertyValue */
+int wc_custom_prop(const struct wstyle *st, const char *name, char *out, uint32_t max)
+{
+    out[0] = 0; if (!st || max < 2) return -1;
+    uint32_t nl = wu_strlen(name); const struct wvar *v = find_var_slow(st->vars, name, nl);
+    if (!v || !v->val) return -1;
+    int r = expand_vars(0, st->vars, v->val, wu_strlen(v->val), out, max, 0);
+    if (!r) { wu_copy(out, v->val, max); }
+    /* recorta espacios como Chrome */
+    uint32_t a = 0, z = wu_strlen(out); while (a < z && wu_isspace(out[a])) a++; while (z > a && wu_isspace(out[z - 1])) z--;
+    if (a) for (uint32_t i = a; i < z; i++) out[i - a] = out[i];
+    out[z - a] = 0; return 0;
+}
 static void init_style(struct wstyle *st, const struct wstyle *par)
 {
     memset(st, 0, sizeof(*st));
@@ -1275,12 +1862,13 @@ static void init_style(struct wstyle *st, const struct wstyle *par)
     st->top.kind = st->right.kind = st->bottom.kind = st->left.kind = LK_AUTO;
     st->gap_r.kind = st->gap_c.kind = LK_VAL; st->text_indent.kind = LK_VAL; st->bg_w.kind = st->bg_h.kind = LK_AUTO;
     st->z_index = 0; st->spacing_h = st->spacing_v = 2; st->align_self = AI_AUTO;
-    st->color = par->color; st->font_px = par->font_px; st->bold = par->bold; st->italic = par->italic; st->mono = par->mono;
+    st->color = par->color; st->font_px = par->font_px; st->fs_zero = par->fs_zero; st->bold = par->bold; st->italic = par->italic; st->mono = par->mono;
     st->text_align = par->text_align; st->text_decor = par->text_decor; st->text_transform = par->text_transform; st->white_space = par->white_space;
     st->list_style = par->list_style; st->list_inside = par->list_inside; st->visibility = par->visibility; st->letter_sp = par->letter_sp;
     st->word_break = par->word_break; st->lh_mode = par->lh_mode; st->lh_val = par->lh_val; st->border_collapse = par->border_collapse;
-    st->spacing_h = par->spacing_h; st->spacing_v = par->spacing_v; st->pointer = par->pointer; st->vars = par->vars;
+    st->spacing_h = par->spacing_h; st->spacing_v = par->spacing_v; st->pointer = par->pointer; st->no_ptr = par->no_ptr; st->vars = par->vars; st->svg_fill = par->svg_fill; st->svg_stroke = par->svg_stroke; st->svg_sw = par->svg_sw;
     st->text_indent = par->text_indent; st->vertical_align = 0;
+    st->obj_pos_x = st->obj_pos_y = 50;   /* SOMA_181 */
 }
 
 /* SOMA_PARCHE_028_UI: busqueda acotada a [h, h+hl). Los valores de las declaraciones apuntan DENTRO del texto de la hoja
@@ -1296,10 +1884,30 @@ static void apply_decl(struct wcss *c, struct wstyle *st, struct actx *a, const 
 {
     const char *v = d->val; uint32_t vl = d->vlen;
     if (d->prop == PR_CUSTOM) {
+        uint32_t s = 0; while (s < vl && wu_isspace(v[s])) s++;
+        /* SOMA_152_WEB_FLUIDO: antes cada recalculo de estilos creaba de nuevo TODAS las variables (--bs-*) de cada
+         * elemento en el arena del documento, que nunca se libera hasta cambiar de pagina: con Bootstrap eran cientos de
+         * KB por recalculo; con un reloj en JS o al pasar el raton (:hover) el arena (16 MB) se agotaba en ~1 minuto y la
+         * pagina se quedaba sin estilos ni DOM nuevo. Ahora un nodo identico (nombre, valor y lista de la que cuelga) se
+         * reutiliza: las listas son persistentes, compartirlo es seguro y el arena deja de crecer. */
+        uint32_t h = 2166136261u;
+        for (uint32_t i = 0; i < d->nlen; i++) { h ^= (uint8_t)d->name[i]; h *= 16777619u; }
+        for (uint32_t i = s; i < vl; i++) { h ^= (uint8_t)v[i]; h *= 16777619u; }
+        h ^= (uint32_t)((uintptr_t)st->vars >> 3); h *= 16777619u; h ^= h >> 15;
+        if (!c->vtab) { c->vtab = (struct wvar **)kmalloc(sizeof(struct wvar *) * 16384u); if (c->vtab) memset(c->vtab, 0, sizeof(struct wvar *) * 16384u); }
+        struct wvar **slot = c->vtab ? &c->vtab[h & 16383u] : 0;
+        if (slot && *slot) {
+            struct wvar *e = *slot;
+            if (e->next == st->vars && wu_strneq(e->name, d->name, d->nlen) && e->name[d->nlen] == 0 &&
+                wu_strneq(e->val, v + s, vl - s) && e->val[vl - s] == 0) { st->vars = e; return; }
+        }
         struct wvar *nv = (struct wvar *)wa_alloc(&c->d->ar, sizeof(*nv)); if (!nv) return;
         nv->name = wa_strndup(&c->d->ar, d->name, d->nlen);
-        uint32_t s = 0; while (s < vl && wu_isspace(v[s])) s++;
-        nv->val = wa_strndup(&c->d->ar, v + s, vl - s); nv->next = st->vars; st->vars = nv; return;
+        nv->val = wa_strndup(&c->d->ar, v + s, vl - s);
+        if (!nv->name || !nv->val) return;
+        nv->next = st->vars; st->vars = nv;
+        if (slot) *slot = nv;
+        return;
     }
     if (vl > 4 && findn(v, vl, "var(")) {
         int r = expand_vars(c, st->vars, v, vl, c->scratch, 2048, 0);
@@ -1357,7 +1965,7 @@ static void apply_presentational(struct wnode *n, struct wstyle *st)
 {
     if (!n->attrs) return;
     const char *v; struct wlen l; int t = n->tag;
-    if (wd_attr(n, "hidden") && t != WT_INPUT) { st->display = D_NONE; return; }
+    if (wd_attr(n, "hidden")) { st->display = D_NONE; return; }   /* SOMA_187A: tambien en <input hidden> (Google oculta asi el input de archivos del menu "+") */
     if ((v = wd_attr(n, "bgcolor")) && !st->bg_color) { uint32_t c = attr_color(v); if (c) st->bg_color = c; }
     if (t == WT_BODY) { if ((v = wd_attr(n, "text"))) { uint32_t c = attr_color(v); if (c) st->color = c; } }
     if (t == WT_TABLE || t == WT_TD || t == WT_TH || t == WT_IMG || t == WT_IFRAME || t == WT_CANVAS || t == WT_VIDEO || t == WT_SVG || t == WT_EMBED || t == WT_OBJECT || t == WT_HR || t == WT_COL || t == WT_COLGROUP || t == WT_INPUT) {
@@ -1417,12 +2025,169 @@ static void apply_presentational(struct wnode *n, struct wstyle *st)
     if (t == WT_A && wd_attr(n, "href") && n->parent && n->parent->tag == WT_BODY) { /* link=... del body */ const char *lc = wd_attr(n->parent, "link"); if (lc) { uint32_t c = attr_color(lc); if (c && st->color == 0xFF0000EEu) st->color = c; } }
 }
 
+static int wu_isxdigit(int ch) { return (ch >= '0' && ch <= '9') || ((ch | 32) >= 'a' && (ch | 32) <= 'f'); }
+/* ---------------- SOMA_188: contadores CSS y contenido generado (::before / ::after) ---------------- */
+static int *cnt_slot(struct wcss *c, const char *nm, uint32_t nl, int create)
+{
+    for (int i = 0; i < c->ncnt; i++) if (wu_strlen(c->cnt[i].name) == nl && wu_strneq(c->cnt[i].name, nm, nl)) return &c->cnt[i].val;
+    if (!create || c->ncnt >= 24 || nl >= 24) return 0;
+    memcpy(c->cnt[c->ncnt].name, nm, nl); c->cnt[c->ncnt].name[nl] = 0; c->cnt[c->ncnt].val = 0; return &c->cnt[c->ncnt++].val;
+}
+/* "a 2 b" -> op(a, 2), op(b, def). op 0 reset, 1 increment, 2 set */
+static void cnt_apply(struct wcss *c, const char *s, int op)
+{
+    if (!s[0] || wu_strnieq(s, "none", 4)) return;
+    const char *p = s;
+    while (*p) {
+        while (*p && wu_isspace(*p)) p++;
+        const char *a = p; while (*p && !wu_isspace(*p)) p++;
+        uint32_t nl = (uint32_t)(p - a); if (!nl) break;
+        if ((a[0] >= '0' && a[0] <= '9') || a[0] == '-') continue;
+        while (*p && wu_isspace(*p)) p++;
+        int val = op == 1 ? 1 : 0;
+        if ((*p >= '0' && *p <= '9') || (*p == '-' && p[1] >= '0' && p[1] <= '9')) { val = wu_atoi(p); if (*p == '-') p++; while (*p >= '0' && *p <= '9') p++; }
+        int *v = cnt_slot(c, a, nl, 1); if (!v) continue;
+        if (op == 1) *v += val; else *v = val;
+    }
+}
+static void put_cp(char *o, int *k, int max, uint32_t cp)
+{
+    if (cp >= 0xE000 && cp <= 0xF8FF) return;            /* zona privada: iconos de fuentes web (no hay @font-face): nada */
+    if (cp == 0) return;
+    if (cp < 0x80) { if (*k < max) o[(*k)++] = (char)cp; }
+    else if (cp < 0x800) { if (*k + 1 < max) { o[(*k)++] = (char)(0xC0 | (cp >> 6)); o[(*k)++] = (char)(0x80 | (cp & 63)); } }
+    else if (cp < 0x10000) { if (*k + 2 < max) { o[(*k)++] = (char)(0xE0 | (cp >> 12)); o[(*k)++] = (char)(0x80 | ((cp >> 6) & 63)); o[(*k)++] = (char)(0x80 | (cp & 63)); } }
+    else if (cp < 0x110000 && *k + 3 < max) { o[(*k)++] = (char)(0xF0 | (cp >> 18)); o[(*k)++] = (char)(0x80 | ((cp >> 12) & 63)); o[(*k)++] = (char)(0x80 | ((cp >> 6) & 63)); o[(*k)++] = (char)(0x80 | (cp & 63)); }
+}
+static void put_str(char *o, int *k, int max, const char *s) { while (*s && *k < max) o[(*k)++] = *s++; }
+static void fmt_counter(char *o, int *k, int max, int v, const char *style, uint32_t sl)
+{
+    char b[40]; int n = 0;
+    if (sl && (is_kw(style, sl, "lower-alpha") || is_kw(style, sl, "lower-latin") || is_kw(style, sl, "upper-alpha") || is_kw(style, sl, "upper-latin")) && v > 0) {
+        int up = style[0] == 'u' || style[0] == 'U'; char t[16]; int m = 0; int x = v;
+        while (x > 0 && m < 15) { x--; t[m++] = (char)((up ? 'A' : 'a') + x % 26); x /= 26; }
+        while (m) b[n++] = t[--m];
+    } else if (sl && (is_kw(style, sl, "lower-roman") || is_kw(style, sl, "upper-roman")) && v > 0 && v < 4000) {
+        static const int V[] = { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 }; static const char *const R[] = { "m", "cm", "d", "cd", "c", "xc", "l", "xl", "x", "ix", "v", "iv", "i" };
+        int up = style[0] == 'u' || style[0] == 'U'; int x = v;
+        for (int i = 0; i < 13; i++) while (x >= V[i]) { for (const char *r = R[i]; *r; r++) b[n++] = up ? (char)(*r - 32) : *r; x -= V[i]; }
+    } else if (sl && is_kw(style, sl, "disc")) { put_cp(o, k, max, 0x2022); return; }
+    else if (sl && is_kw(style, sl, "circle")) { put_cp(o, k, max, 0x25E6); return; }
+    else if (sl && is_kw(style, sl, "square")) { put_cp(o, k, max, 0x25AA); return; }
+    else if (sl && is_kw(style, sl, "none")) return;
+    else { if (sl && is_kw(style, sl, "decimal-leading-zero") && v >= 0 && v < 10) b[n++] = '0'; n += wu_itoa(v, b + n); }
+    b[n] = 0; put_str(o, k, max, b);
+}
+/* evalua content: cadenas (con escapes CSS), attr(), comillas, counter()/counters(). Devuelve -1 si es none/normal */
+static int eval_content(struct wcss *c, struct wnode *n, const char *v, int vl, char *o, int max)
+{
+    int k = 0, i = 0, any = 0;
+    while (i < vl) {
+        while (i < vl && wu_isspace(v[i])) i++;
+        if (i >= vl) break;
+        char ch = v[i];
+        if (ch == '/') break;                             /* texto alternativo: content: "x" / "alt" */
+        if (ch == '"' || ch == '\'') {
+            i++; any = 1;
+            while (i < vl && v[i] != ch) {
+                if (v[i] == '\\' && i + 1 < vl) {
+                    i++; uint32_t cp = 0; int h = 0;
+                    while (i < vl && h < 6 && wu_isxdigit(v[i])) { char d = v[i]; cp = cp * 16 + (uint32_t)(d <= '9' ? d - '0' : (d | 32) - 'a' + 10); i++; h++; }
+                    if (h) { if (i < vl && v[i] == ' ') i++; put_cp(o, &k, max, cp); }
+                    else if (v[i] == '\n') i++;
+                    else { if (k < max) o[k++] = v[i]; i++; }
+                } else { if (k < max) o[k++] = v[i]; i++; }
+            }
+            i++; continue;
+        }
+        int s0 = i; while (i < vl && (wu_isalnum(v[i]) || v[i] == '-' || v[i] == '_')) i++;
+        uint32_t wl = (uint32_t)(i - s0); const char *w = v + s0;
+        if (!wl) { i++; continue; }
+        if (i < vl && v[i] == '(') {
+            int d = 0, a0 = i + 1; while (i < vl) { if (v[i] == '(') d++; else if (v[i] == ')') { if (--d == 0) break; } i++; }
+            int a1 = i; i++;
+            while (a0 < a1 && wu_isspace(v[a0])) a0++;
+            int e1 = a1; while (e1 > a0 && wu_isspace(v[e1 - 1])) e1--;
+            any = 1;
+            if (is_kw(w, wl, "attr")) { char an[64]; int an_l = e1 - a0; if (an_l > 63) an_l = 63; memcpy(an, v + a0, (size_t)an_l); an[an_l] = 0; for (int q = 0; q < an_l; q++) if (an[q] == ' ' || an[q] == ',') { an[q] = 0; break; } const char *av = wd_attr(n, an); if (av) put_str(o, &k, max, av); }
+            else if (is_kw(w, wl, "counter") || is_kw(w, wl, "counters")) {
+                int cm = a0; while (cm < e1 && v[cm] != ',') cm++;
+                int ne = cm; while (ne > a0 && wu_isspace(v[ne - 1])) ne--;
+                const char *sty = 0; uint32_t syl = 0;
+                if (cm < e1) { int ss = cm + 1; if (is_kw(w, wl, "counters")) { /* separador entre comillas: se salta */ while (ss < e1 && v[ss] != ',') ss++; ss++; } while (ss < e1 && wu_isspace(v[ss])) ss++; if (ss < e1) { sty = v + ss; syl = (uint32_t)(e1 - ss); } }
+                int *cv = cnt_slot(c, v + a0, (uint32_t)(ne - a0), 0);
+                fmt_counter(o, &k, max, cv ? *cv : 0, sty, syl);
+            }
+            /* url(), image-set(), etc.: imagen generada no soportada: nada */
+            continue;
+        }
+        if (is_kw(w, wl, "none") || is_kw(w, wl, "normal")) return -1;
+        if (is_kw(w, wl, "open-quote")) { put_cp(o, &k, max, 0x201C); any = 1; }
+        else if (is_kw(w, wl, "close-quote")) { put_cp(o, &k, max, 0x201D); any = 1; }
+        else if (is_kw(w, wl, "no-open-quote") || is_kw(w, wl, "no-close-quote")) any = 1;
+    }
+    if (!any) return -1;
+    o[k < max ? k : max - 1] = 0; return k;
+}
+static void sort_rules(struct wrule **m, int nm)
+{
+    for (int i = 1; i < nm; i++) {
+        struct wrule *x = m[i]; int j = i - 1;
+        uint64_t kx = ((uint64_t)x->origin << 56) | ((uint64_t)x->sel->spec << 24) | (x->order & 0xFFFFFF);
+        while (j >= 0) { struct wrule *y = m[j]; uint64_t ky = ((uint64_t)y->origin << 56) | ((uint64_t)y->sel->spec << 24) | (y->order & 0xFFFFFF); if (ky <= kx) break; m[j + 1] = y; j--; }
+        m[j + 1] = x;
+    }
+}
+static void counters_after_cascade(struct wcss *c)
+{
+    if (c->creset[0]) cnt_apply(c, c->creset, 0);
+    if (c->cset[0]) cnt_apply(c, c->cset, 2);
+    if (c->cinc[0]) cnt_apply(c, c->cinc, 1);
+    c->creset[0] = c->cinc[0] = c->cset[0] = 0;
+}
+static void compute_pseudo(struct wcss *c, struct wnode *n, struct wstyle *st, struct wrule **m, int nm, int k)
+{
+    struct wnode *ps = st->pse[k];
+    if (!ps) {
+        ps = (struct wnode *)wa_zalloc(&c->d->ar, sizeof *ps); if (!ps) return;
+        ps->type = WN_ELEM; ps->tag = WT_SPAN; ps->name = k ? "::after" : "::before"; ps->tlen = 7; ps->flags = WNF_PSEUDO | WNF_INDOC;
+        st->pse[k] = ps;
+    }
+    ps->parent = n; ps->next = ps->prev = 0;
+    struct wstyle *pst = ps->st;
+    if (!pst) { pst = (struct wstyle *)wa_alloc(&c->d->ar, sizeof *pst); if (!pst) return; ps->st = pst; }
+    init_style(pst, st);
+    sort_rules(m, nm);
+    c->pc_len = -1; c->creset[0] = c->cinc[0] = c->cset[0] = 0;
+    struct actx a; a.par = st; a.c = c; a.lc.root_px = 16; a.lc.vw = c->vw; a.lc.vh = c->vh; a.lc.font_px = st->font_px;
+    cascade_pass(c, pst, &a, m, nm, 0, 0, 0);
+    cascade_pass(c, pst, &a, m, nm, 0, 0, 1);
+    for (int i = 0; i < 4; i++) if (pst->border_color[i] == 1) pst->border_color[i] = pst->color;
+    if ((pst->floating || pst->position == P_ABSOLUTE || pst->position == P_FIXED) && pst->display != D_NONE) {
+        if (pst->display == D_INLINE || pst->display == D_INLINE_BLOCK) pst->display = D_BLOCK;
+        else if (pst->display == D_INLINE_FLEX) pst->display = D_FLEX;
+    }
+    pst->pse[0] = pst->pse[1] = 0;
+    counters_after_cascade(c);
+    char txt[512]; int tl = c->pc_len >= 0 ? eval_content(c, n, c->pc, c->pc_len, txt, (int)sizeof txt - 1) : -1;
+    if (tl < 0) { pst->display = D_NONE; return; }
+    struct wnode *t = ps->first;
+    if (t && t->tlen == (uint32_t)tl && wu_strneq(t->name, txt, (uint32_t)tl)) return;
+    if (!tl) { ps->first = ps->last = 0; return; }
+    if (!t) { t = (struct wnode *)wa_zalloc(&c->d->ar, sizeof *t); if (!t) return; t->type = WN_TEXT; t->flags = WNF_PSEUDO | WNF_INDOC; t->parent = ps; ps->first = ps->last = t; }
+    t->name = wa_strndup(&c->d->ar, txt, (uint32_t)tl); t->tlen = t->name ? (uint32_t)tl : 0;
+}
+
 static void compute_node(struct wcss *c, struct wnode *n, const struct wstyle *par, struct wdecl *tmpd)
 {
     wu_tick();
-    struct wstyle *st = n->st;
-    if (!st) { st = (struct wstyle *)wa_alloc(&c->d->ar, sizeof(*st)); if (!st) return; n->st = st; }
+    struct wstyle *st = n->st; int fresh = 0;
+    if (!st) { st = (struct wstyle *)wa_alloc(&c->d->ar, sizeof(*st)); if (!st) return; n->st = st; fresh = 1; }
+    /* SOMA_188: un estilo recien reservado no esta a cero (en el kernel kmalloc no limpia): sus pse[] son basura */
+    struct wnode *keep_pse[2] = { fresh ? 0 : st->pse[0], fresh ? 0 : st->pse[1] };
     init_style(st, par);
+    st->pse[0] = keep_pse[0]; st->pse[1] = keep_pse[1];
+    struct wrule *pm[3][24]; int npm[3] = { 0, 0, 0 };
     /* reglas coincidentes */
     int nm = 0; struct wrule **m = c->match;
     struct wrule *lists[8]; int nl = 0;
@@ -1438,7 +2203,7 @@ static void compute_node(struct wcss *c, struct wnode *n, const struct wstyle *p
         for (; r; r = r->bnext) {
             if (c->vw < r->minw || c->vw > r->maxw) continue;
             if (!match_from(r->sel, 0, n)) continue;
-            if (r->sel->pe) { st->clearfix = 1; continue; }
+            if (r->sel->pe) { if (r->sel->pe & 4) st->clearfix = 1; int pk = (r->sel->pe & 3) - 1; if (pk >= 0 && pk < 3 && npm[pk] < 24) pm[pk][npm[pk]++] = r; continue; }   /* SOMA_188 */
             if (nm < c->match_cap) m[nm++] = r;
         }
     }
@@ -1452,10 +2217,33 @@ static void compute_node(struct wcss *c, struct wnode *n, const struct wstyle *p
     int ninl = 0; const char *sty = wd_attr(n, "style");
     if (sty && *sty) { uint32_t sl = wu_strlen(sty); ninl = parse_decls(c, sty, sty + sl, tmpd, 96); }
     struct actx a; a.par = par; a.c = c; a.lc.root_px = 16; a.lc.vw = c->vw; a.lc.vh = c->vh; a.lc.font_px = par->font_px;
+    c->creset[0] = c->cinc[0] = c->cset[0] = 0;
     cascade_pass(c, st, &a, m, nm, tmpd, ninl, 0);
     cascade_pass(c, st, &a, m, nm, tmpd, ninl, 1);
     for (int i = 0; i < 4; i++) if (st->border_color[i] == 1) st->border_color[i] = st->color;
     apply_presentational(n, st);
+    counters_after_cascade(c);   /* SOMA_188 */
+    if (n->tag == WT_OL || n->tag == WT_UL) { int *lv = cnt_slot(c, "list-item", 9, 1); if (lv) *lv = 0; }
+    if (st->display == D_LIST_ITEM) { int *lv = cnt_slot(c, "list-item", 9, 1); if (lv) (*lv)++; }
+    st->ph_color = 0; st->ph_italic = st->ph_bold = -1;
+    if (npm[2] && (n->tag == WT_INPUT || n->tag == WT_TEXTAREA)) {   /* SOMA_188: ::placeholder -> color/estilo del texto indicativo */
+        if (!c->phst) c->phst = (struct wstyle *)wa_alloc(&c->d->ar, sizeof *c->phst);
+        struct wstyle *ph = c->phst;
+        if (ph) {
+            init_style(ph, st); ph->color = 0x01000000u; ph->italic = 2; ph->bold = 2;
+            sort_rules(pm[2], npm[2]); c->pc_len = -1;
+            struct actx pa; pa.par = st; pa.c = c; pa.lc.root_px = 16; pa.lc.vw = c->vw; pa.lc.vh = c->vh; pa.lc.font_px = st->font_px;
+            cascade_pass(c, ph, &pa, pm[2], npm[2], 0, 0, 0); cascade_pass(c, ph, &pa, pm[2], npm[2], 0, 0, 1);
+            if (ph->color != 0x01000000u) st->ph_color = ph->color ? ph->color : 0x00000001u;
+            if (ph->italic != 2) st->ph_italic = (int8_t)(ph->italic != 0);
+            if (ph->bold != 2) st->ph_bold = (int8_t)(ph->bold != 0);
+        }
+    }
+    for (int pk = 0; pk < 2; pk++) {
+        if (npm[pk] && st->display != D_NONE && !(n->flags & WNF_VOID) && n->tag != WT_IMG && n->tag != WT_INPUT && n->tag != WT_TEXTAREA && n->tag != WT_SELECT && n->tag != WT_IFRAME && n->tag != WT_VIDEO && n->tag != WT_CANVAS && n->tag != WT_SVG)
+            compute_pseudo(c, n, st, pm[pk], npm[pk], pk);
+        else if (st->pse[pk] && st->pse[pk]->st) st->pse[pk]->st->display = D_NONE;
+    }
     /* flotantes y posicion absoluta bloquean el display */
     if ((st->floating || st->position == P_ABSOLUTE || st->position == P_FIXED) && st->display != D_NONE) {
         if (st->display == D_INLINE || st->display == D_INLINE_BLOCK) st->display = D_BLOCK;
@@ -1465,32 +2253,63 @@ static void compute_node(struct wcss *c, struct wnode *n, const struct wstyle *p
     n->flags &= (uint16_t)~WNF_DIRTY;
 }
 
+/* SOMA_188: <slot> del arbol sombra de h al que se asigna el hijo n (o NULL) */
+static const struct wnode *slot_for(const struct wnode *h, const struct wnode *n)
+{
+    const char *want = n->type == WN_ELEM ? wd_attr(n, "slot") : 0; if (want && !*want) want = 0;
+    const struct wnode *sr = h->shadow;
+    for (const struct wnode *q = sr->first; q; ) {
+        if (q->type == WN_ELEM && q->name && wu_streq(q->name, "slot")) { const char *nm = wd_attr(q, "name"); if (nm && !*nm) nm = 0; if ((!want && !nm) || (want && nm && wu_streq(want, nm))) return q; }
+        if (q->first) { q = q->first; continue; }
+        while (q && q != sr && !q->next) q = q->parent;
+        if (!q || q == sr) break;
+        q = q->next;
+    }
+    return 0;
+}
 void wc_compute(struct wcss *c, int vw, int vh)
 {
     if (!c) return;
     c->vw = vw; c->vh = vh;
+    vcache_clear152(); cbloom_new_gen152();
     build_index(c);
+    c->ncnt = 0;   /* SOMA_188 */
     struct wstyle *root = (struct wstyle *)kmalloc(sizeof(struct wstyle));
     struct wdecl *tmpd = (struct wdecl *)kmalloc(sizeof(struct wdecl) * 96);
     if (!root || !tmpd) { if (root) kfree(root); if (tmpd) kfree(tmpd); return; }
-    memset(root, 0, sizeof(*root)); root->font_px = 16; root->color = 0xFF000000u; root->spacing_h = root->spacing_v = 2;
+    memset(root, 0, sizeof(*root)); root->font_px = 16; root->color = 0xFF000000u; root->spacing_h = root->spacing_v = g_wl181_off ? 2 : 0;   /* SOMA_181: border-spacing inicial 0 (la hoja base lo pone a 2px en <table>) */
     struct wnode *docn = c->d->root;
     for (struct wnode *n = docn->first; n; ) {
         if (n->type == WN_ELEM) {
-            const struct wstyle *par = (n->parent && n->parent->st) ? n->parent->st : root;
+            const struct wnode *pn = n->parent; if (wd_is_shadow_root(pn)) pn = pn->parent;   /* SOMA_188: el arbol sombra hereda del anfitrion */
+            else if (pn && pn->shadow) { const struct wnode *sl = slot_for(pn, n); if (sl && sl->st) pn = sl; }   /* un hijo asignado a un <slot> hereda del slot */
+            const struct wstyle *par = (pn && pn->st) ? pn->st : root;
             compute_node(c, n, par, tmpd);
         }
-        if (n->type == WN_ELEM && n->first) { n = n->first; continue; }
-        while (n && !n->next) { n = n->parent; if (n == docn) { n = 0; break; } }
-        if (n) n = n->next;
+        if (n->type == WN_ELEM && (n->first || (n->shadow && n->shadow->first))) { n = wd_walk_next(n, docn); continue; }
+        n = wd_walk_next(n, docn);
     }
     kfree(root); kfree(tmpd);
 }
 
 /* ============================ consultas ============================ */
+/* SOMA_152_WEB_FLUIDO: cache real (antes cada querySelector/matches/closest compilaba el selector de nuevo en el arena del
+ * documento: memoria que solo se libera al salir de la pagina; con scripts que consultan el DOM en bucle se agotaba). */
 static struct wsel *cached_sel(struct wcss *c, const char *sel, uint32_t n)
 {
-    return compile_selector(c, sel, n);
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < n; i++) { h ^= (uint8_t)sel[i]; h *= 16777619u; }
+    h = (h ^ (h >> 13)) & 511u;
+    if (!c->stab) {
+        c->stab = (struct wsel **)kmalloc(sizeof(struct wsel *) * 512u);
+        c->stab_key = (const char **)kmalloc(sizeof(const char *) * 512u);
+        if (!c->stab || !c->stab_key) { if (c->stab) kfree(c->stab); if (c->stab_key) kfree(c->stab_key); c->stab = 0; c->stab_key = 0; }
+        else { memset(c->stab, 0, sizeof(struct wsel *) * 512u); memset(c->stab_key, 0, sizeof(const char *) * 512u); }
+    }
+    if (c->stab && c->stab[h] && c->stab_key[h] && wu_strneq(c->stab_key[h], sel, n) && c->stab_key[h][n] == 0) return c->stab[h];
+    struct wsel *r = compile_selector(c, sel, n);
+    if (r && c->stab) { const char *k = wa_strndup(&c->d->ar, sel, n); if (k) { c->stab[h] = r; c->stab_key[h] = k; } }
+    return r;
 }
 
 static int query_one(struct wcss *c, struct wnode *root, const char *sel, struct wnode **out, int max, int first_only, int *count)
@@ -1519,6 +2338,7 @@ int wc_query(struct wcss *c, struct wnode *root, const char *sel, struct wnode *
 {
     int count = 0;
     if (!c || !root || !sel) return 0;
+    cbloom_new_gen152();
     size_t mark = 0; (void)mark;
     query_one(c, root, sel, out, max, first_only, &count);
     return count > max ? max : count;
@@ -1526,6 +2346,7 @@ int wc_query(struct wcss *c, struct wnode *root, const char *sel, struct wnode *
 
 int wc_matches(struct wcss *c, struct wnode *n, const char *sel)
 {
+    cbloom_new_gen152();
     const char *p = sel, *e = sel + wu_strlen(sel);
     while (p < e) {
         const char *r = p; int d = 0; while (r < e && !(*r == ',' && !d)) { if (*r == '(' || *r == '[') d++; else if (*r == ')' || *r == ']') d--; r++; }

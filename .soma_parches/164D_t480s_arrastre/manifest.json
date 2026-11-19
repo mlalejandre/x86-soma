@@ -1,0 +1,21 @@
+{
+  "created": {
+    "docs/PARCHE_164D_T480S_ARRASTRE.md": "437d248f5159fd3a7e04d7f30bf09d3820d955ee56d778efc270373eda9b8fe4"
+  },
+  "files": {
+    "src/drivers/fb.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "e1e5aad5bdbb51ee77bbc7a432b6588bd41025f4d16d3634aa2ed211449a0daa",
+      "old": "5046abe0499f60b2ecee27daeab086c4ce93f49cd42110e8e9e5f11db0a070da"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "0b8277b7b036517c9950aa8b98bb9684142ff2d93aeea6baf71fd2fdbd39cf82",
+      "old": "b526a59aa4823cfb8ef535cfc7187d8005838aeeb11d9c94ee4519380623554e"
+    }
+  },
+  "log": "20261115_221553 parche 164D: arrastre/redimension a 16-33 ms por fotograma; sombras, cajas redondeadas, rellenos y copias de la translucidez repartidos",
+  "version": 1
+}

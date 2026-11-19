@@ -1165,3 +1165,266 @@ nucleos a la vez, asi que se ha elegido un modelo asimetrico que no puede romper
   no cambia), repararlo (restaura). QEMU: TODO OK. `checkpoint` y `rollback` informan ahora de los fallos en vez de callar.
 - GUI: `memview`, `gui_open_notepad` y `gui_open_agents` no fijaban `g_pending_app`, asi que al lanzarlos desde la shell se abria el escritorio vacio; ahora abren su ventana (como el
   resto de los `gui_open_*`).
+
+## Parche 121 — Fase 1 (permisos): un programa de ring 3 ya no puede abrir archivos privados ni internos de BIGFS
+- Problema: `sys_open` aceptaba cualquier ruta del almacen BIGFS. Un ELF podia leer `/.ramfs/NNN` (donde RamFS vuelca los archivos grandes: memoria del agente, `/etc`, estado) o cualquier archivo privado.
+- Cambio: `src/arch/x86_64/user_path.h` (`user_path_allowed`, funcion pura): la ruta se normaliza con `agent_path_canon` (//, /./, /../) y se rechaza si el primer componente es oculto (`/.ramfs`, `/.ckpt`...),
+  si cae en `/etc /sys /boot /mem /agent /tmp /proc /dev`, si contiene un NUL, si es la raiz o no se puede normalizar (> 255). `sys_open` devuelve `E_ACCES` (-13). El resto del almacen (musica, video, /bin, datos
+  del usuario) sigue accesible: se ha preferido lista negra + ocultos a lista blanca para no romper `wavplay`/`vidplay`/`sumfile` con rutas libres.
+- Garantia: desde ring 3 no se puede abrir nada bajo las zonas privadas ni internas, ni con trucos de normalizacion.
+- Prueba: `tests/test_user_path.c` (host, ASan/UBSan, 46 comprobaciones: permitidas, privadas, internas, `..`, `//`, `/./`, NUL, ruta larga, puntero nulo) y `usfuzz`: el kernel crea archivos SENUELO en `/.ramfs/0`, `/mem/x`, `/etc/init.sh`...
+  (y los borra al terminar) y `sysfuzz` intenta abrirlos por 9 rutas distintas, incluidas `/bin/../.ramfs/0` y `//.ramfs/0`. QEMU: 24 x 3000, 0 violaciones.
+- Mutacion: sin la linea `return E_ACCES` el fuzzer da VIOLACION en cada proceso (16-26 aperturas indebidas por proceso).
+
+## Parche 122 — Fase 1 (permisos): `sector_write` y `sector_read` solo tocan zonas libres del disco
+- Problema: `cmd_sector_write` protegia `< 3600`, `4095..4400` y `8192..16383`. Se escribio antes de que existieran BIGFS (LBA >= 16384, todo el almacen de archivos grandes) y el checkpoint de 2.113 sectores
+  (solo se protegian 306): `sector_write 16384 x` destruia el superbloque de BIGFS y `sector_write 5000 x` el checkpoint. `sector_read` es un comando de AGENTES (`CMD_F_SAFE`) y leia cualquier sector:
+  VFS privado, memoria, diario, BIGFS.
+- Cambio: `soma_lba_user_zone()` en `src/fs/disk_layout.h`: solo 3600..4094 y 6211..8191 son zona de usuario; todo lo demas (arranque, buzon, VFS, diario, scratch, marcador y checkpoint, SRCFS, BIGFS y mas alla)
+  esta protegido. `sector_write` la usa; `sector_read` la exige solo cuando lo llama un agente (una persona sigue pudiendo inspeccionar el disco).
+- Prueba: `tests/test_disk_layout.c` (host, ASan/UBSan): 36 limites exactos (3599/3600, 4094/4095, 6210/6211, 8191/8192, 16383/16384, 10^9, 2^64-1...).
+- Mutacion: con la condicion antigua el test falla en los LBA 4401, 5000, 6209, 16384 y 100000.
+
+## Parche 123 — Fase 1 (red): el servidor HTTP sirve solo `/www/` y `/public/` (lista blanca)
+- Problema: `httpd_path_allowed` era una lista NEGRA (`/etc /mem /tmp /sys /agent/*`): `/workspace`, `/mis_archivos`, `/bin`, y cualquier carpeta nueva (informes, `/share`) quedaban expuestas a toda la red. El panel
+  tambien listaba los nombres de TODOS los archivos. Una ruta de mas de 127 bytes se cortaba en silencio y se servia otra distinta.
+- Cambio: `src/net/httpd_policy.h` (funcion pura): solo `/www/...`, `/public/...` y `/proc/version`, `/proc/meminfo`, `/dev/rtc` (los que enlaza el panel); sin `..`, `//`, `/.`, `%`, `\`, controles, ni mas de 120 bytes.
+  Respuestas nuevas: 405 (con `Allow: GET`) para cualquier metodo distinto de GET y 414 para una ruta que no cabe. El panel solo lista lo que se sirve. Las rutas de API (`/api/*`) no cambian.
+- Garantia: un archivo del VFS solo sale por la red si el usuario lo coloca en `/public/` o `/www/`.
+- Prueba: `tests/test_httpd_policy.c` (host, ASan/UBSan, 49 comprobaciones: permitidas, cada carpeta privada, `..`, `//`, `/.oculto`, `%2e`, `\`, controles, 120/121 bytes). QEMU con `hostfwd` y `curl` reales: `/` 200,
+  `/etc/init.sh` 403, `/workspace/notas.txt` 403, `/public/../etc/init.sh` 403, `/public/x` 404 (permitida pero inexistente), `/api/blackboard` 200, `/proc/version` 200, POST 405, ruta de 200 bytes 414, y el panel ya no contiene "workspace".
+- Mutacion: con la lista negra anterior los casos `/workspace/n.txt`, `/mis_archivos/a`, `/bin/hello.elf`, `/share/x` y `/informes/q3.txt` del test devuelven "permitido" y el test falla.
+
+## Parche 124 — Calidad: tabla unica de codigos de error (errno) en la frontera de las syscalls
+- Problema: cada capa tenia sus codigos y se solapaban: `BIGFS_E_IO` (-9) valia lo mismo que `E_BADF`, `BIGFS_E_NOTMNT` (-14) que `E_FAULT`, `BIGFS_E_FBIG` (-13) que "sin permiso" (parche 121). `SYS_WRITE` devolvia un -1 generico.
+  Un programa de usuario no podia distinguir "descriptor invalido" de "error de disco".
+- Cambio: `src/core/errno.h` (sin dependencias, la incluyen el kernel y `ulib.h`): 20 codigos con los valores de Linux (`SOMA_ENOENT -2`, `SOMA_EBADF -9`, `SOMA_EACCES -13`, `SOMA_EFAULT -14`, `SOMA_EBUSY -16`, `SOMA_EINVAL -22`,
+  `SOMA_EMFILE -24`, `SOMA_ENOSYS -38`, `SOMA_EUCLEAN -117`...) y `soma_errno_valid()`. `src/fs/bigfs_errno.h`: `bigfs_errno()` traduce cada error de BIGFS (todo codigo desconocido -> `EIO`). `sys_open/read/seek/fsize` lo aplican;
+  `SYS_WRITE` devuelve `EFAULT`; `-16` y `-38` literales pasan a `SOMA_EBUSY`/`SOMA_ENOSYS`. Los valores que ya documentaban los programas de usuario (-14, -9, -22, -24, -16, -19, -38, -2) NO cambian.
+- Garantia: ring 3 solo ve codigos de la tabla; un error de disco ya no se confunde con un descriptor o un puntero invalido.
+- Prueba: `tests/test_errno.c` (host, 281 comprobaciones: los 60 codigos negativos posibles de BIGFS se traducen a valores de la tabla, sin colisiones, valores antiguos intactos) y `sysfuzz`: toda llamada que falle debe devolver un codigo
+  de la tabla. QEMU: 24 x 3000, 0 violaciones.
+- Mutacion: devolviendo otra vez `-1` en `SYS_WRITE` el fuzzer da VIOLACION en todos los procesos.
+
+## Parche 125 — Calidad: las autopruebas de ring 3 salen de `usermode.c`
+- Problema: `usermode.c` (1.009 lineas) mezclaba la entrada/salida de ring 3, las ranuras de procesos, las syscalls y, desde los parches 117-119, el fuzzer y las pruebas de OOM.
+- Cambio: `usfuzz`, los senuelos del parche 121 y `oomtest` (partes 1 y 2) pasan a `src/arch/x86_64/usermode_tests.c` (220 lineas), que solo usa la API publica (`usermode_exec/wait`, pmm, kheap, bigfs). `usermode.c` queda en 801 lineas. Sin cambio de
+  comportamiento. Se registra `usermode_tests.o` en el Makefile.
+- Ajuste de la prueba de OOM del monton: tras `usfuzz` el monton ya es grande y las rondas piden decenas de MiB; un crecimiento fallido deja una tabla de paginas por cada 2 MiB cruzados (se reutilizan), asi que la tolerancia por fallo es
+  ahora `peticion / 2 MiB + 2` marcos (la cota acumulada por tamano del monton sigue igual).
+- Prueba: QEMU en una misma ejecucion: `usfuzz` 24 x 3000 TODO OK, `oomtest` parte 1 TODO OK (38 puntos), parte 2 TODO OK (96 denegadas, 24 escrituras rechazadas con el original intacto).
+
+## Parche 126 — Rendimiento/estabilidad: ventanas de interrupcion en las syscalls largas y cuotas por proceso
+- Problema: `SYSCALL` entra con IF=0 (SFMASK) y una lectura de disco, una escritura de audio, un `SYS_WRITE` grande o un `fb_blit` de pantalla completa mantenian las interrupciones cerradas durante milisegundos: se perdian ticks del reloj
+  y la red/teclado tardaban en atenderse. Un proceso podia ademas imprimir sin limite en una sola llamada o girar eternamente haciendo syscalls.
+- Cambio (`usermode.c`): `sys_read` y el audio abren IF alrededor de la espera (y lo cierran antes de `copy_to_user`); `SYS_WRITE` es una escritura corta de como maximo 64 KiB con IF=1 mientras imprime; `fb_blit` copia en trozos de
+  256 KiB y abre una ventana entre trozos con SMAP ya cerrado. Cuota de llamadas por proceso (`USER_MAX_SYSCALLS` = 2^28): al superarla el proceso termina con `USER_EXIT_QUOTA` (-5000). Es seguro porque el kernel es cooperativo y
+  `usermode_on_tick` solo actua si interrumpio ring 3.
+- Correccion de compilacion en AArch64: `usermode_tests.o` solo se enlaza en x86_64 y `usermode.c` de AArch64 aporta `usermode_fuzz/oomtest/oomtest_mem` (informan "no disponible" y devuelven OK), porque `shell.c` los referencia en ambas arquitecturas.
+- Prueba: QEMU: `usfuzz` 24 x 3000 TODO OK sin fugas (1,6 s) y `oomtest` partes 1 y 2 TODO OK con las ventanas de IF activas.
+
+## Parche 127 — Rendimiento: asignador de marcos fisicos por palabras de 64 bits y con pista
+- Problema: `pmm_alloc_frame` recorria el mapa de bits bit a bit desde los 16 MiB en cada llamada: con 32 MiB ya ocupados cada asignacion costaba decenas de miles de ciclos (coste lineal en la memoria usada), y `pmm_alloc_contig` hacia lo mismo.
+- Cambio: `src/arch/x86_64/pmm_scan.h` (funciones puras): `pmm_scan_zero/one/run` saltan 64 marcos por palabra llena y usan `ctz`. El mapa pasa a palabras de 64 bits alineadas. `pmm_hint` guarda "nada libre por debajo": `alloc` empieza ahi,
+  `free` la baja si libera un marco menor, y `alloc_contig` busca tramos con `pmm_scan_run`. Nueva orden `pmmbench` (compara el escaneo antiguo y el nuevo, y comprueba que devuelven los mismos marcos y que no hay fugas).
+  AArch64 usa un asignador lineal propio: `pmmbench` alli solo informa de que no aplica.
+- Medido en QEMU (8192 marcos ocupados, 256 asignaciones): 78.802 -> 954 ciclos por marco (x82), mismos marcos devueltos, 0 fugas. `usfuzz` y `oomtest` (partes 1 y 2) siguen TODO OK.
+- Prueba: `tests/test_pmm_scan.c` (host, ASan/UBSan, 180.008 comprobaciones contra una version bit a bit con mapas de densidad variable y limites no alineados).
+- Mutacion: con `r <= to` en lugar de `r < to` el test da 104 fallos.
+
+## Parche 128 — Estabilidad/rendimiento: OOM real en la creacion de archivos y contadores incrementales del monton
+- Problema 1 (E4): la prueba de OOM del parche 119 creaba archivos de 5 bytes, que nunca necesitan crecer el monton: "creaciones ok/rechazadas 100/0". La ruta `vfs_create` con memoria agotada no se habia ejercitado nunca.
+- Problema 2 (R5): `kheap_stats` recorria TODOS los bloques del monton en cada llamada (la usan el panel HTTP, `thread.c`, `ramstat`, `sysinfo` y la orden `heap`): coste lineal en los bloques vivos.
+- Cambio (`mem.c`): `heap_free_bytes` se mantiene en `bin_insert`/`bin_remove` (toda la contabilidad de libres pasa por ahi) y `kheap_stats` lee `used_bytes` y `heap_free_bytes`: O(1). `kheap_check()` (recorrido completo) ahora tambien comprueba que los
+  contadores de usados, bloques vivos y libres coinciden con lo que dice el recorrido. Nueva `kheap_check_quick()` (O(1)): el ultimo bloque cierra la region mapeada y los contadores son plausibles.
+- Prueba (`usermode_tests.c`): tras las rondas anteriores, una creacion de 512 KiB con los "tapones" que cierran todos los huecos >= 512 KiB, de modo que `vfs_create` TIENE que crecer el monton y la denegacion de marcos cae dentro de la creacion
+  (barrido de 0 a 134 marcos de 3 en 3). Cada resultado se verifica: o el archivo existe entero y con el contenido exacto, o no existe; los bytes usados del monton vuelven al valor inicial; `kheap_check` tras cada paso. La prueba del monton se
+  detiene antes de chocar con el limite del monton (256 MiB) y exige tantas peticiones servidas como rondas hechas.
+- Medido en QEMU tras `usfuzz`: creaciones grandes ok/rechazadas 6/132 (sin tapar el hueco: 0), defectos 0, `kheap_check` = 0.
+- Mutacion: sin descontar `heap_free_bytes` en `bin_remove`, `kheap_check` informa "contador de bytes libres desviado" y la prueba falla en la primera ronda.
+
+## Parche 129 — Estabilidad: un superbloque danado de BIGFS se reconstruye, no se pierde el almacen
+- Problema: el superbloque (sector 0) es un punto unico de fallo de BIGFS. Con el CRC roto el almacen no montaba (y todo lo que vive alli, incluidos los archivos grandes del RamFS, desaparecia); con el sector a ceros el arranque lo tomaba por
+  "region en blanco" y la FORMATEABA, borrando todos los inodos.
+- Cambio (`bigfs.c`): `bigfs_format` deja una copia de reserva del superbloque en el primer sector de relleno tras la tabla de inodos (`1 + inode_count/2`, si el alineado a cluster deja alguno; la geometria NO cambia, asi que los discos
+  existentes siguen montando). Nueva `bigfs_repair_super(dev)`: 0 = estaba sano; 1 = restaurado desde la copia (se busca entre los sectores 2..32769 y solo se acepta una copia con CRC valido cuya POSICION coincide con su `inode_count`,
+  asi un resto de otro formateo no vale); 2 = sin copia (discos anteriores): geometria automatica, solo si el inodo raiz (sector 1) es un directorio con CRC valido; <0 = no hay un SOMABIG1 reconocible y no se escribe nada (el arranque
+  puede entonces formatear una region de verdad en blanco). Solo escribe el sector 0 y hace `flush`. `bigfs_sys()` la invoca una vez por arranque si el montaje da `CORRUPT` o `NOTFMT`, antes de la ruta que formatea.
+- Limite documentado: la ruta 2 supone un disco formateado con `inode_count = 0` (el que usan el kernel y `big format`); un disco con inodos personalizados y sin copia no puede reconstruirse con seguridad.
+- Prueba: `tests/test_bigfs.c` (ASan/UBSan): disco en blanco no se toca; sector 0 a ceros y con un bit cambiado se restauran desde la copia y los archivos se leen idénticos con `fsck` limpio; sin copia (2); copia con CRC malo; un superbloque
+  valido de otra geometria en el relleno no se acepta; raiz destruida -> `NOTFMT` sin escribir; 300 inodos con copia; error de E/S al escribir se propaga y el reintento funciona. QEMU: disco ya formateado por el codigo anterior, sector 0 borrado ->
+  "superbloque danado: reconstruido por la geometria automatica" y el archivo creado antes sigue ahi.
+- Mutacion: sin exigir que la posicion de la copia coincida con su geometria, el senuelo se acepta y el test falla (4 comprobaciones).
+
+## Parche 130 — Persistencia: el checkpoint del VFS guarda dos generaciones (A/B)
+- Problema: el guardado invalidaba el marcador del unico checkpoint y despues copiaba 2113 sectores: un corte de energia en esa ventana dejaba el sistema SIN ningun punto de restauracion (el VFS vivo seguia ahi, pero se perdia la red de seguridad). Ademas
+  el numero de secuencia se reiniciaba en cada arranque, asi que no servia para decidir cual copia era la mas nueva.
+- Cambio (`ckptio.h`, `fs.c`, `disk_layout.h`): hay dos ranuras. Guardar escribe SIEMPRE en la que no contiene el checkpoint valido mas reciente (la secuencia se lee del disco: `ultima + 1`), asi que mientras dura el guardado la anterior sigue entera. Restaurar y
+  `ckpt_recover` usan la valida mas reciente y, si esa esta corrupta, caen a la otra. La ranura B no necesita espacio nuevo en el disco: va partida en dos tramos (`struct ckpt_slot`: marcador 6211, datos 6212..8191 = 1980 sectores y 3962..4094 = 133 sectores),
+  aprovechando la antigua zona libre. Consecuencia: la zona de `sector_write` de usuario pasa a ser LBA 3600..3961 (`soma_lba_user_zone`); el resto queda protegido. Un `_Static_assert` comprueba que los tramos de B no se solapan con nada.
+- Garantia: tras un corte en cualquier punto de un guardado siempre existe un checkpoint valido y entero (el anterior o el nuevo); nunca uno a medias, y una copia corrupta no impide restaurar la generacion anterior.
+- Prueba: `tests/test_ckptio.c` (host, ASan/UBSan, 14.459 comprobaciones): alternancia A,B,A con B partida en dos tramos (mapa de LBA y contenido), corte tras cada escritura del guardado con y sin cache volatil (siempre hay checkpoint valido, anterior o nuevo), caida a la
+  generacion anterior si la nueva esta corrupta, negativa si lo estan las dos, recuperacion tras un corte a mitad de restaurar, 2000 casos aleatorios con cache que reordena. `tests/test_disk_layout.c` actualizado. QEMU: `ckpt` TODO OK dos veces seguidas (incluye
+  corromper las dos ranuras, y corromper solo la mas reciente y recuperar `gen-A`).
+- Mutacion: guardando sobre la ranura mas reciente (sin alternar) el test detecta 25 cortes que pierden la generacion anterior.
+
+## Parche 131 — Rendimiento: cache de lectura de bloques en BIGFS
+- Problema: cada lectura de BIGFS (cabeceras de ELF, archivos pequenos, lecturas de un sector sueltas en cabecera y cola) iba al dispositivo, aunque fuese exactamente el mismo bloque que se acababa de leer. En discos reales (SD, NVMe, USB) cada peticion cuesta
+  de decenas de microsegundos a milisegundos y el nucleo espera girando.
+- Cambio: `src/fs/blkcache.h` (codigo puro): cache de lineas de 4 KiB alineadas, mapeo directo, 64 lineas (256 KiB) mas una zona para leer de una sola peticion las lineas que faltan. Solo se cachean lecturas de hasta 32 sectores (16 KiB): el streaming de
+  audio/video (64 KiB por peticion) va directo y no la ensucia. Coherencia: escritura directa, y TODA escritura invalida las lineas que toca, antes y despues de escribir. Si no hay memoria para la cache el sistema funciona igual sin ella. `big info` muestra
+  aciertos y fallos. No se hace cedida de CPU dentro de la espera del disco: varios llamadores usan bufferes estaticos sin cerrojo, asi que ceder alli podria corromperlos (queda como punto abierto documentado).
+- Prueba: `tests/test_bigfs.c` (host, ASan/UBSan): lectura repetida = 0 lecturas del dispositivo, lecturas pequenas dentro de lo cacheado = 0, escritura parcial invalida, borrar y recrear sobre los mismos clusteres, truncar y crecer (lo nuevo son ceros). Ademas, TODO el
+  resto de pruebas de BIGFS (cortes de energia en cada sector, fuzzing contra un modelo) ahora pasa por la cache. QEMU: 20 pasadas sobre un archivo de 100 KB: 473 aciertos / 8 fallos y contenido identico. En QEMU el disco emulado no tiene latencia, asi que el tiempo total
+  no cambia de forma medible: el beneficio es evitar peticiones al dispositivo (98 % de las lecturas), que importa en hardware real.
+- Mutacion: sin invalidar en las escrituras fallan 586 comprobaciones (modelo y contenido distintos).
+
+## Parche 132 — Seguridad/estabilidad: canario de pila aleatorio, marca de agua de pilas y espera de UART acotada
+- Problema 1: el canario del protector de pila era una constante de compilacion (`0x0A0D5AC3A55A5A00`): quien leyese el binario la conocia. Problema 2: no habia forma de saber cuanta pila usa cada hilo; un desbordamiento solo se descubria al ocurrir.
+  Problema 3: `kputc` esperaba al transmisor del UART sin limite: un UART que no declara "vacio" colgaba el sistema en la primera impresion.
+- Cambio 1 (`src/arch/x86_64/ssp_init.c`, `boot.s`): `ssp_randomize()` se llama desde `boot.s` justo ANTES de `kernel_main` (cuando ninguna funcion protegida esta en curso: cambiarlo despues haria fallar a las que retornan). Usa `RDRAND` (hasta 16 intentos) y, si la CPU no lo
+  tiene, el jitter del contador de ciclos entre `cpuid`. Byte bajo 0 y nunca nulo. `kernel_main` informa de la fuente (`SSP: canario aleatorio (RDRAND)`). Con `SSP=0` no hace nada. En AArch64 el protector sigue desactivado.
+- Cambio 2 (`thread.c`, orden `stacks`): la pila de cada hilo (15 paginas) se pinta con un patron al crearla; `thread_format_stacks` calcula la marca de agua (hasta donde se llego) y marca los hilos que pasan del 80 %; al recoger un hilo muerto se avisa
+  (`[STACK] AVISO`) si uso mas del 80 %.
+- Cambio 3 (`console.c`): la espera del UART se acota (20.000 lecturas); tras dos esperas agotadas se da por muerto y la consola sigue solo por pantalla (x86_64 VGA / AArch64 HDMI).
+- Prueba (QEMU): arranque con canario por RDRAND (si algun marco protegido hubiese quedado con el canario viejo el sistema se detendria con "DESBORDAMIENTO DE PILA"); `usfuzz` TODO OK; `stacks` lista los hilos y un hilo de prueba que toca 22.000 bytes de pila aparece con
+  22.024 / 61.440 bytes (35 %). 0 esperas de UART agotadas en funcionamiento normal.
+
+## Parche 133 — Seguridad (red): conexiones TCP atascadas caducan, limite de semiabiertas e ISN imprevisible
+- Problema 1: una conexion en `SYN_RCVD` (SYN recibido, ACK final nunca llega) ocupaba su ranura PARA SIEMPRE: con solo 4 ranuras, cuatro SYN falsos dejaban el servidor sin aceptar a nadie hasta reiniciar. Lo mismo para cierres que no avanzan
+  (`FIN_WAIT_*`, `CLOSING`, `LAST_ACK`) y para `CLOSE_WAIT` cuando la aplicacion no cierra. Problema 2: el ISN era el contador de ciclos (predecible: un atacante fuera del camino podia suplantar o inyectar segmentos).
+- Cambio (`src/net/tcp_policy.h` puro, `tcp.c`, `net.c`): cada conexion guarda su ultima actividad (`t_ms`, se renueva con cada segmento valido). `tcp_reap()` (llamada como mucho cada 500 ms desde `net_wait_step`) descarta: `SYN_RCVD` a los 5 s, `FIN_WAIT_1/2`,
+  `CLOSING` y `LAST_ACK` a los 30 s, `CLOSE_WAIT` a los 120 s (con RST salvo en semiabiertas). `ESTABLISHED`, `LISTEN` y `SYN_SENT` nunca caducan por esta via. Como mucho `TCPP_HALFOPEN_MAX` = 3 conexiones pueden estar semiabiertas a la vez: un SYN de mas se descarta en silencio
+  (el cliente real reintenta) y no ocupa ranura, asi que una inundacion nunca desaloja conexiones establecidas. `TCP_MAX_CONN` pasa de 4 a 8. ISN segun RFC 6528: reloj de 250 kHz + hash del secreto (RDRAND + mezcla por arranque) y de la 4-tupla, tanto al aceptar como al conectar.
+- Prueba: `tests/test_tcp_reap.c` (host, ASan/UBSan, sobre la pila real: `net.c`+`ip.c`+`udp.c`+`tcp.c`, 31 comprobaciones): 20 SYN seguidos dejan 3 semiabiertas y 17 descartados; a los 4,9 s no caduca nada y a los 5,1 s caducan las 3; una conexion legitima completa el saludo y una inundacion
+  posterior no la desaloja; `CLOSE_WAIT` caduca entre 119 y 121 s; 11 ISN consecutivos distintos y sin progresion; reloj de 250 kHz; vuelta del contador de 32 bits. QEMU con `hostfwd`: 10 peticiones HTTP seguidas 200 con los ISN nuevos y 8 ranuras.
+- Mutacion: sin el limite de semiabiertas fallan 5 comprobaciones; sin caducidad, 19. (La mutacion "ISN = contador de ciclos" NO la detecta el test del host, porque el contador de ciclos tambien varia: la garantia de ISN la dan las pruebas de la funcion pura.)
+- Limite conocido (no es de este parche): `httpd` atiende de uno en uno; seis conexiones abiertas e inactivas retrasan la siguiente peticion hasta que vencen sus tiempos de lectura.
+
+## Parche 134 — Rendimiento (red): envio TCP con ventana (varios segmentos en vuelo) y retroceder-N
+- Problema: `tcp_send` era de parada y espera: un segmento, esperar su ACK, el siguiente. El rendimiento quedaba limitado a un segmento por RTT y se ignoraba la ventana que anuncia el par (podia enviarse mas de lo que el par aceptaba).
+- Cambio (`src/net/tcp.c`): cada conexion guarda `snd_wnd` (ventana anunciada por el par, solo se actualiza con ACK validos) y `cwnd` (ventana de congestion, arranque lento: crece con cada byte confirmado, tope 16 KiB). `tcp_send` mantiene en vuelo hasta `min(snd_wnd, cwnd, 16 KiB)` bytes, avanza al llegar ACK,
+  y ante un tiempo agotado (`TCP_RTO_MS`) reenvia desde el primer byte sin confirmar (retroceder N) y devuelve `cwnd` a un segmento. Con ventana cero envia un sondeo de 1 byte por RTO; tras `TCP_MAX_RETRIES` sin progreso devuelve -1; un RST aborta el envio.
+- Prueba: `tests/test_tcp_send.c` (host, ASan/UBSan, pila real, 22 comprobaciones, par simulado): 100 KB con ventana grande llegan exactos y con varios segmentos en vuelo (hasta 16 KiB); ventana de 3000 B nunca se excede; perdida de cada 7o segmento (15 perdidas en 50 KB): el flujo llega entero y en orden;
+  ventana cero inicial: sondea y termina; RST a mitad: devuelve -1 sin colgarse; 0, 1 y 1461 bytes.
+- Mutacion: ignorar la ventana del par (usar 65535) -> fallo detectado (104 violaciones de ventana).
+- Limite: sin retransmision selectiva ni reordenacion en el receptor (parche 135).
+
+## Parche 135 — Robustez (red): recepcion TCP con recorte de solapes y un rango fuera de orden
+- Problema: `tcp.c` solo aceptaba un segmento si `seq == rcv_nxt` exacto. Un reenvio del par que solapaba lo ya recibido (mismos bytes mas datos nuevos) se tiraba entero, y un segmento adelantado tambien: tras una sola perdida el par debia reenviar toda su ventana.
+- Cambio (`src/net/tcp.c`): (1) un segmento que empieza antes de `rcv_nxt` se recorta y se aprovecha la parte nueva (si todo es viejo, solo se re-confirma); (2) un segmento adelantado se guarda directamente en su sitio futuro del anillo de recepcion (un unico rango, `ooo_off/ooo_len`, que se amplia si
+  el siguiente lo toca o solapa; un segundo hueco se descarta y el par lo reenvia) y al llegar el hueco `rcv_nxt` salta de golpe; (3) nada fuera de la ventana anunciada se guarda; (4) un FIN solo se acepta cuando ya no queda nada pendiente antes de el.
+- Prueba: `tests/test_tcp_rx.c` (host, ASan/UBSan, pila real, 21 comprobaciones): orden 1,3,2 con ACK acumulativo exacto (500, 500, 1500); duplicado y solape sin repetir ni perder bytes; rangos 200-300-400 unidos; dato 40 000 bytes adelantado ignorado; 26 segmentos de 1400 B con el buffer de 32 KiB
+  (ventana se cierra, el exceso se descarta, reabre al leer); FIN adelantado ignorado y FIN en orden consume un numero de secuencia.
+- Mutaciones: sin guardar fuera de orden, 2 fallos; sin recorte de solapes, 12; FIN sin comprobar el hueco, 17.
+
+## Parche 136 — CORRECCION URGENTE: `make_isn` ejecutaba RDRAND sin comprobar CPUID (panico #UD en CPUs sin RDRAND)
+- Problema (introducido en el parche 133): al abrir la primera conexion TCP, `make_isn` ejecutaba `rdrand` directamente. En una CPU que no lo ofrece (el QEMU por defecto, `-cpu qemu64`, o hardware antiguo) la instruccion lanza #UD y el kernel entraba en panico (`Vector 6`, RIP dentro de `make_isn`).
+  Los parches 133, 134 y 135 llevan el fallo; el test de host no lo veia porque la CPU de la maquina de pruebas si tiene RDRAND.
+- Cambio (`src/net/tcp.c`): se consulta CPUID.1:ECX[30] antes de usar RDRAND; sin ella queda la mezcla del contador de ciclos, el reloj y la direccion del secreto (como ya hacia el canario de pila del parche 132).
+- Prueba: QEMU con `-cpu qemu64` (sin RDRAND): arranque sin panico (`SSP: ... contador de ciclos`) y 4 peticiones HTTP seguidas 200 con 2938 bytes; con `-cpu max` (con RDRAND): igual (`SSP: ... RDRAND`). Antes del cambio el arranque con `qemu64` terminaba en panico.
+- Leccion anotada: toda instruccion opcional (RDRAND, RDSEED, AVX, ...) debe ir tras su bit de CPUID; revisado `src/`: no queda otra sin proteger.
+
+## Parche 137 — Calidad: compilacion sin warnings (-Werror en CI), matriz de CPU en QEMU y enlace reproducible
+- Problema: 72 avisos del compilador (29 de inicializadores, 16 de `if` mal indentados, 8 de enums, `&funcion_debil` siempre verdadero, funciones sin usar...) escondian los avisos nuevos; el panico por RDRAND del parche 136 solo se habria visto arrancando con otra CPU; el enlace
+  emitia avisos de `build-id` y de pila ejecutable en `userprogs.o`.
+- Cambio: (1) x86_64 y aarch64 compilan con CERO avisos de compilador; los `if (a) x; y;` en una linea pasan a dos lineas (mismo comportamiento: la segunda sentencia nunca dependio del `if`), `struct vm_val` se inicializa completo, la comprobacion `mouse_get_x && ...` (siempre cierta con
+  la version debil en el mismo fichero) se elimina, enums comparados con `(int)`, funciones/variables solo usadas en una arquitectura marcadas. (2) `make WERROR=1` activa `-Werror`; `ci.yml` lo usa al compilar. (3) `tools/cpu_matrix.py` (`make cpu-matrix`, tambien en CI para x86_64): arranca la imagen con
+  `-cpu qemu64,Nehalem,max` y exige: sin `KERNEL PANIC`, linea `SSP:` impresa (llego a `kernel_main`) y tres peticiones HTTP 200. Comprobado con mutacion: con el `tcp.c` del parche 135 (RDRAND sin CPUID) falla en `qemu64` con `#UD` y pasa en `max`. (4) `--build-id=none` en el enlace del kernel y de los programas de usuario y
+  `-z noexecstack` al empaquetar `userprogs.o`. (5) `tests/test_bigfs_xcheck.py` se omite con un aviso claro si falta `tools/bigfs.py` en vez de romper `make test`.
+- Pendiente conocido: el enlazador de aarch64 avisa de un segmento LOAD con RWX (`--no-warn-rwx-segments` solo existe en binutils >= 2.39; pendiente de separar permisos en el script de enlace).
+
+## Parche 138 — AISLAMIENTO (etapa 1): los decodificadores de imagen salen del kernel a servicios aislados en ring 3
+- Problema: el navegador, el visor, el explorador, Paint, el lector PDF y el maquetador decodificaban PNG/GIF/JPEG/BMP DENTRO del kernel (ring 0).
+  Un fallo en esos decodificadores (los que mas bytes hostiles reciben: cualquier imagen de una web) tenia acceso a toda la memoria, el disco y la red.
+- Rediseno de interfaz: **servicios aislados** (`src/arch/x86_64/sandbox.c/.h`, ABI en `src/core/sbx_abi.h`). El kernel lanza un proceso de ring 3 con:
+  filtro de syscalls por proceso (los servicios solo pueden llamar a `exit`; cualquier otra lo mata con `USER_EXIT_DENIED`), entrada en una region de SOLO
+  LECTURA, respuesta en una pagina propia, monton propio NO ejecutable reservado BAJO DEMANDA (fallo de pagina -> marco nuevo, `usermode_demand_fault` en
+  `idt.c`), plazo, y una reserva de 32 MiB que ningun servicio puede consumir (`USER_EXIT_NOMEM`). Las tres regiones estan fuera de `USER_WINDOW`. La
+  respuesta se VALIDA en el kernel (magic, tamanos, puntero dentro del monton y en paginas realmente escritas) antes de copiar nada.
+  `usermode.c` gana regiones prestadas (`usermode_exec_ex`, `struct uregion`), el filtro (`sysmask`) y la paginacion bajo demanda.
+- `wi_decode`, `wi_decode_fit` y el BMP de `image_decode` (unico punto de entrada de todas las aplicaciones) pasan a ser clientes del servicio `imgdec.elf`
+  (`src/apps/web_img_sbx.c`, `src/user/imgdec.c`, runtime `src/user/sbxrt.h`). En x86_64 `web_img.o`, `web_jpeg.o` y el BMP YA NO SE ENLAZAN en el kernel.
+  Ventaja anadida: en ring 3 el reloj expulsa la decodificacion cada 10 ms (antes, una imagen enorme congelaba el kernel cooperativo).
+- BMP separado en `src/apps/bmp_dec.c`; corregido de paso: con 8 bpp y paleta corta, `palette[indice]` leia entradas sin inicializar de la PILA DEL KERNEL
+  (fuga de memoria del kernel a la imagen). Ahora son negro opaco. Los BMP entran tambien en el fuzzing de host (antes excluidos).
+- Corregido: `usermode_selftest` daba FALLO desde el parche 121 (esperaba -1 de `SYS_WRITE` y ahora es `SOMA_EFAULT`, -14).
+- Pruebas (todas sin intervencion): `make sbx-check` (`tools/sbx_check.py`, tambien en CI) arranca QEMU con `-fw_cfg name=opt/soma/selftest,string=sbx+user`
+  (nuevo `src/arch/x86_64/fwcfg.c`) y el kernel ejecuta `sbx_selftest` + `usermode_selftest` y sale de QEMU con el resultado:
+  14 ataques al mecanismo (syscall prohibida, bucle, leer el kernel, escribir la entrada, salirse del monton, ejecutar el monton, 4 respuestas falsas,
+  reserva del sistema, ida y vuelta de 10 000 bytes) -> todos bloqueados; 14 imagenes (PNG RGBA/paleta+tRNS/gris16, GIF, JPEG base/progresivo/CMYK/640x480
+  reducido y completo, BMP 24/32/8 con paleta corta, basura, PNG truncado) identicas BIT A BIT a la referencia de host (`tests/test_sbx_ref.c`, en `make test`);
+  240 imagenes mutadas; 12 hilos x 4 llamadas con 8 ranuras; sin fugas de memoria fisica (descontado el crecimiento del monton) ni corrupcion del monton.
+  `python3 tools/sbx_check.py --web`: el NAVEGADOR real carga por red una pagina servida desde el host; las 9 imagenes validas llegan por el servicio aislado
+  identicas a la referencia y las 2 danadas se rechazan. Comando `sbx` (estadisticas) y `sbx test`.
+- Coste medido (QEMU TCG): 2-26 ms por imagen pequena (crear el proceso incluido), 126 ms JPEG 640x480.
+- Pendiente (siguientes etapas): MJPEG del reproductor (`media.c`, aun usa `jpeg.c` en el kernel), inflate de PDF y de HTTP gzip, motor JavaScript, y aarch64
+  (sin EL0: alli los decodificadores siguen en el kernel).
+
+## Parche 139 — AISLAMIENTO (etapa 2): servicios persistentes; inflate (HTTP gzip y PDF) y MJPEG del reproductor fuera del kernel
+- Problema: tras el 138 seguian en ring 0 el inflate (cuerpos HTTP `Content-Encoding: gzip/deflate` y flujos `FlateDecode` de PDF, ambos datos
+  hostiles: una bomba de descompresion o una tabla Huffman corrupta llegaban al kernel) y el decodificador JPEG del reproductor (`media.c`, MJPEG).
+  Ademas, crear un proceso por imagen costaba ~1,5 ms por llamada.
+- Rediseno: SERVICIOS PERSISTENTES (`sbx_svc_call`, `src/arch/x86_64/sandbox.c`). El proceso aislado arranca con la entrada vacia y espera en la nueva
+  syscall `SYS_SVC_NEXT` (permitida solo a servicios: su filtro es `exit` + `svc_next`). Por peticion: el kernel escribe la entrada (reservando y mapeando
+  sus paginas, solo lectura), pone a cero la respuesta, despierta al servicio (`thread_wake`, nueva en `thread.c`) con PLAZO POR PETICION, y valida y copia la
+  respuesta como en el 138. Entre peticiones el monton del servicio se PONE A CERO y se recorta a 8 MiB (`vmm_as_unmap`, nueva), de modo que una peticion
+  no ve datos de la anterior; cada 256 peticiones, o ante cualquier error, muerte o plazo, el proceso se destruye y el siguiente arranca limpio.
+  2 procesos por servicio (llamadas concurrentes). En reposo duermen (no consumen CPU).
+- Servicios: `imgdec` (ahora persistente; nueva operacion `SBX_IMG_JPEGRAW` = `jpeg_decode` para el MJPEG de `media.c` via `jpeg_decode_isolated`) y
+  `zdec` (`src/user/zdec.c`; el kernel usa `src/apps/web_inflate_sbx.c`, misma semantica que `wz_inflate`: anade y conserva lo parcial). En x86_64 ya NO se
+  enlazan en el kernel `web_inflate.o` ni `jpeg.o` (ni, desde el 138, `web_img.o`, `web_jpeg.o`, BMP).
+- Pruebas (`make sbx-check`, `tools/sbx_check.py --web`): ademas de las del 138, 200 peticiones al mismo servicio (645 us/llamada frente a 1560 con un
+  proceso por llamada, 1 proceso creado), una peticion no ve el "secreto" de la anterior (0 bytes), muerte por #PF a mitad de peticion -> error y la siguiente
+  la atiende un proceso NUEVO (contador global = 1), plazo por peticion, syscall prohibida, reutilizacion entre peticiones correctas; inflate gzip/zlib/crudo/
+  auto/truncado/bomba (8 MiB de ceros cortados en 1 MiB) identico bit a bit a la referencia de host; fotograma MJPEG identico y "no cabe" con el mismo
+  codigo; el navegador recibe la PAGINA comprimida con gzip (la infla zdec) y sus imagenes (imgdec). Sin fugas tras detener los servicios.
+- Medido: imagenes 2-4 veces mas rapidas que en el 138 (JPEG 640x480: 109 -> 56 ms en QEMU TCG).
+- `tests/test_srcfs_pack.py`: exige todas las carpetas de CODIGO (las de solo datos pueden ceder) e informa del margen. AVISO: el codigo ocupa 4,06 MB de los
+  4,16 MB de la region SRCFS (margen 100 KiB): la siguiente mejora necesaria es comprimir SRCFS.
+- Pendiente: el analizador PDF (`pdf.c`) y el motor del navegador (HTML/CSS/JS, `web_*`) siguen en ring 0; aarch64 sin EL0.
+
+## Parche 140 — SRCFS v02: fuentes comprimidas en disco (el codigo volvia a no caber); descompresion aislada
+- Problema: la region SRCFS (LBA 8256..16383, ~4 MiB, pegada a BIGFS) guarda las fuentes que el sistema y el agente leen con `src_ls/src_cat/src_grep`.
+  El codigo ya ocupaba 4,06 MB de 4,16 MB (margen 100 KiB) y las tablas de fuentes tipograficas (2,1 MB) se quedaban fuera. Mover BIGFS romperia los discos.
+- Cambio: `ejecutar.py::pack_sources` escribe "SRCFSv02": cada archivo comprimido con zlib si asi ocupa menos; entrada = name[48], lba, tamano original,
+  tamano guardado, flags. `src/fs/srcfs.c` lee el archivo completo (cache del ultimo: paginar no relee ni descomprime), lo descomprime con `wz_inflate`
+  (en x86_64, el servicio aislado `zdec` del parche 139: un disco manipulado no llega a un inflate en ring 0) y comprueba que el tamano coincide.
+  Sigue leyendo discos v01. `src_cat` y `src_grep` trabajan sobre memoria.
+- Resultado: caben las 357 fuentes, tablas incluidas: 6,2 MB -> 1,56 MB de 4,06 MB (2,5 MB libres).
+- Pruebas: `tests/test_srcfs_pack.py` (datos incompresibles donde se prueba "no cabe", nueva prueba de compresion, lector v02 que descomprime y compara,
+  ahora exige que quepan TODAS); prueba cruzada `tests/test_srcfs.c` (el lector REAL del kernel lee byte a byte las 357 fuentes que escribe el empaquetador
+  real); un byte corrupto en los datos comprimidos -> error limpio, sin fallo de memoria (ASan); en QEMU (`tools/sbx_check.py --srcfs`, incluido en
+  `make sbx-check` y CI): indice v02, `src_cat` dos paginas, `src_grep`, la tabla de 1,7 MB leida por el final, y la descompresion paso por el servicio.
+
+## Parche 141 — AISLAMIENTO (etapa 3): el analizador PDF sale del kernel (servicio pdfsvc en ring 3)
+- Problema: `pdf.c` (xref clasica y en flujo, flujos de objetos, FlateDecode con predictores, fuentes y ToUnicode, contenido de pagina, imagenes) interpretaba
+  en ring 0 cualquier PDF que se abriera en el visor: 1400 lineas de analizador expuestas a archivos hostiles.
+- Rediseno: servicio aislado `pdfsvc.elf` (`src/user/pdfsvc.c` + `pdf.c` + decodificadores, todo en ring 3; dentro, las imagenes se decodifican directamente,
+  sin servicios anidados). SIN ESTADO entre peticiones: `SBX_PDF_OPEN` (paginas, tamanos, titulo) y `SBX_PDF_RENDER` (pagina, escala) traen el documento
+  entero y se analiza desde cero, asi que una pagina manipulada no puede alterar la siguiente. La lista de dibujo vuelve SERIALIZADA (`struct sbx_pdf_op`:
+  desplazamientos en vez de punteros, `sbx_abi.h`). El kernel (`src/apps/pdf_sbx.c`, misma API de `pdf.h`: `pdfview.c` no cambia) VALIDA todo antes de
+  convertir desplazamientos en punteros: tipo de operacion, indice de fuente (<= 64, `pdfview` lo usa como indice de tabla), texto/puntos/pixeles dentro del
+  blob y alineados, imagen con ancho/alto de destino >= 1 (`pdfview` divide por ellos), dimensiones acotadas, numero de operaciones y tamano de pagina.
+  En x86_64 `pdf.o` ya no se enlaza en el kernel.
+- Pruebas (`make sbx-check`): 6 PDF (xref clasica, xref en flujo, 3 paginas con JPEG/curva/rotacion/acentos/titulo, truncado, basura, sin cabecera) dan la
+  MISMA huella de lista de dibujo que `pdf.c` en el host (`tests/test_sbx_ref.c`); 17 listas de dibujo manipuladas (lo que devolveria un analizador
+  comprometido) rechazadas por el kernel; 120 PDF mutados abiertos y dibujados (333 paginas) sin efecto en el kernel. Mutacion: quitar la validacion
+  del indice de fuente -> detectada.
+
+## Parche 142 — AISLAMIENTO (etapa 4): red desde ring 3 como capacidad; cliente HTTP del kernel aislado (netsvc); huella del navegador
+- Problema: el comando `descargar` usaba `wn_fetch` (cliente HTTP completo: URL, cabeceras, chunked, redirecciones, gzip, cookies) dentro del kernel.
+  Y para sacar el navegador a ring 3 (parche 143) hace falta red desde procesos de usuario sin dar red a todos.
+- Cambio: syscalls de red `SYS_NET_DNS`, `SYS_TCP_OPEN/POLL/SEND/RECV/CLOSE` (21-26) como CAPACIDAD: el filtro por defecto de un programa de usuario
+  pasa a ser `USER_SYS_DEFAULT` (syscalls 0..20) y solo los procesos lanzados con `USER_SYS_NET_MASK` las tienen. Cada proceso solo puede tocar SUS
+  conexiones (`tcp_owner` == su hilo), como mucho 4 a la vez (`USER_MAX_SOCKETS`), y al morir se cierran todas. Conexion NO bloqueante
+  (`tcp_connect_start` / `tcp_connect_poll` en `tcp.c`), recepcion de como mucho 2 ms por llamada, nombres DNS validados ([A-Za-z0-9.-_], <= 253).
+  Lado de usuario: `src/user/unet.c` (misma API que el kernel: `dns_resolve`, `tcp_*`; esperas en `unet_idle()`, sustituible).
+  Servicio `netsvc.elf` (web_net.c + unet.c + inflate) con `exit`, `svc_next`, `sleep`, `uptime` y red; el kernel usa `wn_fetch_isolated`
+  (`src/apps/web_net_sbx.c`): valida codigo HTTP, tamanos y textos. `descargar` ya no interpreta HTTP en ring 0.
+- Pruebas (`make sbx-check`, servidor HTTP en el anfitrion): texto, gzip, chunked, redireccion 302, 404 y binario de 300 KB identicos byte a byte;
+  sin la capacidad, abrir un socket mata el proceso (DENIED); con ella, 37 operaciones sobre sockets ajenos (incluida una conexion del KERNEL) -> todas
+  EBADF y la conexion del kernel sigue viva; 6 aperturas -> 4 (la 5a EBUSY) y al morir se cierran; 4 nombres DNS maliciosos -> EINVAL.
+  Mutacion: quitar la comprobacion de dueno -> 7 operaciones ajenas aceptadas, detectado.
+- HUELLA del navegador actual (ring 0): ventana 1024x700 con `ref.html` cargada = 0x3EE95F6D, estable. El parche 143 exigira la misma con el
+  navegador en ring 3.

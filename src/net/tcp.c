@@ -7,6 +7,10 @@
 #include "net.h"
 #include "thread.h"
 #include "tcp.h"
+#include "tcp_policy.h"
+#include "rng.h"
+
+uint64_t timer_get_uptime_ms(void);
 
 #define IP_PROTO_TCP     6
 #define TCP_FIN          0x01
@@ -20,7 +24,7 @@
 #define TCP_MSS_MAX      1460
 #define TCP_MSS_DEFAULT  536
 #define TCP_RX_BUFFER    32768
-#define TCP_MAX_CONN     4
+#define TCP_MAX_CONN     8      /* PARCHE 133: antes 4 (un solo cliente lento ocupaba la cuarta parte) */
 #define TCP_RTO_MS       1000
 #define TCP_MAX_RETRIES  5
 
@@ -39,6 +43,8 @@ enum {
     TCP_CLOSING,
     TCP_LAST_ACK
 };
+_Static_assert((int)TCP_SYN_RCVD == (int)TCPP_SYN_RCVD && (int)TCP_ESTABLISHED == (int)TCPP_ESTABLISHED && (int)TCP_FIN_WAIT_1 == (int)TCPP_FIN_WAIT_1 && (int)TCP_FIN_WAIT_2 == (int)TCPP_FIN_WAIT_2 &&
+               (int)TCP_CLOSE_WAIT == (int)TCPP_CLOSE_WAIT && (int)TCP_CLOSING == (int)TCPP_CLOSING && (int)TCP_LAST_ACK == (int)TCPP_LAST_ACK && (int)TCP_LISTEN == (int)TCPP_LISTEN, "tcp_policy.h: estados desalineados");
 
 struct tcp_conn {
     uint8_t           used;
@@ -48,16 +54,21 @@ struct tcp_conn {
     uint8_t           fin_sent;
     uint8_t           pad[3];
     uint32_t          owner_tid;
+    uint32_t          t_ms;          /* PARCHE 133: ultima actividad (ms de actividad del sistema, con vuelta) */
+    uint32_t          syn_t;         /* PARCHE 142: conexion no bloqueante: cuando se envio el ultimo SYN */
+    uint8_t           syn_n;         /* PARCHE 142: SYN enviados */
 
     uint8_t           remote_ip[4];
     uint16_t          remote_port;
     uint16_t          local_port;
     uint16_t          mss;
-    uint16_t          pad2;
+    uint16_t          snd_wnd;       /* PARCHE 134: ventana que anuncia el par (sin escalado) */
 
     volatile uint32_t snd_una;
     uint32_t          snd_nxt;
     uint32_t          rcv_nxt;
+    uint16_t          ooo_off, ooo_len; /* PARCHE 135: un unico rango fuera de orden ya guardado en el anillo (relativo a rcv_nxt) */
+    uint32_t          cwnd;          /* PARCHE 134: ventana de congestion en bytes (arranque lento) */
 
     uint16_t          rx_head;
     volatile uint16_t rx_count;
@@ -66,6 +77,26 @@ struct tcp_conn {
 
 static struct tcp_conn conns[TCP_MAX_CONN] __attribute__((aligned(8)));
 static uint16_t next_port = 49152;
+static uint64_t isn_secret;                       /* PARCHE 133: secreto por arranque para los ISN (RFC 6528) */
+static uint32_t stat_reaped, stat_syn_dropped;
+
+static uint32_t now_ms32(void) { return (uint32_t)timer_get_uptime_ms(); }
+static uint32_t make_isn(const uint8_t *rip, uint16_t rport, uint16_t lport)
+{
+    if (!isn_secret) {
+        uint64_t v = 0;
+#ifdef __x86_64__
+        /* PARCHE 136: RDRAND solo si CPUID lo anuncia (sin esa comprobacion, una CPU sin RDRAND -p. ej. el QEMU por defecto- daba #UD al abrir la primera conexion) */
+        uint32_t ca = 1, cb, cc = 0, cd; __asm__ volatile ("cpuid" : "+a"(ca), "=b"(cb), "+c"(cc), "=d"(cd));
+        if (cc & (1u << 30))
+            for (int i = 0; i < 8 && !v; ++i) { uint64_t r; unsigned char ok; __asm__ volatile ("rdrand %0; setc %1" : "=r"(r), "=qm"(ok) : : "cc"); if (ok) v = r; }
+#endif
+        v ^= tcpp_mix(arch_cycle_counter() ^ ((uint64_t)(uintptr_t)&isn_secret << 20) ^ timer_get_uptime_ms());
+        v ^= rng_u64();                           /* SOMA_192: sin RDRAND el secreto solo dependia del contador de ciclos */
+        isn_secret = v ? v : 0x5DEECE66DULL;
+    }
+    return tcp_isn(isn_secret, rip, rport, lport, timer_get_uptime_ms());
+}
 
 static uint16_t rd16(const uint8_t *p)
 {
@@ -209,8 +240,9 @@ void tcp_input(const uint8_t *src_ip, const uint8_t *dst_ip, const uint8_t *tcp,
             if (conns[i].used && conns[i].state == TCP_LISTEN && conns[i].local_port == dport) { l = &conns[i]; break; }
         }
         if (l && (flags & TCP_SYN) && !(flags & TCP_ACK)) {
-            int free_idx = -1;
-            for (int i = 0; i < TCP_MAX_CONN; ++i) if (!conns[i].used) { free_idx = i; break; }
+            int free_idx = -1, halfopen = 0;
+            for (int i = 0; i < TCP_MAX_CONN; ++i) { if (!conns[i].used) { if (free_idx < 0) free_idx = i; } else if (conns[i].state == TCP_SYN_RCVD) halfopen++; }
+            if ((unsigned)halfopen >= TCPP_HALFOPEN_MAX) { stat_syn_dropped++; return; }     /* PARCHE 133: limite de semiabiertas; el cliente reintenta el SYN */
             if (free_idx >= 0) {
                 struct tcp_conn *nc = &conns[free_idx];
                 memset(nc, 0, sizeof(*nc));
@@ -222,7 +254,9 @@ void tcp_input(const uint8_t *src_ip, const uint8_t *dst_ip, const uint8_t *tcp,
                 uint16_t peer_mss = parse_peer_mss(tcp, hlen);
                 nc->mss = (peer_mss > 0 && peer_mss < TCP_MSS_MAX) ? peer_mss : TCP_MSS_DEFAULT;
                 nc->rcv_nxt = seq + 1;
-                uint32_t iss = (uint32_t)arch_cycle_counter();
+                nc->snd_wnd = rd16(tcp + 14);
+                uint32_t iss = make_isn(src_ip, sport, dport);                 /* PARCHE 133: imprevisible */
+                nc->t_ms = now_ms32();
                 nc->snd_una = iss;
                 nc->snd_nxt = iss + 1;
                 nc->state = TCP_SYN_RCVD;
@@ -234,6 +268,7 @@ void tcp_input(const uint8_t *src_ip, const uint8_t *dst_ip, const uint8_t *tcp,
         return;
     }
     if (c->state == TCP_CLOSED) return;
+    c->t_ms = now_ms32();                                    /* PARCHE 133: cualquier segmento de la conexion cuenta como actividad */
 
     if (c->state == TCP_SYN_SENT) {
         if (flags & TCP_ACK) {
@@ -246,7 +281,7 @@ void tcp_input(const uint8_t *src_ip, const uint8_t *dst_ip, const uint8_t *tcp,
         if ((flags & TCP_SYN) && (flags & TCP_ACK)) {
             uint16_t peer_mss = parse_peer_mss(tcp, hlen);
             c->mss = (peer_mss > 0 && peer_mss < TCP_MSS_MAX) ? peer_mss : TCP_MSS_DEFAULT;
-            c->rcv_nxt = seq + 1; c->snd_una = ack; c->state = TCP_ESTABLISHED;
+            c->rcv_nxt = seq + 1; c->snd_una = ack; c->snd_wnd = rd16(tcp + 14); c->state = TCP_ESTABLISHED;
             conn_emit(c, TCP_ACK, c->snd_nxt, 0, 0, 0);
         }
         return;
@@ -261,6 +296,7 @@ void tcp_input(const uint8_t *src_ip, const uint8_t *dst_ip, const uint8_t *tcp,
 
     if (c->state == TCP_SYN_RCVD) { if (ack != c->snd_nxt) return; c->snd_una = ack; c->state = TCP_ESTABLISHED; }
     if (seq_lt(c->snd_una, ack) && !seq_lt(c->snd_nxt, ack)) c->snd_una = ack;
+    if (!seq_lt(ack, c->snd_una) && !seq_lt(c->snd_nxt, ack)) c->snd_wnd = rd16(tcp + 14);     /* PARCHE 134: la ventana del par solo se acepta de un ACK valido */
 
     if (c->fin_sent && c->snd_una == c->snd_nxt) {
         if (c->state == TCP_FIN_WAIT_1) c->state = TCP_FIN_WAIT_2;
@@ -270,18 +306,90 @@ void tcp_input(const uint8_t *src_ip, const uint8_t *dst_ip, const uint8_t *tcp,
     if (plen == 0 && !(flags & TCP_FIN)) return;
 
     int can_rx = (c->state == TCP_ESTABLISHED || c->state == TCP_FIN_WAIT_1 || c->state == TCP_FIN_WAIT_2);
-    if (seq == c->rcv_nxt && can_rx) {
-        uint16_t n = rx_store(c, payload, plen);
-        c->rcv_nxt += n;
-        if (n == plen && (flags & TCP_FIN)) {
-            c->rcv_nxt += 1; c->peer_fin = 1;
-            if (c->state == TCP_ESTABLISHED) c->state = TCP_CLOSE_WAIT;
-            else if (c->state == TCP_FIN_WAIT_1) c->state = TCP_CLOSING;
-            else if (c->state == TCP_FIN_WAIT_2) c->state = TCP_CLOSED;
+    if (can_rx) {
+        /* PARCHE 135: recorte del tramo ya recibido, un rango fuera de orden y union al llegar el hueco */
+        const uint8_t *pp = payload; uint16_t pl = plen; int fin = (flags & TCP_FIN) != 0;
+        if (seq_lt(seq, c->rcv_nxt)) {
+            uint32_t skip = c->rcv_nxt - seq;
+            if (skip > (uint32_t)pl) { fin = 0; pl = 0; }
+            else { pp += skip; pl = (uint16_t)(pl - skip); }
+            seq = c->rcv_nxt;
+        }
+        if (seq == c->rcv_nxt) {
+            uint16_t n = rx_store(c, pp, pl);
+            c->rcv_nxt += n;
+            if (c->ooo_len) {
+                if (n >= c->ooo_off) {
+                    uint32_t end = (uint32_t)c->ooo_off + c->ooo_len;
+                    if (end > n) { uint16_t extra = (uint16_t)(end - n); c->rx_count = (uint16_t)(c->rx_count + extra); c->rcv_nxt += extra; }
+                    c->ooo_off = c->ooo_len = 0;
+                    n = pl;                                    /* lo guardado fuera de orden ya esta; el FIN solo cuenta si no sobra nada */
+                    fin = 0;                                   /* con datos posteriores el FIN no puede ser este: se espera su retransmision */
+                } else { c->ooo_off = (uint16_t)(c->ooo_off - n); fin = 0; }
+            }
+            if (n == pl && fin) {
+                c->rcv_nxt += 1; c->peer_fin = 1;
+                if (c->state == TCP_ESTABLISHED) c->state = TCP_CLOSE_WAIT;
+                else if (c->state == TCP_FIN_WAIT_1) c->state = TCP_CLOSING;
+                else if (c->state == TCP_FIN_WAIT_2) c->state = TCP_CLOSED;
+            }
+        } else if (pl > 0) {
+            uint32_t rel = seq - c->rcv_nxt, win = rx_window(c);
+            if (rel < win) {
+                uint32_t len = pl; if (len > win - rel) len = win - rel;
+                int ok = 1;
+                if (c->ooo_len) {
+                    uint32_t o0 = c->ooo_off, o1 = o0 + c->ooo_len;
+                    if (rel > o1 || rel + len < o0) ok = 0;                         /* hueco con el rango ya guardado: se descarta (solo un rango) */
+                    else { uint32_t n0 = rel < o0 ? rel : o0, n1 = rel + len > o1 ? rel + len : o1; c->ooo_off = (uint16_t)n0; c->ooo_len = (uint16_t)(n1 - n0); }
+                } else { c->ooo_off = (uint16_t)rel; c->ooo_len = (uint16_t)len; }
+                if (ok) for (uint32_t i = 0; i < len; ++i) c->rx[(uint16_t)((c->rx_head + c->rx_count + rel + i) % TCP_RX_BUFFER)] = pp[i];
+            }
         }
     }
     conn_emit(c, TCP_ACK, c->snd_nxt, 0, 0, 0);
 }
+
+/* PARCHE 142: conexion NO bloqueante (la usan los procesos de ring 3 por syscall: el navegador aislado no se congela mientras conecta).
+ * tcp_connect_start envia el SYN y devuelve el descriptor; tcp_connect_poll reenvia el SYN cada TCP_SYN_RETRY_MS (3 intentos) y devuelve
+ * 1 establecida, 0 pendiente, -1 fallida (y la libera). */
+#define TCP_SYN_RETRY_MS 2000u
+int tcp_connect_start(const uint8_t *dst_ip, uint16_t dst_port)
+{
+    int h = -1;
+    for (int i = 0; i < TCP_MAX_CONN; ++i) if (!conns[i].used) { h = i; break; }
+    if (h < 0) return -1;
+    struct tcp_conn *c = &conns[h];
+    memset(c, 0, sizeof(*c));
+    c->used = 1; memcpy(c->remote_ip, dst_ip, 4); c->remote_port = dst_port;
+    c->local_port = next_port++;
+    if (next_port >= 65000) next_port = 49152;
+    uint32_t iss = make_isn(dst_ip, dst_port, c->local_port);
+    c->t_ms = now_ms32();
+    c->mss = TCP_MSS_DEFAULT; c->snd_una = iss; c->snd_nxt = iss + 1; c->state = TCP_SYN_SENT;
+    struct tcb *cur_t = thread_current();
+    c->owner_tid = cur_t ? cur_t->tid : 0;
+    conn_emit(c, TCP_SYN, iss, 1, 0, 0);
+    c->syn_t = now_ms32(); c->syn_n = 1;
+    return h;
+}
+int tcp_connect_poll(int h)
+{
+    if (h < 0 || h >= TCP_MAX_CONN || !conns[h].used) return -1;
+    struct tcp_conn *c = &conns[h];
+    net_wait_step();
+    if (c->state == TCP_ESTABLISHED) return 1;
+    if (c->reset || c->state == TCP_CLOSED) { c->used = 0; c->owner_tid = 0; return -1; }
+    if (c->state != TCP_SYN_SENT) return -1;
+    if (now_ms32() - c->syn_t >= TCP_SYN_RETRY_MS) {
+        if (c->syn_n >= 3) { c->state = TCP_CLOSED; c->used = 0; c->owner_tid = 0; return -1; }
+        conn_emit(c, TCP_SYN, c->snd_una, 1, 0, 0);
+        c->syn_t = now_ms32(); c->syn_n++;
+    }
+    return 0;
+}
+uint32_t tcp_owner(int h) { return (h >= 0 && h < TCP_MAX_CONN && conns[h].used) ? conns[h].owner_tid : 0; }
+int tcp_count_owned(uint32_t tid) { int n = 0; for (int i = 0; i < TCP_MAX_CONN; ++i) if (conns[i].used && conns[i].owner_tid == tid) n++; return n; }
 
 int tcp_connect(const uint8_t *dst_ip, uint16_t dst_port, uint32_t timeout_ms)
 {
@@ -291,10 +399,11 @@ int tcp_connect(const uint8_t *dst_ip, uint16_t dst_port, uint32_t timeout_ms)
 
     struct tcp_conn *c = &conns[h];
     memset(c, 0, sizeof(*c));
-    uint32_t iss = (uint32_t)arch_cycle_counter();
     c->used = 1; memcpy(c->remote_ip, dst_ip, 4); c->remote_port = dst_port;
     c->local_port = next_port++;
     if (next_port >= 65000) next_port = 49152;
+    uint32_t iss = make_isn(dst_ip, dst_port, c->local_port);       /* PARCHE 133 */
+    c->t_ms = now_ms32();
     c->mss = TCP_MSS_DEFAULT; c->snd_una = iss; c->snd_nxt = iss + 1; c->state = TCP_SYN_SENT;
     struct tcb *cur_t = thread_current();
     c->owner_tid = cur_t ? cur_t->tid : 0;
@@ -317,43 +426,67 @@ int tcp_connect(const uint8_t *dst_ip, uint16_t dst_port, uint32_t timeout_ms)
     return -1;
 }
 
-static int tcp_wait_ack(struct tcp_conn *c, uint32_t target, uint32_t timeout_ms)
+/* PARCHE 134: envio con ventana. Antes cada segmento esperaba su ACK (parada y espera: ~1 segmento por RTT, ignorando la ventana del par).
+ * Ahora se mantienen en vuelo hasta min(ventana del par, ventana de congestion, TCP_SEND_CAP) bytes; ante un tiempo agotado se retransmite desde el
+ * primer byte sin confirmar (retroceder N) y la ventana de congestion vuelve a un segmento. Con ventana cero se envia un sondeo de 1 byte cada RTO. */
+#define TCP_SEND_CAP   (16u * 1024u)
+static uint32_t tcp_flight_limit(const struct tcp_conn *c)
 {
-    uint64_t start = arch_cycle_counter();
-    uint64_t limit = (uint64_t)timeout_ms * TSC_PER_MS;
-    for (;;) {
-        if (c->reset || c->state == TCP_CLOSED) return -1;
-        if (!seq_lt(c->snd_una, target)) return 1;
-        if ((arch_cycle_counter() - start) >= limit) return 0;
-        net_wait_step();
-        arch_pause();
-    }
+    uint32_t w = c->snd_wnd, cw = c->cwnd ? c->cwnd : 2u * c->mss;
+    if (cw < w) w = cw;
+    if (w > TCP_SEND_CAP) w = TCP_SEND_CAP;
+    return w;
 }
 
 int tcp_send(int h, const void *data, uint32_t len)
 {
     struct tcp_conn *c = get_conn(h);
     if (!c || (c->state != TCP_ESTABLISHED && c->state != TCP_CLOSE_WAIT)) return -1;
+    if (len == 0) return 0;
 
     const uint8_t *p = (const uint8_t *)data;
-    uint32_t off = 0;
-    while (off < len) {
-        uint32_t chunk = len - off;
-        if (chunk > c->mss) chunk = c->mss;
-        uint32_t seq = c->snd_nxt;
-        uint32_t end = seq + chunk;
-        c->snd_nxt = end;
-        int acked = 0;
-        for (int attempt = 0; attempt < TCP_MAX_RETRIES; ++attempt) {
-            conn_emit(c, TCP_PSH | TCP_ACK, seq, 0, p + off, (uint16_t)chunk);
-            int r = tcp_wait_ack(c, end, TCP_RTO_MS);
-            if (r < 0) return -1;
-            if (r == 1) { acked = 1; break; }
+    const uint32_t base = c->snd_nxt;            /* numero de secuencia del primer byte */
+    uint32_t sent = 0;                           /* bytes ya emitidos (relativo a base) */
+    uint32_t last_una = c->snd_una;
+    int retries = 0;
+    uint64_t t_prog = arch_cycle_counter();
+    const uint64_t rto = (uint64_t)TCP_RTO_MS * TSC_PER_MS;
+    if (c->cwnd == 0) c->cwnd = 2u * c->mss;
+
+    for (;;) {
+        if (c->reset || c->state == TCP_CLOSED) return -1;
+        uint32_t acked = c->snd_una - base;
+        if (acked > len) acked = len;
+        if (acked >= len) return (int)len;
+        if (c->snd_una != last_una) {            /* hubo progreso: arranque lento y se reinicia el temporizador */
+            uint32_t d = c->snd_una - last_una;
+            if (d < 0x10000000u) { c->cwnd += d; if (c->cwnd > TCP_SEND_CAP) c->cwnd = TCP_SEND_CAP; }
+            last_una = c->snd_una; retries = 0; t_prog = arch_cycle_counter();
         }
-        if (!acked) return -1;
-        off += chunk;
+        uint32_t lim = tcp_flight_limit(c);
+        while (sent < len && sent - acked < lim) {
+            uint32_t chunk = len - sent;
+            if (chunk > c->mss) chunk = c->mss;
+            if (chunk > lim - (sent - acked)) chunk = lim - (sent - acked);
+            if (chunk == 0) break;
+            uint32_t seq = base + sent;
+            if (seq_lt(c->snd_nxt, seq + chunk)) c->snd_nxt = seq + chunk;
+            conn_emit(c, TCP_PSH | TCP_ACK, seq, 0, p + sent, (uint16_t)chunk);
+            sent += chunk;
+        }
+        if (arch_cycle_counter() - t_prog >= rto) {
+            if (++retries > TCP_MAX_RETRIES) return -1;
+            c->cwnd = c->mss;                                  /* perdida: vuelta al arranque lento */
+            if (sent - acked == 0 || c->snd_wnd == 0) {         /* ventana cero: sondeo de 1 byte (no cuenta como enviado) */
+                uint32_t seq = base + acked;
+                if (seq_lt(c->snd_nxt, seq + 1)) c->snd_nxt = seq + 1;
+                conn_emit(c, TCP_PSH | TCP_ACK, seq, 0, p + acked, 1);
+            } else sent = acked;                                /* retroceder N: se reenvia desde el primer byte sin confirmar */
+            t_prog = arch_cycle_counter();
+        }
+        net_wait_step();
+        arch_pause();
     }
-    return (int)len;
 }
 
 int tcp_recv(int h, void *buf, uint16_t max, uint32_t timeout_ms)
@@ -452,4 +585,46 @@ int tcp_accept(int listen_h, uint32_t timeout_ms)
         arch_pause();
     }
     return -1;
+}
+
+int tcp_peer_ip(int h, uint8_t ip[4])                              /* SOMA_197 */
+{
+    struct tcp_conn *c = get_conn(h);
+    if (!c) return -1;
+    for (int i = 0; i < 4; i++) ip[i] = c->remote_ip[i];
+    return 0;
+}
+
+/* PARCHE 133: descarta conexiones atascadas (semiabiertas sin ACK final, cierres que no avanzan, cierre del par sin respuesta de la aplicacion). */
+int tcp_reap(void)
+{
+    int n = 0; uint32_t now = now_ms32();
+    for (int i = 0; i < TCP_MAX_CONN; ++i) {
+        struct tcp_conn *c = &conns[i];
+        if (!c->used || !tcp_should_reap(c->state, now, c->t_ms)) continue;
+        if (c->state != TCP_SYN_RCVD) conn_emit(c, TCP_RST | TCP_ACK, c->snd_nxt, 0, 0, 0);
+        c->state = TCP_CLOSED; c->used = 0; c->owner_tid = 0;
+        stat_reaped++; n++;
+    }
+    return n;
+}
+
+/* se llama con frecuencia desde la espera de red; solo trabaja cada 500 ms */
+void tcp_reap_tick(void)
+{
+    static uint32_t last;
+    uint32_t now = now_ms32();
+    if ((uint32_t)(now - last) < 500) return;
+    last = now;
+    tcp_reap();
+}
+
+void tcp_get_stats(uint32_t *reaped, uint32_t *syn_dropped, int *halfopen, int *in_use)
+{
+    int h = 0, u = 0;
+    for (int i = 0; i < TCP_MAX_CONN; ++i) if (conns[i].used) { u++; if (conns[i].state == TCP_SYN_RCVD) h++; }
+    if (reaped) *reaped = stat_reaped;
+    if (syn_dropped) *syn_dropped = stat_syn_dropped;
+    if (halfopen) *halfopen = h;
+    if (in_use) *in_use = u;
 }

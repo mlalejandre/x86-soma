@@ -6,6 +6,7 @@
 #include "smp.h"
 #include "mem.h"
 #include "ramstat.h"
+#include "cpupower.h"
 
 static void cpuid(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
@@ -136,4 +137,12 @@ int hwmon_board(struct hw_board *o)
     cat(o->firmware, "BIOS + GRUB (multiboot)", sizeof o->firmware);
     return 0;
 }
-int hwmon_live(int *temp_mc, uint32_t *mhz) { *temp_mc = -1; *mhz = (uint32_t)tsc_freq_mhz; return -1; }
+/* SOMA_166_T480S: temperatura del paquete y frecuencia real del nucleo 0 (antes: no disponible y la del TSC) */
+int hwmon_live(int *temp_mc, uint32_t *mhz)
+{
+    int t; uint32_t f, mw;
+    int r = cpupower_live(&t, &f, &mw);
+    *temp_mc = t > -1000 ? t * 1000 : -1;
+    *mhz = f ? f : (uint32_t)tsc_freq_mhz;
+    return r;
+}

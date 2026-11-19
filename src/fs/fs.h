@@ -57,6 +57,7 @@ void vfs_tree_ext(int show_all, char *out_buf, uint32_t max);
 
 void vfs_get_stats(uint32_t *files_used, uint32_t *bytes_used, uint32_t *dirty_count);
 int  vfs_is_hidden(const char *name);
+int  vfs_agent_secret(const char *name);   /* SOMA_193: 1 si el hilo actual es un agente y `name` es un archivo con secretos */
 
 /* Motor de Búsqueda Semántica y Ponderada BM25 */
 int  vfs_search_bm25(const char *query, const char *path_prefix, char *out, uint32_t max);

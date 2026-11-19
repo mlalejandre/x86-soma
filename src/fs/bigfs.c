@@ -1,5 +1,6 @@
 /* SOMA_PARCHE_018_BIGFS: ver bigfs.h */
 #include "bigfs.h"
+#include "blkcache.h"
 
 #define MAGIC "SOMABIG1"
 #define VERSION 1u
@@ -37,6 +38,8 @@ struct bigfs {
     uint64_t free_clusters;
     uint32_t used_inodes, repaired;
     uint32_t hint;                  /* siguiente cluster a probar */
+    struct blkcache bc;             /* PARCHE 131: cache de lectura (bc.nlines == 0: desactivada) */
+    void *bc_mem;                   /* un solo bloque: etiquetas + datos + zona de lectura contigua */
 };
 #define SCRATCH 65536u
 
@@ -102,13 +105,35 @@ static int dev_read(struct bigfs *fs, uint64_t lba, void *buf, uint32_t n)
 {
     if (n == 0) return 0;
     if (lba + n > fs->dev.total_sectors) return BIGFS_E_IO;
-    return fs->dev.read(fs->dev.ctx, lba, buf, n) == 0 ? 0 : BIGFS_E_IO;
+    struct blkcache *c = &fs->bc;
+    if (c->nlines == 0 || n > BLKC_MAX_SECT) return fs->dev.read(fs->dev.ctx, lba, buf, n) == 0 ? 0 : BIGFS_E_IO;
+    /* PARCHE 131: lectura con cache. Se sirve de las lineas si estan todas; si no, se lee de una vez el tramo alineado y se rellenan. */
+    uint64_t l0 = lba / BLKC_LINE_SECT, l1 = (lba + n - 1) / BLKC_LINE_SECT; uint32_t nl = (uint32_t)(l1 - l0 + 1);
+    int all = 1;
+    for (uint32_t i = 0; i < nl && all; ++i) if (!blkc_line(c, l0 + i)) all = 0;
+    if (!all) {
+        if ((l1 + 1) * BLKC_LINE_SECT > fs->dev.total_sectors) return fs->dev.read(fs->dev.ctx, lba, buf, n) == 0 ? 0 : BIGFS_E_IO;   /* ultimo tramo parcial: no se cachea */
+        if (fs->dev.read(fs->dev.ctx, l0 * BLKC_LINE_SECT, c->span, nl * BLKC_LINE_SECT) != 0) return BIGFS_E_IO;
+        for (uint32_t i = 0; i < nl; ++i) blkc_put(c, l0 + i, c->span + (size_t)i * BLKC_LINE_BYTES);
+        c->misses++;
+        COPY(buf, c->span + (size_t)(lba - l0 * BLKC_LINE_SECT) * BIGFS_SECTOR, (size_t)n * BIGFS_SECTOR);
+        return 0;
+    }
+    c->hits++;
+    for (uint32_t k = 0; k < n; ++k) {
+        uint64_t sec = lba + k;
+        COPY((uint8_t *)buf + (size_t)k * BIGFS_SECTOR, blkc_line(c, sec / BLKC_LINE_SECT) + (size_t)(sec % BLKC_LINE_SECT) * BIGFS_SECTOR, BIGFS_SECTOR);
+    }
+    return 0;
 }
 static int dev_write(struct bigfs *fs, uint64_t lba, const void *buf, uint32_t n)
 {
     if (n == 0) return 0;
     if (lba + n > fs->dev.total_sectors) return BIGFS_E_IO;
-    return fs->dev.write(fs->dev.ctx, lba, buf, n) == 0 ? 0 : BIGFS_E_IO;
+    if (fs->bc.nlines) blkc_invalidate(&fs->bc, lba, n);      /* PARCHE 131: ANTES de escribir (un fallo a medias tampoco deja datos viejos) */
+    int r = fs->dev.write(fs->dev.ctx, lba, buf, n) == 0 ? 0 : BIGFS_E_IO;
+    if (fs->bc.nlines) blkc_invalidate(&fs->bc, lba, n);      /* y despues: una lectura intercalada no puede haber cacheado el estado intermedio */
+    return r;
 }
 
 /* ---------------------------------------------------------------- formato y montaje */
@@ -171,6 +196,12 @@ int bigfs_format(const struct bigfs_dev *dev, uint32_t inode_count)
     dev->free(z);
     if (r) return r;
     ZERO(sec, sizeof(sec)); COPY(sec, &sb, sizeof(sb));
+    /* PARCHE 129: copia de reserva del superbloque en el primer sector de relleno tras la tabla de inodos (si el
+     * alineado a cluster deja alguno). No cambia la geometria: los discos anteriores simplemente no la tienen. */
+    if (sb.data_start > 1 + inode_count / 2) {
+        r = dev_write(&tmp, 1 + inode_count / 2, sec, 1);
+        if (r) return r;
+    }
     return dev_write(&tmp, 0, sec, 1);                 /* el superbloque se escribe el ULTIMO */
 }
 
@@ -249,6 +280,18 @@ static void analyze(const struct super *sb, struct inode *tab, uint8_t *verdict,
     if (used_clusters) *used_clusters = used;
 }
 
+/* PARCHE 129: un superbloque es valido si su CRC cuadra y su geometria coincide con la que calcula `layout` */
+static int super_valid(const struct super *sb, uint64_t dev_sectors)
+{
+    for (int i = 0; i < 8; ++i) if (sb->magic[i] != MAGIC[i]) return 0;
+    if (sb->crc != super_crc(sb) || sb->version != VERSION || sb->cluster_sectors != BIGFS_CLUSTER_SECT) return 0;
+    if (sb->total_sectors > dev_sectors) return 0;
+    if (sb->inode_count < 2 || sb->inode_count > BIGFS_MAX_INODES || (sb->inode_count & 1)) return 0;
+    struct super chk; int ok;
+    layout(sb->total_sectors, sb->inode_count, &chk, &ok);
+    return ok && chk.data_start == sb->data_start && chk.data_clusters == sb->data_clusters && sb->inode_start == 1;
+}
+
 static int read_super(const struct bigfs_dev *dev, struct super *sb)
 {
     uint8_t sec[BIGFS_SECTOR];
@@ -256,13 +299,53 @@ static int read_super(const struct bigfs_dev *dev, struct super *sb)
     if (dev->read(dev->ctx, 0, sec, 1) != 0) return BIGFS_E_IO;
     COPY(sb, sec, sizeof(*sb));
     for (int i = 0; i < 8; ++i) if (sb->magic[i] != MAGIC[i]) return BIGFS_E_NOTFMT;
-    if (sb->crc != super_crc(sb) || sb->version != VERSION || sb->cluster_sectors != BIGFS_CLUSTER_SECT) return BIGFS_E_CORRUPT;
-    if (sb->total_sectors > dev->total_sectors) return BIGFS_E_CORRUPT;
-    if (sb->inode_count < 2 || sb->inode_count > BIGFS_MAX_INODES || (sb->inode_count & 1)) return BIGFS_E_CORRUPT;
-    struct super chk; int ok;
-    layout(sb->total_sectors, sb->inode_count, &chk, &ok);
-    if (!ok || chk.data_start != sb->data_start || chk.data_clusters != sb->data_clusters || sb->inode_start != 1) return BIGFS_E_CORRUPT;
-    return 0;
+    return super_valid(sb, dev->total_sectors) ? 0 : BIGFS_E_CORRUPT;
+}
+
+/* PARCHE 129: reconstruye el superbloque SIN tocar inodos ni datos. 0 = ya estaba bien; 1 = restaurado desde la copia
+ * de reserva; 2 = reconstruido por la geometria automatica (discos sin copia, formateados con inode_count = 0: lo que usa
+ * el sistema); <0 = no hay nada que reconstruir (no hay un SOMABIG1 reconocible: el llamador decide si formatea). */
+int bigfs_repair_super(const struct bigfs_dev *dev)
+{
+    if (!dev || !dev->read || !dev->write || !dev->alloc || !dev->free) return BIGFS_E_INVAL;
+    struct super sb;
+    int r = read_super(dev, &sb);
+    if (r == 0) return 0;
+    if (r == BIGFS_E_IO) return r;
+    struct bigfs tmp; ZERO(&tmp, sizeof(tmp)); tmp.dev = *dev;
+    uint8_t *buf = (uint8_t *)dev->alloc(SCRATCH);
+    if (!buf) return BIGFS_E_NOSPC;
+    int how = 0;
+    uint64_t last = dev->total_sectors < 1 + BIGFS_MAX_INODES / 2 + 1 ? dev->total_sectors : 1 + BIGFS_MAX_INODES / 2 + 1;
+    /* 1) buscar la copia: esta en el sector 1 + inode_count/2, asi que su posicion confirma la geometria */
+    for (uint64_t s0 = 2; s0 < last && !how; ) {
+        uint32_t n = (uint32_t)(last - s0 < SCRATCH / BIGFS_SECTOR ? last - s0 : SCRATCH / BIGFS_SECTOR);
+        if (dev->read(dev->ctx, s0, buf, n) != 0) { dev->free(buf); return BIGFS_E_IO; }
+        for (uint32_t i = 0; i < n && !how; ++i) {
+            struct super c; COPY(&c, buf + (size_t)i * BIGFS_SECTOR, sizeof(c));
+            if (super_valid(&c, dev->total_sectors) && s0 + i == 1u + c.inode_count / 2) { sb = c; how = 1; }
+        }
+        s0 += n;
+    }
+    /* 2) sin copia: geometria automatica; solo si el inodo raiz (sector 1) es un directorio con CRC valido */
+    if (!how) {
+        uint32_t cnt;
+        { uint64_t c = dev->total_sectors / BIGFS_CLUSTER_SECT / 8; cnt = c < 256 ? 256 : c > 4096 ? 4096 : (uint32_t)c; }
+        cnt = (cnt + 1) & ~1u;
+        int ok; struct super c; layout(dev->total_sectors, cnt, &c, &ok);
+        struct inode root;
+        if (ok && dev->read(dev->ctx, 1, buf, 1) == 0) {
+            COPY(&root, buf, sizeof(root));
+            if (root.state == BIGFS_T_DIR && root.parent == 0 && root.name[0] == 0 && root.crc == inode_crc(&root)) { sb = c; how = 2; }
+        }
+    }
+    dev->free(buf);
+    if (!how) return BIGFS_E_NOTFMT;
+    uint8_t sec[BIGFS_SECTOR]; ZERO(sec, sizeof(sec)); COPY(sec, &sb, sizeof(sb));
+    r = dev_write(&tmp, 0, sec, 1);
+    if (r) return r;
+    if (dev->flush && dev->flush(dev->ctx) != 0) return BIGFS_E_IO;
+    return how;
 }
 
 static int load_table(const struct bigfs_dev *dev, const struct super *sb, struct inode *tab, uint8_t *scratch)
@@ -304,13 +387,19 @@ struct bigfs *bigfs_mount(const struct bigfs_dev *dev, int *err)
         dev->free(fs); *err = BIGFS_E_NOSPC; return 0;
     }
     ZERO(fs->bitmap, bsz);
+    {   /* PARCHE 131: cache de lectura (si no hay memoria, el sistema de archivos funciona igual sin ella) */
+        enum { NL = 64 };
+        size_t tag_b = NL * sizeof(uint64_t), tot = tag_b + (size_t)NL * BLKC_LINE_BYTES + (size_t)BLKC_SPAN_LINES * BLKC_LINE_BYTES;
+        uint8_t *m = (uint8_t *)dev->alloc(tot);
+        if (m) { fs->bc_mem = m; blkc_init(&fs->bc, NL, (uint64_t *)(void *)m, m + tag_b, m + tag_b + (size_t)NL * BLKC_LINE_BYTES); }
+    }
     r = load_table(dev, &sb, fs->ino, fs->scratch);
     if (r == 0) {
         analyze(&sb, fs->ino, verdict, fs->bitmap, 0, &fs->repaired, 0);
         if (verdict[0] != 1) r = BIGFS_E_CORRUPT;
     }
     if (r) {
-        dev->free(verdict); dev->free(fs->ino); dev->free(fs->bitmap); dev->free(fs->scratch); dev->free(fs);
+        dev->free(verdict); dev->free(fs->ino); dev->free(fs->bitmap); dev->free(fs->scratch); if (fs->bc_mem) dev->free(fs->bc_mem); dev->free(fs);
         *err = r; return 0;
     }
     /* los descartados se tratan como libres en RAM (en disco no se tocan hasta que se reutilicen) y sus
@@ -331,7 +420,7 @@ void bigfs_unmount(struct bigfs *fs)
 {
     if (!fs) return;
     struct bigfs_dev d = fs->dev;
-    d.free(fs->ino); d.free(fs->bitmap); d.free(fs->scratch); d.free(fs);
+    d.free(fs->ino); d.free(fs->bitmap); d.free(fs->scratch); if (fs->bc_mem) d.free(fs->bc_mem); d.free(fs);
 }
 
 int bigfs_fsck(const struct bigfs_dev *dev, struct bigfs_fsck_report *rep)
@@ -366,6 +455,7 @@ void bigfs_info(struct bigfs *fs, struct bigfs_info *o)
     o->total_clusters = fs->sb.data_clusters; o->free_clusters = fs->free_clusters;
     o->total_inodes = fs->sb.inode_count; o->used_inodes = fs->used_inodes + 1;
     o->cluster_bytes = BIGFS_CLUSTER; o->repaired = fs->repaired;
+    o->cache_hits = fs->bc.hits; o->cache_misses = fs->bc.misses;
     unlock(fs);
 }
 

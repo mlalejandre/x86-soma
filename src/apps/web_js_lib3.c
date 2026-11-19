@@ -1,5 +1,6 @@
 /* SOMA_PARCHE_NAVEGADOR: Number, Math, JSON, Date, Intl minimo. */
 #include "web_js_i.h"
+#include "rng.h"
 #define ARG(i) ((i) < argc ? args[i] : jundef())
 jobj *js_own_keys(struct jrt *rt, jv v, int all);
 static jobj *mkctor3(struct jrt *rt, const char *name, jnative f, int nargs, int magic, jobj *proto)
@@ -20,7 +21,11 @@ static f64 this_num(struct jrt *rt, jv t)
 }
 static jstr *group_num(struct jrt *rt, f64 n, int minfd, int maxfd, char thou, char dec, int grouping)
 {
-    char buf[400]; if (maxfd < minfd) maxfd = minfd;
+    char buf[F64_STR_MAX];                                   /* SOMA_200: antes 400, con maxfd elegido por la pagina */
+    if (minfd < 0) minfd = 0;
+    if (minfd > F64_DIGITS_MAX) minfd = F64_DIGITS_MAX;
+    if (maxfd > F64_DIGITS_MAX) maxfd = F64_DIGITS_MAX;
+    if (maxfd < minfd) maxfd = minfd;
     if (f64_is_nan(n)) return js_intern_c(rt, "NaN");
     if (f64_is_inf(n)) return js_intern_c(rt, (n >> 63) ? "-∞" : "∞");
     f64_to_fixed(n, maxfd, buf);
@@ -59,13 +64,13 @@ static jstr *locale_number(struct jrt *rt, f64 n, jv locale, jv opts)
 }
 static jv number_proto(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
-    f64 n = this_num(rt, thisv); char buf[400];
+    f64 n = this_num(rt, thisv); char buf[F64_STR_MAX];      /* SOMA_200: antes 400: (1e308).toString(2) escribe 1025 bytes */
     switch (magic) {
     case N_VALUEOF: return jnum(n);
     case N_TOSTRING: { int radix = IS_UNDEF(ARG(0)) ? 10 : (int)f64_to_i64(js_tonum(rt, args[0])); if (radix < 2 || radix > 36) js_throw_err(rt, E_RANGE, "radix debe estar entre 2 y 36"); if (radix == 10) return jstrv(js_num_to_str(rt, n)); int l = f64_to_str(n, buf, radix); return jstrv(js_str_new(rt, buf, (uint32_t)l)); }
     case N_TOFIXED: { int d = (int)f64_to_i64(js_tonum(rt, ARG(0))); if (d < 0 || d > 100) js_throw_err(rt, E_RANGE, "toFixed() digits debe estar entre 0 y 100"); int l = f64_to_fixed(n, d, buf); return jstrv(js_str_new(rt, buf, (uint32_t)l)); }
     case N_TOPRECISION: { if (IS_UNDEF(ARG(0))) return jstrv(js_num_to_str(rt, n)); int p = (int)f64_to_i64(js_tonum(rt, args[0])); if (p < 1 || p > 100) js_throw_err(rt, E_RANGE, "toPrecision() argumento debe estar entre 1 y 100"); int l = f64_to_precision(n, p, buf); return jstrv(js_str_new(rt, buf, (uint32_t)l)); }
-    case N_TOEXP: { int d = IS_UNDEF(ARG(0)) ? -1 : (int)f64_to_i64(js_tonum(rt, args[0])); int l = f64_to_exponential(n, d, buf); return jstrv(js_str_new(rt, buf, (uint32_t)l)); }
+    case N_TOEXP: { int d = IS_UNDEF(ARG(0)) ? -1 : (int)f64_to_i64(js_tonum(rt, args[0])); if (!IS_UNDEF(ARG(0)) && (d < 0 || d > F64_DIGITS_MAX)) js_throw_err(rt, E_RANGE, "toExponential() digits debe estar entre 0 y 100"); int l = f64_to_exponential(n, d, buf); return jstrv(js_str_new(rt, buf, (uint32_t)l)); }
     case N_TOLOCALE: return jstrv(locale_number(rt, n, ARG(0), ARG(1)));
     }
     return jundef();
@@ -114,7 +119,7 @@ static jv math_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     }
     case M_RANDOM: { uint64_t hi = xr(rt) >> 5, lo = xr(rt) >> 6; return jnum(f64_div(f64_from_u64(hi * 67108864ULL + lo), cnum("9007199254740992"))); }
     case M_HYPOT: { f64 s = 0; for (int i = 0; i < argc; i++) { f64 v = js_tonum(rt, args[i]); s = f64_add(s, f64_mul(v, v)); } return jnum(f64_sqrt(s)); }
-    case M_FROUND: return jnum(x);
+    case M_FROUND: return jnum(js_f32_round(x));   /* SOMA_186: redondeo real a 32 bits */
     case M_CLZ32: { uint32_t v = f64_to_u32(x); return jint(v ? __builtin_clz(v) : 32); }
     case M_IMUL: return jint((int32_t)((uint32_t)f64_to_i32(x) * (uint32_t)f64_to_i32(y)));
     }
@@ -424,7 +429,9 @@ void js_lib_numbers_init(struct jrt *rt)
     for (int i = 0; MF[i].n; i++) js_method(rt, m, MF[i].n, math_fn, 1, MF[i].m);
     static const struct { const char *n; const char *v; } MC[] = { { "PI", "3.141592653589793" }, { "E", "2.718281828459045" }, { "LN2", "0.6931471805599453" }, { "LN10", "2.302585092994046" }, { "LOG2E", "1.4426950408889634" }, { "LOG10E", "0.4342944819032518" }, { "SQRT2", "1.4142135623730951" }, { "SQRT1_2", "0.7071067811865476" }, { 0, 0 } };
     for (int i = 0; MC[i].n; i++) js_def(rt, m, js_intern_c(rt, MC[i].n), jnum(cnum(MC[i].v)), JP_RO);
-    uint64_t seed = web_now_ms() * 2654435761u + 12345; rt->rng[0] = (uint32_t)seed | 1; rt->rng[1] = (uint32_t)(seed >> 16) ^ 0x9E3779B9u; rt->rng[2] = 0x85EBCA6Bu; rt->rng[3] = 0xC2B2AE35u; for (int i = 0; i < 16; i++) xr(rt);
+    uint64_t seed = web_now_ms() * 2654435761u + 12345; rt->rng[0] = (uint32_t)seed | 1; rt->rng[1] = (uint32_t)(seed >> 16) ^ 0x9E3779B9u; rt->rng[2] = 0x85EBCA6Bu; rt->rng[3] = 0xC2B2AE35u;
+    { uint32_t e[4]; rng_bytes(e, sizeof e); for (int i = 0; i < 4; i++) rt->rng[i] ^= e[i]; rt->rng[0] |= 1; }   /* SOMA_192: Math.random ya no se siembra solo con la hora */
+    for (int i = 0; i < 16; i++) xr(rt);
     jobj *j = js_obj_new(rt, rt->p_object); js_def(rt, rt->global, js_intern_c(rt, "JSON"), jobjv(j), 0); js_method(rt, j, "parse", json_parse_fn, 2, 0); js_method(rt, j, "stringify", json_str_fn, 3, 0);
     jobj *dc = mkctor3(rt, "Date", date_ctor, 7, 0, rt->p_date); js_method(rt, dc, "now", date_static, 0, D_NOW); js_method(rt, dc, "parse", date_static, 1, D_PARSE); js_method(rt, dc, "UTC", date_static, 7, D_UTC);
     static const struct { const char *n; int m; } DM[] = { { "getTime", DG_TIME }, { "valueOf", DG_TIME }, { "getFullYear", DG_YEAR }, { "getMonth", DG_MONTH }, { "getDate", DG_DATE }, { "getDay", DG_DAY }, { "getHours", DG_HOURS }, { "getMinutes", DG_MIN }, { "getSeconds", DG_SEC }, { "getMilliseconds", DG_MS },

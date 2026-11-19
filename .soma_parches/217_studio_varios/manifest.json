@@ -1,0 +1,43 @@
+{
+  "created": {},
+  "date": "20261119_200334",
+  "files": {
+    "src/agent/agent.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "41a486fd4d26a1eed51480f433bf1a058ac2e57c7e52b28d087008903f60425e",
+      "old": "7169ff30c71b41d6795f267cfd2f4a9ec40b254024d42bccf3c2efd58f7cb586"
+    },
+    "src/apps/codeedit.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "2ac899cdec383e8ff4f1b019c8bc668ad067d7b33c418fa6a783261f812116fb",
+      "old": "b5ed89e070aa20afe70bea3aa645800a7b54557cd7e1988d6a3d0a7a50b04252"
+    },
+    "src/apps/codeedit.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "c404847af478bc54dbc0955c8763f3816bd747d9db7ca460da5e6fc564c6364a",
+      "old": "015403acd94d84acb3aff976be5b80de7350959da55c10831bc80b7f1404f09e"
+    },
+    "src/apps/coder_app.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "04baad2a223c2de600e68f0d1dae6615fb0f77ba4a023a4419cdadc537b4bd55",
+      "old": "04c6bf4ac32335b09e96af81563bbfd372e696ffad02f38c97b75b9382abed48"
+    },
+    "src/apps/coder_app.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "77f6100135b555dbc8b85345263cd4855ccae103e6a5d56eab97aa2c3b7442ad",
+      "old": "a7381751106e98aa0208ae73fecdfcda17ad3b775fe752d8d5fced93932bb68c"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "9c6a4917270dd0123d944be22877afc5d5d9dac5babd9e7ac476a8910e49df54",
+      "old": "d35ba72bf7c487af1a21dfd77d193b63ac9d4c824a9d538093afdc7f83316385"
+    }
+  },
+  "name": "217_studio_varios"
+}

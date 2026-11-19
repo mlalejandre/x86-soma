@@ -1,0 +1,54 @@
+{
+  "created": {
+    "docs/PARCHE_193_CONTENCION_AGENTE.md": "44a451c1cbddd4557196f44a577bd232375ecb33d0e5a7fd34e4cbf1a293ee7b",
+    "src/agent/agent_net.c": "01d37151b7927ad1b34a9ca7d9fff212fc0706c38bd3b7374411ed3e89142a5e",
+    "src/agent/agent_net.h": "f67ad2e86c0cede7c4a38f66e318c85e799bec3792915eb22054ed3225212d6d",
+    "tests/test_agent_net_193.c": "92287f913b3e6a2f33eef0b8666d4d7cb886aabd8ad170f212498cb261157082"
+  },
+  "date": "20261117_213603",
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "8a8e937f34b797651541edd77620aaca0e73ba2c77c4976b65eb45552e1b11c6",
+      "old": "425dca11bfb6407f9a52795b2a4a446da534af7c9a285ea3a53435595e6d6342"
+    },
+    "protected.txt": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "1653de444c9b41dac12269e868a4e5dceb435095afca175a27e39ad9cce47253",
+      "old": "233e391fdefdbbc9c92b797c16df8fffe4557916e0b36e2b6f718942fde4bbb3"
+    },
+    "src/agent/agent.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "7169ff30c71b41d6795f267cfd2f4a9ec40b254024d42bccf3c2efd58f7cb586",
+      "old": "93d221560667991466f626b2e7574cf96bf01d92177a8fe593dca9c0ea0b8692"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "bd3581764f2dea4993089691a299f8f062ef36f38ddb3c2b171b0a72bd57508c",
+      "old": "c358a111b39677054228d508e0327166f87558b4a1a9ca909b23f3178aac5e4d"
+    },
+    "src/fs/fs.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "877c3fb6bb8df3155773cee2c36b73b59a7039da35df069fd8a3a4bd436b5795",
+      "old": "87f1e8ef090583e3e08eb68e0253699dcb01328a12f923039294ef3d04ee738c"
+    },
+    "src/fs/fs.h": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "4875ac22e10ea46af78132d4f4f2cd3b2ec519a0c245e6b2f27e3571e975bc1a",
+      "old": "44311c62054eef0f1f80a8590dc6d5974d3b82426d5a2f4f2293b11916b3e600"
+    },
+    "src/ui/console.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "0f1764059a2c38c96f1939c732234ab4bb8dcab17f6bed114e30798e7b9bebba",
+      "old": "61dd027045d4da835f69d593e09a4ab9a6f23e5e1f0bf7a7b9ecdda82e3af07f"
+    }
+  },
+  "name": "193_contencion_agente"
+}

@@ -71,6 +71,7 @@ struct bigfs_info {
     uint32_t total_inodes, used_inodes;
     uint32_t cluster_bytes;
     uint32_t repaired;       /* inodos descartados al montar (CRC malo, fuera de rango, solapados, huerfanos) */
+    uint64_t cache_hits, cache_misses;   /* PARCHE 131: cache de lectura */
 };
 
 struct bigfs_fsck_report {
@@ -81,6 +82,7 @@ struct bigfs_fsck_report {
 struct bigfs;   /* opaco */
 
 int  bigfs_format(const struct bigfs_dev *dev, uint32_t inode_count);   /* inode_count 0 = automatico */
+int  bigfs_repair_super(const struct bigfs_dev *dev);   /* PARCHE 129: 0 sano, 1 desde la copia, 2 por geometria automatica, <0 no hay SOMABIG1 */
 struct bigfs *bigfs_mount(const struct bigfs_dev *dev, int *err);
 void bigfs_unmount(struct bigfs *fs);
 int  bigfs_fsck(const struct bigfs_dev *dev, struct bigfs_fsck_report *rep);   /* lee el disco; no modifica nada */

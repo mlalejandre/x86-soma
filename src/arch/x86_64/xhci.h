@@ -36,9 +36,14 @@ struct xhci_hid_status { int active, nkbd, nmouse; uint32_t reports, keys, mouse
 struct xhci_msc_info { char vendor[9], product[17]; uint64_t sectors; uint8_t sector0[16]; };
 int xhci_msc_start(const struct xhci_info *o, struct xhci_msc_info *out);   /* 0 = disco listo (tras xhci_probe) */
 int xhci_msc_ready(void);
+void xhci_msc_report(void);                                                  /* SOMA_172B: dispositivos de almacenamiento probados */
 const struct xhci_msc_info *xhci_msc_get(void);
 int xhci_msc_read(uint64_t lba, uint32_t n, void *buf);                     /* n <= 128; 0 = bien */
 int xhci_msc_write(uint64_t lba, uint32_t n, const void *buf);
+int xhci_msc_write_nosync(uint64_t lba, uint32_t n, const void *buf);   /* SOMA_162: sin SYNCHRONIZE CACHE */
+int xhci_msc_sync(void);
+uint32_t xhci_msc_generation(void);                                  /* cambia cada vez que el disco USB se reinicia */
+int xhci_rescanning(void);
 int xhci_probe(struct xhci_info *o);               /* 0 = controlador activo y puertos enumerados */
 const char *xhci_err_str(int err);
 /* PARCHE 047 (fase 2): teclado y raton USB HID (protocolo boot) sobre un controlador ya enumerado con xhci_probe. Configura el extremo
@@ -53,4 +58,5 @@ int xhci_rescan(void);                                  /* 0 = hecho, -1 = ya en
 const struct xhci_info *xhci_last(void);                /* ultima exploracion (sin reiniciar el controlador) */
 /* Arranque: si hay un xHCI con teclado o raton USB boot, los activa (silencioso si no hay controlador). Se omite si existe /etc/nousb. */
 void xhci_autostart(void);
+void xhci_autostart_early(void);                        /* SOMA_162: sin mirar /etc/nousb (antes del VFS) */
 #endif

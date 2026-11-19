@@ -1,0 +1,32 @@
+{
+  "created": {
+    "docs/PARCHE_172_T480S_AUDIO.md": "843047efecff7c50ed615d608800e90dca0b9f04f3f48da094c03d780c2082cb",
+    "tests/host172/arch.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/bootfb.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/console.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/host172.h": "5d0c8d7cdb2ca7a75206d795da0e52c8f2db1fab73da28ffeeea7f2d5377ccd1",
+    "tests/host172/idt.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/pci.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/pmm.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/sysinfo.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/thread.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/host172/vmm.h": "f6aae4a3ae4e328e1c287147a2434a7d12d807d31a99715fbdc76386e4e1a459",
+    "tests/test_hda_172.c": "7953297cdd5c5d67525e749c35368a5787fdd509b1810cbd206edc816e6e5437"
+  },
+  "files": {
+    "docs/PLAN_T480S.md": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "7039ec5f4209c6f6bf0d628df87eb2addd3bf4ba9683c70b6c205a7562a6d02b",
+      "old": "738ec58d448f963daf80863a44445d5cff98a385bfe24bb7afc554c41f83f2bd"
+    },
+    "src/arch/x86_64/hda.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "ac014cd5fb01887bd8dafde716107dc85859595fcf6ff86c2c3055aadf40136d",
+      "old": "d2c67bd4f369682af1e07ee47a6371f1c4bac3ba6036355d462448578d69ae83"
+    }
+  },
+  "log": "20261115_235411 parche 172: audio real en el T480s: BAR de 64 bits, DMA con snoop, ordenes por CORB/RIRB, codec analogico (ALC257), altavoz y auriculares con su DAC, selectores, EAPD y deteccion del conector",
+  "version": 1
+}

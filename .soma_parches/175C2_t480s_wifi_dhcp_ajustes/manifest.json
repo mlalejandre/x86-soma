@@ -1,0 +1,27 @@
+{
+  "created": {
+    "docs/PARCHE_175C2_T480S_WIFI_DHCP_AJUSTES.md": "f1d3faa77efb2af4c697c91cad5babc093ec8ef2863c11dc1355ead215ba80d7"
+  },
+  "files": {
+    "src/apps/settings.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "0ea38d665adab363da580172264b02ea9fae55d85b49974ba57a2e3d04bde250",
+      "old": "4ec87b5575e836e4b01e853542779a035f5ec27f2d3046dff35fc6242cd71192"
+    },
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "52288ceeb75b34929e2a98956fb167e1f9bec4ad831d3abf57ffdce714c2cc23",
+      "old": "39cddc9ef00434ad04b8a7156f6f1274c177133cbd0aade4549426746835caf3"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "3b8004e82d3cbe47f9ed5bc563819b4ea7affe097105310435c793b1e5058476",
+      "old": "6d9087b65f29959627df1ea5a5158461c844ac0dffdaa6549349d64d00f280c4"
+    }
+  },
+  "log": "20261116_111432 parche 175C2: Ajustes > Redes comprueba 2 veces/s y repinta solo su ventana; EAPOL: reenvio del mensaje 4; CAM real; contadores de trafico WiFi y sucesos de cifrado",
+  "version": 1
+}

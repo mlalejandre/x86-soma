@@ -100,6 +100,7 @@ void _start(void)
         if (nr == SYS_READ) b = safe_out(b);
         calls++;
         i64 r = u_sys3(nr, (i64)a, (i64)b, (i64)c);
+        if (r < 0 && !soma_errno_valid(r)) fail();                                       /* PARCHE 124: todo error es un codigo de la tabla unica (nunca un -1 generico ni un codigo interno) */
         /* ORACULO: lo que el kernel jamas debe aceptar */
         switch (nr) {
         case SYS_WRITE:       if (outside(a, b)) expect_neg(r); break;
@@ -113,6 +114,12 @@ void _start(void)
         }
         if (nr == SYS_GETARGS && b >= 1 && a == (u64)&_start) expect_neg(r);             /* destino en una pagina de SOLO LECTURA (codigo) */
         if ((nr == SYS_AUDIO_STATUS || nr == SYS_FB_INFO) && a == (u64)&_start) expect_neg(r);
+        if ((it & 63) == 0) {                                                            /* PARCHE 121: rutas privadas e internas de BIGFS jamas se abren desde ring 3 */
+            static const char *const prohibidas[] = { "/.ramfs/0", "/.ramfs/t000", "/bin/../.ramfs/0", "//.ramfs/0", "/mem/x", "/agent/state.txt", "/etc/init.sh", "/./.ckpt/B", "/music/../../.ramfs/3", 0 };
+            const char *pp = prohibidas[(it >> 6) % 9];
+            i64 fd = u_open(pp);
+            if (fd >= 0) fail();
+        }
         if ((it & 255) == 0 && (u64)u_getpid() != pid0) fail();                          /* la identidad del proceso no cambia */
     }
     /* despues de todo, el proceso sigue sano: puede escribir con una llamada valida y su memoria no se ha tocado */

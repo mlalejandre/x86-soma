@@ -115,7 +115,7 @@ static uint64_t *vmm_get_pt(uint64_t virt_addr, int allocate)
     } else if (pd[pd_i] & 0x80) {
         /* Desglosar Huge Page de 2 MiB en 512 entradas de 4 KiB */
         uint64_t base_2mb = pd[pd_i] & 0x000FFFFFFFE00000ULL;
-        uint64_t orig_flags = (pd[pd_i] & 0xFFF) & ~0x80ULL;
+        uint64_t orig_flags = ((pd[pd_i] & 0xFFF) & ~0x80ULL) | (pd[pd_i] & VMM_FLAG_NX);   /* SOMA_192: al partir una pagina de 2 MiB no se pierde el NX */
 
         uintptr_t new_pt_frame = pmm_alloc_frame();
         if (!new_pt_frame) return 0;
@@ -216,6 +216,22 @@ uint64_t vmm_as_get_pte(uint64_t as, uint64_t virt_addr)
     if (!(e & VMM_FLAG_PRESENT) || (e & 0x80)) return 0;
     uint64_t *pt = (uint64_t *)(uintptr_t)(e & PAGE_MASK);
     return pt[PT_INDEX(virt_addr)];
+}
+
+/* PARCHE 139: el espacio no debe estar cargado (los servicios bloqueados en el kernel cambian de CR3 al ceder: la TLB de usuario se vacia). */
+uint64_t vmm_as_unmap(uint64_t as, uint64_t virt_addr)
+{
+    if (!as || PML4_INDEX(virt_addr) != VMM_USER_PML4_INDEX) return 0;
+    uint64_t *pml4 = (uint64_t *)(uintptr_t)as, e = pml4[VMM_USER_PML4_INDEX];
+    if (!(e & VMM_FLAG_PRESENT)) return 0;
+    uint64_t *pdpt = (uint64_t *)(uintptr_t)(e & PAGE_MASK); e = pdpt[PDPT_INDEX(virt_addr)];
+    if (!(e & VMM_FLAG_PRESENT) || (e & 0x80)) return 0;
+    uint64_t *pd = (uint64_t *)(uintptr_t)(e & PAGE_MASK); e = pd[PD_INDEX(virt_addr)];
+    if (!(e & VMM_FLAG_PRESENT) || (e & 0x80)) return 0;
+    uint64_t *pt = (uint64_t *)(uintptr_t)(e & PAGE_MASK);
+    uint64_t f = pt[PT_INDEX(virt_addr)];
+    pt[PT_INDEX(virt_addr)] = 0;
+    return (f & VMM_FLAG_PRESENT) ? (f & PAGE_MASK) : 0;
 }
 
 void vmm_as_destroy(uint64_t as)

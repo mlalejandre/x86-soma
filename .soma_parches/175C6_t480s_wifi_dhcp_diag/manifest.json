@@ -1,0 +1,21 @@
+{
+  "created": {
+    "docs/PARCHE_175C6_T480S_WIFI_DHCP_DIAG.md": "6acf30b6404eb2244c0f25e2a5adf53fdbca21e779f08d33267672ba7ec32ec3"
+  },
+  "files": {
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "9ca6ea54b87bf09f1296c220cde1e4fd5cebeebdee85c50d8ff707898e8855b2",
+      "old": "827406235ddbd50af03d6af949d3bade5f4ddd6d5e9061fc6fc772087083fc47"
+    },
+    "src/net/netmgr.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "8cc1a436cf51de7456ca54e6553b2dbc36e8f6667febc2f160a783da0ac3e0ba",
+      "old": "b8f6ab5ceb51e83aa32d5456e79328246b92ddb8d882c537fc23127741b5b807"
+    }
+  },
+  "log": "20261116_134751 parche 175C6: WiFi: diagnostico del DHCP recibido en wifi tramas e IP fija automatica si falla el DHCP",
+  "version": 1
+}

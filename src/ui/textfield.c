@@ -87,7 +87,8 @@ void tf_render(struct tfield *t, int x, int y, int w, int h, int focused, const 
     fb_stroke_rrect_aa(x, y, w, h, 8, focused ? 0xFF38BDF8u : 0xFF243044u);
     if (focused) fb_stroke_rrect_aa(x - 1, y - 1, w + 2, h + 2, 9, 0x5038BDF8u);
     const char *s = t->buf; uint32_t n = slen(s), a, b; sel(t, &a, &b);
-    if (t->cur > n) t->cur = n; if (t->anc > n) t->anc = n;
+    if (t->cur > n) t->cur = n;
+    if (t->anc > n) t->anc = n;
     fb_set_clip(x + 4, y + 2, w - 8, h - 4);
     if (!t->multiline) {
         int ty = y + (h - TF_LH) / 2;
@@ -106,7 +107,8 @@ void tf_render(struct tfield *t, int x, int y, int w, int h, int focused, const 
         int cl = line_of(t->cur);
         if (cl < t->scroll) t->scroll = cl;
         if (cl >= t->scroll + rows) t->scroll = cl - rows + 1;
-        if (t->scroll > g_nl - 1) t->scroll = g_nl - 1; if (t->scroll < 0) t->scroll = 0;
+        if (t->scroll > g_nl - 1) t->scroll = g_nl - 1;
+        if (t->scroll < 0) t->scroll = 0;
         if (!n && ph) run(x + 10, y + 5, ph, (int)slen(ph), focused ? 0x00384458u : 0x00566479u);
         for (int l = t->scroll; l < g_nl && l < t->scroll + rows; l++) {
             int ly = y + 5 + (l - t->scroll) * TF_LH;

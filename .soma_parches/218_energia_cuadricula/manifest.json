@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "date": "20261119_203643",
+  "files": {
+    "src/ui/gui.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "121b7c772e051da20512816dbfd0cc0c74662cb63b0822eb8ecb42260b71125a",
+      "old": "9c6a4917270dd0123d944be22877afc5d5d9dac5babd9e7ac476a8910e49df54"
+    },
+    "src/ui/sysicon.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "9646664863b0b98b17d4dc1fa110dc62d6200ed15e3656360f1b2990ebd0ffc8",
+      "old": "3d09124b9f4326042b006bac6248c6ac0692dbb72407edcce87a60149fea40c2"
+    },
+    "src/ui/sysicon.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "8941eb614bec90e6cdc4e55a7d3b45e3f296013cce385e02ee15d15e4f0b0111",
+      "old": "10faecc3541c3073b242bd0c039a70ccb0b5aa4217a6239eb444bd3c1ee71b09"
+    }
+  },
+  "name": "218_energia_cuadricula"
+}

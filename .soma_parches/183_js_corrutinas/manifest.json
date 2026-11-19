@@ -1,0 +1,59 @@
+{
+  "created": {
+    "docs/PARCHE_183_JS_CORRUTINAS.md": "9e7feb6debf0d6de927e3e974e5f1d6a6b161a74f386d20f36dfdf807714b063",
+    "src/apps/web_js_co.c": "5b9cc24a8e18daceeaccc483da560420406d167281323681bf6805829e32a3bf",
+    "tests/test_web_js_183.c": "340fa362184de18878eef37956830b6bcbfa38cfc8560a36bb943b9b1bf5a689"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "f27f39808f7359c6f802f24d38cb2f4aa54e8ba908388831ce4c6a7d1cc570de",
+      "old": "08939a9aa6ce437bb91b4884362b627361f0f0668327357283a3ba0ad4a7ecd9"
+    },
+    "src/apps/browser.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "0bff91c2a7e8a11b71d8252f210fcf868a657c033d9244529036d38f248f4bf4",
+      "old": "09ad6f0540daec4d7f4528762e7f4b808ede20e6eef704be30e49ddda6be76bf"
+    },
+    "src/apps/web_js_api.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "3d75ab67d6463e10ea2b492c106cec1da276bf79a986a52667bb07279e7a7998",
+      "old": "cebf2b227e113717b0869da59266b488b4106c19f9bf1f4d3bc8b5915edf3294"
+    },
+    "src/apps/web_js_i.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "451a32dd71220b897b730cee227341f75aafbb0850a23ca58ada93d6d451c7d9",
+      "old": "252166e04b6e788771ab6cae0a0f9d92a2e544511b6849027c2ed979ce49b869"
+    },
+    "src/apps/web_js_lib.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "8f3a69007f531270ca72b2940fdd0b380f907f1ddccbe371ba39184d5295959c",
+      "old": "556549a58c0e08c0b939c31fc6124ed5806c4fc0e227ec6c02e04ca577c965aa"
+    },
+    "src/apps/web_js_lib4.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "800b3abd21e7b520118882024c1b07c86814974a0873af62a236f00b98528203",
+      "old": "a809d9fae0374adf24233e2f4df2c23f229b6ba9afd47d2cc71cc28f6c356a03"
+    },
+    "src/apps/web_js_parse.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "b551f2b7d8f69a64e9af69dad6866b26f384b31bf6490fa8e58e2fa6c8c5b929",
+      "old": "97944fe00bcd36a2864c73fb7a20d1019ea7b453b26285d3605eeb423856c443"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "9d050a099989206802c171aedd75bda707cf7bfe9112361a1b79c98e3f169d88",
+      "old": "31ba44e16b2d8f23e982a094640985df01194a7162e1c8e8dc7e50421175b92c"
+    }
+  },
+  "log": "20261116_220117 parche 183: motor JavaScript (I): generadores y async/await real (corrutinas)",
+  "version": 1
+}

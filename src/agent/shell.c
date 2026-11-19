@@ -1,13 +1,33 @@
+#if defined(__x86_64__)
+#include "bootfb.h"   /* SOMA_154_T480S */
+#include "i8042.h"    /* SOMA_155_T480S */
+#include "hwscan.h"   /* SOMA_156_T480S */
+#endif
 #include "image.h"
 #include "fb.h"
 #include "usermode.h"
 #include "elf.h"
 #include "bigfs_glue.h"
 #include "audio_sys.h"
+#include "micrec.h"
+#include "camera.h"
+#include "scrcap.h"                                  /* SOMA_179_T480S */                                   /* SOMA_178_T480S */
 #include "media.h"
 #include "gui_font.h"
 #include "mouse.h"
 #include "httpd.h"
+#include "rng.h"
+#include "agent_net.h"
+#include "tls_trust.h"
+#include "llm_proto.h"
+#include "web_fault.h"
+#if defined(__x86_64__)
+#include "web_r3.h"
+int browser_r3_wanted(void); int browser_r3_active(void);
+#endif
+#ifdef __x86_64__
+#include "memprot.h"
+#endif
 #include "shell.h"
 #include "lang/lang.h"
 #include "console.h"
@@ -57,6 +77,11 @@
 #include "dns.h"
 #include "http.h"
 #include "virtio_blk.h"
+#ifdef __x86_64__
+#include "usbdisk.h"
+#include "acpi_sys.h"
+#include "cpupower.h"
+#endif
 #include "srcfs.h"
 #include "boot_gate.h"
 #include "rtc.h"
@@ -262,12 +287,71 @@ static void fb_puts(char *out, uint32_t max, uint32_t *pos, const char *s);
 volatile uint32_t agent_denied_writes;
 static int agent_write_denied(const char *path, const char *cmd, char *out_buf, uint32_t max_out)
 {
-    if (!agent_dispatch_mode || !agent_path_protected(path)) return 0;
+    /* SOMA_193: tampoco /www ni /public: lo que hay ahi lo sirve httpd a toda la red (seria publicar datos del usuario) */
+    int published = agent_dispatch_mode && path && (agent_path_has_prefix(path, "/www") || agent_path_has_prefix(path, "/public"));
+    if (!agent_dispatch_mode || (!agent_path_protected(path) && !published)) return 0;
     agent_denied_writes++;
-    kprint("[SEGURIDAD AGENTE] "); kprint(cmd); kprint(": denegado, los agentes no pueden modificar /etc, /sys, /bin ni /boot.\n");
+    kprint("[SEGURIDAD AGENTE] "); kprint(cmd); kprint(published ? ": denegado, los agentes no pueden publicar en /www ni /public (lo sirve el servidor web).\n" : ": denegado, los agentes no pueden modificar /etc, /sys, /bin ni /boot.\n");
     if (out_buf && max_out) { uint32_t pp = 0; fb_puts(out_buf, max_out, &pp, "Error: Operacion denegada por politica de seguridad."); }
     return 1;
 }
+
+/* ---------------------------------------------------------------- SOMA_193: a donde puede conectarse un agente (agent_net.h) */
+static int shell_starts_with(const char *s, const char *prefix);
+static int agent_net_cfg_loaded;
+static void agent_net_cfg_load(void)
+{
+    if (agent_net_cfg_loaded) return;
+    agent_net_cfg_loaded = 1;
+    static char b[2048];
+    int n = vfs_read("/etc/agente_red.conf", b, sizeof b - 1);
+    if (n <= 0) return;
+    b[n] = 0;
+    for (char *p = b; *p; ) {
+        char *l = p; while (*p && *p != '\n') p++;
+        if (*p) *p++ = 0;
+        while (*l == ' ') l++;
+        if (shell_starts_with(l, "modo=")) {
+            const char *v = l + 5;
+            agent_net_set_mode(v[0] == 'a' ? AGENT_NET_ABIERTO : v[0] == 'c' ? AGENT_NET_CERRADO : AGENT_NET_PROCEDENCIA);
+        } else if (shell_starts_with(l, "permitir=")) agent_net_allow_add(l + 9);
+    }
+}
+static int agent_net_cfg_save(void)
+{
+    static char b[2048]; uint32_t p = 0;
+    int m = agent_net_mode();
+    fb_puts(b, sizeof b, &p, "# Destinos de red de los agentes (parche 193). Lo cambia la orden agente_red.\nmodo=");
+    fb_puts(b, sizeof b, &p, m == AGENT_NET_ABIERTO ? "abierto" : m == AGENT_NET_CERRADO ? "cerrado" : "procedencia");
+    fb_puts(b, sizeof b, &p, "\n");
+    for (int i = 0; agent_net_allow_get(i); ++i) { fb_puts(b, sizeof b, &p, "permitir="); fb_puts(b, sizeof b, &p, agent_net_allow_get(i)); fb_puts(b, sizeof b, &p, "\n"); }
+    return vfs_write("/etc/agente_red.conf", b, p) < 0 ? -1 : 0;
+}
+/* 1 (y avisa) si un agente pide un destino de red que no viene de la mision, de un resultado ni de la lista de confianza. */
+volatile uint32_t agent_denied_net;
+static int agent_net_denied(const char *cmd, const char *args, char *out_buf, uint32_t max_out)
+{
+    if (!agent_dispatch_mode) return 0;
+    agent_net_cfg_load();
+    if (agent_net_args_ok(args)) return 0;
+    agent_denied_net++;
+    kprint("[SEGURIDAD AGENTE] "); kprint(cmd); kprint(": destino de red no permitido (no viene de la mision, de un resultado de busqueda ni de la lista de confianza).\n");
+    if (out_buf && max_out) {
+        uint32_t pp = 0;
+        fb_puts(out_buf, max_out, &pp, "AGENT_DENIED: destino de red no permitido. Solo puedes pedir una URL que aparezca TAL CUAL en la mision del usuario, en un resultado de search o en una pagina ya descargada. No compongas URL ni les anadas datos.");
+    }
+    return 1;
+}
+/* Solo se registran las URL de texto que viene de FUERA (search, curl, descargar) y sin encadenar ordenes: si valiera cualquier salida,
+ * el modelo podria "blanquear" una URL con datos pegados haciendo `echo http://...` y pidiendola despues. */
+static int agent_cmd_is_external(const char *c)
+{
+    while (*c == ' ') c++;
+    if (!(shell_starts_with(c, "search ") || shell_starts_with(c, "ddg ") || shell_starts_with(c, "curl ") || shell_starts_with(c, "descargar "))) return 0;
+    for (const char *p = c; *p; ++p) if (*p == ';' || *p == '|' || *p == '&' || *p == '>' || *p == '<' || *p == '`' || *p == '$') return 0;
+    return 1;
+}
+int shell_agent_mode(void) { return agent_dispatch_mode; }
 
 int dispatch_agent_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
@@ -275,6 +359,7 @@ int dispatch_agent_command(const char *cmd_line, char *out_buf, uint32_t max_out
     agent_dispatch_mode = 1;
 
     int result = dispatch_command(cmd_line, out_buf, max_out);
+    if (out_buf && max_out && agent_cmd_is_external(cmd_line)) agent_net_observe(out_buf);   /* SOMA_193 */
 
     agent_dispatch_mode = previous;
     return result;
@@ -340,16 +425,41 @@ static uint64_t parse_num(const char **str)
     return val;
 }
 
+/* SOMA_200_MENU_ENERGIA: reinicio/apagado real, compartido con la GUI. */
+#ifdef __aarch64__
+/* SMP usa esta misma distincion de firmware para CPU_ON: SMC para EL2 / Pi5,
+ * HVC cuando QEMU virt arranca directamente en EL1. */
+extern uint64_t soma_boot_el;
+static void soma_psci_system_action(uint64_t function_id)
+{
+    register uint64_t x0 __asm__("x0") = function_id;
+#if defined(PLATFORM_rpi5)
+    __asm__ volatile ("smc #0" : "+r"(x0) : : "memory", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17");
+#else
+    if (soma_boot_el >= 2u)
+        __asm__ volatile ("smc #0" : "+r"(x0) : : "memory", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17");
+    else
+        __asm__ volatile ("hvc #0" : "+r"(x0) : : "memory", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17");
+#endif
+    (void)x0;
+}
+#endif
+
 static void system_reboot(void)
 {
     kprint("\n[REBOOT] Sincronizando discos...\n");
     vfs_sync();
 #ifdef __x86_64__
+    usbdisk_flush();                                                 /* SOMA_164_T480S */
+    (void)acpi_reboot();                                             /* FADT RESET; 8042 como respaldo */
     for (int i = 0; i < 10000; ++i) if ((inb(0x64) & 0x02) == 0) break;
     outb(0x64, 0xFE);
     struct { uint16_t limit; uint64_t base; } __attribute__((packed)) null_idtr = { 0, 0 };
     __asm__ volatile ("lidt %0; int3" : : "m"(null_idtr));
+#elif defined(__aarch64__)
+    soma_psci_system_action(0x84000009ULL);                          /* PSCI SYSTEM_RESET */
 #endif
+    kprint("[REBOOT] Firmware no ha reiniciado: equipo detenido.\n");
     for (;;) { arch_interrupts_disable(); arch_halt(); }
 }
 
@@ -358,13 +468,27 @@ static void system_poweroff(void)
     kprint("\n[POWEROFF] Sincronizando discos...\n");
     vfs_sync();
 #ifdef __x86_64__
+    usbdisk_flush();                                                 /* SOMA_164_T480S */
+    {   int r = acpi_poweroff();
+        if (r != -1) { kprint("[POWEROFF] ACPI S5 fallo ("); kprint_dec((uint32_t)-r); kprint("); probando las salidas de emulador\n"); } }
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
     outb(0xF4, 0x00);
+#elif defined(__aarch64__)
+    soma_psci_system_action(0x84000008ULL);                          /* PSCI SYSTEM_OFF */
 #endif
+    kprint("[POWEROFF] Firmware no ha apagado: equipo detenido.\n");
     for (;;) { arch_interrupts_disable(); arch_halt(); }
 }
+
+/* API publica: evita pasar por el parser de comandos desde un clic de la GUI. */
+void shell_system_reboot(void) { system_reboot(); }
+void shell_system_poweroff(void) { system_poweroff(); }
+
+#ifdef __x86_64__
+void shell_poweroff_from_button(void) { system_poweroff(); }        /* SOMA_165_T480S: boton de encendido */
+#endif
 
 static const char *pci_device_name(uint16_t vendor, uint16_t device)
 {
@@ -524,8 +648,8 @@ void show_somafetch(char *out_buf, uint32_t max_out)
     kprint("                               \033[1;33mRed:    \033[1;37msin interfaz (la Ethernet esta en el RP1)\033[0m\n");
 #endif
 #else
-    kprint("                               \033[1;33mDisco:  \033[1;37mRamFS (16 MiB virtio-blk)\033[0m\n");
-    kprint("                               \033[1;33mRed:    \033[1;37m10.0.2.15 (VirtIO-NET NAT)\033[0m\n");
+    kprint("                               \033[1;33mDisco:  \033[1;37m"); kprint(sysdisk_describe()); kprint("\033[0m\n");   /* SOMA_162 */
+    kprint("                               \033[1;33mRed:    \033[1;37m"); kprint(net_describe()); kprint("\033[0m\n");
 #endif
     kprint("                               \033[1;33mAgente: \033[1;37mnail-35b (ReAct LAN)\033[0m\n\n");
 
@@ -589,20 +713,13 @@ static int cmd_status(const char *args, char *out_buf, uint32_t max_out)
     uint32_t p = 0;
     fb_puts(out_buf, max_out, &p, "ARCH: ");
     fb_puts(out_buf, max_out, &p, MYOS_ARCH_NAME);
-    fb_puts(out_buf, max_out, &p, " | IP: 10.0.2.15 | Disco: 16 MiB virtio-blk | STORAGE: PERSISTENT");
+    fb_puts(out_buf, max_out, &p, " | Red: "); fb_puts(out_buf, max_out, &p, net_describe()); fb_puts(out_buf, max_out, &p, " | Disco: "); fb_puts(out_buf, max_out, &p, sysdisk_describe());
     return 1;
 }
 
 /* PARCHE_FEEDBACK_V1: uptime real al agente */
 /* PARCHE 032: "hw" describe el hardware (ACPI en x86, PCI en ambos). Solo lectura. */
-#if defined(__x86_64__)
-static const uint8_t *hw_map_identity(uint64_t phys, size_t len, void *ctx)
-{
-    (void)ctx;
-    if (phys + len < phys || phys + len > 0x40000000ULL) return 0;       /* boot.s mapea 1 GiB con identidad */
-    return (const uint8_t *)(uintptr_t)phys;
-}
-#endif
+/* SOMA_156_T480S: el acceso a memoria fisica (antes hw_map_identity, solo el primer GiB) esta en hwscan.c: hw_map_phys */
 
 __attribute__((unused)) static const char *hw_pci_class(uint8_t c, uint8_t sc)
 {
@@ -672,19 +789,39 @@ __attribute__((unused)) static void hw_pci_caps(char *b, uint32_t max, uint32_t 
 
 static int cmd_hw(const char *args, char *out_buf, uint32_t max_out)
 {
+    while (args && *args == ' ') args++;
     int verbose = args && args[0] == '-' && args[1] == 'v';
+    (void)verbose;
     static char b[6144];
     uint32_t p = 0;
 #if defined(__x86_64__)
-    uint64_t rsdp = 0;
-    {
-        uintptr_t ea = 0x40E; __asm__ volatile ("" : "+r"(ea));          /* segmento EBDA del area de datos de la BIOS */
-        uint64_t ebda = (uint64_t)(*(const volatile uint16_t *)ea) << 4;
-        if (ebda >= 0x80000 && ebda < 0xA0000) rsdp = hw_acpi_find_rsdp(ebda, ebda + 1024, hw_map_identity, 0);
-        if (!rsdp) rsdp = hw_acpi_find_rsdp(0xE0000, 0x100000, hw_map_identity, 0);
+    /* SOMA_156_T480S: secciones para fotografiar en el portatil: hw cpu | mem [-v] | smbios | acpi | pci [-v] | todo.
+     * Sin argumentos: resumen (equipo, CPU, RAM, pantalla) + ACPI + PCI, como antes. */
+    int only_acpi = args && args[0] == 'a' && args[1] == 'c';
+    int only_pci = args && args[0] == 'p' && args[1] == 'c';
+    if (only_pci && args[2] == 'i' && args[3] == ' ' && args[4] == '-' && args[5] == 'v') verbose = 1;
+    if (args && *args && !only_acpi && !only_pci && !verbose) {
+        static char sb[8192];
+        int todo = args[0] == 't' && args[1] == 'o' && args[2] == 'd';
+        if (todo) {
+            uint32_t q = 0; const char *secs[] = { "smbios", "cpu", "mem" };
+            for (int i = 0; i < 3; i++) { hw_section_text(secs[i], sb + q, sizeof sb - q); while (sb[q]) q++; }
+        } else if (!hw_section_text(args, sb, sizeof sb)) {
+            kprint("Uso: hw [cpu | mem [-v] | smbios | acpi | pci [-v] | todo]\n");
+            return 1;
+        }
+        kprint(sb);
+        if (!todo) { if (out_buf && max_out) out_buf[0] = 0; return 1; }
+        only_acpi = 0; only_pci = 0;
+    } else if (!only_acpi && !only_pci) {
+        static char sb[2048];
+        hw_section_text("resumen", sb, sizeof sb);
+        fb_puts(b, sizeof b, &p, sb);
     }
+    uint64_t rsdp = hw_find_rsdp();    /* SOMA_156_T480S: tablas por encima de 1 GiB accesibles (UEFI) */
     static struct hw_acpi a;
-    if (rsdp && hw_acpi_parse(rsdp, hw_map_identity, 0, &a) == 0) {
+    if (only_pci) { /* nada */ } else
+    if (rsdp && hw_acpi_parse(rsdp, hw_map_phys, 0, &a) == 0) {
         fb_puts(b, sizeof b, &p, "ACPI: rev "); fb_put_dec(b, sizeof b, &p, a.revision);
         fb_puts(b, sizeof b, &p, ", OEM "); fb_puts(b, sizeof b, &p, a.oem);
         fb_puts(b, sizeof b, &p, ", tablas:");
@@ -704,6 +841,7 @@ static int cmd_hw(const char *args, char *out_buf, uint32_t max_out)
     } else {
         fb_puts(b, sizeof b, &p, "ACPI: no disponible (arranque sin tablas ACPI)\n");
     }
+    if (only_acpi) goto hw_done;
 #else
     {
         const uint8_t *dtb = hw_dtb();
@@ -747,11 +885,17 @@ static int cmd_hw(const char *args, char *out_buf, uint32_t max_out)
                 fb_putc(b, sizeof b, &p, ' '); fb_put_hex16(b, sizeof b, &p, v); fb_putc(b, sizeof b, &p, ':');
                 fb_put_hex16(b, sizeof b, &p, pci_device_id((uint8_t)bus, (uint8_t)slot, (uint8_t)fn));
                 fb_putc(b, sizeof b, &p, ' '); fb_puts(b, sizeof b, &p, hw_pci_class((uint8_t)(cc >> 24), (uint8_t)(cc >> 16)));
+                {   /* SOMA_156_T480S: fabricante y nombre de lo que lleva el portatil */
+                    uint16_t dv = pci_device_id((uint8_t)bus, (uint8_t)slot, (uint8_t)fn);
+                    const char *vn = hw_vendor_name(v), *dn = hw_pci_name(v, dv);
+                    if (vn || dn) { fb_puts(b, sizeof b, &p, " - "); if (vn) fb_puts(b, sizeof b, &p, vn); if (dn) { if (vn) fb_putc(b, sizeof b, &p, ' '); fb_puts(b, sizeof b, &p, dn); } }
+                }
                 fb_putc(b, sizeof b, &p, '\n'); n++;
                 if (verbose) hw_pci_caps(b, sizeof b, &p, (uint8_t)bus, (uint8_t)slot, (uint8_t)fn);
             }
         }
     if (n == 0) fb_puts(b, sizeof b, &p, "  (ningun dispositivo)\n");
+hw_done:
 #else
     fb_puts(b, sizeof b, &p, "PCI: no usado en aarch64 (los dispositivos son virtio-mmio)\n");     /* su ECAM no esta mapeada en QEMU virt */
 #endif
@@ -766,6 +910,7 @@ static int cmd_apic(const char *args, char *out_buf, uint32_t max_out)
 {
     int do_test = args && args[0] == 't' && args[1] == 'e' && args[2] == 's' && args[3] == 't';
     int do_route = 0, route_test = 0, route_off = 0;                  /* PARCHE 039 */
+    (void)do_test; (void)do_route; (void)route_test; (void)route_off;      /* en aarch64 no hay APIC */
     if (args && args[0] == 'r' && args[1] == 'o' && args[2] == 'u' && args[3] == 't' && args[4] == 'e') {
         const char *w = args + 5; while (*w == ' ') w++;
         do_route = 1; route_test = (w[0] == 't'); route_off = (w[0] == 'o' && w[1] == 'f');
@@ -773,12 +918,9 @@ static int cmd_apic(const char *args, char *out_buf, uint32_t max_out)
     static char b[3072];
     uint32_t p = 0;
 #if defined(__x86_64__)
-    uint64_t rsdp = 0;
-    { uintptr_t ea = 0x40E; __asm__ volatile ("" : "+r"(ea)); uint64_t eb = (uint64_t)(*(const volatile uint16_t *)ea) << 4;
-      if (eb >= 0x80000 && eb < 0xA0000) rsdp = hw_acpi_find_rsdp(eb, eb + 1024, hw_map_identity, 0);
-      if (!rsdp) rsdp = hw_acpi_find_rsdp(0xE0000, 0x100000, hw_map_identity, 0); }
+    uint64_t rsdp = hw_find_rsdp();    /* SOMA_156_T480S (antes solo el primer GiB) */
     static struct hw_acpi a; static struct apic_info ai;
-    if (!rsdp || hw_acpi_parse(rsdp, hw_map_identity, 0, &a) != 0 || !a.has_madt) {
+    if (!rsdp || hw_acpi_parse(rsdp, hw_map_phys, 0, &a) != 0 || !a.has_madt) {
         fb_puts(b, sizeof b, &p, "APIC: sin tabla MADT\n");
     } else if (apic_probe(a.lapic_addr, a.nioapic ? a.ioapic_addr[0] : 0, &ai) != 0) {
         fb_puts(b, sizeof b, &p, "APIC: no se pudo leer el LAPIC\n");
@@ -845,6 +987,7 @@ static int cmd_ahci(const char *args, char *out_buf, uint32_t max_out)
 {
     static char b[3072];
     int do_test = args && args[0] == 't' && args[1] == 'e' && args[2] == 's' && args[3] == 't';
+    (void)do_test;
     int do_read = args && args[0] == 'r' && args[1] == 'e' && args[2] == 'a' && args[3] == 'd';
     uint64_t rd_lba = 0;
     if (do_read) { const char *w = args + 4; while (*w == ' ') w++; while (*w >= '0' && *w <= '9') rd_lba = rd_lba * 10 + (uint64_t)(*w++ - '0'); }
@@ -1007,14 +1150,46 @@ static int cmd_gpio(const char *args, char *out_buf, uint32_t max_out)
 /* PARCHE 079: "wifi" (Wi-Fi de la Pi 5, fase 1: bus SDIO y firmware) y "placa" */
 static int cmd_wifi(const char *args, char *out_buf, uint32_t max_out)
 {
-    (void)max_out;
     if (out_buf) out_buf[0] = 0;
+    if (agent_dispatch_mode) {                    /* SOMA_193: un agente consulta la WiFi, pero no cambia de red (podria llevar el equipo al punto de acceso de un atacante) */
+        const char *a = args ? args : ""; while (*a == ' ') a++;
+        if (*a && !shell_starts_with(a, "buscar") && !shell_starts_with(a, "guardadas") && !shell_starts_with(a, "registro") && !shell_starts_with(a, "log") && !shell_starts_with(a, "firmware")) {
+            kprint("[SEGURIDAD AGENTE] wifi: los agentes solo pueden consultar (wifi, wifi buscar, wifi guardadas, wifi registro).\n");
+            if (out_buf && max_out) { uint32_t pp = 0; fb_puts(out_buf, max_out, &pp, "AGENT_DENIED: los agentes no pueden cambiar la conexion WiFi"); }
+            return 1;
+        }
+    }
 #ifdef __aarch64__
     wifi_command(args ? args : "");
 #else
-    (void)args;
-    kprint("wifi: sin adaptador Wi-Fi en esta plataforma\n");
+    { extern void iwl_command(const char *args); iwl_command(args ? args : ""); }   /* SOMA_175A_T480S: Intel 8265 */
 #endif
+    return 1;
+}
+/* SOMA_176A: "tls <url>": prueba el HTTPS directo (TLS 1.3 propio) sin navegador */
+static int cmd_tls(const char *args, char *out_buf, uint32_t max_out)
+{
+    if (agent_net_denied("tls", args, out_buf, max_out)) return 1;   /* SOMA_193 */
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    while (args && *args == ' ') args++;
+    if (!args || !*args || shell_starts_with(args, "estado")) {           /* SOMA_194 */
+        struct tls_trust_info ti; tls_trust_get_info(&ti);
+        kprint("TLS 1.3 del nucleo: verificacion de certificados "); kprint(ti.verify ? "ACTIVA" : "DESACTIVADA (soma.tlsverificar=off): cifrado sin comprobar con quien se habla");
+        kprint("\n  autoridades de confianza: "); kprint_dec(ti.roots); kprint(" de fabrica (Mozilla) + "); kprint_dec((uint32_t)ti.user); kprint(" del usuario (/etc/tls_confianza.pem)");
+        kprint("\n  reloj: "); if (ti.now) { kprint("correcto (se comprueban las fechas de los certificados)"); } else kprint("SIN PONER: no se comprueban las fechas de los certificados");
+        kprint("\nuso: tls <url>   (ej. tls https://example.com/)   HTTPS directo; dice por que falla un certificado\n");
+        return 1;
+    }
+    static struct wn_req rq; static struct wn_resp rs;
+    memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
+    rq.url = args; rq.timeout_ms = 20000; rq.max_body = 300000;
+    kprint("tls: pidiendo "); kprint(args); kprint(wn_https_unverified() ? " (HTTPS directo, certificado SIN verificar: soma.tlsverificar=off)\n" : " (HTTPS directo con certificado verificado, o por la pasarela del anfitrion en QEMU)\n");
+    int r = wn_fetch(&rq, &rs);
+    if (r != 0) { kprint("tls: fallo: "); kprint(rs.err); const char *e = wn_tls_last_error(); if (e[0]) { kprint(" | "); kprint(e); } kprint("\n"); wn_free(&rs); return 1; }
+    kprint("tls: HTTP "); kprint_dec((uint32_t)rs.status); kprint(" | "); kprint(rs.ctype); kprint(" | "); kprint_dec(rs.len); kprint(" bytes | redirecciones "); kprint_dec((uint32_t)rs.redirects); kprint(rs.via_gateway ? " | por la pasarela\n" : " | directo\n");
+    char t[161]; uint32_t k = 0; for (uint32_t i = 0; i < rs.len && k < 160; i++) { char c = rs.body[i]; t[k++] = (c >= 32 && c < 127) ? c : ' '; } t[k] = 0;
+    kprint("tls: "); kprint(t); kprint("\n");
+    wn_free(&rs);
     return 1;
 }
 static int cmd_placa(const char *args, char *out_buf, uint32_t max_out)
@@ -1031,8 +1206,8 @@ static int cmd_placa(const char *args, char *out_buf, uint32_t max_out)
 
 /* PARCHE 082: "cpus" - nucleos del procesador y prueba de calculo en paralelo */
 #define CPUS_BUF (256 * 1024)
-static uint8_t cpus_buf[CPUS_BUF];
-struct cpus_job { uint32_t rounds; uint8_t out[4][20]; };
+static uint8_t *cpus_buf;            /* SOMA_175C: en el montón al usarse (256 KiB menos en la imagen del kernel, que no puede pasar de 14 MiB) */
+struct cpus_job { uint32_t rounds; uint8_t out[16][20]; };   /* SOMA_159_T480S: 16 (antes 4, el maximo de la Pi 5: con 8 nucleos se desbordaba) */
 static void cpus_part(int idx, int n, void *arg)
 {
     struct cpus_job *j = (struct cpus_job *)arg;
@@ -1051,6 +1226,8 @@ static int cmd_cpus(const char *args, char *out_buf, uint32_t max_out)
     if (args && args[0] == '1' && !args[1]) { smp_set_enabled(0); kprint("cpus: solo el nucleo 0 (vuelve con 'cpus todos')\n"); return 1; }
     if (args && args[0] == 't') { smp_set_enabled(1); kprint("cpus: todos los nucleos disponibles\n"); }
     if (args && args[0] == 'p') {
+        if (!cpus_buf) cpus_buf = (uint8_t *)kmalloc(CPUS_BUF);
+        if (!cpus_buf) { kprint("cpus: sin memoria para la prueba\n"); return 1; }
         for (uint32_t i = 0; i < CPUS_BUF; i++) cpus_buf[i] = (uint8_t)(i * 2654435761u >> 24);
         struct cpus_job j; j.rounds = 24;
         uint32_t t1 = 0, tn = 0;
@@ -1069,6 +1246,22 @@ static int cmd_cpus(const char *args, char *out_buf, uint32_t max_out)
         return 1;
     }
     kprint("Nucleos: "); kprint_dec((uint32_t)smp_cpus()); kprint(" en uso | "); kprint(smp_method()); kprint(smp_enabled() ? "\n" : " | reparto apagado ('cpus todos')\n");
+#ifdef __x86_64__
+    /* SOMA_159_T480S: hasta 16 nucleos; el identificador es el del LAPIC (en el T480s: 0..7, dos hilos por nucleo fisico) */
+    kprint("  el firmware declara "); kprint_dec((uint32_t)smp_found()); kprint(" procesadores");
+    if (smp_cpus() > 1) { kprint(" | trampolin 0x"); kprint_hex32(smp_tramp_addr()); }
+    else { kprint(" | "); kprint(smp_why()); }
+    kprint("\n");
+    for (int i = 0; i < 16; i++) {
+        struct smp_core_info c;
+        if (smp_core_info(i, &c) != 0) break;
+        if (i > 0 && !c.online) continue;
+        kprint("  nucleo "); if (i < 10) kprint(" "); kprint_dec((uint32_t)i); kprint(i == 0 ? "  sistema + calculo" : "  calculo          ");
+        kprint("  APIC "); kprint_dec(c.mpidr); kprint("  trabajos "); kprint_dec((uint32_t)c.jobs); kprint("  ocupado "); kprint_dec((uint32_t)c.busy_ticks); kprint(" ms");
+        if (i > 0) { kprint("  despertares "); kprint_dec((uint32_t)smp_core_wakes(i)); kprint("  arranque "); kprint_dec(smp_core_boot_ms(i)); kprint(" ms"); }
+        kprint("\n");
+    }
+#else
     for (int i = 0; i < 4; i++) {
         struct smp_core_info c;
         if (smp_core_info(i, &c) != 0) break;
@@ -1076,6 +1269,7 @@ static int cmd_cpus(const char *args, char *out_buf, uint32_t max_out)
         kprint("  nucleo "); kprint_dec((uint32_t)i); kprint(i == 0 ? "  sistema + calculo" : "  calculo          ");
         kprint("  MPIDR 0x"); kprint_hex32(c.mpidr); kprint("  trabajos "); kprint_dec((uint32_t)c.jobs); kprint("  ocupado "); kprint_dec((uint32_t)c.busy_ticks); kprint(" ms\n");
     }
+#endif
     kprint("  volcados de pantalla repartidos: "); kprint_dec((uint32_t)fb_parallel_rects()); kprint("\n");
     kprint("uso: cpus | cpus prueba | cpus 1 | cpus todos\n");
     return 1;
@@ -1088,6 +1282,32 @@ static int cmd_dhcp(const char *args, char *out_buf, uint32_t max_out)
     if (out_buf) out_buf[0] = 0;
     if (!net_init()) { kprint("dhcp: sin red\n"); return 1; }
     dhcp_run(1);
+    return 1;
+}
+
+/* SOMA_170_T480S: "red": estado de la conexion (cable, movil por USB), direccion y tarjetas */
+#ifdef __x86_64__
+#include "e1000e.h"
+#include "netmgr.h"
+#endif
+static int cmd_red(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    const struct netif_ops *act = netif_active();
+#ifdef __x86_64__
+    kprint("Red: "); kprint(netmgr_state());
+#else
+    kprint("Red:");
+#endif
+    kprint(" | interfaz "); kprint(act ? act->name : "ninguna");
+    kprint(" | IP "); kprint_ip(net_ip); kprint(" puerta "); kprint_ip(net_gateway); kprint(" DNS "); kprint_ip(net_dns); kprint("\n");
+#ifdef __x86_64__
+    { uint32_t sw, ok, fl; netmgr_counts(&sw, &ok, &fl); kprint("  cambios de interfaz "); kprint_dec(sw); kprint(", DHCP bien "); kprint_dec(ok); kprint(", fallidos "); kprint_dec(fl); kprint("\n"); }
+    e1000e_info();
+    { extern void usbnet_info(void) __attribute__((weak)); if (usbnet_info) usbnet_info(); }
+#endif
+    kprint("uso: red | netif (interfaces) | netif usar <nombre> | dhcp | ping <ip>\n");
     return 1;
 }
 
@@ -1116,6 +1336,307 @@ static int cmd_netif(const char *args, char *out_buf, uint32_t max_out)
     kprint("uso: netif | netif usar <nombre>\n");
     return 1;
 }
+
+/* SOMA_195: "llm-config" - con que modelo de lenguaje habla SOMA (solo el usuario: no es una orden de agente) */
+static char llmcfg_models[4096]; static int llmcfg_nmodels;
+static void llmcfg_show(const struct llm_conf *c)
+{
+    kprint("Modelo de lenguaje de SOMA\n");
+    for (int i = 0; i < LLM_NPROV; i++) {
+        uint32_t kl = 0; while (c->key[i][kl]) kl++;
+        kprint(i == c->prov ? "  * " : "    "); kprint(llm_prov_name(i)); kprint(i == LLM_LOCAL ? "   " : "  ");
+        kprint(llm_prov_label(i)); kprint(": "); kprint(c->base[i]);
+        kprint(" | modelo: "); kprint(c->model[i][0] ? c->model[i] : "(sin elegir)");
+        kprint(" | clave: "); if (kl) { kprint("puesta (termina en "); kprint(c->key[i] + (kl > 4 ? kl - 4 : 0)); kprint(")"); } else kprint(i == LLM_LOCAL ? "no hace falta" : "FALTA");
+        kprint("\n");
+    }
+    kprint("uso: llm-config proveedor <local|openai|claude|gemini> | servidor <url o ip:puerto> | modelo <nombre o numero de la lista>\n"
+           "     llm-config clave <clave de la API> | archivo-clave <ruta> | modelos (pide la lista al proveedor) | probar\n"
+           "     llm-config lanzador (arrancar llama-server en el servidor de la red local) | lanzar <modelo> | parar\n");
+}
+static int cmd_llm_config(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    static struct llm_conf c; c = *llm_conf_get();
+    while (*args == ' ') args++;
+    const char *field = shell_starts_with(args, "servidor") ? "servidor" : shell_starts_with(args, "modelos") ? 0 : shell_starts_with(args, "modelo") ? "modelo" : shell_starts_with(args, "clave") ? "clave" : 0;
+    if (!*args) { llmcfg_show(&c); return 1; }
+    if (shell_starts_with(args, "lanzador")) {                                   /* SOMA_196: lanzador del servidor local */
+        const char *a = args + 8; while (*a == ' ') a++;
+        const char *lf = shell_starts_with(a, "clave") ? "clave-lanzador" : shell_starts_with(a, "servidor") ? "lanzador" : 0;
+        if (lf) {
+            const char *v = a; while (*v && *v != ' ') v++;
+            while (*v == ' ') v++;
+            if (llm_conf_set(&c, 0, lf, v) != 0) { kprint("llm-config: valor no valido\n"); return 1; }
+            if (llm_conf_save(&c) != 0) kprint("llm-config: no se pudo guardar /etc/llm.conf (el cambio vale hasta reiniciar)\n");
+            kprint("llm-config: guardado\n");
+            return 1;
+        }
+        char lb[LLM_BASE_MAX]; llm_launcher_base(&c, lb, sizeof lb);
+        if (shell_starts_with(a, "modelos")) {
+            llmcfg_nmodels = 0;
+            int n = llm_launcher_models(llmcfg_models, sizeof llmcfg_models);
+            if (n < 0) { kprint(llm_last_error); kprint("\n"); return 1; }
+            llmcfg_nmodels = n;
+            const char *m = llmcfg_models;
+            for (int i = 1; i <= n; i++) {
+                kprint(i < 10 ? "   " : "  "); kprint_dec((uint32_t)i); kprint("  ");
+                char one[LLM_MODEL_MAX + 1]; uint32_t k = 0; while (*m && *m != '\n' && k < LLM_MODEL_MAX) one[k++] = *m++;
+                one[k] = 0; if (*m) m++;
+                kprint(one); kprint("\n");
+            }
+            kprint(n ? "arranca uno con:  llm-config lanzar <numero o nombre>\n" : "el lanzador no encuentra modelos .gguf en el servidor\n");
+            return 1;
+        }
+        kprint("Lanzador del servidor local: "); kprint(lb); kprint(c.launcher[0] ? "" : " (por defecto)"); kprint(" | clave: "); kprint(c.launcher_key[0] ? "puesta" : "FALTA"); kprint("\n");
+        if (c.launcher_key[0]) {
+            char mo[LLM_MODEL_MAX]; int st = llm_launcher_status(mo, sizeof mo);
+            kprint("estado de llama-server: "); kprint(st == 1 ? "LISTO" : st == 2 ? "cargando un modelo" : st == 0 ? "parado" : "ERROR");
+            if (st > 0 && mo[0]) { kprint(", modelo "); kprint(mo); }
+            kprint("\n"); if (st < 0) { kprint(llm_last_error); kprint("\n"); }
+        }
+        kprint("uso: llm-config lanzador clave <clave que muestra soma_lanzador.py> | lanzador servidor <ip:puerto> | lanzador modelos\n"
+               "     llm-config lanzar <numero o nombre> (arranca llama-server con ese modelo) | llm-config parar\n");
+        return 1;
+    }
+    if (shell_starts_with(args, "lanzar")) {
+        const char *v = args + 6; while (*v == ' ') v++;
+        static char pick[LLM_MODEL_MAX];
+        if (*v >= '0' && *v <= '9' && llmcfg_nmodels) {
+            int idx = 0; const char *d = v; while (*d >= '0' && *d <= '9') idx = idx * 10 + (*d++ - '0');
+            if (!*d && idx >= 1 && idx <= llmcfg_nmodels) {
+                const char *m = llmcfg_models; uint32_t k = 0;
+                for (int i = 1; i < idx; i++) { while (*m && *m != '\n') m++; if (*m) m++; }
+                while (m[k] && m[k] != '\n' && k < sizeof pick - 1) { pick[k] = m[k]; k++; }
+                pick[k] = 0; v = pick;
+            }
+        }
+        if (!*v) { kprint("uso: llm-config lanzar <numero de `llm-config lanzador modelos` o nombre>\n"); return 1; }
+        kprint("llm-config: arrancando llama-server con "); kprint(v); kprint(" (cargar el modelo puede tardar un par de minutos) ...\n");
+        if (llm_launcher_start(v, 240000, 0)) { llmcfg_nmodels = 0; kprint("llm-config: servidor LISTO con "); kprint(v); kprint(". Queda elegido como modelo local.\n"); }
+        else { kprint("llm-config: no arranco. "); kprint(llm_last_error); kprint("\n"); }
+        return 1;
+    }
+    if (shell_starts_with(args, "parar")) {
+        if (llm_launcher_stop() == 0) kprint("llm-config: llama-server parado (VRAM libre)\n"); else { kprint(llm_last_error); kprint("\n"); }
+        return 1;
+    }
+    if (shell_starts_with(args, "proveedor")) {
+        int p = llm_prov_by_name(args + 9);
+        if (p < 0) { kprint("llm-config: proveedores: local, openai, claude, gemini\n"); return 1; }
+        c.prov = p; llmcfg_nmodels = 0;
+        if (llm_conf_save(&c) != 0) kprint("llm-config: no se pudo guardar /etc/llm.conf (el cambio vale hasta reiniciar)\n");
+        llmcfg_show(&c);
+        return 1;
+    }
+    if (field) {
+        const char *v = args; while (*v && *v != ' ') v++;
+        while (*v == ' ') v++;
+        if (field[0] == 'm' && *v >= '0' && *v <= '9' && llmcfg_nmodels) {            /* numero de la ultima lista */
+            int idx = 0; const char *d = v; while (*d >= '0' && *d <= '9') idx = idx * 10 + (*d++ - '0');
+            if (!*d && idx >= 1 && idx <= llmcfg_nmodels) {
+                static char pick[LLM_MODEL_MAX]; const char *m = llmcfg_models; uint32_t k = 0;
+                for (int i = 1; i < idx; i++) { while (*m && *m != '\n') m++; if (*m) m++; }
+                while (m[k] && m[k] != '\n' && k < sizeof pick - 1) { pick[k] = m[k]; k++; }
+                pick[k] = 0; v = pick;
+            }
+        }
+        if (llm_conf_set(&c, c.prov, field, v) != 0) { kprint("llm-config: valor no valido\n"); return 1; }
+        if (llm_conf_save(&c) != 0) kprint("llm-config: no se pudo guardar /etc/llm.conf (el cambio vale hasta reiniciar)\n");
+        llmcfg_show(&c);
+        return 1;
+    }
+    if (shell_starts_with(args, "archivo-clave")) {                              /* la clave desde un archivo (p. ej. de un USB): no hay que teclearla */
+        const char *p = args + 13; while (*p == ' ') p++;
+        static char kb[LLM_KEY_MAX + 8]; int n = *p ? vfs_read(p, kb, sizeof kb - 1) : -1;
+        if (n <= 0) { kprint("uso: llm-config archivo-clave <ruta de un archivo de texto que solo contiene la clave>\n"); return 1; }
+        kb[n] = 0; while (n > 0 && (kb[n - 1] == '\n' || kb[n - 1] == '\r' || kb[n - 1] == ' ' || kb[n - 1] == '\t')) kb[--n] = 0;
+        const char *v = kb; while (*v == ' ' || *v == '\t') v++;
+        int r = llm_conf_set(&c, c.prov, "clave", v);
+        memset(kb, 0, sizeof kb);
+        if (r != 0) { kprint("llm-config: ese archivo no contiene una clave valida (una sola linea)\n"); return 1; }
+        if (llm_conf_save(&c) != 0) kprint("llm-config: no se pudo guardar /etc/llm.conf (el cambio vale hasta reiniciar)\n");
+        llmcfg_show(&c);
+        return 1;
+    }
+    if (shell_starts_with(args, "modelos")) {
+        kprint("llm-config: pidiendo la lista de modelos a "); kprint(c.base[c.prov]); kprint(" ...\n");
+        int n = llm_list_models(llmcfg_models, sizeof llmcfg_models);
+        if (n < 0) { llmcfg_nmodels = 0; kprint(llm_last_error); kprint("\n"); return 1; }
+        llmcfg_nmodels = n;
+        const char *m = llmcfg_models;
+        for (int i = 1; i <= n; i++) {
+            kprint(i < 10 ? "   " : i < 100 ? "  " : " "); kprint_dec((uint32_t)i); kprint("  ");
+            char one[LLM_MODEL_MAX + 1]; uint32_t k = 0; while (*m && *m != '\n' && k < LLM_MODEL_MAX) one[k++] = *m++;
+            one[k] = 0; if (*m) m++;
+            kprint(one); kprint("\n");
+        }
+        kprint(n ? "elige uno con:  llm-config modelo <numero o nombre>\n" : "el proveedor no devolvio ningun modelo\n");
+        return 1;
+    }
+    if (shell_starts_with(args, "probar")) {
+        static char reply[512];
+        kprint("llm-config: probando "); kprint(llm_prov_label(c.prov)); kprint(", modelo "); kprint(c.model[c.prov][0] ? c.model[c.prov] : "(sin elegir)"); kprint(" ...\n");
+        uint64_t t0 = timer_get_uptime_ms();
+        if (llm_chat("Responde unicamente con estas tres palabras: SOMA TEST OK", reply, sizeof reply, 60000)) {
+            kprint("llm-config: FUNCIONA ("); kprint_dec((uint32_t)(timer_get_uptime_ms() - t0)); kprint(" ms). Respuesta: "); kprint(reply); kprint("\n");
+        } else { kprint("llm-config: NO funciona. "); kprint(llm_last_error); kprint("\n"); }
+        return 1;
+    }
+    llmcfg_show(&c);
+    return 1;
+}
+
+#if defined(__x86_64__)
+/* SOMA_202: "navegador-aislado" - el motor del navegador en un proceso de ring 3 (solo el usuario) */
+static int cmd_nav_aislado(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    while (*args == ' ') args++;
+    int on = shell_starts_with(args, "on") || shell_starts_with(args, "si"), off = shell_starts_with(args, "off") || shell_starts_with(args, "no");
+    if (on || off) {
+        const char *t = on ? "# Navegador de SOMA (parche 202): navegador-aislado on | off\naislado=si\n" : "# Navegador de SOMA (parche 202): navegador-aislado on | off\naislado=no\n";
+        uint32_t n = 0; while (t[n]) n++;
+        if (vfs_write("/etc/navegador.conf", t, n) < 0) { kprint("navegador-aislado: no se pudo guardar /etc/navegador.conf\n"); return 1; }
+        kprint(on ? "navegador-aislado: ACTIVADO. " : "navegador-aislado: DESACTIVADO (el motor correra dentro del nucleo, como antes del parche 202). ");
+        kprint(browser_r3_active() == on ? "\n" : "Vale desde el proximo arranque (el navegador de esta sesion ya esta en marcha).\n");
+        return 1;
+    }
+    uint32_t st = 0, de = 0, hp = 0, sp = 0; int64_t le = 0; web_r3_stats(&st, &de, &le, &hp, &sp);
+    kprint("Navegador aislado (motor web en un proceso de ring 3)\n  configurado: "); kprint(browser_r3_wanted() ? "si" : "no");
+    kprint("\n  esta sesion: "); kprint(browser_r3_active() ? "AISLADO" : "el navegador aun no se ha abierto, o corre dentro del nucleo");
+    kprint("\n  proceso:     "); kprint(web_r3_alive() ? "en marcha" : "parado"); kprint(", lanzado "); kprint_dec(st); kprint(" veces, caidas "); kprint_dec(de);
+    kprint("\n  memoria:     monton "); kprint_dec(hp * 4u); kprint(" KiB, superficie "); kprint_dec(sp * 4u); kprint(" KiB\n");
+    { uint32_t fr = 0, pl = 0, pa = 0, fh = 0, sv = 0, sl = 0; web_r3_stats2(&fr, &pl, &pa, &fh, &sv, &sl);      /* SOMA_203 */
+      kprint("  fotogramas:  "); kprint_dec(fr); kprint(" pintados, ultimo "); kprint_dec(pl); kprint(" ms, media "); kprint_dec(pa); kprint(" ms, alto "); kprint_dec(fh); kprint(" px\n");
+      kprint("  a salvo:     cookies y almacenamiento, "); kprint_dec(sv); kprint(" copias, la ultima de "); kprint_dec(sl); kprint(" bytes\n"); }
+    kprint("uso: navegador-aislado on | off     (prueba sin interfaz: webr3 <url>)\n");
+    return 1;
+}
+/* SOMA_202: "webr3 <url>" - carga una pagina con el motor del navegador en ring 3, sin interfaz, y dice que salio */
+static int cmd_webr3(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    while (*args == ' ') args++;
+    if (agent_net_denied("webr3", args, out_buf, max_out)) return 1;
+    if (!*args) { kprint("uso: webr3 <url>   (prueba del navegador aislado: carga la pagina en el proceso de ring 3 y muestra titulo, fotogramas y memoria)\n"); return 1; }
+    (void)web_r3_selftest(args);
+    return 1;
+}
+#endif
+
+/* SOMA_199: "membench" - coste de memcpy/memset/memmove/memcmp por tamano (ciclos por llamada, de la mejor de varias tandas) */
+static int cmd_membench(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; (void)max_out; if (out_buf) out_buf[0] = 0;
+    static const uint32_t sz[] = { 4, 8, 16, 24, 48, 64, 128, 256, 1024, 4096, 65536 };
+    static uint8_t *a, *b;
+    if (!a) { a = (uint8_t *)kmalloc(70000); b = (uint8_t *)kmalloc(70000); }
+    if (!a || !b) { kprint("membench: sin memoria\n"); return 1; }
+    for (uint32_t i = 0; i < 70000; i++) { a[i] = (uint8_t)(i * 7); b[i] = (uint8_t)(i * 7); }
+    kprint("membench: ciclos por llamada (menos es mejor)\n  bytes    memcpy    memset   memmove<   memmove>    memcmp\n");
+    void *(*volatile cpy)(void *, const void *, size_t) = memcpy; void *(*volatile set)(void *, int, size_t) = memset;
+    void *(*volatile mov)(void *, const void *, size_t) = memmove; int (*volatile cmp)(const void *, const void *, size_t) = memcmp;
+    volatile int sink = 0;
+    for (uint32_t k = 0; k < sizeof sz / sizeof sz[0]; k++) {
+        uint32_t n = sz[k], reps = n <= 256 ? 2000 : n <= 4096 ? 400 : 40;
+        uint64_t best[5];
+        for (int op = 0; op < 5; op++) {
+            best[op] = ~0ull;
+            for (int round = 0; round < 5; round++) {
+                uint64_t t0 = arch_cycle_counter();
+                for (uint32_t r = 0; r < reps; r++) {
+                    uint32_t o = (r * 13) & 63;
+                    if (op == 0) cpy(b + 300 + o, a + ((r * 5) & 63), n);
+                    else if (op == 1) set(b + 300 + o, (int)r, n);
+                    else if (op == 2) mov(a + 100 + o, a + 100 + o + 3, n);
+                    else if (op == 3) mov(a + 100 + o + 3, a + 100 + o, n);
+                    else sink += cmp(a + 2000, b + 68000 - n - 1 - (n & 1), n) != 0;
+                }
+                uint64_t dt = (arch_cycle_counter() - t0) / reps;
+                if (dt < best[op]) best[op] = dt;
+            }
+        }
+        char line[96]; uint32_t p = 0;
+        for (int c = -1; c < 5; c++) {
+            uint64_t v = c < 0 ? n : best[c]; char d[20]; int nd = 0;
+            do { d[nd++] = (char)('0' + v % 10); v /= 10; } while (v && nd < 19);
+            for (int sp = nd; sp < (c < 0 ? 7 : 10); sp++) line[p++] = ' ';
+            while (nd) line[p++] = d[--nd];
+        }
+        line[p++] = '\n'; line[p] = 0; kprint(line);
+    }
+    (void)sink;
+    return 1;
+}
+
+/* SOMA_193: "agente_red" - politica de destinos de red de los agentes (solo el usuario: no es una orden de agente) */
+static int cmd_agente_red(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    agent_net_cfg_load();
+    while (*args == ' ') args++;
+    int changed = 0;
+    if (shell_starts_with(args, "abierto")) { agent_net_set_mode(AGENT_NET_ABIERTO); changed = 1; }
+    else if (shell_starts_with(args, "procedencia")) { agent_net_set_mode(AGENT_NET_PROCEDENCIA); changed = 1; }
+    else if (shell_starts_with(args, "cerrado")) { agent_net_set_mode(AGENT_NET_CERRADO); changed = 1; }
+    else if (shell_starts_with(args, "permitir ")) {
+        if (agent_net_allow_add(args + 9) != 0) { kprint("agente_red: dominio no valido o lista llena (ej.: agente_red permitir wikipedia.org)\n"); return 1; }
+        changed = 1;
+    } else if (shell_starts_with(args, "quitar ")) {
+        if (agent_net_allow_del(args + 7) != 0) { kprint("agente_red: ese dominio no esta en la lista\n"); return 1; }
+        changed = 1;
+    } else if (*args) { kprint("uso: agente_red | agente_red abierto|procedencia|cerrado | agente_red permitir <dominio> | agente_red quitar <dominio>\n"); return 1; }
+    if (changed && agent_net_cfg_save() != 0) kprint("agente_red: no se pudo guardar /etc/agente_red.conf (el cambio vale hasta reiniciar)\n");
+    int m = agent_net_mode(); uint32_t seen = 0, den = 0; agent_net_stats(&seen, &den);
+    kprint("Destinos de red de los agentes: modo ");
+    kprint(m == AGENT_NET_ABIERTO ? "ABIERTO (cualquier destino; sin proteccion)\n" : m == AGENT_NET_CERRADO ? "CERRADO (solo los dominios de confianza)\n"
+           : "PROCEDENCIA (URL de la mision, de resultados de busqueda o de paginas ya descargadas, y dominios de confianza)\n");
+    kprint("  dominios de confianza:");
+    if (!agent_net_allow_get(0)) kprint(" (ninguno)");
+    for (int i = 0; agent_net_allow_get(i); ++i) { kprint(" "); kprint(agent_net_allow_get(i)); }
+    kprint("\n  URL registradas: "); kprint_dec(seen); kprint(" | destinos denegados: "); kprint_dec(den); kprint("\n");
+    return 1;
+}
+
+/* SOMA_192: "rng" - estado del generador aleatorio del nucleo */
+static int cmd_rng(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    struct rng_info ri; rng_get_info(&ri);
+    int st = rng_selftest();
+    uint8_t s[16]; rng_bytes(s, sizeof s);
+    kprint("Generador aleatorio del nucleo (ChaCha20, clave nueva tras cada peticion)\n  fuentes de hardware: RDSEED ");
+    kprint(ri.rdseed ? "si" : "no"); kprint(", RDRAND "); kprint(ri.rdrand ? "si" : "no");
+    kprint((ri.rdseed || ri.rdrand) ? "\n" : "  -> solo ruido de tiempos y de red (en QEMU: -cpu max; la Pi 5 no tiene)\n");
+    kprint("  siembras: "); kprint_dec(ri.reseeds); kprint(" | sucesos mezclados: "); kprint_dec(ri.events);
+    kprint(" | bytes entregados: "); kprint_dec((uint32_t)ri.bytes_out);
+    kprint("\n  autoprueba (vector del RFC 8439 y salidas distintas): "); kprint(st == 0 ? "correcta" : "FALLO");
+    kprint("\n  muestra: "); for (int i = 0; i < 16; i++) kprint_hex8(s[i]);
+    kprint("\n");
+    return 1;
+}
+
+#ifdef __x86_64__
+/* SOMA_192: "memprot" - repite la pasada de proteccion de memoria y muestra el resultado */
+static int cmd_memprot(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    memprot_apply();
+    struct memprot_info mi; memprot_get_info(&mi);
+    if (mi.mode == 0) { kprint("Proteccion de memoria del nucleo: DESACTIVADA (soma.memprot=off o modo seguro)\n"); return 1; }
+    kprint("Proteccion de memoria del nucleo (W^X)\n  ejecutable: solo .text, "); kprint_dec((uint32_t)mi.text_kib); kprint(" KiB");
+    kprint(mi.wx_text ? "  (AVISO: parte de .text es escribible)\n" : " (ninguno escribible)\n");
+    kprint("  retirado el permiso de ejecucion a "); kprint_dec((uint32_t)(mi.exec_fixed / 1024)); kprint(" MiB en "); kprint_dec(mi.sweeps); kprint(" pasadas");
+    kprint("\n  ejecutable fuera de .text ahora: "); kprint_dec((uint32_t)mi.exec_left); kprint(mi.exec_left ? " KiB  <-- AVISO\n" : " KiB\n");
+    kprint("  pagina 0 (punteros nulos): "); kprint(mi.mode == 2 ? "sin mapear (soma.pagina0=estricta): leer o escribir detiene el sistema\n" : "solo lectura: escribir detiene el sistema (soma.pagina0=estricta para que tambien fallen las lecturas)\n");
+    return 1;
+}
+#endif
 
 static void hexline(const uint8_t *b, int n) { static const char *h = "0123456789abcdef"; char t[3] = { 0, 0, 0 }; for (int i = 0; i < n; i++) { t[0] = h[b[i] >> 4]; t[1] = h[b[i] & 15]; kprint(t); } kprint("\n"); }
 static int cmd_wpa(const char *args, char *out_buf, uint32_t max_out)
@@ -1767,13 +2288,13 @@ static int cmd_df(const char *args, char *out_buf, uint32_t max_out)
     vfs_get_stats(&files_u, &bytes_u, &dirty_c);
 
     kprint("\nALMACENAMIENTO (df):\n");
-    kprint("  Disco: 16 MiB virtio-blk (SOMAFS02 persistente en KHeap)\n");
+    kprint("  Disco: "); kprint(sysdisk_describe()); kprint("\n");   /* SOMA_162 */
     kprint("  RamFS: "); kprint_dec(files_u); kprint("/64 inodos | ");
     kprint_dec(bytes_u / 1024); kprint(" KiB usados (max 16 KiB/archivo) | dirty=");
     kprint_dec(dirty_c); kprint("\n\n");
 
     uint32_t pos = 0;
-    fb_puts(out_buf, max_out, &pos, "Disco: 16 MiB virtio-blk | RamFS V2: ");
+    fb_puts(out_buf, max_out, &pos, "Disco: "); fb_puts(out_buf, max_out, &pos, sysdisk_describe()); fb_puts(out_buf, max_out, &pos, " | RamFS V2: ");
     fb_put_dec(out_buf, max_out, &pos, files_u);
     fb_puts(out_buf, max_out, &pos, "/64 inodos | ");
     fb_put_dec(out_buf, max_out, &pos, bytes_u / 1024);
@@ -1884,6 +2405,15 @@ static int cmd_usfuzz(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* PARCHE 127 */
+static int cmd_pmmbench(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; uint32_t pos = 0;
+    int ok = pmm_bench();
+    fb_puts(out_buf, max_out, &pos, ok == 1 ? "pmmbench: OK (cifras en la consola)" : "pmmbench: FALLO (detalle en la consola)");
+    return 1;
+}
+
 /* PARCHE 118 */
 static int cmd_oomtest(const char *args, char *out_buf, uint32_t max_out)
 {
@@ -1946,6 +2476,34 @@ static int cmd_watchdog(const char *args, char *out_buf, uint32_t max_out)
 static int cmd_audio(const char *args, char *out_buf, uint32_t max_out)
 {
     return audio_sys_command(args, out_buf, max_out);
+}
+
+/* SOMA_177_T480S: mic (diagnostico y grabacion por el microfono) y grabadora (la aplicacion) */
+static int cmd_mic(const char *args, char *out_buf, uint32_t max_out)
+{
+    return micrec_command(args, out_buf, max_out);
+}
+static int cmd_cam(const char *args, char *out_buf, uint32_t max_out)      /* SOMA_178_T480S */
+{
+    return camera_command(args, out_buf, max_out);
+}
+static int cmd_camara(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; uint32_t p = 0;
+    gui_open_camera();
+    fb_puts(out_buf, max_out, &p, "Camara abierta.");
+    return 1;
+}
+static int cmd_captura(const char *args, char *out_buf, uint32_t max_out)    /* SOMA_179_T480S */
+{
+    return scrcap_command(args, out_buf, max_out);
+}
+static int cmd_grabadora(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; uint32_t p = 0;
+    gui_open_recorder();
+    fb_puts(out_buf, max_out, &p, "Grabadora abierta.");
+    return 1;
 }
 
 /* SOMA_PARCHE_018_BIGFS: almacen de archivos grandes */
@@ -2106,6 +2664,36 @@ static int cmd_ps(const char *args, char *out_buf, uint32_t max_out)
     thread_format_table(out_buf, max_out);
     return 1;
 }
+
+/* PARCHE 132 */
+static int cmd_stacks(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args;
+    thread_format_stacks(out_buf, max_out);
+    return 1;
+}
+
+/* PARCHE 138: servicios aislados (decodificadores de imagen en ring 3) */
+#ifdef __x86_64__
+#include "sandbox.h"
+static void shell_copy(char *dst, const char *src, uint32_t cap);
+static int cmd_sbx(const char *args, char *out_buf, uint32_t max_out)
+{
+    if (args && args[0] == 't') { int b = sbx_selftest(); shell_copy(out_buf, b ? "sbx: FALLO (ver consola)\n" : "sbx: OK\n", max_out); return 1; }
+    struct sbx_stats s; sbx_get_stats(&s);
+    char *o = out_buf; uint32_t n = 0;
+    #define SP(t) do { const char *_t = (t); while (*_t && n + 1 < max_out) o[n++] = *_t++; } while (0)
+    #define SN(v) do { char _b[24]; int _i = 23; uint64_t _v = (uint64_t)(v); _b[_i] = 0; if (!_v) _b[--_i] = '0'; while (_v) { _b[--_i] = (char)('0' + _v % 10); _v /= 10; } SP(_b + _i); } while (0)
+    SP("Servicios aislados (ring 3, solo exit): decodificadores de imagen\n  llamadas "); SN(s.runs); SP(", correctas "); SN(s.ok);
+    SP(", procesos muertos "); SN(s.died); SP(", respuestas rechazadas "); SN(s.bad_reply); SP(", sin memoria "); SN(s.oom);
+    SP(", sin ranura "); SN(s.spawn_fail); SP("\n  ultima "); SN(s.last_ms); SP(" ms, maxima "); SN(s.max_ms); SP(" ms, total "); SN(s.total_ms);
+    SP(" ms\n  'sbx test' ejecuta las pruebas de aislamiento\n");
+    o[n] = 0;
+    #undef SP
+    #undef SN
+    return 1;
+}
+#endif
 
 static int cmd_threads(const char *args, char *out_buf, uint32_t max_out)
 {
@@ -2877,6 +3465,11 @@ static int cmd_sector_read(const char *args, char *out_buf, uint32_t max_out)
 {
     uint64_t sec = parse_num(&args);
     char sbuf[512];
+    if (agent_dispatch_mode && !soma_lba_user_zone(sec)) {          /* PARCHE 122: un agente no lee el disco entero (VFS privado, memoria, BIGFS) */
+        kprint("Error: sector protegido para agentes.\n");
+        uint32_t pe = 0; fb_puts(out_buf, max_out, &pe, "sector protegido para agentes");
+        return 1;
+    }
     if (virtio_blk_read(sec, sbuf) == 0) {
         kprint("\n[LBA "); kprint_dec((uint32_t)sec); kprint("]: ");
         for (int i=0; i<512 && sbuf[i]; i++) if (sbuf[i]>=32 && sbuf[i]<127) kputc(sbuf[i]);
@@ -2889,7 +3482,7 @@ static int cmd_sector_read(const char *args, char *out_buf, uint32_t max_out)
 static int cmd_sector_write(const char *args, char *out_buf, uint32_t max_out)
 {
     uint64_t sec = parse_num(&args);
-    if (sec < 3600 || (sec >= 4095 && sec <= 4400) || (sec >= 8192 && sec < 16384)) {
+    if (!soma_lba_user_zone(sec)) {                                  /* PARCHE 122: antes dejaba escribir sobre BIGFS y el checkpoint */
         kprint("Error: sector protegido.\n");
         return 1;
     }
@@ -2915,6 +3508,7 @@ static int cmd_ping(const char *args, char *out_buf, uint32_t max_out)
 
 static int cmd_dns(const char *args, char *out_buf, uint32_t max_out)
 {
+    if (agent_net_denied("dns", args, out_buf, max_out)) return 1;   /* SOMA_193: un nombre inventado tambien saca datos (consulta DNS) */
     while (*args == ' ') args++;
     uint8_t ip[4];
     dns_resolve(args, ip, 3000);
@@ -3029,6 +3623,7 @@ static int shell_starts_with(const char *s, const char *prefix)
 
 static int cmd_curl(const char *args, char *out_buf, uint32_t max_out)
 {
+    if (agent_net_denied("curl", args, out_buf, max_out)) return 1;   /* SOMA_193 */
     /* PARCHE_RED_SEGURO_V1: URL completa delegada al proxy; el kernel no necesita TLS. */
     while (*args == ' ') args++;
     const char *url_arg = args;
@@ -3171,7 +3766,8 @@ static int cmd_health(const char *args, char *out_buf, uint32_t max_out)
 {
     (void)args;
     int ok = llm_health();
-    kprint(ok ? "Servidor LLM: OK (HTTP 200 OK)\n" : "Servidor LLM: ERROR\n");
+    kprint(ok ? "Servidor LLM: OK\n" : "Servidor LLM: ERROR\n");
+    if (!ok) { kprint(llm_last_error); kprint("\nSe elige con la orden llm-config o en Ajustes > IA.\n"); }   /* SOMA_195 */
     uint32_t pos = 0; fb_puts(out_buf, max_out, &pos, ok ? "Servidor LLM: OK" : "Servidor LLM: ERROR");
     return 1;
 }
@@ -3264,6 +3860,23 @@ static int cmd_panic(const char *args, char *out_buf, uint32_t max_out)
 {
     (void)out_buf; (void)max_out;
     while (*args == ' ') args++;
+#if defined(__x86_64__)
+    if (args[0] == 'w' && args[1] == 'e' && args[2] == 'b') {              /* SOMA_198: fallo real dentro del motor del navegador */
+        const char *a = args + 3; while (*a == ' ') a++;
+        int ph = (*a >= '1' && *a <= '5') ? *a - '0' : 0;
+        if (!ph) { kprint("uso: panic web <1 navegacion | 2 JavaScript | 3 maquetacion | 4 instruccion no valida | 5 desbordamiento de pila>\n"
+                          "     El siguiente paso de ese tipo en el navegador fallara de verdad: debe cerrarse la pagina, no el sistema.\n"); return 1; }
+        if (browser_r3_active()) {                                          /* SOMA_202: con el motor aislado el fallo ocurre en su proceso de ring 3 */
+            int32_t wa[1] = { ph == 4 ? 1 : ph == 5 ? 3 : ph == 2 ? 2 : 0 };
+            kprint("panic web: fallo provocado dentro del proceso del navegador ("); kprint(wa[0] == 1 ? "instruccion no valida" : wa[0] == 2 ? "bucle sin fin" : wa[0] == 3 ? "agotar su memoria" : "puntero nulo"); kprint("). El sistema debe seguir como si nada.\n");
+            (void)web_r3_send(W3C_CRASH, wa, 1, 0, 0);
+            return 1;
+        }
+        web_fault_inject = ph;
+        kprint("panic web: el navegador fallara en su proximo paso de ese tipo (recuperaciones hasta ahora: "); kprint_dec(web_fault_count()); kprint(")\n");
+        return 1;
+    }
+#endif
     if (args[0] == 'd' && args[1] == 'i' && args[2] == 'v') {
         kprint("Provocando division por cero (#DE)...\n");
         volatile int z = 0; volatile int x = 42 / z; (void)x;
@@ -3273,6 +3886,20 @@ static int cmd_panic(const char *args, char *out_buf, uint32_t max_out)
         __asm__ volatile ("ud2");
 #else
         __builtin_trap();
+#endif
+#ifdef __x86_64__
+    } else if (args[0] == 'n' && args[1] == 'u' && args[2] == 'l') {              /* SOMA_192: comprueba la proteccion de la pagina 0 */
+        kprint("Escribiendo a traves de un puntero nulo (debe detener el sistema con #PF)...\n");
+        volatile uint64_t *np = 0; __asm__ volatile ("" : "+r"(np)); *np = 0xCAFEBABE;
+        kprint("... la escritura NO fallo: la pagina 0 no esta protegida (soma.memprot=off?)\n");
+    } else if (args[0] == 'n' && args[1] == 'x') {                                /* SOMA_192: comprueba W^X fuera de la imagen del nucleo */
+        uintptr_t fr = pmm_alloc_frame();
+        if (!fr) { kprint("sin memoria\n"); return 1; }
+        *(volatile uint8_t *)fr = 0xC3;                                           /* ret */
+        kprint("Saltando a un marco de datos de la RAM (debe detener el sistema con #PF)...\n");
+        void (*fn)(void) = (void (*)(void))fr; __asm__ volatile ("" : "+r"(fn)); fn();
+        kprint("... el codigo se ejecuto: la RAM de datos sigue siendo ejecutable (soma.memprot=off?)\n");
+        pmm_free_frame(fr);
 #endif
     } else {
         kprint("Provocando fallo de pagina (#PF) en 0xDEADBEEF00...\n");
@@ -3513,6 +4140,7 @@ static int cmd_suma(const char *args, char *out_buf, uint32_t max_out)
 /* PARCHE 087: "descargar <url> [archivo]" - guarda en el VFS lo que devuelve una URL (http directo; https por la pasarela) */
 static int cmd_descargar(const char *args, char *out_buf, uint32_t max_out)
 {
+    if (agent_net_denied("descargar", args, out_buf, max_out)) return 1;   /* SOMA_193 */
     char rep[256]; rep[0] = 0;
     char url[300], dst[FS_NAME_MAX]; uint32_t p = 0, k = 0;
     while (args && *args == ' ') args++;
@@ -3533,6 +4161,10 @@ static int cmd_descargar(const char *args, char *out_buf, uint32_t max_out)
     if (agent_write_denied(dst, "descargar", out_buf, max_out)) return 1;
     struct wn_req rq; struct wn_resp rs; memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
     rq.url = url; rq.timeout_ms = 30000; rq.max_body = 24u << 20; rq.want_binary = 1;
+#if defined(__x86_64__)
+#define wn_fetch wn_fetch_isolated      /* PARCHE 142: el kernel no interpreta HTTP: lo hace el servicio aislado netsvc */
+#define wn_free  wn_free_isolated
+#endif
     if (wn_fetch(&rq, &rs) != 0 || !rs.body) { fb_puts(rep, sizeof rep, &p, "descargar: error de red "); fb_puts(rep, sizeof rep, &p, rs.err); wn_free(&rs); { fb_puts(rep, sizeof rep, &p, "\n"); shell_emit(rep, out_buf, max_out); } return 1; }
     if (rs.status < 200 || rs.status >= 300) { fb_puts(rep, sizeof rep, &p, "descargar: estado HTTP "); fb_put_dec(rep, sizeof rep, &p, (uint64_t)rs.status); wn_free(&rs); { fb_puts(rep, sizeof rep, &p, "\n"); shell_emit(rep, out_buf, max_out); } return 1; }
     int w = vfs_write(dst, rs.body, rs.len);
@@ -3601,9 +4233,502 @@ static int cmd_studio(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+#if defined(__x86_64__)
+/* SOMA_154_T480S: "pantalla" */
+static int cmd_pantalla(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; uint32_t p = 0;
+    bootfb_print_info();
+    fb_puts(out_buf, max_out, &p, "");
+    return 1;
+}
+#endif
+#if defined(__x86_64__)
+/* SOMA_155_T480S: "teclado [es|us]" */
+static int cmd_teclado(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t p = 0;
+    while (args && *args == ' ') args++;
+    if (args && args[0] == 'e' && args[1] == 's') keyboard_set_layout(1);
+    else if (args && args[0] == 'u' && args[1] == 's') keyboard_set_layout(0);
+    i8042_print_info();
+    kprint("  Distribucion: "); kprint(keyboard_get_layout() ? "espanola (es)\n" : "la de siempre (us + n y tildes)\n");
+    kprint("  Cambiar: teclado es | teclado us   (al arrancar: soma.teclado=es|us en la linea de GRUB)\n");
+    fb_puts(out_buf, max_out, &p, "");
+    return 1;
+}
+#endif
+#if defined(__x86_64__)
+/* SOMA_157_T480S: "ramtest [MiB]": comprueba la memoria alta (reserva, escribe, verifica, libera) */
+static int cmd_ramtest(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t mib = 0;
+    while (args && *args == ' ') args++;
+    while (args && *args >= '0' && *args <= '9') mib = mib * 10 + (uint32_t)(*args++ - '0');
+    static char b[1024];
+    hw_ramtest(mib, b, sizeof b);
+    kprint(b);
+    if (out_buf && max_out) out_buf[0] = 0;
+    return 1;
+}
+#endif
+#if defined(__x86_64__)
+/* SOMA_162_T480S: "disco": donde guarda SOMA los archivos (pendrive SOMADATA, virtio o solo RAM) */
+static int cmd_disco(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    while (args && *args == ' ') args++;
+    const struct usbdisk_info *u = usbdisk_info();
+    if (args && args[0] == 's') {
+        int r = usbdisk_flush();
+        kprint(r == 0 ? "disco: cache del pendrive vaciada\n" : "disco: no hay pendrive como disco del sistema\n");
+        return 1;
+    }
+    kprint("Disco del sistema: "); kprint(sysdisk_describe()); kprint("\n");
+    if (u->active) {
+        uint64_t r, w, e, t; usbdisk_stats(&r, &w, &e, &t);
+        kprint("  pendrive: particion "); kprint_dec((uint32_t)u->part_index); kprint(" del MBR, sectores "); kprint_dec((uint32_t)u->part_lba);
+        kprint(".."); kprint_dec((uint32_t)(u->part_lba + u->part_sectors - 1)); kprint(" (SOMA usa "); kprint_dec((uint32_t)(u->sectors / 2048)); kprint(" MiB)\n");
+        kprint("  estado: "); kprint(u->readonly ? (u->lost ? "SOLO LECTURA (el pendrive cambio o no responde)" : "solo lectura") : "lectura y escritura");
+        kprint(u->dirty ? " | cambios pendientes de vaciar\n" : " | todo vaciado al pendrive\n");
+        kprint("  peticiones: lecturas "); kprint_dec((uint32_t)r); kprint(", escrituras "); kprint_dec((uint32_t)w); kprint(", errores "); kprint_dec((uint32_t)e);
+        kprint(", reintentos "); kprint_dec((uint32_t)t); kprint(", vaciados "); kprint_dec((uint32_t)u->syncs); kprint("\n");
+    } else {
+        kprint("  pendrive: "); kprint(u->why && u->why[0] ? u->why : "no se intento"); kprint("\n");
+    }
+    kprint("uso: disco | disco sync (vacia la cache del pendrive; se hace sola cada 5 s)\n");
+    return 1;
+}
+/* SOMA_165_T480S: "bateria": carga, autonomia, salud y cargador */
+static void pr_cap(uint32_t v, int ma) { if (v == 0xFFFFFFFF) { kprint("?"); return; } kprint_dec(v); kprint(ma ? " mAh" : " mWh"); }
+static void pr_min(uint32_t m) { kprint_dec(m / 60); kprint(" h "); if (m % 60 < 10) kprint("0"); kprint_dec(m % 60); kprint(" min"); }
+static int cmd_bateria(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args; (void)max_out; if (out_buf) out_buf[0] = 0;
+    const struct acpi_sys_info *a = acpi_sys_info();
+    if (!a->active) { kprint("bateria: sin ACPI ("); kprint(a->why); kprint(")\n"); return 1; }
+    acpi_power_refresh_now();
+    struct acpi_power_state ps; acpi_power_state(&ps);
+    kprint("Cargador: "); kprint(ps.ac == 1 ? "enchufado" : ps.ac == 0 ? "desenchufado" : "desconocido");
+    kprint(" | tapa: "); kprint(ps.lid == 1 ? "abierta" : ps.lid == 0 ? "cerrada" : "desconocida"); kprint("\n");
+    if (!a->nbat) { kprint("No hay baterias en el firmware.\n"); return 1; }
+    if (ps.percent != 0xFFFFFFFF) {
+        kprint("Total: "); kprint_dec(ps.percent); kprint(" %");
+        kprint(ps.charging ? " | cargando" : ps.discharging ? " | descargando" : " | sin carga ni descarga");
+        if (ps.minutes != 0xFFFFFFFF) { kprint(ps.discharging ? " | quedan " : " | llena en "); pr_min(ps.minutes); }
+        kprint("\n");
+    }
+    for (int i = 0; i < a->nbat; i++) {
+        struct acpi_battery b; int r = acpi_battery_read(i, &b);
+        kprint("  bateria "); kprint_dec((uint32_t)i); kprint(": ");
+        if (r <= 0) { kprint(r == 0 ? "no colocada\n" : "no se pudo leer\n"); continue; }
+        if (b.model[0]) { kprint(b.oem); kprint(" "); kprint(b.model); kprint(" | "); }
+        if (b.percent != 0xFFFFFFFF) { kprint_dec(b.percent); kprint(" % | "); }
+        kprint("queda "); pr_cap(b.remaining, b.unit_ma); kprint(" de "); pr_cap(b.full, b.unit_ma);
+        kprint(" (de fabrica "); pr_cap(b.design, b.unit_ma); kprint(")");
+        if (b.health != 0xFFFFFFFF) { kprint(" | salud "); kprint_dec(b.health); kprint(" %"); }
+        kprint("\n    ");
+        kprint(b.critical ? "CRITICA | " : ""); kprint(b.charging ? "cargando" : b.discharging ? "descargando" : "en reposo");
+        if (b.rate != 0xFFFFFFFF) { kprint(" a "); kprint_dec(b.rate); kprint(b.unit_ma ? " mA" : " mW"); }
+        if (b.voltage != 0xFFFFFFFF) { kprint(" | "); kprint_dec(b.voltage); kprint(" mV"); }
+        if (b.cycles != 0xFFFFFFFF && b.cycles) { kprint(" | ciclos "); kprint_dec(b.cycles); }
+        kprint("\n");
+    }
+    uint32_t pb, lid, bat; acpi_event_counts(&pb, &lid, &bat);
+    kprint("Eventos: boton "); kprint_dec(pb); kprint(", tapa "); kprint_dec(lid); kprint(", bateria "); kprint_dec(bat);
+    kprint(a->pb_fixed ? " | el boton de encendido apaga SOMA limpiamente\n" : "\n");
+    return 1;
+}
+/* SOMA_208: "escritorio reiniciar" devuelve iconos y gadget a su sitio de fabrica */
+extern void gui_desktop_layout_reset(void);
+extern int gui_stress_request(int n, char *out, uint32_t max);   /* SOMA_220_PRUEBA */
+#if defined(__x86_64__)
+extern volatile int gui_rescue_inject;                            /* SOMA_221_RESCATE */
+#endif
+static int cmd_escritorio(const char *args, char *out_buf, uint32_t max_out)
+{
+    while (args && *args == ' ') args++;
+    if (args && args[0] == 'r') { gui_desktop_layout_reset(); kprint("escritorio: iconos y gadget en su posicion original\n"); }
+    else if (args && args[0] == 'p') {                       /* SOMA_220_PRUEBA: escritorio prueba [n] */
+        int n = 0; const char *q = args; while (*q && *q != ' ') ++q; while (*q == ' ') ++q;
+        while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+        static char res[2048];
+        int r = gui_stress_request(n ? n : 20, res, sizeof res);
+        if (r == -1) kprint("escritorio prueba: el escritorio no esta en marcha\n");
+        else if (r == -2) kprint("escritorio prueba: no termino a tiempo\n");
+        else kprint(res);
+    }
+#if defined(__x86_64__)
+    else if (args && args[0] == 'f') {                       /* SOMA_221_RESCATE: escritorio fallo memoria|cuelgue */
+        const char *q = args; while (*q && *q != ' ') ++q; while (*q == ' ') ++q;
+        gui_rescue_inject = (*q == 'c') ? 2 : 1;
+        kprint(*q == 'c' ? "escritorio: la proxima aplicacion que se dibuje entra en un bucle sin fin (se rescata a los 10 s)\n"
+                         : "escritorio: la proxima aplicacion que se dibuje hace un acceso a memoria no valido\n");
+    }
+#endif
+    else kprint("uso: escritorio reiniciar | escritorio prueba [n] | escritorio fallo memoria|cuelgue   (arrastra iconos y gadget con el raton para colocarlos; se guardan en /etc/escritorio.conf)\n");
+    if (out_buf && max_out) out_buf[0] = 0;
+    return 1;
+}
+/* SOMA_164B_T480S: "orbe prueba" */
+extern int orb_parallel_selftest(char *out, uint32_t max);
+static int cmd_orbe(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args;
+    while (args && *args == ' ') args++;
+    if (args && args[0] == 'p') {
+        static char b[512];
+        orb_parallel_selftest(b, sizeof b);
+        kprint(b);
+        if (out_buf && max_out) out_buf[0] = 0;
+        return 1;
+    }
+    extern uint64_t orb_perf_last[16]; extern uint32_t orb_perf_period, orb_perf_windows; extern uint64_t tsc_ticks_per_ms;
+    extern uint32_t her_lay_hits, her_lay_miss; extern int her_lay_on;
+    {   /* SOMA_209: orbe eco on|off | orbe cintas on|off | orbe verifica [on|off] */
+        extern int her_eco_on, her_ribl_on, her_eco_verify; extern uint32_t her_eco_stat[10]; extern int orb_eco_selftest(char *out, uint32_t max);
+        const char *q = args ? args : ""; while (*q && *q != ' ') q++; while (*q == ' ') q++;
+        int on = (q[0] == 'o' && q[1] == 'n'), off = (q[0] == 'o' && q[1] == 'f');
+        if (args && args[0] == 'e') {
+            if (on) her_eco_on = 1; else if (off) her_eco_on = 0;
+            kprint("ahorro por fotograma (halo por tabla, borrado y volcado por zonas): "); kprint(her_eco_on ? "activado\n" : "desactivado\n");
+            if (out_buf && max_out) out_buf[0] = 0;
+            return 1;
+        }
+        if (args && args[0] == 'v' && args[1] == 'e' && args[2] == 'n') {
+            extern int her_bc_on;
+            if (on) her_bc_on = 1; else if (off) her_bc_on = 0;
+            kprint("contenido de ventanas en cache (hasta 70 ms): "); kprint(her_bc_on ? "activado" : "desactivado");
+            kprint(" | copiado "); kprint_dec(her_eco_stat[2]); kprint(", pintado "); kprint_dec(her_eco_stat[3]); kprint("\n");
+            her_eco_stat[2] = her_eco_stat[3] = 0;
+            if (out_buf && max_out) out_buf[0] = 0;
+            return 1;
+        }
+        if (args && args[0] == 'c' && args[1] == 'i') {
+            if (on) her_ribl_on = 1; else if (off) her_ribl_on = 0;
+            kprint("cintas en capa (se renuevan cada 80 ms): "); kprint(her_ribl_on ? "activado" : "desactivado (se pintan en cada fotograma)");
+            kprint(" | cintas pintadas "); kprint_dec(her_eco_stat[0]); kprint(", reutilizadas "); kprint_dec(her_eco_stat[1]);
+            kprint(" | halo calculado "); kprint_dec(her_eco_stat[9]); kprint(", copiado "); kprint_dec(her_eco_stat[8]); kprint("\n");
+            her_eco_stat[0] = her_eco_stat[1] = her_eco_stat[8] = her_eco_stat[9] = 0;
+            if (out_buf && max_out) out_buf[0] = 0;
+            return 1;
+        }
+        if (args && args[0] == 'v') {
+            static char b[384];
+            if (on || off) { extern int32_t fb_verify_box[4]; fb_verify_box[0] = fb_verify_box[1] = 1 << 30; fb_verify_box[2] = fb_verify_box[3] = -1; her_eco_verify = on; for (int z = 0; z < 10; z++) her_eco_stat[z] = 0; kprint(on ? "verificacion en marcha (1 de cada 8 fotogramas; la interfaz ira algo mas lenta): usa el escritorio y repite 'orbe verifica'\n" : "verificacion apagada\n"); }
+            else {
+                orb_eco_selftest(b, sizeof b); kprint(b);
+                kprint("en vivo ("); kprint(her_eco_verify ? "verificando" : "sin verificar: 'orbe verifica on'"); kprint("): fotogramas "); kprint_dec(her_eco_stat[7]);
+                kprint(" | pixeles sin borrar "); kprint_dec(her_eco_stat[5]); kprint(" | pantalla distinta del bufer "); kprint_dec(her_eco_stat[6]);
+                kprint(" | contenidos de ventana distintos "); kprint_dec(her_eco_stat[4]); kprint("\n");
+                { extern int32_t fb_verify_box[4]; if (fb_verify_box[2] >= 0) { kprint("  pixeles sin borrar en la caja "); kprint_dec((uint32_t)fb_verify_box[0]); kprint(","); kprint_dec((uint32_t)fb_verify_box[1]); kprint(" - "); kprint_dec((uint32_t)fb_verify_box[2]); kprint(","); kprint_dec((uint32_t)fb_verify_box[3]); kprint("\n"); } }
+                kprint("contenido de ventanas: copiado "); kprint_dec(her_eco_stat[2]); kprint(", pintado "); kprint_dec(her_eco_stat[3]); kprint("\n");
+            }
+            if (out_buf && max_out) out_buf[0] = 0;
+            return 1;
+        }
+    }
+    if (args && args[0] == 'c') {            /* SOMA_207: orbe capa on|off */
+        const char *q = args + 1; while (*q && *q != ' ') q++; while (*q == ' ') q++;
+        if (q[0] == 'o' && q[1] == 'f') her_lay_on = 0; else if (q[0] == 'o') her_lay_on = 1;
+        kprint("capa de fondo en cache: "); kprint(her_lay_on ? "activada" : "desactivada");
+        kprint(" | repintados reutilizados "); kprint_dec(her_lay_hits); kprint(", recalculados "); kprint_dec(her_lay_miss); kprint("\n");
+        { extern uint32_t her_lay_why[16]; kprint("  motivos: sin_copia "); kprint_dec(her_lay_why[0]); kprint(" | omitida "); kprint_dec(her_lay_why[1]); kprint(" | caducada "); kprint_dec(her_lay_why[2]); kprint(" | cambio "); kprint_dec(her_lay_why[3]); kprint("\n"); kprint("  causas omitida: fresco "); kprint_dec(her_lay_why[4]); kprint(" arrastre "); kprint_dec(her_lay_why[5]); kprint(" iconos "); kprint_dec(her_lay_why[6]); kprint(" anim "); kprint_dec(her_lay_why[7]); kprint(" lanzador "); kprint_dec(her_lay_why[8]); kprint(" agente "); kprint_dec(her_lay_why[9]); kprint(" resp "); kprint_dec(her_lay_why[10]); kprint(" vortice "); kprint_dec(her_lay_why[11]); kprint(" flash "); kprint_dec(her_lay_why[12]); kprint("\n"); for (int z = 0; z < 16; z++) her_lay_why[z] = 0; }
+        her_lay_hits = her_lay_miss = 0;
+        if (out_buf && max_out) out_buf[0] = 0;
+        return 1;
+    }
+    uint64_t d = tsc_ticks_per_ms / 100; if (!d) d = 1;                       /* centesimas de ms */
+    static const char *nm[] = { "fondo y orbe", "marcos", "contenido de ventanas", "mezcla", "volcado a pantalla" };
+    static const char *sub[] = { "borrado", "halo y cintas", "particulas", "", "anillo y destellos", "zonas y dock", "  de ello, halo", "  de ello, cintas" };
+    kprint("Fotograma del escritorio (media de 60; "); kprint_dec(orb_perf_windows); kprint(orb_perf_windows == 1 ? " ventana abierta)\n" : " ventanas abiertas)\n");
+    uint64_t tot = 0;
+    for (int i = 0; i < 5; i++) { uint64_t v = orb_perf_last[i] / d; tot += v; kprint("  "); kprint(nm[i]); kprint(": "); kprint_dec((uint32_t)(v / 100)); kprint(","); if (v % 100 < 10) kprint("0"); kprint_dec((uint32_t)(v % 100)); kprint(" ms\n");
+        if (i == 0) for (int k = 0; k < 8; k++) { if (!sub[k][0]) continue; uint64_t w = orb_perf_last[8 + k] / d; kprint("      "); kprint(sub[k]); kprint(": "); kprint_dec((uint32_t)(w / 100)); kprint(","); if (w % 100 < 10) kprint("0"); kprint_dec((uint32_t)(w % 100)); kprint(" ms\n"); } }
+    kprint("  total "); kprint_dec((uint32_t)(tot / 100)); kprint(","); if (tot % 100 < 10) kprint("0"); kprint_dec((uint32_t)(tot % 100));
+    kprint(" ms | el orbe va a "); kprint_dec(orb_perf_period ? 1000u / orb_perf_period : 0); kprint(" fps (cada "); kprint_dec(orb_perf_period); kprint(" ms) | nucleos "); kprint_dec((uint32_t)smp_cpus()); kprint("\n");
+    {   /* SOMA_209: parte de la pantalla que se vuelca de media por fotograma desde la ultima consulta */
+        extern uint64_t fb_dirty_px; extern uint32_t fb_dirty_n; static uint64_t lp; static uint32_t ln;
+        uint64_t dpx = fb_dirty_px - lp; uint32_t dn = fb_dirty_n - ln; lp = fb_dirty_px; ln = fb_dirty_n;
+        uint64_t scr = (uint64_t)fb_get_width() * fb_get_height();
+        if (dn && scr) { kprint("  volcado medio: "); kprint_dec((uint32_t)(dpx * 100u / dn / scr)); kprint(" % de la pantalla por volcado ("); kprint_dec(dn); kprint(" volcados)\n"); }
+    }
+    kprint("uso: orbe | orbe eco|cintas|ventanas|capa [on|off] | orbe verifica [on|off] | orbe prueba (mismo dibujo con 1 y con todos los nucleos) | cpus 1 / cpus todos para comparar\n");
+    if (out_buf && max_out) out_buf[0] = 0;
+    return 1;
+}
+/* SOMA_166_T480S: "energia": perfil, temperatura, frecuencia real y consumo del procesador */
+static void pr_w(uint32_t mw) { kprint_dec(mw / 1000); kprint(","); kprint_dec((mw % 1000) / 100); kprint(" W"); }
+static int cmd_energia(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    while (args && *args == ' ') args++;
+    const struct cpupower_info *ci = cpupower_info();
+    if (args && *args) {
+        int p = args[0] == 'r' ? CP_RENDIMIENTO : args[0] == 'e' ? CP_EQUILIBRADO : args[0] == 'a' ? CP_AHORRO : -1;
+        if (p < 0) { kprint("uso: energia | energia rendimiento | energia equilibrado | energia ahorro\n"); return 1; }
+        cpupower_set_profile(p, 1);
+        kprint("energia: perfil "); kprint(cpupower_profile_name(p)); kprint(" (guardado en /etc/energia.conf)\n");
+    }
+    kprint("Perfil: "); kprint(cpupower_profile_name(ci->profile));
+    if (ci->hwp_on) {
+        kprint(" | HWP (Speed Shift): de "); kprint_dec(ci->hwp_lowest * 100); kprint(" a "); kprint_dec((ci->profile == CP_AHORRO ? ci->hwp_guaranteed : ci->hwp_highest) * 100);
+        kprint(" MHz (base "); kprint_dec(ci->hwp_guaranteed * 100); kprint(", turbo "); kprint_dec(ci->hwp_highest * 100); kprint(")");
+    } else kprint(" | sin HWP (frecuencia que deja el firmware)");
+    kprint("\nReposo: "); if (ci->mwait) { kprint("MWAIT hasta C"); kprint_dec((uint32_t)ci->deep_c); kprint(ci->profile == CP_RENDIMIENTO ? " (en rendimiento: C1)" : ""); if (!ci->arat) kprint(" (el nucleo 0 en C1: sin ARAT)"); }
+    else kprint(ci->hypervisor ? "HLT (C1; en maquina virtual no se usa MWAIT)" : "HLT (C1)");
+    if (ci->pkg_cst_known) { kprint(" | limite del firmware para el paquete: "); kprint_dec(ci->pkg_cst_limit); }
+    kprint("\n");
+    struct cpupower_sample sm;
+    if (cpupower_measure(&sm, 500) != 0) { kprint("(sin lecturas)\n"); return 1; }
+    if (ci->rapl) { kprint("Consumo (0,5 s): paquete "); pr_w(sm.pkg_mw); if (ci->rapl_pp0) { kprint(" | nucleos "); pr_w(sm.cores_mw); } if (ci->rapl_pp1) { kprint(" | grafica "); pr_w(sm.gfx_mw); } kprint("\n"); }
+    else kprint("Consumo: sin medidor RAPL\n");
+    if (sm.pkg_temp > -1000) { kprint("Temperatura del paquete: "); kprint_dec((uint32_t)sm.pkg_temp); kprint(" C (limite "); kprint_dec((uint32_t)ci->tjmax); kprint(" C)\n"); }
+    for (int i = 0; i < sm.ncores && i < CP_MAXCORE; i++) {
+        kprint("  nucleo "); kprint_dec((uint32_t)i); kprint(": ");
+        if (sm.temp[i] > -1000) { kprint_dec((uint32_t)sm.temp[i]); kprint(" C  "); }
+        if (sm.mhz[i]) { kprint_dec(sm.mhz[i]); kprint(" MHz  despierto "); kprint_dec(sm.busy_pm[i] / 10); kprint(","); kprint_dec(sm.busy_pm[i] % 10); kprint(" %"); }
+        else kprint("(sin APERF/MPERF)");
+        kprint("\n");
+    }
+    kprint("uso: energia | energia rendimiento | energia equilibrado | energia ahorro\n");
+    return 1;
+}
+/* SOMA_168_T480S: "brillo": luz del panel y teclas Fn del ThinkPad */
+#include "backlight.h"
+#include "acpi_sys.h"
+#include "hda.h"
+static int cmd_brillo(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    struct backlight_info b; backlight_get(&b);
+    while (args && *args == ' ') args++;
+    if (args && *args) {
+        if (!b.ok) { kprint("brillo: "); kprint(b.why); kprint("\n"); return 1; }
+        uint32_t p = b.pct;
+        if (*args == '+') p = p + 10 > 100 ? 100 : p + 10;
+        else if (*args == '-') p = p < 10 ? 0 : p - 10;
+        else if (*args >= '0' && *args <= '9') { p = 0; while (*args >= '0' && *args <= '9') p = p * 10 + (uint32_t)(*args++ - '0'); if (p > 100) p = 100; }
+        else { kprint("uso: brillo | brillo 0-100 | brillo + | brillo -\n"); return 1; }
+        if (backlight_set_pct(p, 1) != 0) kprint("brillo: la grafica no acepto el cambio\n");
+        backlight_get(&b);
+    }
+    kprint("Brillo: ");
+    if (b.ok) {
+        kprint_dec(b.pct); kprint(" %"); if (b.blanked) kprint(" (apagado: tapa cerrada)");
+        kprint(" | PWM del chipset: ciclo "); kprint_dec(b.duty); kprint(" de "); kprint_dec(b.max);
+        kprint(" (minimo "); kprint_dec(b.max / 50 ? b.max / 50 : 1); kprint(")\n");
+    } else { kprint("no disponible: "); kprint(b.why); kprint("\n"); }
+    if (b.gpu_vendor && b.gpu_vendor != 0xFFFF) {
+        kprint("  grafica "); kprint_hex32(b.gpu_vendor); kprint(":"); kprint_hex32(b.gpu_device);
+        kprint(" | BAR0 0x"); kprint_hex32((uint32_t)(b.bar >> 32)); kprint_hex32((uint32_t)b.bar);
+        if (b.ok || b.ctl1 || b.ctl2) { kprint(" | CTL1 0x"); kprint_hex32(b.ctl1); kprint(" CTL2 0x"); kprint_hex32(b.ctl2); }
+        kprint("\n");
+    }
+    const struct acpi_sys_info *ai = acpi_sys_info();
+    kprint("Teclas: volumen y silencio por el teclado | EC "); kprint(ai->ec_node ? "si" : "no");
+    kprint(" (consultas "); kprint_dec(ai->ec_queries); kprint(") | HKEY ");
+    if (ai->hkey) { kprint("activo, version 0x"); kprint_hex32(ai->hkey_ver); kprint(", teclas 0x"); kprint_hex32(ai->hkey_mask); }
+    else kprint("no");
+    kprint(" | video "); kprint(ai->video_bcl ? (ai->dos_ok ? "si (_DOS 4)" : "si") : "no"); 
+    kprint(" | volumen "); if (hda_ready()) { kprint_dec((uint32_t)hda_get_volume()); kprint(" %"); } else kprint("sin audio"); kprint("\n");
+    kprint("  pulsaciones "); kprint_dec(b.key_events); kprint(" | avisos de video "); kprint_dec(b.video_events);
+    kprint(" | eventos HKEY "); kprint_dec(b.hkey_events); kprint(" | tapa "); kprint_dec(ai->lid_actions); kprint("\n");
+    uint32_t c[8]; int k[8], n = 0; hotkey_recent(c, k, &n);
+    if (n) {
+        kprint("  ultimos eventos:");
+        for (int i = 0; i < n; i++) { kprint(k[i] == 1 ? " EC _Q" : k[i] == 2 ? " HKEY " : " video "); kprint_hex32(c[i]); }
+        kprint("\n");
+    }
+    kprint("uso: brillo 0-100 | brillo + | brillo -   (Fn+F5/F6 cambian el brillo; Fn+F1/F2/F3 el volumen)\n");
+    return 1;
+}
+/* SOMA_167_T480S: "trackpad": gestos del trackpad Synaptics */
+#include "syn_gest.h"
+extern int trackpad_save_config(int gestos, int natural, int tap, int speed);
+extern void trackpad_status(int *gestos, int *natural, int *tap, int *speed, const struct syn_state **st, uint32_t *fallbacks);
+static int cmd_trackpad(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    if (!i8042_touchpad()) { kprint("trackpad: no hay un trackpad Synaptics (raton PS/2 normal o USB)\n"); return 1; }
+    int g, nat, tap, sp; const struct syn_state *st; uint32_t fb;
+    trackpad_status(&g, &nat, &tap, &sp, &st, &fb);
+    while (args && *args == ' ') args++;
+    if (args && *args) {
+        const char *a = args, *v = a; while (*v && *v != ' ') v++; while (*v == ' ') v++;
+        int on = !(v[0] == 'n' && v[1] == 'o') && !(v[0] == 'o' && v[1] == 'f') && v[0] != '0';
+        int want_g = g;
+        if (a[0] == 'g') want_g = 1;
+        else if (a[0] == 'r') want_g = 0;
+        else if (a[0] == 'n') nat = *v ? on : !nat;
+        else if (a[0] == 't') tap = *v ? on : !tap;
+        else if (a[0] == 'v') { int n = 0; while (*v >= '0' && *v <= '9') n = n * 10 + (*v++ - '0'); if (n >= 1 && n <= 10) sp = n; }
+        else { kprint("uso: trackpad | trackpad gestos | trackpad relativo | trackpad natural si|no | trackpad toque si|no | trackpad velocidad 1-10\n"); return 1; }
+        trackpad_save_config(want_g, nat, tap, sp);
+        trackpad_status(&g, &nat, &tap, &sp, &st, &fb);
+        if (want_g && !g) kprint("trackpad: el trackpad no acepto el modo absoluto\n");
+    }
+    uint32_t e09, e0c, caps = i8042_syn_caps(&e09, &e0c);
+    kprint("Trackpad Synaptics: modo "); kprint(g ? "GESTOS (absoluto)" : "relativo (el de fabrica)");
+    kprint(" | clickpad "); kprint(i8042_syn_clickpad() ? "si" : "no"); kprint(" | TrackPoint por pass-through "); kprint(i8042_syn_passthrough() ? "si" : "no");
+    kprint("\n  capacidades 0x"); kprint_hex32(caps); kprint(" ext09 0x"); kprint_hex32(e09); kprint(" ext0C 0x"); kprint_hex32(e0c); kprint("\n");
+    kprint("  toque = clic: "); kprint(tap ? "si" : "no"); kprint(" | desplazamiento "); kprint(nat ? "natural (como el Mac)" : "clasico"); kprint(" | velocidad "); kprint_dec((uint32_t)sp); kprint("\n");
+    if (g) {
+        kprint("  paquetes "); kprint_dec(st->packets); kprint(" (malos "); kprint_dec(st->bad); kprint(") | TrackPoint "); kprint_dec(st->tp_packets);
+        kprint(" | toques "); kprint_dec(st->taps); kprint(", con dos dedos "); kprint_dec(st->rtaps); kprint(" | desplazamientos "); kprint_dec(st->scrolls);
+        kprint(" | palmas "); kprint_dec(st->palms); kprint("\n  ultimo: W "); kprint_dec((uint32_t)st->last_w); kprint(", presion "); kprint_dec((uint32_t)st->last_z);
+        kprint(", dedos "); kprint_dec((uint32_t)st->last_fingers); kprint("\n");
+    }
+    if (fb) { kprint("  vueltas automaticas al modo relativo: "); kprint_dec(fb); kprint("\n"); }
+    kprint("Gestos: un dedo mueve | toque = clic | toque con dos dedos = clic derecho | dos dedos arriba/abajo = desplazar |\n");
+    kprint("        clic con dos dedos = clic derecho | TrackPoint + boton central = desplazar\n");
+    kprint("uso: trackpad gestos | relativo | natural si|no | toque si|no | velocidad 1-10\n");
+    return 1;
+}
+/* SOMA_164_T480S: "acpi": estado del interprete y dispositivos del firmware */
+struct acpi_ls { int n, shown, all; };
+static const char *acpi_hid_what(const char *h)
+{
+    static const struct { const char *hid, *what; } t[] = {
+        { "PNP0C0A", "bateria" }, { "PNP0C0D", "tapa" }, { "PNP0C0C", "boton de encendido" }, { "PNP0C0E", "boton de suspender" },
+        { "PNP0C09", "controlador embebido (EC)" }, { "ACPI0003", "cargador (AC)" }, { "LEN0068", "ThinkPad ACPI (teclas Fn)" },
+        { "LEN0268", "ThinkPad ACPI (teclas Fn)" }, { "PNP0C14", "WMI" }, { "INT33A1", "energia de Intel" }, { "PNP0A08", "bus PCI Express" },
+        { "PNP0A03", "bus PCI" }, { "PNP0103", "HPET" }, { "ACPI000C", "procesadores (agregador)" }, { "PNP0C0B", "ventilador" },
+    };
+    for (unsigned i = 0; i < sizeof t / sizeof t[0]; i++) { const char *x = t[i].hid, *y = h; while (*x && *x == *y) { x++; y++; } if (!*x && !*y) return t[i].what; }
+    return 0;
+}
+static void acpi_dev_cb(const char *path, const char *hid, uint32_t sta, void *u)
+{
+    struct acpi_ls *l = u; l->n++;
+    if (!(sta & 1)) return;                                          /* no presente */
+    const char *what = acpi_hid_what(hid);
+    if (!l->all && !what) return;
+    l->shown++;
+    kprint("  "); kprint(hid); { int k = 0; while (hid[k]) k++; for (; k < 9; k++) kprint(" "); }
+    kprint(path);
+    if (what) { kprint("  <- "); kprint(what); }
+    kprint("\n");
+}
+static int cmd_acpi(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out; if (out_buf) out_buf[0] = 0;
+    const struct acpi_sys_info *a = acpi_sys_info();
+    kprint("ACPI: "); kprint(a->active ? "interprete uACPI activo" : a->why);
+    if (!a->active && a->status) { kprint(" ("); kprint(a->status); kprint(")"); }
+    kprint("\n");
+    if (!a->active) return 1;
+    kprint("  arranque "); kprint_dec(a->init_ms); kprint(" ms | avisos "); kprint_dec(a->warnings); kprint(", errores "); kprint_dec(a->errors); kprint("\n");
+    kprint("  EC: ");
+    if (a->ec_present) {
+        kprint("puertos 0x"); kprint_hex16(a->ec_cmd); kprint("/0x"); kprint_hex16(a->ec_data); kprint(a->ec_from_ecdt ? " (ECDT)" : " (por defecto)");
+        kprint(" | accesos "); kprint_dec((uint32_t)a->ec_ops); kprint(", sin respuesta "); kprint_dec((uint32_t)a->ec_timeouts);
+    } else kprint("no hay");
+    kprint("\n  SCI: IRQ "); kprint_dec(a->sci_irq); kprint(" por sondeo cada 100 ms | eventos atendidos "); kprint_dec((uint32_t)a->sci_handled); kprint("\n");
+    while (args && *args == ' ') args++;
+    struct acpi_ls l = { 0, 0, args && args[0] == 't' };
+    kprint(l.all ? "Dispositivos presentes (_HID):\n" : "Dispositivos conocidos ('acpi todos' para la lista completa):\n");
+    acpi_for_each_device(acpi_dev_cb, &l);
+    kprint("  ("); kprint_dec((uint32_t)l.shown); kprint(" mostrados de "); kprint_dec((uint32_t)l.n); kprint(" con _HID)\n");
+    kprint("uso: acpi | acpi todos | poweroff (apaga por ACPI S5) | reboot\n");
+    return 1;
+}
+/* SOMA_158_T480S: "irq": como llegan las interrupciones (PIC o APIC), el reloj y los contadores */
+static int cmd_irq(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args;
+    const struct apic_sys_info *ai = apic_system_info();
+    kprint("Interrupciones: "); kprint(ai->active ? "APIC (LAPIC + IOAPIC), PIC 8259 enmascarado" : "PIC 8259 (modo antiguo)");
+    kprint("\n  estado: "); kprint(ai->why ? ai->why : "sin iniciar"); kprint("\n");
+    if (ai->active) {
+        kprint("  LAPIC id "); kprint_dec(ai->lapic_id); kprint(ai->x2apic ? " (x2APIC)" : " (xAPIC)");
+        kprint(" | ARAT "); kprint(ai->arat ? "si" : "no");
+        kprint(" | IOAPIC id "); kprint_dec(ai->ioapic_id); kprint(" en 0x"); kprint_hex32(ai->ioapic_addr); kprint("\n");
+        kprint("  reloj: ");
+        if (ai->timer_lapic) {
+            kprint("temporizador del LAPIC, "); kprint_dec(ai->ticks_per_ms); kprint(" cuentas/ms (bus del LAPIC ");
+            kprint_dec(ai->ticks_per_ms * 16u / 1000u); kprint(" MHz)");
+        } else kprint("PIT 1 kHz por el IOAPIC");
+        kprint(" | comprobacion: "); kprint_dec(ai->verify_ticks); kprint(" ticks en 30 ms\n");
+        const char *nm[3] = { "IRQ0  PIT     ", "IRQ1  teclado ", "IRQ12 trackpad" };
+        for (int i = 0; i < 3; i++) {
+            kprint("  "); kprint(nm[i]); kprint(" -> GSI "); kprint_dec(ai->gsi[i]);
+            kprint(ai->level[i] ? " nivel" : " flanco"); kprint(ai->low[i] ? "/baja" : "/alta");
+            if (ai->io_used[i]) { uint64_t e = apic_io_redir(ai->io_index[i]); kprint(" | IOAPIC: vector "); kprint_dec((uint32_t)(e & 0xFF)); kprint((e >> 16) & 1 ? " ENMASCARADA" : " activa"); }
+            else kprint(" | no se usa");
+            kprint("\n");
+        }
+    }
+    kprint("  atendidas: reloj "); kprint_dec((uint32_t)idt_irq_count(32)); kprint(", teclado "); kprint_dec((uint32_t)idt_irq_count(33));
+    kprint(", trackpad "); kprint_dec((uint32_t)idt_irq_count(44)); kprint(", espurias LAPIC "); kprint_dec((uint32_t)idt_irq_count(255));
+    kprint(", EOI LAPIC "); kprint_dec(apic_eoi_count()); kprint("\n  uptime "); kprint_dec((uint32_t)(timer_get_uptime_ms() / 1000)); kprint(" s\n");
+    if (ai->active) {
+        uint64_t tk = 0, ts = 0; apic_clock_drift(&tk, &ts);
+        kprint("  precision: el reloj conto "); kprint_dec((uint32_t)tk); kprint(" ms; el TSC mide "); kprint_dec((uint32_t)ts); kprint(" ms");
+        if (ts > 1000) {
+            int64_t dpm = ((int64_t)tk - (int64_t)ts) * 1000 / (int64_t)ts;    /* por mil */
+            kprint(" (deriva "); if (dpm < 0) { kprint("-"); dpm = -dpm; } kprint_dec((uint32_t)dpm); kprint(" por mil)");
+        }
+        kprint("\n");
+    }
+    if (out_buf && max_out) out_buf[0] = 0;
+    return 1;
+}
+#endif
+/* SOMA_156_T480S: "dmesg [N | texto]": registro del nucleo desde el arranque (ultimas N lineas, o las que contienen texto) */
+static int dmesg_has(const char *l, uint32_t n, const char *w)
+{
+    for (uint32_t i = 0; i < n; i++) { uint32_t k = 0; while (w[k] && i + k < n && l[i + k] == w[k]) k++; if (!w[k]) return 1; }
+    return 0;
+}
+static int cmd_dmesg(const char *args, char *out_buf, uint32_t max_out)
+{
+    while (args && *args == ' ') args++;
+    uint32_t want = 60; const char *filt = 0;
+    if (args && *args >= '0' && *args <= '9') { want = 0; while (*args >= '0' && *args <= '9') want = want * 10 + (uint32_t)(*args++ - '0'); if (want > 3000) want = 3000; }
+    else if (args && *args) { filt = args; want = 300; }
+    if (!want) want = 1;
+    char *snap = (char *)kmalloc(256u * 1024u + 1);
+    if (!snap) { kprint("dmesg: sin memoria\n"); return 1; }
+    uint32_t n = klog_snapshot(snap, 256u * 1024u + 1);
+    /* 1) cuantas lineas cumplen (todas, o las que contienen el texto) */
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < n;) {
+        uint32_t j = i; while (j < n && snap[j] != '\n') j++;
+        if (!filt || dmesg_has(snap + i, j - i, filt)) total++;
+        i = j + 1;
+    }
+    /* 2) se imprimen solo las `want` ultimas */
+    uint32_t skip = total > want ? total - want : 0, idx = 0, shown = 0;
+    klog_pause(1);                                             /* lo que imprime dmesg no se vuelve a registrar */
+    for (uint32_t i = 0; i < n;) {
+        uint32_t j = i; while (j < n && snap[j] != '\n') j++;
+        if (!filt || dmesg_has(snap + i, j - i, filt)) {
+            if (idx++ >= skip) {                                 /* SOMA_156C: sin codigos de control (un "clear" registrado borraba la pantalla) */
+                char ln[256]; uint32_t w = 0;
+                for (uint32_t r = i; r < j && w < sizeof ln - 1; r++) {
+                    char ch = snap[r];
+                    if (ch == 27) { if (r + 1 < j && snap[r + 1] == '[') { r += 2; while (r < j && !((snap[r] >= 'A' && snap[r] <= 'Z') || (snap[r] >= 'a' && snap[r] <= 'z'))) r++; } continue; }
+                    if ((unsigned char)ch < 32 && ch != '\t') continue;
+                    ln[w++] = ch;
+                }
+                ln[w] = 0; kprint(ln); kprint("\n"); shown++;
+            }
+        }
+        i = j + 1;
+    }
+    kprint("[dmesg: "); kprint_dec(shown); kprint(" de "); kprint_dec(total); kprint(filt ? " lineas con ese texto" : " lineas");
+    kprint(" | "); kprint_dec((uint32_t)(klog_written() / 1024)); kprint(" KiB registrados. Uso: dmesg [N | texto]]\n");
+    klog_pause(0);
+    kfree(snap);
+    if (out_buf && max_out) out_buf[0] = 0;
+    return 1;
+}
 /* PARCHE 085: "navegador [url]" */
 static int cmd_navegador(const char *args, char *out_buf, uint32_t max_out)
 {
+    if (agent_net_denied("navegador", args, out_buf, max_out)) return 1;   /* SOMA_193 */
     uint32_t p = 0;
     while (args && *args == ' ') args++;
     if (args && *args) gui_open_browser(args); else gui_open_web();
@@ -4041,7 +5166,7 @@ static int cmd_sysinfo(const char *args, char *out_buf, uint32_t max_out)
     }
 
     rep[0] = '\0';
-    fb_puts(rep, sizeof(rep), &p, "=== ESTADO DEL SISTEMA ===\nSOMA 0.2 | arch ");
+    fb_puts(rep, sizeof(rep), &p, "=== ESTADO DEL SISTEMA ===\nSOMA 0.3 pre-beta | arch ");
     fb_puts(rep, sizeof(rep), &p, MYOS_ARCH_NAME);
     fb_puts(rep, sizeof(rep), &p, " | host ");
     fb_puts(rep, sizeof(rep), &p, env_get("HOST"));
@@ -4713,6 +5838,7 @@ static const struct command_entry cmd_table[] = {
     { "df",           cmd_df,           CMD_F_SAFE,   "Capacidad de almacenamiento y estado de RamFS" },
     { "stats",        cmd_stats,        CMD_F_SAFE,   "Estadisticas de paquetes y bytes VirtIO-NET" },
     { "heap",         cmd_heap,         CMD_F_SAFE,   "Telemetria y auto-test del KHeap dinamico" },
+    { "pmmbench",     cmd_pmmbench,     CMD_F_NORMAL, "DEPURACION: compara el asignador de marcos nuevo con el escaneo antiguo" },
     { "oomtest",      cmd_oomtest,      CMD_F_NORMAL, "DEPURACION: carga de procesos con memoria agotada en cada punto (sin fugas ni cuelgues)" },
     { "usfuzz",       cmd_usfuzz,       CMD_F_NORMAL, "DEPURACION: fuzzing hostil de syscalls desde ring 3: usfuzz [procesos] [syscalls por proceso] [semilla]" },
     { "demo_ai",      cmd_demo_ai,      CMD_F_NORMAL, "DEMO: la IA escribe un programa, las pruebas detectan sus fallos y los corrige (demo_ai vivo = con el LLM real)" },
@@ -4722,6 +5848,12 @@ static const struct command_entry cmd_table[] = {
     { "deadlock",     cmd_deadlock,     CMD_F_NORMAL, "DEPURACION: provoca un interbloqueo de dos hilos para probar su deteccion" },
     { "mutex",        cmd_mutex,        CMD_F_SAFE,   "Estado de los mutex del kernel: propietario, esperando, interbloqueos" },
     { "audio",        cmd_audio,        CMD_F_NORMAL, "Audio: audio info|tone [hz] [ms]|test|play <ruta.wav>|stop|vol N|stat" },
+    { "mic",          cmd_mic,          CMD_F_NORMAL, "Microfono: mic info|fuentes|fuente N|ganancia N|sw N|nivel [s]|grabar [s] [Hz]|parar|reproducir|guardar [ruta]|cargar ruta|borrar [ruta]|probar|nodos|verbo nid verbo payload" },
+    { "cam",          cmd_cam,          CMD_F_NORMAL, "Camara web: cam info|estado|iniciar [AnchoxAlto] [fps]|parar|foto [ruta]|video [segundos]|abrir" },
+    { "captura",      cmd_captura,      CMD_F_NORMAL, "Captura de pantalla: captura estado|foto|video [s]|audio [s]|av [s]|iniciar video|audio|av|parar|fps N|escala N|abrir" },
+    { "cap",          cmd_captura,      CMD_F_NORMAL, "Igual que captura" },
+    { "camara",       cmd_camara,       CMD_F_NORMAL, "Abre la aplicacion Camara (vista previa, foto JPEG y video AVI con audio)" },
+    { "grabadora",    cmd_grabadora,    CMD_F_NORMAL, "Abre la aplicacion Grabadora (microfono: grabar, escuchar, guardar WAV)" },
     { "big",          cmd_big,          CMD_F_NORMAL, "Almacen de archivos grandes: big info|format yes|ls|mkdir|rm|mv|stat|cat|put|get|write|truncate|fsck|bench" },
     { "exec",         cmd_exec,         CMD_F_NORMAL, "Ejecuta un programa ELF de usuario (ring 3): exec [-b] /bin/hello.elf [plazo_ms]" },
     { "procs",        cmd_procs,        CMD_F_NORMAL, "Lista los procesos de usuario (libera los terminados)" },
@@ -4733,12 +5865,24 @@ static const struct command_entry cmd_table[] = {
     { "pmm",          cmd_pmm,          CMD_F_SAFE,   "Telemetria y auto-test del PMM bitmap allocator" },
     { "vmm",          cmd_vmm,          CMD_F_SAFE,   "Verificacion de tablas de paginas MMU 4 KiB" },
     { "pci",          cmd_pci,          CMD_F_SAFE,   "Escaneo completo del bus PCI y BAR0 I/O" },
-    { "wifi",         cmd_wifi,         CMD_F_SAFE,   "Wi-Fi de la Pi 5: wifi | wifi prueba | sondear | nucleos | firmware | log | mux | rd | wr" },
+    { "tls",          cmd_tls,          CMD_F_SAFE,   "HTTPS directo (TLS 1.3 propio, certificado verificado): tls <url> | tls estado" },
+    { "wifi",         cmd_wifi,         CMD_F_SAFE,   "WiFi: T480s (Intel 8265): wifi | buscar | conectar <red> [clave] | desconectar | guardadas | olvidar | registro. Pi 5: wifi | prueba | sondear | nucleos | firmware | log | mux | rd | wr" },
     { "placa",        cmd_placa,        CMD_F_SAFE,   "Modelo de Raspberry Pi, memoria y revision (segun el firmware)" },
     { "cpus",         cmd_cpus,         CMD_F_SAFE,   "Nucleos del procesador: cpus | cpus prueba (velocidad en paralelo) | cpus 1 | cpus todos" },
     { "dhcp",         cmd_dhcp,         CMD_F_SAFE,   "Pide IP, mascara, puerta de enlace y DNS al router por DHCP" },
     { "netif",        cmd_netif,        CMD_F_SAFE,   "Interfaces de red: netif | netif usar <eth0|wlan0|virtio0>" },
     { "wpa",          cmd_wpa,          CMD_F_SAFE,   "WPA2: wpa (autoprueba de la criptografia) | wpa psk <ssid> <clave>" },
+    { "llm-config",   cmd_llm_config,   CMD_F_NORMAL, "Modelo de lenguaje: llm-config | proveedor <local|openai|claude|gemini> | servidor | modelo | clave | modelos | probar" },
+#if defined(__x86_64__)
+    { "navegador-aislado", cmd_nav_aislado, CMD_F_NORMAL, "Motor del navegador en un proceso de ring 3: navegador-aislado | on | off" },
+    { "webr3",        cmd_webr3,        CMD_F_NORMAL, "DEPURACION: carga una URL con el motor del navegador en ring 3 (sin interfaz)" },
+#endif
+    { "membench",     cmd_membench,     CMD_F_NORMAL, "DEPURACION: coste de memcpy/memset/memmove/memcmp por tamano" },
+    { "agente_red",   cmd_agente_red,   CMD_F_NORMAL, "Destinos de red de los agentes: agente_red | abierto|procedencia|cerrado | permitir <dominio> | quitar <dominio>" },
+    { "rng",          cmd_rng,          CMD_F_SAFE,   "Generador aleatorio del nucleo: fuentes (RDSEED/RDRAND), siembras y autoprueba" },
+#ifdef __x86_64__
+    { "memprot",      cmd_memprot,      CMD_F_SAFE,   "Proteccion de memoria del nucleo: que es ejecutable (solo .text) y estado de la pagina 0" },
+#endif
     { "fan",          cmd_fan,          CMD_F_SAFE,   "Ventilador de la Pi 5: fan | fan on | fan off | fan inv" },
     { "hdmi",         cmd_hdmi,         CMD_F_SAFE,   "Framebuffer HDMI (Pi 5): resolucion, bits, pitch, direccion; 'hdmi swap' cambia rojo/azul" },
     { "eth",          cmd_eth,          CMD_F_SAFE,   "Ethernet del RP1 (Pi 5): velocidad y duplex negociados, tramas" },
@@ -4746,6 +5890,10 @@ static const struct command_entry cmd_table[] = {
     { "arp",          cmd_arp,          CMD_F_SAFE,   "Tabla de cache de resolucion dinamica ARP" },
 
     /* Multitarea, Hilos y Control de Energía */
+#ifdef __x86_64__
+    { "sbx",          cmd_sbx,          CMD_F_SAFE,   "Servicios aislados en ring 3 (decodificadores de imagen): estadisticas; 'sbx test' = pruebas" },
+#endif
+    { "stacks",       cmd_stacks,       CMD_F_SAFE,   "Uso maximo de pila de cada hilo (marca de agua); avisa de los que rozan el limite" },
     { "ps",           cmd_ps,           CMD_F_SAFE,   "Tabla de hilos de kernel, demonios y ticks CPU" },
     { "threads",      cmd_threads,      CMD_F_SAFE,   "Supervision de KThreads y stacks virtuales" },
     { "spawn",        cmd_spawn,        CMD_F_SAFE,   "Lanza un comando como hilo en segundo plano" },
@@ -4797,7 +5945,7 @@ static const struct command_entry cmd_table[] = {
     { "sector_w",     cmd_sector_write, CMD_F_ALIAS,  "Alias de sector_write" },
 
     /* Red TCP/IP y Web */
-    { "httpd",        cmd_httpd,        CMD_F_SAFE,   "Estado del servidor web HTTP (puerto 80 / localhost:8090)" },
+    { "httpd",        cmd_httpd,        CMD_F_SAFE,   "Servidor web HTTP (puerto 80 / localhost:8090): httpd | httpd on | httpd off" },
     { "ping",         cmd_ping,         CMD_F_SAFE,   "Envia peticiones ICMP Echo a una IP destino" },
     { "dns",          cmd_dns,          CMD_F_SAFE,   "Resolucion dinamica de nombres de dominio DNS" },
     { "curl",         cmd_curl,         CMD_F_SAFE,   "Cliente HTTP/1.1 con resolucion y cabeceras" },
@@ -4838,6 +5986,22 @@ static const struct command_entry cmd_table[] = {
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
     { "suma",         cmd_suma,         CMD_F_SAFE,   "Tamano y CRC-32 de un archivo: suma <archivo>" },
     { "descargar",    cmd_descargar,    CMD_F_SAFE,   "Descarga una URL a un archivo: descargar <url> [archivo] (sin limite de 16 KiB)" },
+#if defined(__x86_64__)
+    { "pantalla",     cmd_pantalla,     CMD_F_SAFE,   "Pantalla y arranque: Multiboot, UEFI/BIOS, framebuffer del firmware, ACPI (portatil T480s)" },
+    { "teclado",      cmd_teclado,      CMD_F_SAFE,   "Teclado y trackpad PS/2 (portatil T480s): estado y distribucion (teclado es|us)" },
+    { "ramtest",      cmd_ramtest,      CMD_F_SAFE,   "Comprueba la memoria alta: ramtest [MiB] (reserva, escribe, verifica y libera; por defecto 1024)" },
+    { "irq",          cmd_irq,          CMD_F_SAFE,   "Interrupciones: modo PIC/APIC, reloj, rutas del IOAPIC y contadores" },
+    { "bateria",      cmd_bateria,      CMD_F_SAFE,   "Bateria (carga, autonomia, salud), cargador y tapa por ACPI" },
+    { "escritorio",   cmd_escritorio,   CMD_F_SAFE,   "Escritorio: escritorio reiniciar devuelve iconos y gadget a su sitio | escritorio prueba [n] abre y cierra n veces cada aplicacion y mira la memoria" },
+    { "orbe",         cmd_orbe,         CMD_F_SAFE,   "Orbe del escritorio: coste de cada parte del fotograma y fps | orbe prueba (identico con 1 y con todos los nucleos)" },
+    { "energia",      cmd_energia,      CMD_F_SAFE,   "Procesador: perfil (rendimiento/equilibrado/ahorro), temperatura, frecuencia real y consumo" },
+    { "brillo",       cmd_brillo,       CMD_F_SAFE,   "Brillo de la pantalla y teclas Fn del ThinkPad: brillo | brillo 0-100 | brillo + | brillo -" },
+    { "trackpad",     cmd_trackpad,     CMD_F_SAFE,   "Trackpad del portatil: gestos (dos dedos), toque, desplazamiento natural, velocidad" },
+    { "red",          cmd_red,          CMD_F_SAFE,   "Conexion de red: cable Ethernet, movil por USB, direccion IP y estado de las tarjetas" },
+    { "acpi",         cmd_acpi,         CMD_F_SAFE,   "Firmware ACPI (uACPI): estado, EC, eventos y dispositivos (bateria, tapa, botones): acpi | acpi todos" },
+    { "disco",        cmd_disco,        CMD_F_SAFE,   "Donde se guardan los archivos: particion SOMADATA del pendrive, virtio o solo RAM (disco sync)" },
+#endif
+    { "dmesg",        cmd_dmesg,        CMD_F_SAFE,   "Registro del nucleo desde el arranque: dmesg [N lineas | texto a buscar]" },
     { "navegador",    cmd_navegador,    CMD_F_SAFE,   "Navegador web: navegador [url] (boton derecho sobre una imagen: Guardar imagen como...)" },
     { "ajustes",      cmd_ajustes,      CMD_F_SAFE,   "Ajustes de la interfaz: transparencia de las ventanas y fuente" },
     { "latex",        cmd_latex,        CMD_F_SAFE,   "Maquetador LaTeX: latex [archivo.tex] (formulas, secciones, tablas; vista Documento/Fuente)" },
@@ -4849,7 +6013,7 @@ static const struct command_entry cmd_table[] = {
 
     /* Auto-Modificación y Pruebas Críticas */
     { "hpatch",       cmd_hpatch,       CMD_F_NORMAL, "Prueba del buzon de parches y Singularity Loop" },
-    { "panic",        cmd_panic,        CMD_F_NORMAL, "Dispara excepciones de CPU para verificar IDT/TSS" },
+    { "panic",        cmd_panic,        CMD_F_NORMAL, "Dispara excepciones de CPU para verificar IDT/TSS: panic | div | ud | nulo | nx (los dos ultimos: protecciones del parche 192)" },
     { "agent_sim",    cmd_agent_sim,    CMD_F_NORMAL, "Ejecuta un comando bajo la politica del Agente (pruebas de seguridad)" },
 };
 
@@ -5140,7 +6304,7 @@ static int cmd_help(const char *args, char *out_buf, uint32_t max_out)
         str_eq(q, "agentes")) {
         int all = q[0] != 0;
         int only_safe = str_eq(q, "agentes");
-        fb_puts(o, HELP_BUF, &p, "Comandos disponibles en SOMA 0.2 (");
+        fb_puts(o, HELP_BUF, &p, "Comandos disponibles en SOMA 0.3 pre-beta (");
         fb_put_dec(o, HELP_BUF, &p, (uint64_t)total);
         fb_puts(o, HELP_BUF, &p, " comandos, ");
         fb_put_dec(o, HELP_BUF, &p, (uint64_t)aliases);

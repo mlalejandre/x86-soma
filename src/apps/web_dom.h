@@ -29,6 +29,7 @@ enum wtag {
 #define WNF_DIRTY    0x40   /* estilo/maquetacion a recalcular */
 #define WNF_OPEN     0x80
 #define WNF_EDITED   0x100  /* valor de formulario modificado por el usuario */
+#define WNF_PSEUDO   0x200  /* SOMA_188: ::before/::after sintetico (fuera de la lista de hijos; invisible para el DOM de JS) */
 
 struct wattr { struct wattr *next; const char *name; const char *val; };
 
@@ -44,14 +45,34 @@ struct wnode {
     void *js;                      /* envoltorio JS */
     const char *value;             /* valor actual de input/textarea/select (NULL = usar atributo) */
     int32_t sel;                   /* cursor / opcion elegida */
+    int32_t scy;                   /* SOMA_181: desplazamiento vertical interno (overflow:auto/scroll) */
     uint32_t uid;
+    uint32_t cbloom_gen;           /* SOMA_152: generacion del filtro de clases (web_css) */
+    uint64_t cbloom;               /* SOMA_152: filtro de Bloom de las clases del elemento */
+    uint32_t trsig, ansig;         /* SOMA_188: firma de propiedades animables y de animation-name (transitionend/animationend) */
+    uint8_t trop, trsig_ok;
+    struct wnode *shadow;          /* SOMA_188: raiz sombra ("#shadow-root", parent = anfitrion; no esta en la lista de hijos) */
 };
+/* SOMA_188: recorrido del arbol compuesto: anfitrion, su arbol sombra y despues sus hijos (los asignados a <slot> incluidos) */
+static inline int wd_is_shadow_root(const struct wnode *n) { return n && n->name && n->name[0] == '#' && n->name[1] == 's' && n->parent && n->parent->shadow == n; }
+static inline struct wnode *wd_walk_next(struct wnode *n, const struct wnode *stop)
+{
+    if (n->type == 1 && n->shadow && n->shadow->first) return n->shadow->first;
+    if (n->first) return n->first;
+    while (n && n != stop) {
+        if (n->next) return n->next;
+        struct wnode *p = n->parent;
+        if (wd_is_shadow_root(p)) { struct wnode *h = p->parent; if (h->first) return h->first; n = h; continue; }
+        n = p;
+    }
+    return 0;
+}
 
 struct wdoc {
     struct wa_arena ar;
     struct wnode *root, *html, *head, *body;
     const char *title;
-    char base[512];                /* URL base del documento */
+    char base[4096];               /* URL base del documento */
     uint32_t next_uid;
     struct wnode *focus;
     void *sheets;                  /* hojas de estilo (web_css) */
@@ -67,6 +88,7 @@ void wd_append(struct wnode *parent, struct wnode *c);
 void wd_insert_before(struct wnode *parent, struct wnode *c, struct wnode *ref);
 void wd_remove(struct wnode *c);
 const char *wd_attr(const struct wnode *n, const char *name);
+int web_feat_off(const char *name);   /* SOMA_188: soma.<name>=off */
 void wd_set_attr(struct wdoc *d, struct wnode *n, const char *name, const char *val);
 void wd_del_attr(struct wnode *n, const char *name);
 int  wd_tag_of(const char *name, uint32_t n);

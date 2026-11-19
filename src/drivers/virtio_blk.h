@@ -21,4 +21,17 @@ int virtio_blk_write_n(uint64_t sector, const void *buf, uint32_t nsec);
 int virtio_blk_flush(void);
 uint64_t virtio_blk_capacity(void);   /* sectores de 512 B; 0 si no se conoce */
 
+/* SOMA_162_T480S: otro dispositivo como disco del sistema cuando no hay disco virtio (en el portatil: la particion SOMADATA del
+ * pendrive, ver src/arch/x86_64/usbdisk.c). Todas las funciones de arriba pasan a el sin que los sistemas de archivos se enteren. */
+struct sysdisk_ops {
+    int (*read)(uint64_t lba, void *buf, uint32_t n);          /* 0 = bien */
+    int (*write)(uint64_t lba, const void *buf, uint32_t n);
+    int (*flush)(void);
+    uint64_t sectors;
+    const char *name;
+};
+int virtio_blk_set_alt(const struct sysdisk_ops *o);           /* 0 = aceptado; -1 si ya hay disco virtio */
+const char *virtio_blk_alt_name(void);                         /* 0 si el disco es el virtio de siempre */
+const char *sysdisk_describe(void);                            /* "SOMAFS en el pendrive (SOMADATA, 79 MiB)"... */
+
 #endif

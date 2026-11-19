@@ -50,7 +50,10 @@ int dhcp_run(int verbose)
         }
     } else kprint("dhcp: ningun servidor DHCP contesto\n");
     udp_unbind(68);
-    if (r != 0) { memcpy(net_ip, old, 4); return -1; }
+    if (r != 0) {                                                    /* SOMA_175C7: no pisar una IP puesta mientras tanto (wifi ipfija) */
+        if (!(net_ip[0] | net_ip[1] | net_ip[2] | net_ip[3])) memcpy(net_ip, old, 4);
+        return -1;
+    }
     memcpy(net_ip, ack.ip, 4); memcpy(net_netmask, ack.mask, 4);
     if (ack.router[0]) memcpy(net_gateway, ack.router, 4);
     if (ack.dns[0]) memcpy(net_dns, ack.dns, 4);

@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "wav.h"
 #include "hda.h"
+#include "micrec.h"
 #include "bigfs_glue.h"
 #include "thread.h"
 #include "mutex.h"
@@ -19,6 +20,7 @@ static struct kmutex g_lock;
 static int g_ready, g_open;
 static uint32_t g_owner;
 static volatile int g_stop;
+static uint32_t g_rate; static audio_tap_fn g_tap;      /* SOMA_179_T480S: copia de lo que suena (captura de pantalla) */
 static volatile int g_playing;            /* hay un reproductor en segundo plano (comando audio tone/test/play) */
 
 static const int16_t SINE[256] = {
@@ -77,6 +79,7 @@ void audio_sys_init(void)
     audio_init(&g_audio, hda_hw(), g_fifo, sizeof g_fifo);
     g_ready = 1;
     thread_create("audiod", audiod_main, 0);
+    micrec_init();                                              /* SOMA_177_T480S: grabadora del microfono (si hay entrada de captura) */
 }
 
 int audio_sys_available(void) { return g_ready; }
@@ -88,7 +91,7 @@ int audio_sys_open(uint32_t rate, uint32_t owner_tid)
     kmutex_lock(&g_lock);
     int r;
     if (g_open) r = -16;
-    else { r = audio_open(&g_audio, rate) == 0 ? 0 : -22; if (r == 0) { g_open = 1; g_owner = owner_tid; } }
+    else { r = audio_open(&g_audio, rate) == 0 ? 0 : -22; if (r == 0) { g_open = 1; g_owner = owner_tid; g_rate = rate; } }
     kmutex_unlock(&g_lock);
     return r;
 }
@@ -103,7 +106,9 @@ int audio_sys_write(const void *pcm, uint32_t n)
     while (done < n && g_open && !g_stop) {
         kmutex_lock(&g_lock);
         uint32_t k = audio_write(&g_audio, p + done, n - done);
+        uint32_t queued = k ? (uint32_t)sizeof g_fifo - audio_space(&g_audio) : 0;
         kmutex_unlock(&g_lock);
+        if (k) { audio_tap_fn tap = g_tap; if (tap) tap((const int16_t *)(p + done), (k & ~(AUDIO_FRAME - 1)) / AUDIO_FRAME, g_rate, queued / AUDIO_FRAME); }
         if (k) { done += k; stall_since = timer_get_uptime_ms(); }
         else {
             if (timer_get_uptime_ms() - stall_since > 3000) break;      /* el hardware no avanza */
@@ -132,6 +137,7 @@ uint32_t audio_sys_flush(void)
 }
 
 uint32_t audio_sys_fifo_bytes(void) { return sizeof g_fifo; }
+void audio_sys_set_tap(audio_tap_fn f) { g_tap = f; }          /* SOMA_179_T480S */
 
 void audio_sys_close(int drain)
 {
@@ -272,7 +278,7 @@ int audio_sys_command(const char *args, char *out, uint32_t max)
     if (!next_tok(&q, sub, sizeof sub)) { ob_s(out, max, &p, "uso: audio info | tone [hz] [ms] | test | play <ruta.wav> | stop | vol <0-100> | stat"); kprint(out); kprint("\n"); return 1; }
     int rc = 0;
     if (str_eq(sub, "info") || str_eq(sub, "stat")) {
-        char info[160]; hda_info(info, sizeof info); ob_s(out, max, &p, info);
+        char info[512]; hda_info(info, sizeof info); ob_s(out, max, &p, info);
         if (g_ready) {
             struct audio_stats st; kmutex_lock(&g_lock); audio_get_stats(&g_audio, &st); uint32_t qd = audio_queued(&g_audio); kmutex_unlock(&g_lock);
             ob_s(out, max, &p, g_open ? ", abierto" : ", cerrado"); ob_s(out, max, &p, ", reproducidos "); ob_d(out, max, &p, st.played_bytes);
@@ -282,7 +288,9 @@ int audio_sys_command(const char *args, char *out, uint32_t max)
         uint32_t hz = 440, ms = 1000;
         if (next_tok(&q, a1, sizeof a1)) hz = num(a1);
         if (next_tok(&q, a2, sizeof a2)) ms = num(a2);
-        if (hz < 20 || hz > 20000) hz = 440; if (ms < 50) ms = 50; if (ms > 60000) ms = 60000;
+        if (hz < 20 || hz > 20000) hz = 440;
+        if (ms < 50) ms = 50;
+        if (ms > 60000) ms = 60000;
         rc = start_job(1, hz, ms, 44100, 0);
         ob_s(out, max, &p, rc == 0 ? "audio tone: reproduciendo en segundo plano" : "audio tone: no se puede (ocupado o sin dispositivo)");
     } else if (str_eq(sub, "test")) {

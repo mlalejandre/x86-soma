@@ -296,6 +296,7 @@ static int vm_alloc_table(struct soma_vm *vm)
 
 static int vm_table_find_key(struct soma_vm *vm, const struct vm_table_obj *tab, const struct vm_val *key)
 {
+    (void)vm;
     for (uint16_t k = 0; k < tab->len; ++k) {
         if (vm_values_equal(&tab->entries[k].key, key)) return (int)k;
     }
@@ -629,10 +630,10 @@ static void native_get_mouse_state(int *out_x, int *out_y, int *out_btn)
         x = mouse_x;
         y = mouse_y;
         if (&mouse_buttons) b = mouse_buttons;
-    } else if (mouse_get_x && mouse_get_y) {
+    } else {                                  /* las versiones debiles devuelven el centro y 0; mouse.c las sustituye al enlazar */
         x = mouse_get_x();
         y = mouse_get_y();
-        if (mouse_get_buttons) b = mouse_get_buttons();
+        b = mouse_get_buttons();
     }
     *out_x = x;
     *out_y = y;
@@ -847,7 +848,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             if (vm->ip + 8 > vm->code_len) return -1;
             int64_t val = read_i64(&vm->code[vm->ip]);
             vm->ip += 8;
-            struct vm_val v = { VAL_INT, val, {0}, 0 };
+            struct vm_val v = { VAL_INT, val, {0}, 0, 0 };
             if (!push_val(vm, v)) return -1;
             break;
         }
@@ -917,7 +918,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
 
                 if (!push_val(vm, res)) return -1;
             } else {
-                struct vm_val res = { VAL_INT, (int64_t)((uint64_t)a.i + (uint64_t)b.i), {0}, 0 };
+                struct vm_val res = { VAL_INT, (int64_t)((uint64_t)a.i + (uint64_t)b.i), {0}, 0, 0 };
                 if (!push_val(vm, res)) return -1;
             }
             break;
@@ -926,7 +927,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_SUB: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (int64_t)((uint64_t)a.i - (uint64_t)b.i), {0}, 0 };
+            struct vm_val res = { VAL_INT, (int64_t)((uint64_t)a.i - (uint64_t)b.i), {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -934,7 +935,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_MUL: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (int64_t)((uint64_t)a.i * (uint64_t)b.i), {0}, 0 };
+            struct vm_val res = { VAL_INT, (int64_t)((uint64_t)a.i * (uint64_t)b.i), {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -946,7 +947,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                 kprint("[VM ERROR] Division por cero en Ring 0\n");
                 return -1;
             }
-            struct vm_val res = { VAL_INT, (b.i == -1) ? (int64_t)(0 - (uint64_t)a.i) : (a.i / b.i), {0}, 0 }; /*PL11_DIV*/
+            struct vm_val res = { VAL_INT, (b.i == -1) ? (int64_t)(0 - (uint64_t)a.i) : (a.i / b.i), {0}, 0, 0 }; /*PL11_DIV*/
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -958,7 +959,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                 kprint("[VM ERROR] Modulo por cero en Ring 0\n");
                 return -1;
             }
-            struct vm_val res = { VAL_INT, (b.i == -1) ? 0 : (a.i % b.i), {0}, 0 }; /*PL11_MOD*/
+            struct vm_val res = { VAL_INT, (b.i == -1) ? 0 : (a.i % b.i), {0}, 0, 0 }; /*PL11_MOD*/
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -966,7 +967,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_EQ: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, vm_values_equal(&a, &b) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, vm_values_equal(&a, &b) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -974,7 +975,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_NEQ: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, !vm_values_equal(&a, &b) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, !vm_values_equal(&a, &b) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -982,7 +983,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_LT: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (a.i < b.i) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (a.i < b.i) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -990,7 +991,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_GT: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (a.i > b.i) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (a.i > b.i) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -998,7 +999,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_LE: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (a.i <= b.i) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (a.i <= b.i) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1006,7 +1007,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_GE: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (a.i >= b.i) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (a.i >= b.i) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1014,7 +1015,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_AND: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (vm_truthy(&a) && vm_truthy(&b)) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (vm_truthy(&a) && vm_truthy(&b)) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1022,14 +1023,14 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_OR: {
             struct vm_val b = pop_val(vm);
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, (vm_truthy(&a) || vm_truthy(&b)) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (vm_truthy(&a) || vm_truthy(&b)) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
 
         case OP_NOT: {
             struct vm_val a = pop_val(vm);
-            struct vm_val res = { VAL_INT, !vm_truthy(&a) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, !vm_truthy(&a) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1168,7 +1169,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                 struct vm_val item = pop_val(vm);
                 if (k < (int)arr->len) arr->items[k] = item;
             }
-            struct vm_val res = { VAL_ARRAY, 0, {0}, aid };
+            struct vm_val res = { VAL_ARRAY, 0, {0}, aid, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1205,14 +1206,14 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             }
 
             if (arr_v.type != VAL_ARRAY || arr_v.arr_id >= vm->array_pool_count) {
-                struct vm_val nil = { VAL_NIL, 0, {0}, 0 };
+                struct vm_val nil = { VAL_NIL, 0, {0}, 0, 0 };
                 if (!push_val(vm, nil)) return -1;
                 break;
             }
             struct vm_array_obj *arr = &vm->array_pool[arr_v.arr_id];
             if (idx.type == VAL_STR || idx.type == VAL_ARRAY || idx.type == VAL_TABLE ||
                 idx.i < 0 || idx.i >= (int64_t)arr->len) { /*PL11_AGET*/
-                struct vm_val nil = { VAL_NIL, 0, {0}, 0 };
+                struct vm_val nil = { VAL_NIL, 0, {0}, 0, 0 };
                 if (!push_val(vm, nil)) return -1;
                 break;
             }
@@ -1269,7 +1270,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
 
         case OP_ARRAY_POP: {
             struct vm_val arr_v = pop_val(vm);
-            struct vm_val res = { VAL_NIL, 0, {0}, 0 };
+            struct vm_val res = { VAL_NIL, 0, {0}, 0, 0 };
             if (arr_v.type == VAL_ARRAY && arr_v.arr_id < vm->array_pool_count) {
                 struct vm_array_obj *arr = &vm->array_pool[arr_v.arr_id];
                 if (arr->len > 0) {
@@ -1555,7 +1556,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         }
 
         case OP_SYS_FB_IS_ACTIVE: {
-            struct vm_val res = { VAL_INT, fb_is_active() ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, fb_is_active() ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1710,7 +1711,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
 
         case OP_SYS_MILLIS: {
             uint64_t ms = timer_get_uptime_ms();
-            struct vm_val res = { VAL_INT, (int64_t)ms, {0}, 0 };
+            struct vm_val res = { VAL_INT, (int64_t)ms, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1732,7 +1733,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                 }
                 if (neg) val = -val;
             }
-            struct vm_val res = { VAL_INT, val, {0}, 0 };
+            struct vm_val res = { VAL_INT, val, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -1917,21 +1918,21 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_SYS_RAM: {
             size_t f_free = 0, f_used = 0, f_total = 0;
             pmm_get_stats(&f_free, &f_used, &f_total);
-            struct vm_val v = { VAL_INT, (int64_t)(f_free * 4096), {0}, 0 };
+            struct vm_val v = { VAL_INT, (int64_t)(f_free * 4096), {0}, 0, 0 };
             if (!push_val(vm, v)) return -1;
             break;
         }
 
         case OP_SYS_UPTIME: {
             uint64_t up_s = timer_get_uptime_ms() / 1000; /*PL11_UPTIME*/
-            struct vm_val v = { VAL_INT, (int64_t)up_s, {0}, 0 };
+            struct vm_val v = { VAL_INT, (int64_t)up_s, {0}, 0, 0 };
             if (!push_val(vm, v)) return -1;
             break;
         }
 
         case OP_SYS_RAND: {
             uint32_t r = vm_rand31();
-            struct vm_val v = { VAL_INT, (int64_t)r, {0}, 0 };
+            struct vm_val v = { VAL_INT, (int64_t)r, {0}, 0, 0 };
             if (!push_val(vm, v)) return -1;
             break;
         }
@@ -1942,14 +1943,14 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             int64_t span = (int64_t)((uint64_t)hi.i - (uint64_t)lo.i + 1u);
             if (span <= 0) span = 1;
             int64_t r = (int64_t)((uint64_t)lo.i + (vm_rand31() % (uint64_t)span));
-            struct vm_val res = { VAL_INT, r, {0}, 0 };
+            struct vm_val res = { VAL_INT, r, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
 
         case OP_SYS_CLEAR: {
             console_clear();
-            struct vm_val res = { VAL_INT, 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -2037,7 +2038,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                     r = vfs_create(norm, dbuf);
                 }
             }
-            struct vm_val res = { VAL_INT, (r >= 0) ? 1 : 0, {0}, 0 };
+            struct vm_val res = { VAL_INT, (r >= 0) ? 1 : 0, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;
             break;
         }
@@ -2061,7 +2062,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                     r = vfs_read(path.s + 1, dummy, sizeof(dummy) - 1);
                 }
             }
-            struct vm_val res = { VAL_INT, (r >= 0) ? 1 : 0, {0}, 0 }; /*PL11_EXISTS2*/
+            struct vm_val res = { VAL_INT, (r >= 0) ? 1 : 0, {0}, 0, 0 }; /*PL11_EXISTS2*/
             if (!push_val(vm, res)) return -1;
             break;
         }

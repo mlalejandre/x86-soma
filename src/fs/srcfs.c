@@ -4,6 +4,7 @@
 #include "mem.h"
 #include "srcfs.h"
 #include "virtio_blk.h"
+#include "web_inflate.h"   /* PARCHE 140: SRCFS v02 comprimido (en x86_64 se descomprime en el servicio aislado zdec) */
 
 /*
  * Formato (lo escribe ejecutar.py::pack_sources):
@@ -17,6 +18,8 @@
  * (python3 tools/audit.py lo comprueba).
  * PARCHE 107: con 32 sectores (255 entradas) y mas de 320 fuentes, el empaquetado cortaba por orden alfabetico y dejaba fuera net/,
  * lang/, ui/ y user/ (el agente no podia leerlas con src_cat). Ahora 64 sectores = 511 entradas.
+ * PARCHE 140: "SRCFSv02": entrada = name[48], u32 lba, u32 tamano original, u32 tamano guardado, u32 flags (bit 0 = zlib). El codigo C
+ * ocupa ~4 veces menos y vuelve a caber todo. Se siguen leyendo discos "SRCFSv01" (sin comprimir).
  */
 #define SRCFS_LBA            8192
 #define SRCFS_INDEX_SECTORS  64
@@ -27,13 +30,47 @@
 
 static uint8_t srcfs_index[SRCFS_INDEX_SECTORS * 512];
 static uint8_t srcfs_sec[512];
-
+static int srcfs_v2;
 
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
+
+/* PARCHE 140: contenido COMPLETO de una entrada (descomprimido si hace falta). Se guarda el ultimo en cache: paginar con src_cat
+ * no vuelve a leer ni a descomprimir. Devuelve 0 o <0 (-1 E/S o memoria, -2 datos comprimidos corruptos). */
+static uint8_t *cache_buf;
+static uint32_t cache_lba, cache_size, cache_ok;
+static int srcfs_file(const uint8_t *e, const uint8_t **data, uint32_t *size)
+{
+    uint32_t lba = le32(e + 48), osize = le32(e + 52);
+    uint32_t csize = srcfs_v2 ? le32(e + 56) : osize, flags = srcfs_v2 ? le32(e + 60) : 0;
+    if (cache_ok && cache_lba == lba && cache_size == osize) { *data = cache_buf; *size = osize; return 0; }
+    if (csize > (16u << 20) || osize > (64u << 20)) return -2;
+    uint8_t *raw = (uint8_t *)kmalloc(csize ? csize : 1);
+    if (!raw) return -1;
+    for (uint32_t p = 0; p < csize; p += 512) {
+        if (virtio_blk_read((uint64_t)(lba + p / 512), srcfs_sec) != 0) { kfree(raw); return -1; }
+        uint32_t take = csize - p < 512 ? csize - p : 512;
+        memcpy(raw + p, srcfs_sec, take);
+    }
+    uint8_t *buf = raw;
+    if (flags & 1) {
+        struct wb o; o.p = 0; o.len = o.cap = 0; o.err = 0;
+        int r = wz_inflate(raw, csize, 1, &o, osize);
+        kfree(raw);
+        if (r < 0 || o.len != osize) { if (o.p) kfree(o.p); return o.err ? -1 : -2; }
+        buf = (uint8_t *)o.p;
+        if (!buf) { buf = (uint8_t *)kmalloc(1); if (!buf) return -1; }
+    } else if (csize != osize) { kfree(raw); return -2; }
+    if (cache_buf) kfree(cache_buf);
+    cache_buf = buf; cache_lba = lba; cache_size = osize; cache_ok = 1;
+    *data = buf; *size = osize;
+    return 0;
+}
+
+
 
 
 static void out_char(char *out, uint32_t max, uint32_t *pos, char c)
@@ -130,9 +167,9 @@ static int srcfs_load_index(void)
         }
     }
 
-    if (memcmp(srcfs_index, "SRCFSv01", 8) != 0) {
-        return -2;
-    }
+    if (memcmp(srcfs_index, "SRCFSv01", 8) == 0) srcfs_v2 = 0;
+    else if (memcmp(srcfs_index, "SRCFSv02", 8) == 0) srcfs_v2 = 1;
+    else return -2;
 
     uint32_t count = le32(srcfs_index + 8);
     uint32_t cap = SRCFS_INDEX_SECTORS * 512 / SRCFS_ENTRY_SIZE - 1;
@@ -263,8 +300,12 @@ int srcfs_cat(const char *name, uint32_t offset, char *out, uint32_t max)
         return -1;
     }
 
-    uint32_t lba = le32(e + 48);
-    uint32_t size = le32(e + 52);
+    const uint8_t *data; uint32_t size;
+    int fr = srcfs_file(e, &data, &size);
+    if (fr < 0) {
+        out_str(out, max, &pos, fr == -1 ? "Error de I/O (o sin memoria) leyendo el disco." : "Error: datos de fuente corruptos en el disco.");
+        return -1;
+    }
 
     if (offset >= size) {
         out_str(out, max, &pos, "Fin del archivo (tamano ");
@@ -278,30 +319,9 @@ int srcfs_cat(const char *name, uint32_t offset, char *out, uint32_t max)
     if (n > SRCFS_PAGE) n = SRCFS_PAGE;
     if (max > 160 && n > max - 160) n = max - 160;
 
-    uint32_t done = 0;
-
-    while (done < n) {
-        uint32_t p = offset + done;
-
-        if (virtio_blk_read((uint64_t)(lba + p / 512), srcfs_sec) != 0) {
-            out_str(out, max, &pos, "\nError de I/O leyendo el disco.");
-            return -1;
-        }
-
-        uint32_t within = p % 512;
-        uint32_t take = 512 - within;
-
-        if (take > n - done) take = n - done;
-
-        for (uint32_t k = 0; k < take; ++k) {
-            char c = (char)srcfs_sec[within + k];
-
-            if (c != '\r') {
-                out_char(out, max, &pos, c);
-            }
-        }
-
-        done += take;
+    for (uint32_t k = 0; k < n; ++k) {
+        char c = (char)data[offset + k];
+        if (c != '\r') out_char(out, max, &pos, c);
     }
 
     if (offset + n < size) {
@@ -391,8 +411,12 @@ int srcfs_grep(const char *name, const char *pat, char *out, uint32_t max)
         return -1;
     }
 
-    uint32_t lba = le32(e + 48);
-    uint32_t size = le32(e + 52);
+    const uint8_t *data; uint32_t size;
+    int fr = srcfs_file(e, &data, &size);                  /* PARCHE 140 */
+    if (fr < 0) {
+        out_str(out, max, &pos, fr == -1 ? "Error de I/O (o sin memoria) leyendo el disco." : "Error: datos de fuente corruptos en el disco.");
+        return -1;
+    }
 
     char line[SRCFS_LINE_MAX + 1];
     uint32_t ll = 0;
@@ -402,14 +426,7 @@ int srcfs_grep(const char *name, const char *pat, char *out, uint32_t max)
 
     for (uint32_t p = 0; p < size; ++p) {
 
-        if (p % 512 == 0) {
-            if (virtio_blk_read((uint64_t)(lba + p / 512), srcfs_sec) != 0) {
-                out_str(out, max, &pos, "\nError de I/O leyendo el disco.");
-                return -1;
-            }
-        }
-
-        char c = (char)srcfs_sec[p % 512];
+        char c = (char)data[p];
 
         if (c != '\n' && c != '\r' && ll < SRCFS_LINE_MAX) {
             line[ll++] = c;

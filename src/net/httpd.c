@@ -12,6 +12,11 @@
 #include "rtc.h"
 #include "idt.h"
 #include "virtio_net.h"
+#include "httpd_policy.h"
+#include "net.h"
+#if defined(__x86_64__)
+#include "cpupower.h"
+#endif
 
 static int httpd_listen_h = -1;
 static uint32_t httpd_hits = 0;
@@ -41,27 +46,6 @@ static int str_eq(const char *a, const char *b)
 /* PARCHE 031: el servidor entregaba cualquier ruta del VFS salvo tres patrones: historial del shell (/etc/history.txt),
  * conversaciones y memoria del agente (/mem/, /etc/mem_*.txt), temporales, etc. Ahora solo se sirven rutas "normales"
  * (sin .. ni // ni /./) fuera de las zonas privadas; /agent/ solo expone la pizarra publica. */
-static int httpd_prefix(const char *s, const char *p)
-{
-    while (*p) { if (*s != *p) return 0; s++; p++; }
-    return 1;
-}
-
-static int httpd_path_allowed(const char *path)
-{
-    if (path[0] != '/') return 0;
-    for (const char *q = path; *q; q++) {
-        if (q[0] == '.' && q[1] == '.') return 0;
-        if (q[0] == '/' && q[1] == '/') return 0;
-        if (q[0] == '/' && q[1] == '.' && (q[2] == '/' || q[2] == '\0')) return 0;
-        if (q[0] == '%' || q[0] == '\\') return 0;
-    }
-    if (httpd_strstr(path, "_stm.txt") || httpd_strstr(path, "/agent/state")) return 0;
-    if (httpd_prefix(path, "/etc/") || httpd_prefix(path, "/mem/") || httpd_prefix(path, "/tmp/") || httpd_prefix(path, "/sys/")) return 0;
-    if (httpd_prefix(path, "/agent/") && !str_eq(path, "/agent/blackboard.txt")) return 0;
-    return 1;
-}
-
 static void buf_append(char *dst, uint32_t max, uint32_t *pos, const char *src)
 {
     while (*src && *pos < max - 1) {
@@ -194,6 +178,13 @@ static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_p
             }
             fname[fp] = '\0';
 
+            {   /* PARCHE 123: el panel solo lista lo que el servidor sirve (el nombre de un archivo privado tampoco se filtra) */
+                char full[sizeof fname + 1]; uint32_t fl = 0;
+                if (fname[0] != '/') full[fl++] = '/';
+                for (uint32_t q = 0; fname[q] && fl < sizeof full - 1; ++q) full[fl++] = fname[q];
+                full[fl] = '\0';
+                if (!httpd_path_allowed(full)) continue;
+            }
             buf_append(resp_body, max_len, body_pos, "<tr><td><b>");
             buf_append(resp_body, max_len, body_pos, fname);
             buf_append(resp_body, max_len, body_pos, "</b></td><td>");
@@ -246,6 +237,7 @@ static void serve_client(int h)
 
     char path[128];
     path[0] = '\0';
+    int req_status = 0;                                          /* PARCHE 123: 405 metodo no permitido, 414 ruta demasiado larga */
     if (rx_buf[0] == 'G' && rx_buf[1] == 'E' && rx_buf[2] == 'T' && rx_buf[3] == ' ') {
         const char *p = rx_buf + 4;
         while (*p == ' ') p++;
@@ -254,11 +246,19 @@ static void serve_client(int h)
             path[pp++] = *p++;
         }
         path[pp] = '\0';
+        if (*p && *p != ' ' && *p != '?') { req_status = 414; path[0] = '\0'; }      /* la ruta no cabia: antes se CORTABA y se servia otra distinta */
+    } else {
+        req_status = 405;
     }
 
     uint32_t body_pos = 0;
     const char *content_type = "text/html; charset=utf-8";
     int status_code = 200;
+    if (req_status) {                                              /* PARCHE 123: peticion rechazada antes de tocar el VFS */
+        status_code = req_status;
+        buf_append(resp_body, 16384, &body_pos, req_status == 405 ? "405 Method Not Allowed\n" : "414 URI Too Long\n");
+        content_type = "text/plain; charset=utf-8";
+    } else
 
     if (str_eq(path, "/") || str_eq(path, "/index.html") || str_eq(path, "/dashboard")) {
         render_dashboard(resp_body, 16384, &body_pos);
@@ -346,6 +346,10 @@ static void serve_client(int h)
         buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 200 OK\r\n");
     } else if (status_code == 403) {
         buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 403 Forbidden\r\n");
+    } else if (status_code == 405) {
+        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\n");
+    } else if (status_code == 414) {
+        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 414 URI Too Long\r\n");
     } else {
         buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 404 Not Found\r\n");
     }
@@ -362,23 +366,65 @@ static void serve_client(int h)
     }
 }
 
+/* SOMA_197: el servidor web ya no esta siempre encendido. Publica el panel, la telemetria, la pizarra de los agentes y /www y
+ * /public a quien se conecte, sin contrasena: en QEMU es comodo (solo lo ve el anfitrion por localhost:8090), pero en un portatil
+ * conectado a una WiFi lo veia toda la red. Ahora:
+ *   - por defecto esta ACTIVO en maquina virtual y APAGADO en un equipo real (puerto 80 cerrado);
+ *   - `httpd on` / `httpd off` lo cambian al momento y lo recuerdan en /etc/httpd.conf;
+ *   - encendido, solo atiende a equipos de la misma red local. */
+static volatile int httpd_mode = -1;                   /* -1 = sin decidir (por defecto + /etc/httpd.conf), 0 apagado, 1 activo */
+static uint32_t httpd_refused;
+static int httpd_default_mode(void)
+{
+#if defined(__x86_64__)
+    return cpupower_info()->hypervisor ? 1 : 0;
+#elif defined(PLATFORM_qemu_virt)
+    return 1;
+#else
+    return 0;
+#endif
+}
+static void httpd_load_conf(void)
+{
+    char t[96]; int n = vfs_read("/etc/httpd.conf", t, sizeof t - 1);
+    t[n > 0 ? n : 0] = 0;
+    httpd_mode = httpd_conf_mode(t, httpd_default_mode());
+}
+
 void httpd_thread_func(void *arg)
 {
     (void)arg;
-    httpd_listen_h = tcp_listen(80);
-    if (httpd_listen_h < 0) {
-        kprint("HTTPD: Error abriendo socket listen en puerto 80\n");
-        return;
-    }
-    kprint("HTTPD: Servidor Web Bare-Metal activo en puerto 80 (http://localhost:8090/)\n");
-
+    int said = -1;
+    thread_sleep(1500);                                 /* el disco (y con el /etc/httpd.conf) se monta durante el arranque */
+    httpd_load_conf();
     for (;;) {
-        int client = tcp_accept(httpd_listen_h, 200);
-        if (client >= 0) {
-            serve_client(client);
-            tcp_close(client);
+        int want = httpd_mode == 1;
+        if (want && httpd_listen_h < 0) {
+            httpd_listen_h = tcp_listen(80);
+            if (httpd_listen_h < 0) { if (said != 2) kprint("HTTPD: Error abriendo socket listen en puerto 80\n"); said = 2; thread_sleep(2000); continue; }
+            if (said != 1) kprint("HTTPD: Servidor Web Bare-Metal activo en puerto 80 (http://localhost:8090/), solo para la red local\n");
+            said = 1;
+        } else if (!want && httpd_listen_h >= 0) {
+            tcp_close(httpd_listen_h); httpd_listen_h = -1;
+            kprint("HTTPD: servidor web apagado (puerto 80 cerrado)\n"); said = 0;
         }
-        thread_sleep(10);
+        if (httpd_listen_h < 0) {
+            if (said < 0) { kprint("HTTPD: servidor web apagado en este equipo (se enciende con: httpd on)\n"); said = 0; }
+            thread_sleep(500);
+            continue;
+        }
+        /* SOMA_199: antes esperaba 200 ms seguidos dentro de tcp_accept, que no duerme: el hilo se despertaba en cada tic del reloj
+         * (unas 1000 veces por segundo) aunque nadie se conectase nunca. El saludo TCP lo completa la pila de red por su cuenta; aqui
+         * basta mirar 50 veces por segundo si hay una conexion establecida. */
+        int client = tcp_accept(httpd_listen_h, 1);
+        if (client >= 0) {
+            uint8_t peer[4];
+            if (tcp_peer_ip(client, peer) == 0 && httpd_peer_allowed(peer, net_ip, net_netmask)) serve_client(client);
+            else httpd_refused++;                       /* de fuera de la red local: se cierra sin responder */
+            tcp_close(client);
+            continue;                                   /* puede haber mas en cola */
+        }
+        thread_sleep(20);
     }
 }
 
@@ -387,19 +433,36 @@ void httpd_init(void)
     thread_create("httpd", httpd_thread_func, 0);
 }
 
+static int httpd_arg(const char *a, const char *w) { while (*a == ' ') a++; while (*w && *a == *w) { a++; w++; } return !*w && (!*a || *a == ' '); }
 int cmd_httpd(const char *args, char *out_buf, uint32_t max_out)
 {
-    (void)args;
     uint32_t p = 0;
+    int on = httpd_arg(args, "on") || httpd_arg(args, "activar"), off = httpd_arg(args, "off") || httpd_arg(args, "apagar");
+    if (on || off) {                                                       /* SOMA_197 */
+        struct tcb *th = thread_current();
+        if (th && th->agent_mode) { kprint("httpd: encender o apagar el servidor web es cosa del usuario, no de un agente\n"); buf_append(out_buf, max_out, &p, "httpd: denegado a los agentes"); return 1; }
+        const char *t = on ? "# Servidor web de SOMA (parche 197): httpd on | httpd off\nservidor=activo\n" : "# Servidor web de SOMA (parche 197): httpd on | httpd off\nservidor=apagado\n";
+        uint32_t n = 0; while (t[n]) n++;
+        if (vfs_write("/etc/httpd.conf", t, n) < 0) kprint("httpd: no se pudo guardar /etc/httpd.conf (el cambio vale hasta reiniciar)\n");
+        httpd_mode = on ? 1 : 0;
+        kprint(on ? "httpd: servidor web ENCENDIDO. Lo ve cualquier equipo de tu red local (panel, telemetria, pizarra de agentes, /www y /public).\n"
+                  : "httpd: servidor web APAGADO (el puerto 80 se cierra en un momento).\n");
+        buf_append(out_buf, max_out, &p, on ? "HTTPD: encendido" : "HTTPD: apagado");
+        return 1;
+    }
+    int active = httpd_listen_h >= 0;
     kprint("\nESTADO DEL SERVIDOR WEB HTTPD (Ring 0):\n----------------------------------------\n");
-    kprint("  Puerto TCP:       80 (reenviado a http://localhost:8090/ en el host)\n");
-    kprint("  Estado:           ESCUCHANDO (Daemon KThread activo)\n");
-    kprint("  Peticiones (Hits): "); kprint_dec(httpd_hits); kprint("\n");
-    kprint("  Dashboard URL:    http://localhost:8090/\n");
-    kprint("  REST Endpoints:   /api/telemetry , /api/fs , /api/blackboard\n");
+    kprint("  Estado:           "); kprint(active ? "ESCUCHANDO en el puerto 80 (solo equipos de la red local)\n" : httpd_mode == 1 ? "encendiendo...\n" : "APAGADO (puerto 80 cerrado)\n");
+    kprint("  Por defecto:      "); kprint(httpd_default_mode() ? "activo (maquina virtual)\n" : "apagado (equipo real)\n");
+    kprint("  Peticiones (Hits): "); kprint_dec(httpd_hits); kprint("   Rechazadas (fuera de la red local): "); kprint_dec(httpd_refused); kprint("\n");
+    if (active) {
+        kprint("  Dashboard URL:    http://localhost:8090/ (QEMU) o http://<ip de SOMA>/\n");
+        kprint("  REST Endpoints:   /api/telemetry , /api/fs , /api/blackboard\n");
+    }
+    kprint("  Cambiar:          httpd on | httpd off  (se recuerda en /etc/httpd.conf)\n");
     kprint("----------------------------------------\n");
 
-    buf_append(out_buf, max_out, &p, "HTTPD: Puerto 80 activo | Hits: ");
+    buf_append(out_buf, max_out, &p, active ? "HTTPD: Puerto 80 activo | Hits: " : "HTTPD: apagado | Hits: ");
     buf_append_dec(out_buf, max_out, &p, (uint64_t)httpd_hits);
     return 1;
 }

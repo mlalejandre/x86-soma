@@ -188,7 +188,10 @@ void udp_input(
     }
 
     /* Checksum 0 = el emisor no lo calculo (permitido en IPv4). */
-    if (rd16(udp + 6) != 0 && udp_checksum(src_ip, dst_ip, udp, ulen) != 0) {
+    /* SOMA_175C7: DHCP (67 -> 68): el router de casa manda las OFFER/ACK con el checksum UDP mal (como dhclient, no se comprueba);
+     * el paquete ya paso el checksum IP y dhcp_parse comprueba xid, MAC y formato. */
+    int dhcp_rx = rd16(udp) == 67 && rd16(udp + 2) == 68;
+    if (!dhcp_rx && rd16(udp + 6) != 0 && udp_checksum(src_ip, dst_ip, udp, ulen) != 0) {
         return;
     }
 

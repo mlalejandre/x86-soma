@@ -9,7 +9,7 @@
 #define WRE_S 8
 #define WRE_U 16
 #define WRE_Y 32
-#define WRE_MAXG 63                      /* grupos de captura maximos */
+#define WRE_MAXG 255                     /* grupos de captura maximos */
 struct wre;
 /* NULL si hay error (mensaje en err). El programa vive en el arena. */
 struct wre *wre_compile(struct wa_arena *ar, const char *pat, uint32_t n, int flags, char *err, uint32_t errmax);

@@ -448,6 +448,11 @@ static void register_all(void)
     netif_register(&if_gem);
     netif_register(&netif_wlan0);           /* Wi-Fi: no arranca hasta la fase 3 (asociacion WPA2) */
 #endif
+#if defined(__x86_64__)
+    { extern const struct netif_ops netif_e1000e; netif_register(&netif_e1000e); }   /* SOMA_170_T480S: cable (preferido) */
+    { extern const struct netif_ops netif_usbnet; netif_register(&netif_usbnet); }   /* SOMA_171_T480S: movil / adaptador USB */
+    { extern const struct netif_ops netif_iwl; netif_register(&netif_iwl); }         /* SOMA_175C_T480S: WiFi Intel 8265 (wlan0) */
+#endif
     netif_register(&if_virtio);
 }
 

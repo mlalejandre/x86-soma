@@ -27,6 +27,7 @@
 #include "dhcp.h"
 #include "arch.h"
 #include "mem.h"
+#include "rng.h"
 
 /* ------------------------------------------------------------------ placa */
 static struct rpi_board g_board; static int g_board_ok; static uint32_t g_board_rev;
@@ -852,6 +853,7 @@ static void random_bytes(uint8_t *o, int n)
         sha1_init(&c); sha1_update(&c, t, sizeof t); sha1_update(&c, g_wmac, 6); sha1_update(&c, o, (size_t)n); sha1_final(&c, h);
         for (int i = 0; i < 20 && k + i < n; i++) o[k + i] = h[i];
     }
+    for (int k = 0; k < n; k++) o[k] ^= (uint8_t)rng_u32();          /* SOMA_192: antes solo contador de ciclos, ticks y MAC (adivinable) */
 }
 
 static int wifi_connect(const char *ssid, const char *pass)

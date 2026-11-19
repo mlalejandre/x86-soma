@@ -1,0 +1,25 @@
+{
+  "created": {},
+  "date": "20261119_193318",
+  "files": {
+    "src/apps/paint.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "1541072d9508307eeecf51df8331c06d2e0d36e2005594d7b25070fa317fea29",
+      "old": "44b55f33304efa4ec2e498db3d2f3e59cbcb76fa2182c6dc9d3c4a6d9cc53632"
+    },
+    "src/apps/paint.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "2a28591e12cd74bd3caaa0e80a52d286880bb6fd6839e4756cec958e8dacefef",
+      "old": "d65764fad9554e80eeb9f5d67bdd7233592dfb0bcc43bb9f31c8666b02a15e8c"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "62aac72f4f7ebecb18b123c7b9af6946af08c0c6eed94d542b6639ef48869933",
+      "old": "8a456b1a3c99d8bfa8d55c0cbff9b9f82735376da8f98de139ae7efcbc0e8115"
+    }
+  },
+  "name": "215_paint_varios"
+}

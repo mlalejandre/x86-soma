@@ -38,3 +38,14 @@ tools/pi5/firmware/
 estructuranotepad.txt
 tools/pi5/firmware/
 parche*.py
+
+
+
+# SOMA_224: el repositorio publico lleva solo lo necesario para compilar y ejecutar SOMA
+parches/
+parche_*.py
+parches_*/
+backups/
+.parche_backup/
+*.whl
+subir_github.py

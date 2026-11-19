@@ -1,0 +1,21 @@
+{
+  "created": {
+    "docs/PARCHE_175B3_T480S_TERMINAL_SEGUNDO_PLANO.md": "f5cb8692e21e866947f2a3443e6e6d09c41a8a662c02ac8f4aa9f36be4625ee2"
+  },
+  "files": {
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "3cf43a4458784307050591ce61a37dc2232141b242f6ff249905c379aacbeb96",
+      "old": "128ecd53b5e4ee49a9569f2fa1551eacfeca14e0215cb32f2b69d6b32fce39e9"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "ecc6b39358d4923fdc5c6527f20254dec3872a38a3eea88473c9f51f38122452",
+      "old": "ba1ee886c184b68f3e8f69935725b734dce3bd2beb38ead4bbde9dab9d44946f"
+    }
+  },
+  "log": "20261116_102633 parche 175B3: terminal: wifi buscar / wifi arrancar en un hilo aparte (el escritorio no se congela); WiFi: senal medida por trama (? si no hay)",
+  "version": 1
+}

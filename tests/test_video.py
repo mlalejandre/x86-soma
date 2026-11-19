@@ -11,6 +11,13 @@ except ImportError:
     print("video: OMITIDO (falta Pillow: pip install pillow)")
     sys.exit(0)
 
+# PARCHE 138: sin las herramientas de referencia (tools/jpegref.py, tools/mkavi.py) se omite con aviso en vez de romper 'make test'
+_root = Path(__file__).resolve().parent.parent
+_falta = [t for t in ("jpegref.py", "mkavi.py") if not (_root / "tools" / t).exists()]
+if _falta:
+    print("video: OMITIDO (faltan " + ", ".join("tools/" + t for t in _falta) + ")")
+    sys.exit(0)
+
 def run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True)
     sys.stdout.write(r.stdout)

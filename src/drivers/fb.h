@@ -43,6 +43,7 @@ void fb_present(void);
 /* SOMA_PARCHE_012_RENDER */
 void fb_clear_changed(uint32_t color);               /* borra solo lo dibujado desde el ultimo borrado */
 extern volatile int fb_verify_enabled;               /* depuracion: ver fb_debug_verify */
+uint32_t fb_debug_vram_diff(void);                   /* SOMA_209: pixeles de pantalla distintos del backbuffer */
 uint32_t fb_debug_verify(uint32_t bg);               /* pixeles != fondo fuera de lo marcado sucio */
 void fb_debug_stats(uint32_t *frames, uint32_t *bad_total, uint32_t *bad_worst);
 void fb_present_full(void);

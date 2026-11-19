@@ -1,0 +1,46 @@
+{
+  "created": {
+    "docs/PARCHE_191_SEGURIDAD_GRUPO1.md": "960fc8cbcf578b37f910c19f3efd2399465b1a432748dd71871e67b711c3c909",
+    "tests/test_arp_191.c": "4b21c5fc81fd2885d4b91d97b7448a38d735784310aff62ec8f2ea0a1cb1745c"
+  },
+  "date": "20261117_194442",
+  "files": {
+    "Makefile": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "0d20136f51547906173b90122ac60e3644ca1f95047c8a1b01472bd7f66914e4",
+      "old": "637e3948bb9de58ac01ade3c30f1e48c3652a8d2c5d0ace7cdee655e5247280d"
+    },
+    "ejecutar.py": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "cd9f9a07bcd62488e17e69dcc939bd969055192e4a29f23f875b429fbf2016db",
+      "old": "5277547ae729a6b35be8ef655f15d37eda29c665f6ee350653c1320e40b3c603"
+    },
+    "protected.txt": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "f5f3c7b86566bbbaa76fbbd6a5ce11f0b0f7859cba8ebfe032d9cf1b38bdc7c3",
+      "old": "3b0ad385c04c254f032fce3e78d6ac3dc4511720f0506e6fccce0f7e81a68c4b"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "d66a681c66de773c3885bdaad7288ae2f172e2ea398aaaa9be2b2238b5623d42",
+      "old": "46928dc97f9ad748a48bdeee1e3dcf83d01132db3e10fa1bc2b6ae7d2f61040a"
+    },
+    "src/arch/x86_64/usermode.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "8a9d9b5f9ae3b6e6b84067dee987580e9c4e24feff55e0ca29c4a504d68ebb1e",
+      "old": "7c178ea956154a4e6c8ef6695e7d8614ec6ee228ae46a46e47a3626754e8a770"
+    },
+    "src/net/net.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "f6ef55de95661ac7eee8e797e4f12aded431ea6b1d1720f791e89f0268cfb7a0",
+      "old": "e28674f714857ac7aa8154980915cb4abfe4514f5c0d1c1c9d1a2ece7bda1791"
+    }
+  },
+  "name": "191_seguridad_grupo1"
+}

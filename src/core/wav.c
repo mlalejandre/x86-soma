@@ -57,3 +57,19 @@ int wav_parse(const uint8_t *buf, size_t len, struct wav_info *out)
     }
     return have_fmt ? (pos >= len && len < 4096 ? WAV_E_NODATA : WAV_E_SHORT) : WAV_E_FMT;
 }
+
+/* SOMA_177_T480S: ver wav.h */
+static void put32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+void wav_make_header(uint8_t out[44], uint16_t channels, uint32_t rate, uint32_t data_bytes)
+{
+    const char *r = "RIFF", *w = "WAVEfmt ", *d = "data";
+    for (int i = 0; i < 4; ++i) out[i] = (uint8_t)r[i];
+    put32(out + 4, 36u + data_bytes);
+    for (int i = 0; i < 8; ++i) out[8 + i] = (uint8_t)w[i];
+    put32(out + 16, 16); put16(out + 20, 1); put16(out + 22, channels);
+    put32(out + 24, rate); put32(out + 28, rate * channels * 2u);
+    put16(out + 32, (uint16_t)(channels * 2u)); put16(out + 34, 16);
+    for (int i = 0; i < 4; ++i) out[36 + i] = (uint8_t)d[i];
+    put32(out + 40, data_bytes);
+}

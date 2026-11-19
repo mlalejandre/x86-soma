@@ -2,10 +2,15 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "usermode.h"
+#include "web_r3.h"            /* SOMA_202 */
+#include "sandbox.h"   /* PARCHE 139: sbx_svc_next */
 #include "uaccess.h"
+#include "user_path.h"
+#include "bigfs_errno.h"
 #include "vmm.h"
 #include "pmm.h"
 #include "idt.h"
+#include "arch.h"
 #include "console.h"
 #include "thread.h"
 #include "elf.h"
@@ -14,6 +19,9 @@
 #include "audio_sys.h"
 #include "fb.h"
 #include "mem.h"
+#include "tcp.h"        /* PARCHE 142 */
+#include "dns.h"
+#include "net.h"
 
 #define MSR_EFER   0xC0000080u
 #define MSR_STAR   0xC0000081u
@@ -49,6 +57,12 @@ struct uproc {
     char     name[16];
     struct ufd fds[USER_MAX_FDS];           /* SOMA_PARCHE_019_FILES */
     char     args[USER_ARGS_MAX];
+    uint64_t nsys;           /* PARCHE 126: syscalls hechas (cuota) */
+    uint64_t wbytes;         /* PARCHE 126: bytes escritos con SYS_WRITE */
+    uint32_t sysmask;        /* PARCHE 138: syscalls permitidas (bit n) */
+    uint32_t reserve_frames; /* PARCHE 138: reserva minima del PMM para crecer regiones bajo demanda */
+    struct uregion *regions[USER_MAX_REGIONS];   /* PARCHE 138: memoria prestada (no se libera al morir) */
+    int      nregions;
     int      audio;                         /* SOMA_PARCHE_020_AUDIO: este proceso tiene el flujo de audio abierto */
     int      fb;                            /* SOMA_PARCHE_021_FPU: este proceso tiene la pantalla */
     uint8_t  fpu[512] __attribute__((aligned(16)));   /* SOMA_PARCHE_021_FPU: estado x87/MMX/SSE (FXSAVE) del proceso */
@@ -61,6 +75,13 @@ static uint64_t slice_start_ms;
 #define USER_SLICE_MS 10
 #define USER_KSTACK_RESERVE 1024      /* se reserva arriba de la pila del hilo para sus marcos de entrada */
 #define USER_EXIT_KILLED (-4000)
+/* PARCHE 126: politica de interrupciones y cuotas. SFMASK entra en cada syscall con IF=0; las syscalls cortas siguen
+ * asi, pero las que esperan disco/audio o imprimen mucho abren una ventana con IF=1 (el kernel ya es cooperativo y el
+ * reloj solo actua si interrumpe ring 3, asi que es seguro) y la cierran antes de tocar memoria de usuario. */
+#define USER_MAX_SYSCALLS  (1ULL << 28)    /* mas llamadas que esto = bucle desbocado: se mata */
+#define USER_WRITE_MAX     65536           /* bytes por SYS_WRITE: escritura corta (como POSIX), nunca un bloqueo largo */
+#define USER_BLIT_ROWS_BYTES (256 * 1024)  /* el blit abre ventana de IRQ cada tanto */
+static inline void sys_irq_window(void) { arch_interrupts_enable(); __asm__ volatile ("nop; nop" ::: "memory"); arch_interrupts_disable(); }
 
 static inline uint64_t rdmsr(uint32_t msr)
 {
@@ -154,7 +175,9 @@ static void usermode_init(void)
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | 1ULL);                       /* SCE */
     wrmsr(MSR_STAR, ((uint64_t)0x10 << 48) | ((uint64_t)SEL_KCODE << 32));
     wrmsr(MSR_LSTAR, (uint64_t)&usermode_syscall_entry);
-    wrmsr(MSR_SFMASK, 0x700);                                      /* IF, TF, DF a 0 al entrar */
+    /* SOMA_191: ademas AC (bit 18) y NT (bit 14). Ring 3 puede poner AC con popf: sin limpiarlo, la syscall entera corria con SMAP
+     * anulado. Con NT puesto, un iretq del kernel da #GP. (Linux limpia los mismos bits.) */
+    wrmsr(MSR_SFMASK, 0x47700);                                    /* IF, TF, DF, NT y AC a 0 al entrar */
     inited = 1;
 }
 
@@ -185,10 +208,11 @@ static void copy_to_user(uint64_t udst, const void *src, uint64_t n)
     if (smap_on) __asm__ volatile ("clac" ::: "memory");
 }
 
-#define E_FAULT  (-14)
-#define E_BADF   (-9)
-#define E_INVAL  (-22)
-#define E_MFILE  (-24)
+#define E_FAULT  SOMA_EFAULT                 /* PARCHE 124: tabla unica (src/core/errno.h); los errores de BIGFS se traducen con bigfs_errno() */
+#define E_BADF   SOMA_EBADF
+#define E_INVAL  SOMA_EINVAL
+#define E_MFILE  SOMA_EMFILE
+#define E_ACCES  SOMA_EACCES
 
 static struct ufd *get_fd(int64_t fd)
 {
@@ -201,14 +225,95 @@ static int64_t sys_open(uint64_t pptr, uint64_t plen)
     if (plen == 0 || plen > BIGFS_PATH_MAX || !user_range(pptr, plen, 0)) return E_FAULT;
     char path[BIGFS_PATH_MAX + 1];
     copy_from_user(path, pptr, plen); path[plen] = 0;
+    if (!user_path_allowed(path, (unsigned)plen)) return E_ACCES;     /* PARCHE 121: nada privado ni interno de BIGFS desde ring 3 */
     int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return e;
+    if (!fs) return bigfs_errno(e);
     uint32_t ino; int t = bigfs_lookup(fs, path, &ino);
-    if (t < 0) return t;
-    if (t != (int)BIGFS_T_FILE) return BIGFS_E_ISDIR;
+    if (t < 0) return bigfs_errno(t);
+    if (t != (int)BIGFS_T_FILE) return SOMA_EISDIR;
     for (int i = 0; i < USER_MAX_FDS; ++i)
         if (!usermode_cur->fds[i].used) { usermode_cur->fds[i].used = 1; usermode_cur->fds[i].ino = ino; usermode_cur->fds[i].pos = 0; return i; }
     return E_MFILE;
+}
+
+/* ---- PARCHE 142: red por capacidad ---- */
+static int own_sock(uint64_t h) { return h < 64 && usermode_cur && tcp_owner((int)h) == usermode_cur->tid && usermode_cur->tid != 0; }
+static int64_t sys_dns(uint64_t uname, uint64_t len, uint64_t uip)
+{
+    if (len == 0 || len > 253) return E_INVAL;
+    if (!user_range(uname, len, 0) || !user_range(uip, 4, 1)) return E_FAULT;
+    char name[256]; copy_from_user(name, uname, len); name[len] = 0;
+    for (uint64_t i = 0; i < len; ++i) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_')) return E_INVAL;
+    }
+    uint8_t ip[4];
+    arch_interrupts_enable();
+    net_client_lock();
+    int ok = dns_resolve(name, ip, 4000);
+    net_client_unlock();
+    arch_interrupts_disable();
+    if (!ok) return SOMA_ENOENT;
+    copy_to_user(uip, ip, 4);
+    return 0;
+}
+static int64_t sys_tcp_open(uint64_t ip_be, uint64_t port)
+{
+    if (port == 0 || port > 65535) return E_INVAL;
+    if (tcp_count_owned(usermode_cur->tid) >= USER_MAX_SOCKETS) return SOMA_EBUSY;
+    uint8_t ip[4] = { (uint8_t)(ip_be >> 24), (uint8_t)(ip_be >> 16), (uint8_t)(ip_be >> 8), (uint8_t)ip_be };
+    arch_interrupts_enable();
+    net_client_lock();
+    int h = tcp_connect_start(ip, (uint16_t)port);
+    net_client_unlock();
+    arch_interrupts_disable();
+    return h < 0 ? SOMA_EIO : h;
+}
+static int64_t sys_tcp_poll(uint64_t h)
+{
+    if (!own_sock(h)) return E_BADF;
+    arch_interrupts_enable();
+    int r = tcp_connect_poll((int)h);
+    arch_interrupts_disable();
+    return r < 0 ? SOMA_EIO : r;
+}
+static int64_t sys_tcp_send(uint64_t h, uint64_t ubuf, uint64_t len)
+{
+    if (!own_sock(h)) return E_BADF;
+    if (len > 65536) return E_INVAL;
+    if (!user_range(ubuf, len, 0)) return E_FAULT;
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t n = len - done < sizeof(usermode_cur->io) ? len - done : sizeof(usermode_cur->io);
+        copy_from_user(usermode_cur->io, ubuf + done, n);
+        arch_interrupts_enable();
+        int r = tcp_send((int)h, usermode_cur->io, (uint32_t)n);
+        arch_interrupts_disable();
+        if (r < 0) return done ? (int64_t)done : SOMA_EIO;
+        done += n;
+    }
+    return (int64_t)done;
+}
+static int64_t sys_tcp_recv(uint64_t h, uint64_t ubuf, uint64_t max)
+{
+    if (!own_sock(h)) return E_BADF;
+    if (max == 0) return 0;
+    if (max > sizeof(usermode_cur->io)) max = sizeof(usermode_cur->io);
+    if (!user_range(ubuf, max, 1)) return E_FAULT;
+    arch_interrupts_enable();
+    int r = tcp_recv((int)h, usermode_cur->io, (uint16_t)max, 2);
+    arch_interrupts_disable();
+    if (r > 0) { copy_to_user(ubuf, usermode_cur->io, (uint64_t)r); return r; }
+    if (r == 0) return 0;
+    return r == TCP_EOF ? -1 : SOMA_EIO;
+}
+static int64_t sys_tcp_close(uint64_t h)
+{
+    if (!own_sock(h)) return E_BADF;
+    arch_interrupts_enable();
+    tcp_close((int)h);
+    arch_interrupts_disable();
+    return 0;
 }
 
 static int64_t sys_read(uint64_t fdn, uint64_t ubuf, uint64_t len)
@@ -219,12 +324,14 @@ static int64_t sys_read(uint64_t fdn, uint64_t ubuf, uint64_t len)
     if (len > 65536) len = 65536;                               /* con IF=0: acota lo que se retrasa el reloj */
     if (!user_range(ubuf, len, 1)) return E_FAULT;
     int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return e;
+    if (!fs) return bigfs_errno(e);
     uint64_t done = 0;
     while (done < len) {
         uint64_t n = len - done < sizeof(usermode_cur->io) ? len - done : sizeof(usermode_cur->io);
+        arch_interrupts_enable();
         int64_t g = bigfs_read(fs, f->ino, f->pos, usermode_cur->io, n);
-        if (g < 0) return done ? (int64_t)done : g;
+        arch_interrupts_disable();
+        if (g < 0) return done ? (int64_t)done : bigfs_errno((int)g);
         if (g == 0) break;
         copy_to_user(ubuf + done, usermode_cur->io, (uint64_t)g);
         f->pos += (uint64_t)g; done += (uint64_t)g;
@@ -238,9 +345,9 @@ static int64_t sys_seek(uint64_t fdn, int64_t off, uint64_t whence)
     struct ufd *f = get_fd((int64_t)fdn);
     if (!f) return E_BADF;
     int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return e;
+    if (!fs) return bigfs_errno(e);
     struct bigfs_stat st;
-    if (bigfs_stat(fs, f->ino, &st) < 0) return BIGFS_E_NOENT;
+    if (bigfs_stat(fs, f->ino, &st) < 0) return SOMA_ENOENT;
     int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)f->pos : whence == 2 ? (int64_t)st.size : -1;
     if (base < 0) return E_INVAL;
     int64_t np;                                                  /* PARCHE 030: el desbordamiento con signo era indefinido */
@@ -254,9 +361,9 @@ static int64_t sys_fsize(uint64_t fdn)
     struct ufd *f = get_fd((int64_t)fdn);
     if (!f) return E_BADF;
     int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return e;
+    if (!fs) return bigfs_errno(e);
     struct bigfs_stat st;
-    if (bigfs_stat(fs, f->ino, &st) < 0) return BIGFS_E_NOENT;
+    if (bigfs_stat(fs, f->ino, &st) < 0) return SOMA_ENOENT;
     return (int64_t)st.size;
 }
 
@@ -274,14 +381,19 @@ static int64_t sys_fb_blit(uint64_t ubuf, uint64_t wh, uint64_t xy)
     /* se copia fila a fila con SMAP abierto solo durante la copia (con interrupciones cerradas: nadie mas toca el
      * backbuffer a mitad); despues se marca el rectangulo y se presenta */
     const uint8_t *src = (const uint8_t *)ubuf;
-    if (smap_on) __asm__ volatile ("stac" ::: "memory");
-    for (uint32_t r = 0; r < h; ++r) {
-        uint32_t *d = (uint32_t *)(uintptr_t)(dst + (uint64_t)(y + r) * sw + x);
-        const uint32_t *s = (const uint32_t *)(src + (uint64_t)r * w * 4);
-        uint64_t n = w;
-        __asm__ volatile ("rep movsl" : "+D"(d), "+S"(s), "+c"(n) : : "memory");
+    uint32_t rows_per = USER_BLIT_ROWS_BYTES / (w * 4); if (rows_per == 0) rows_per = 1;
+    for (uint32_t r0 = 0; r0 < h; r0 += rows_per) {
+        uint32_t r1 = r0 + rows_per < h ? r0 + rows_per : h;
+        if (smap_on) __asm__ volatile ("stac" ::: "memory");
+        for (uint32_t r = r0; r < r1; ++r) {
+            uint32_t *d = (uint32_t *)(uintptr_t)(dst + (uint64_t)(y + r) * sw + x);
+            const uint32_t *s = (const uint32_t *)(src + (uint64_t)r * w * 4);
+            uint64_t n = w;
+            __asm__ volatile ("rep movsl" : "+D"(d), "+S"(s), "+c"(n) : : "memory");
+        }
+        if (smap_on) __asm__ volatile ("clac" ::: "memory");
+        if (r1 < h) sys_irq_window();                     /* SMAP ya cerrado: el reloj puede atender */
     }
-    if (smap_on) __asm__ volatile ("clac" ::: "memory");
     fb_damage((int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h);
     fb_present();
     return 0;
@@ -299,7 +411,9 @@ static int64_t sys_audio_write(uint64_t ubuf, uint64_t len)
     while (done < len) {
         uint64_t n = len - done < sizeof(usermode_cur->io) ? len - done : sizeof(usermode_cur->io);
         copy_from_user(usermode_cur->io, ubuf + done, n);
+        arch_interrupts_enable();
         int k = audio_sys_write(usermode_cur->io, (uint32_t)n);
+        arch_interrupts_disable();
         if (k <= 0) break;
         done += (uint64_t)k;
         if ((uint64_t)k < n) break;
@@ -322,13 +436,29 @@ static int64_t sys_getargs(uint64_t ubuf, uint64_t len)
 int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
 {
     (void)a2;
+    if (++usermode_cur->nsys > USER_MAX_SYSCALLS) {                /* PARCHE 126: cuota de llamadas */
+        kprint("[USER] proceso terminado: supero la cuota de llamadas al sistema\n");
+        usermode_cur->exit_code = USER_EXIT_QUOTA;
+        usermode_leave(USER_EXIT_QUOTA);
+    }
+    /* SOMA_192: un programa NORMAL (filtro por defecto) que pide una llamada inexistente o sin capacidad recibe ENOSYS, como antes del
+     * parche 138, y sigue vivo: asi lo exige el oraculo de `usfuzz` (que fallaba desde entonces: los procesos morian con DENIED).
+     * Los procesos AISLADOS (filtro restringido: decodificadores, PDF, red) siguen muriendo al primer intento. */
+    if ((nr >= 32 || !(usermode_cur->sysmask & (1u << nr))) && usermode_cur->sysmask == USER_SYS_DEFAULT) return SOMA_ENOSYS;
+    if (nr >= 32 || !(usermode_cur->sysmask & (1u << nr))) {        /* PARCHE 138: filtro por proceso (aislados: solo exit) */
+        kprint("[USER] proceso terminado: llamada al sistema no permitida por su filtro\n");
+        usermode_cur->exit_code = USER_EXIT_DENIED;
+        usermode_leave(USER_EXIT_DENIED);
+    }
     switch (nr) {
     case SYS_EXIT:
         usermode_cur->exit_code = (int64_t)a0;
         usermode_leave((int64_t)a0);
     case SYS_WRITE:
         if (a1 == 0) return 0;                                   /* PARCHE 102: escribir 0 bytes no es un fallo */
-        if (!user_range_ok(a0, a1)) return -1;
+        if (a1 > USER_WRITE_MAX) a1 = USER_WRITE_MAX;            /* PARCHE 126: escritura corta */
+        if (!user_range_ok(a0, a1)) return E_FAULT;
+        usermode_cur->wbytes += a1;
         {   /* se copia a un buffer del kernel con SMAP abierto el minimo tiempo, y se imprime ya cerrado */
             char buf[256];
             const char *s = (const char *)a0;
@@ -337,7 +467,9 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
                 if (smap_on) __asm__ volatile ("stac" ::: "memory");
                 for (uint64_t i = 0; i < n; ++i) buf[i] = s[off + i];
                 if (smap_on) __asm__ volatile ("clac" ::: "memory");
+                arch_interrupts_enable();
                 for (uint64_t i = 0; i < n; ++i) kputc(buf[i]);
+                arch_interrupts_disable();
             }
         }
         return (int64_t)a1;
@@ -349,6 +481,19 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
         return 0;
     case SYS_GETPID:
         return (int64_t)usermode_cur->tid;
+    case SYS_NET_DNS:   return sys_dns(a0, a1, a2);         /* PARCHE 142 */
+    case SYS_TCP_OPEN:  return sys_tcp_open(a0, a1);
+    case SYS_TCP_POLL:  return sys_tcp_poll(a0);
+    case SYS_TCP_SEND:  return sys_tcp_send(a0, a1, a2);
+    case SYS_TCP_RECV:  return sys_tcp_recv(a0, a1, a2);
+    case SYS_TCP_CLOSE: return sys_tcp_close(a0);
+    case SYS_WEB_WAIT:                                      /* SOMA_202: canal del navegador aislado (web_r3.c) */
+        usermode_cur->nsys = 0;                             /* proceso de larga vida: la cuota es por espera, no de por vida */
+        return web_r3_sys_wait(usermode_cur_index(), (int64_t)a0);
+    case SYS_WEB_POST:  return web_r3_sys_post(usermode_cur_index(), a0, a1, a2);
+    case SYS_WEB_FS:    return web_r3_sys_fs(usermode_cur_index(), a0);
+    case SYS_SVC_NEXT:                                      /* PARCHE 139: servicio persistente (sandbox.c) */
+        return sbx_svc_next(usermode_cur_index(), (int64_t)a0);
     case SYS_OPEN:    return sys_open(a0, a1);
     case SYS_READ:    return sys_read(a0, a1, a2);
     case SYS_SEEK:    return sys_seek(a0, (int64_t)a1, a2);
@@ -371,7 +516,7 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
     }
     case SYS_UPTIME_MS: return (int64_t)timer_get_uptime_ms();
     case SYS_FB_OPEN: {
-        if (usermode_cur->fb) return -16;
+        if (usermode_cur->fb) return SOMA_EBUSY;
         int r = fb_user_begin((uint32_t)a0, (uint32_t)a1);
         if (r == 0) usermode_cur->fb = 1;
         return r;
@@ -394,11 +539,47 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
         usermode_cur->audio = 0;
         return 0;
     default:
-        return -38;   /* ENOSYS */
+        return SOMA_ENOSYS;
     }
 }
 
 int usermode_active(void) { return usermode_cur != 0; }
+/* PARCHE 139 */
+int usermode_cur_index(void) { return usermode_cur ? (int)(usermode_cur - procs) : -1; }
+void usermode_set_deadline_cur(uint64_t abs_ms) { if (usermode_cur) usermode_cur->deadline_ms = abs_ms; }
+int usermode_proc_alive(int idx) { return idx >= 0 && idx < USER_MAX_PROCS && (procs[idx].state == 1 || procs[idx].state == 3); }
+uint32_t usermode_proc_tid(int idx) { return (idx >= 0 && idx < USER_MAX_PROCS && procs[idx].state == 1) ? procs[idx].tid : 0; }
+uint64_t usermode_proc_as(int idx) { return (idx >= 0 && idx < USER_MAX_PROCS && procs[idx].state == 1) ? procs[idx].as : 0; }
+
+/* PARCHE 138: fallo de pagina en ring 3 dentro de una region bajo demanda -> se reserva un marco a cero y se reintenta.
+ * Se ejecuta con IF=0 en el manejador de excepcion; el fallo vino de ring 3, asi que el kernel no tenia nada a medias
+ * (igual que usermode_on_tick). Fuera de region, pagina ya presente (violacion de permisos), limite de la region o
+ * reserva del sistema agotada -> 0 (el proceso muere; con la reserva o el limite, con USER_EXIT_NOMEM). */
+int usermode_demand_fault(uint64_t cr2, uint64_t error_code)
+{
+    struct uproc *up = usermode_cur;
+    if (!up || (error_code & 1)) return 0;                     /* bit 0 = pagina presente: es una violacion, no falta */
+    for (int i = 0; i < up->nregions; ++i) {
+        struct uregion *r = up->regions[i];
+        if (!r || !r->demand || cr2 < r->va || cr2 >= r->va + (uint64_t)r->npages * 4096) continue;
+        uint32_t k = (uint32_t)((cr2 - r->va) >> 12);
+        if (r->frames[k]) return 0;
+        size_t fr, us, tot; pmm_get_stats(&fr, &us, &tot);
+        if (fr <= up->reserve_frames) goto nomem;
+        uintptr_t f = pmm_alloc_frame();
+        if (!f) goto nomem;
+        uint8_t *p = (uint8_t *)f; for (size_t b = 0; b < 4096; ++b) p[b] = 0;
+        if (vmm_as_map(up->as, r->va + (uint64_t)k * 4096, f, r->flags) != 0) { pmm_free_frame(f); goto nomem; }
+        r->frames[k] = f; r->used++;
+        __asm__ volatile ("invlpg (%0)" : : "r"(r->va + (uint64_t)k * 4096) : "memory");
+        return 1;
+    }
+    return 0;
+nomem:
+    kprint("[USER] proceso terminado: su memoria bajo demanda no puede crecer (reserva del sistema)\n");
+    up->exit_code = USER_EXIT_NOMEM;
+    usermode_leave(USER_EXIT_NOMEM);
+}
 
 void usermode_on_fault(uint64_t vector, uint64_t rip, uint64_t cr2)
 {
@@ -459,6 +640,7 @@ void arch_thread_cleanup(struct tcb *t)
     if (up->audio) { audio_sys_owner_died(up->tid); up->audio = 0; }
     if (up->fb) { fb_user_end(); up->fb = 0; }
     free_pages(up);
+    up->nregions = 0;                                          /* PARCHE 138: regiones prestadas: las libera su dueno (sandbox.c) */
     vmm_as_destroy(up->as); up->as = 0;                        /* nunca esta cargado: este hilo ya no es el actual */
     up->end_ms = timer_get_uptime_ms();
     up->state = 2;
@@ -487,6 +669,8 @@ static struct uproc *slot_begin(void)
             up->start_ms = up->end_ms = 0; up->user_rsp = 0; up->saved_rsp = 0;
             for (int k = 0; k < USER_MAX_FDS; ++k) up->fds[k].used = 0;
             up->args[0] = 0; up->name[0] = 0; up->audio = 0; up->fb = 0;
+            up->sysmask = USER_SYS_DEFAULT; up->reserve_frames = 0; up->nregions = 0;   /* PARCHE 138 */
+            for (int k = 0; k < USER_MAX_REGIONS; ++k) up->regions[k] = 0;
             /* estado inicial de la FPU: FCW=0x037F (todas las excepciones enmascaradas, doble extendida), MXCSR=0x1F80
              * (idem SSE, redondeo al mas cercano), registros vacios: igual que tras FNINIT */
             for (int k = 0; k < 512; ++k) up->fpu[k] = 0;
@@ -500,6 +684,7 @@ static struct uproc *slot_begin(void)
 static void free_pages(struct uproc *up);
 static void slot_abort(struct uproc *up)
 {
+    up->nregions = 0;                                                /* PARCHE 138: prestadas: las libera su dueno */
     free_pages(up);
     if (up->as) { vmm_as_destroy(up->as); up->as = 0; }
     up->state = 0;
@@ -533,8 +718,14 @@ static int slot_launch(struct uproc *up, const char *name, uint64_t entry, uint3
     int ok = up->as != 0;
     for (int i = 0; i < up->npages && ok; ++i)
         if (vmm_as_map(up->as, up->pages[i].va, up->pages[i].frame, up->pages[i].flags) != 0) ok = 0;
+    for (int i = 0; i < up->nregions && ok; ++i) {                 /* PARCHE 138: regiones prestadas ya reservadas */
+        struct uregion *r = up->regions[i];
+        for (uint32_t k = 0; k < r->npages && ok; ++k)
+            if (r->frames[k] && vmm_as_map(up->as, r->va + (uint64_t)k * 4096, r->frames[k], r->flags) != 0) ok = 0;
+    }
     if (!ok) { slot_abort(up); return -5; }
 
+    up->nsys = 0; up->wbytes = 0;                             /* PARCHE 126 */
     up->entry = entry; up->stack_top = USER_STACK_VA + (uint64_t)USER_STACK_PAGES * 4096;
     up->deadline_ms = timer_get_uptime_ms() + max_ms;
     up->name[0] = 0;
@@ -565,7 +756,32 @@ int usermode_spawn(const char *name, const void *code, size_t len, uint32_t max_
 }
 
 /* Carga un ejecutable ELF validado. *err recibe el codigo de elf_parse (o 0). */
+static int exec_common(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, const struct uexec_spec *sp, int *err);
 int usermode_exec(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, int *err)
+{
+    return exec_common(name, img, len, max_ms, args, 0, err);
+}
+
+/* PARCHE 138: igual que usermode_exec, con filtro de syscalls y regiones prestadas. Las regiones deben estar fuera del
+ * codigo y la pila, alineadas, sin solaparse y sin W+X (si no, -11). */
+int usermode_exec_ex(const char *name, const void *img, size_t len, uint32_t max_ms, const struct uexec_spec *sp, int *err)
+{
+    if (!sp || sp->nregions < 0 || sp->nregions > USER_MAX_REGIONS) return -11;
+    for (int i = 0; i < sp->nregions; ++i) {
+        const struct uregion *r = sp->regions[i];
+        if (!r || !r->frames || r->npages == 0 || (r->va & 0xFFF)) return -11;
+        uint64_t a = r->va, b = r->va + (uint64_t)r->npages * 4096;
+        if (a < USER_STACK_VA + (uint64_t)USER_STACK_PAGES * 4096 || b > USER_BASE + 0x8000000000ULL || b < a) return -11;
+        if ((r->flags & VMM_FLAG_WRITABLE) && !(r->flags & VMM_FLAG_NX)) return -11;
+        for (int j = 0; j < i; ++j) {
+            const struct uregion *q = sp->regions[j];
+            if (a < q->va + (uint64_t)q->npages * 4096 && q->va < b) return -11;
+        }
+    }
+    return exec_common(name, img, len, max_ms, 0, sp, err);
+}
+
+static int exec_common(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, const struct uexec_spec *sp, int *err)
 {
     static const struct elf_limits lim = { USER_BASE, USER_CODE_AREA, USER_CODE_MAX_PAGES };
     struct elf_image im;
@@ -593,6 +809,12 @@ int usermode_exec(const char *name, const void *img, size_t len, uint32_t max_ms
         }
     }
     if (add_stack(up) != 0) { slot_abort(up); return -3; }
+    if (sp) {                                                       /* PARCHE 138 */
+        up->sysmask = sp->sysmask ? sp->sysmask : USER_SYS_DEFAULT;
+        up->reserve_frames = sp->reserve_frames;
+        up->nregions = sp->nregions;
+        for (int i = 0; i < sp->nregions; ++i) up->regions[i] = sp->regions[i];
+    }
     return slot_launch(up, name, im.entry, max_ms, args);
 }
 
@@ -678,7 +900,7 @@ __asm__(
 "    leaq 2f(%rip), %rdi\n movq $(3f-2f), %rsi\n movq $1, %rax\n syscall\n"  /* write valido */
 "    movw %cs, %ax\n andq $3, %rax\n"                                         /* CPL */
 "    leaq 40(%rax), %rdi\n"                                                   /* 40 + CPL */
-"    cmpq $-1, %r12\n je 1f\n movq $1, %rdi\n"
+"    cmpq $-14, %r12\n je 1f\n movq $1, %rdi\n"   /* PARCHE 138: SYS_WRITE devuelve SOMA_EFAULT (-14) desde el parche 121; la prueba seguia esperando -1 */
 "1:  xorq %rax, %rax\n syscall\n"
 "    jmp .\n"
 "2:  .ascii \"[USER] hola desde ring 3 (CPL=3)\\n\"\n"
@@ -794,190 +1016,4 @@ int usermode_selftest(void)
     #undef LEN
     kprint(bad ? "USERMODE: FALLO\n" : "USERMODE: OK\n");
     return bad;
-}
-
-/* ================================================================== PARCHE 117: fuzzing de syscalls desde ring 3
- * Lanza `nproc` procesos hostiles (/bin/sysfuzz.elf) de 3 en 3 con semillas distintas. Cada uno es su propio oraculo (ver src/user/sysfuzz.c).
- * Despues comprueba que el kernel sigue integro: sin fugas de marcos, monton consistente, region de usuario vacia en la PML4 del kernel. */
-static void fz_u32(char *d, uint32_t *n, uint32_t v) { char t[12]; int k = 0; do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v); while (k) d[(*n)++] = t[--k]; }
-int usermode_fuzz(int nproc, uint32_t iters, uint32_t seed)
-{
-    if (nproc < 1) nproc = 1;
-    if (nproc > 500) nproc = 500;
-    if (iters < 10) iters = 10;
-    if (iters > 1000000) iters = 1000000;
-    uint32_t ilen = 0; char *img = vfs_read_alloc("/bin/sysfuzz.elf", &ilen);
-    if (!img || ilen == 0) { kprint("[USFUZZ] no encuentro /bin/sysfuzz.elf\n"); if (img) kfree(img); return -1; }
-    /* La pasada principal (nivel 0) hace crecer cosas legitimas de un solo uso (cache del backbuffer, tablas de paginas del monton): su recuento de marcos es solo
-     * informativo. La medida de fugas se hace en una segunda pasada corta (nivel 1) ya en estado estable: si cada proceso perdiera un marco, aqui se veria. */
-    static int nivel;
-    int nv = nivel;
-    size_t f0 = 0, u0 = 0, t0 = 0, f1 = 0, u1 = 0, t1 = 0;
-    struct kheap_counters h0, h1;
-    kheap_get_counters(&h0);
-    pmm_get_stats(&f0, &u0, &t0);
-    kprint("[USFUZZ] "); kprint_dec((uint32_t)nproc); kprint(" procesos hostiles x "); kprint_dec(iters); kprint(" syscalls maliciosas (semilla "); kprint_dec(seed); kprint(")\n");
-    int clean = 0, breach = 0, faulted = 0, timeout = 0, other = 0, norun = 0; uint64_t t_start = timer_get_uptime_ms();
-    int idx[3];
-    for (int base = 0; base < nproc; base += 3) {
-        int w = nproc - base < 3 ? nproc - base : 3;
-        for (int k = 0; k < w; ++k) {
-            char args[40]; uint32_t n = 0; fz_u32(args, &n, seed + (uint32_t)(base + k) * 7919u); args[n++] = ' '; fz_u32(args, &n, iters); args[n] = 0;
-            int err = 0; idx[k] = usermode_exec("sysfuzz", img, ilen, 20000, args, &err);
-            if (idx[k] < 0) norun++;
-        }
-        for (int k = 0; k < w; ++k) {
-            if (idx[k] < 0) continue;
-            int64_t code = usermode_wait(idx[k]);
-            if (code == 0) clean++;
-            else if (code > 0 && code <= 100) { breach++; kprint("[USFUZZ] VIOLACION: el proceso "); kprint_dec((uint32_t)(base + k)); kprint(" detecto "); kprint_dec((uint32_t)code); kprint(" llamadas aceptadas indebidamente\n"); }
-            else if (code <= USER_EXIT_FAULT_BASE && code > USER_EXIT_FAULT_BASE - 32) { faulted++; kprint("[USFUZZ] el proceso "); kprint_dec((uint32_t)(base + k)); kprint(" murio por excepcion (vector "); kprint_dec((uint32_t)(USER_EXIT_FAULT_BASE - code)); kprint(")\n"); }
-            else if (code == USER_EXIT_TIMEOUT) { timeout++; kprint("[USFUZZ] el proceso "); kprint_dec((uint32_t)(base + k)); kprint(" no termino en su plazo\n"); }
-            else { other++; kprint("[USFUZZ] codigo de salida inesperado "); kprint(code < 0 ? "-" : ""); kprint_dec((uint32_t)(code < 0 ? -code : code)); kprint(" en el proceso "); kprint_dec((uint32_t)(base + k)); kprint("\n"); }
-        }
-    }
-    kfree(img);
-    thread_sleep(20);
-    pmm_get_stats(&f1, &u1, &t1);
-    kheap_get_counters(&h1);
-    /* fuga de MARCOS de procesos = marcos perdidos que NO se explican por el crecimiento del monton (el backbuffer de pantalla que pide SYS_FB_OPEN se conserva
-     * como cache hasta 8 MiB y es crecimiento legitimo; 1 bloque vivo como mucho) */
-    long perdidos = (long)f0 - (long)f1, crec = (long)((h1.mapped_bytes > h0.mapped_bytes ? h1.mapped_bytes - h0.mapped_bytes : 0) / 4096);
-    int leak = nv ? ((perdidos > 2) || (h1.live_blocks > h0.live_blocks + 1)) : 0;
-    (void)crec;
-    int heap = kheap_check();
-    int region = vmm_kernel_user_region_empty() ? 1 : 0;
-    kprint("[USFUZZ] limpios: "); kprint_dec((uint32_t)clean); kprint(" | violaciones: "); kprint_dec((uint32_t)breach); kprint(" | excepciones: "); kprint_dec((uint32_t)faulted);
-    kprint(" | plazo: "); kprint_dec((uint32_t)timeout); kprint(" | otros: "); kprint_dec((uint32_t)(other + norun)); kprint(" | "); kprint_dec((uint32_t)(timer_get_uptime_ms() - t_start)); kprint(" ms\n");
-    kprint("[USFUZZ] marcos libres antes/despues: "); kprint_dec((uint32_t)f0); kprint("/"); kprint_dec((uint32_t)f1); kprint(" (monton crecio "); kprint_dec((uint32_t)crec);
-    kprint(" marcos, bloques vivos "); kprint_dec((uint32_t)h0.live_blocks); kprint("->"); kprint_dec((uint32_t)h1.live_blocks); kprint(")"); kprint(nv ? (leak ? "  FUGA\n" : "  sin fugas\n") : "  (informativo)\n");
-    kprint("[USFUZZ] monton: "); kprint(heap == 0 ? "consistente" : "DANADO"); kprint(" | PML4 del kernel sin entradas de usuario: "); kprint(region ? "si" : "NO"); kprint("\n");
-    int ok = clean == nproc && !leak && heap == 0 && region;
-    if (!nv) { nivel = 1; int ok2 = usermode_fuzz(3, 300, seed ^ 0x5a5a5u); nivel = 0; ok = ok && ok2; }
-    kprint(ok ? "[USFUZZ] TODO OK: el kernel resistio sin ninguna violacion\n" : "[USFUZZ] HAY FALLOS\n");
-    return ok;
-}
-
-/* ================================================================== PARCHE 118: memoria agotada (OOM) en el cargador de procesos
- * Para n = 0, 1, 2... hace que la asignacion de marcos fisicos n+1 (y todas las siguientes) falle MIENTRAS se crea un proceso de usuario. Cada fallo cae en un punto
- * distinto de usermode_exec / vmm / heap. Obligaciones: nunca cuelgue ni panico; un fallo devuelve error (negativo) y deja el sistema EXACTAMENTE como estaba (mismos
- * marcos libres, mismos bloques vivos del monton, tabla de procesos sin ranuras ocupadas); en cuanto n basta, el proceso arranca y termina bien. */
-int usermode_oomtest(void)
-{
-    uint32_t ilen = 0; char *img = vfs_read_alloc("/bin/hello.elf", &ilen);
-    if (!img || ilen == 0) { kprint("[OOM] no encuentro /bin/hello.elf\n"); if (img) kfree(img); return -1; }
-    size_t f0 = 0, u0 = 0, t0 = 0, f1 = 0, u1 = 0, t1 = 0;
-    int fail_at_first_ok = -1, bad = 0, errs = 0, exits_ok = 0;
-    long hits_total = 0;
-    /* pasada de calentamiento sin inyeccion (cosas de un solo uso) */
-    { int e = 0; int ix = usermode_exec("oom", img, ilen, 5000, "", &e); if (ix >= 0) (void)usermode_wait(ix); thread_sleep(20); }
-    struct kheap_counters h0, h1;
-    kheap_get_counters(&h0); pmm_get_stats(&f0, &u0, &t0);
-    kprint("[OOM] inyectando memoria agotada en cada punto de la carga de un proceso...\n");
-    for (int n = 0; n < 200; ++n) {
-        pmm_inject_oom_after(n);
-        int e = 0; int ix = usermode_exec("oom", img, ilen, 5000, "", &e);
-        unsigned long hits = pmm_inject_oom_hits();
-        pmm_inject_oom_after(-1);
-        if (ix < 0) {
-            errs++; hits_total += (long)hits;
-            if (hits == 0) { bad++; kprint("[OOM] n="); kprint_dec((uint32_t)n); kprint(": fallo sin que se negara ningun marco\n"); }
-        } else {
-            int64_t code = usermode_wait(ix);
-            if (code == 0) exits_ok++; else { bad++; kprint("[OOM] n="); kprint_dec((uint32_t)n); kprint(": el proceso arranco pero salio con codigo distinto de 0\n"); }
-            if (fail_at_first_ok < 0) fail_at_first_ok = n;
-            if (hits == 0) break;                         /* ya no se denego ningun marco: hemos barrido todos los puntos */
-        }
-        thread_sleep(5);
-        pmm_get_stats(&f1, &u1, &t1); kheap_get_counters(&h1);
-        if (f1 != f0 || h1.live_blocks != h0.live_blocks) {
-            bad++; kprint("[OOM] n="); kprint_dec((uint32_t)n); kprint(": el sistema no quedo como estaba (marcos libres "); kprint_dec((uint32_t)f0); kprint("->"); kprint_dec((uint32_t)f1);
-            kprint(", bloques "); kprint_dec((uint32_t)h0.live_blocks); kprint("->"); kprint_dec((uint32_t)h1.live_blocks); kprint(")\n");
-            f0 = f1; h0 = h1;                              /* re-base para no repetir el mismo aviso en todas las vueltas */
-        }
-    }
-    kfree(img);
-    int heap = kheap_check();
-    kprint("[OOM] cargas fallidas sin dano: "); kprint_dec((uint32_t)errs); kprint(" | denegaciones de marco: "); kprint_dec((uint32_t)hits_total);
-    kprint(" | primera carga completa con n="); kprint_dec((uint32_t)(fail_at_first_ok < 0 ? 0 : fail_at_first_ok)); kprint(" | defectos: "); kprint_dec((uint32_t)bad);
-    kprint(" | monton: "); kprint(heap == 0 ? "consistente\n" : "DANADO\n");
-    int ok = bad == 0 && heap == 0 && errs >= 3 && exits_ok >= 1;
-    kprint(ok ? "[OOM] TODO OK\n" : "[OOM] HAY FALLOS\n");
-    return ok;
-}
-
-/* ================================================================== PARCHE 119: memoria agotada en el monton y en el sistema de archivos
- * Cada ronda pide MAS de lo que cabe en el mayor hueco libre (obliga al monton a crecer) y se repite con el PMM fallando en el marco 0, k, 2k... hasta cubrir toda la
- * peticion; la ultima repeticion va sin fallos.  Obligaciones:
- *  (1) kmalloc: devuelve NULL (nunca basura) y el monton queda consistente y SIN marcos perdidos tras cada fallo.
- *  (2) vfs_write sobre un archivo existente: si falla, el contenido ANTERIOR sigue intacto; si funciona, el archivo tiene el tamano pedido.
- *  (3) vfs_create: o existe entero o no existe.
- * El monton no se encoge, asi que cada ronda parte de un hueco mayor: pocas rondas y de tamano creciente. */
-static int oom_same(const char *a, uint32_t al, const char *b, uint32_t bl) { if (al != bl) return 0; for (uint32_t i = 0; i < al; ++i) if (a[i] != b[i]) return 0; return 1; }
-int usermode_oomtest_mem(void)
-{
-    int bad = 0, denied = 0, served = 0, fw_ok = 0, fw_fail = 0, fc_ok = 0, fc_fail = 0;
-    long pt_lost = 0;       /* tablas de paginas que un crecimiento fallido deja creadas (se reutilizan despues; acotadas por el tamano del monton) */
-    { void *w = kmalloc(4096); if (w) kfree(w); }
-    for (int ronda = 0; ronda < 4; ++ronda) {
-        size_t want = kheap_largest_free() + 64 * 1024;
-        size_t frames = want / 4096 + 2;
-        long step = (long)(frames / 24) + 1;
-        for (long n = 0; n <= (long)frames + step; n += step) {
-            int last = n > (long)frames;                          /* ultima vuelta: sin fallos */
-            size_t f0 = 0, u0 = 0, t0 = 0, f1 = 0, u1 = 0, t1 = 0; struct kheap_counters h0, h1;
-            pmm_get_stats(&f0, &u0, &t0); kheap_get_counters(&h0);
-            pmm_inject_oom_after(last ? -1 : n);
-            uint8_t *p = (uint8_t *)kmalloc(want);
-            unsigned long hits = pmm_inject_oom_hits();
-            pmm_inject_oom_after(-1);
-            if (!p) {
-                denied++;
-                if (last) { bad++; kprint("[OOM] monton: la peticion sin fallos tampoco se sirvio\n"); }
-                pmm_get_stats(&f1, &u1, &t1); kheap_get_counters(&h1);
-                if (f0 >= f1 && f0 - f1 <= 2 && h1.mapped_bytes == h0.mapped_bytes && h1.live_blocks == h0.live_blocks) pt_lost += (long)(f0 - f1);
-                else { bad++; kprint("[OOM] monton: un fallo dejo marcos/bloques perdidos (n="); kprint_dec((uint32_t)n); kprint(")\n"); }
-            } else {
-                served++; if (hits) bad++;                      /* servida pese a haber denegado marcos */
-                p[0] = 1; p[want - 1] = 2; if (p[0] != 1 || p[want - 1] != 2) bad++;
-                kfree(p);
-            }
-            if (kheap_check() != 0) { bad++; kprint("[OOM] monton danado, ronda "); kprint_dec((uint32_t)ronda); kprint("\n"); return 0; }
-        }
-        /* --- sistema de archivos: mismo barrido con un archivo cuyo tamano exige crecer el monton (ruta /tmp/: efimera, sin disco) --- */
-        size_t fwant = kheap_largest_free() + 64 * 1024; if (fwant > 16u * 1024 * 1024) fwant = 16u * 1024 * 1024;
-        size_t ffr = fwant / 4096 + 2; long fstep = (long)(ffr / 24) + 1;
-        const char *orig = "CONTENIDO ORIGINAL"; uint32_t ol = 18;
-        for (long n = 0; n <= (long)ffr + fstep; n += fstep) {
-            int last = n > (long)ffr;
-            vfs_delete("/tmp/oomA"); vfs_delete("/tmp/oomB");
-            vfs_create("/tmp/oomA", orig);
-            pmm_inject_oom_after(last ? -1 : n);
-            int r = vfs_write("/tmp/oomA", 0, (uint32_t)fwant);
-            int c = vfs_create("/tmp/oomB", "NUEVO");
-            pmm_inject_oom_after(-1);
-            uint32_t l = 0; char *back = vfs_read_alloc("/tmp/oomA", &l);
-            if (!back) { bad++; kprint("[OOM] vfs: el archivo desaparecio\n"); }
-            else {
-                if (r >= 0) { fw_ok++; if (l != (uint32_t)fwant) { bad++; kprint("[OOM] vfs: escritura aceptada con tamano incorrecto\n"); } }
-                else { fw_fail++; if (last) { bad++; kprint("[OOM] vfs: la escritura sin fallos fallo\n"); } if (!oom_same(back, l, orig, ol)) { bad++; kprint("[OOM] vfs: la escritura fallo y ESTROPEO el contenido anterior\n"); } }
-                kfree(back);
-            }
-            uint32_t l2 = 0; char *b2 = vfs_read_alloc("/tmp/oomB", &l2);
-            if (c >= 0) { fc_ok++; if (!b2 || !oom_same(b2, l2, "NUEVO", 5)) { bad++; kprint("[OOM] vfs: creacion aceptada pero archivo incompleto\n"); } }
-            else { fc_fail++; if (b2) { bad++; kprint("[OOM] vfs: creacion fallida dejo un archivo\n"); } }
-            if (b2) kfree(b2);
-            if (kheap_check() != 0) { bad++; kprint("[OOM] monton danado tras vfs\n"); return 0; }
-        }
-        vfs_delete("/tmp/oomA"); vfs_delete("/tmp/oomB");
-    }
-    { struct kheap_counters hz; kheap_get_counters(&hz);
-      long cota = (long)(hz.mapped_bytes / (2u * 1024 * 1024)) + 4;
-      if (pt_lost > cota) { bad++; kprint("[OOM] monton: demasiadas tablas de paginas sin reutilizar: "); kprint_dec((uint32_t)pt_lost); kprint(" > "); kprint_dec((uint32_t)cota); kprint("\n"); } }
-    kprint("[OOM] monton: "); kprint_dec((uint32_t)denied); kprint(" peticiones denegadas, "); kprint_dec((uint32_t)served); kprint(" servidas, tablas de paginas retenidas "); kprint_dec((uint32_t)pt_lost); kprint("\n");
-    kprint("[OOM] vfs: escrituras ok/rechazadas "); kprint_dec((uint32_t)fw_ok); kprint("/"); kprint_dec((uint32_t)fw_fail);
-    kprint(" | creaciones ok/rechazadas "); kprint_dec((uint32_t)fc_ok); kprint("/"); kprint_dec((uint32_t)fc_fail); kprint(" | defectos: "); kprint_dec((uint32_t)bad); kprint("\n");
-    int ok = bad == 0 && denied > 20 && served >= 4 && fw_fail > 20 && fw_ok >= 4;
-    kprint(ok ? "[OOM] MEM TODO OK\n" : "[OOM] MEM HAY FALLOS\n");
-    return ok;
 }

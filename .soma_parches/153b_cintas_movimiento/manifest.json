@@ -1,0 +1,21 @@
+{
+  "created": {
+    "docs/PARCHE_153B_CINTAS_Y_MOVIMIENTO.md": "e0a665e46e89a05d8d3a568c98e1b46122dd1bab3f0d2ab4d4bb3cefbaebfd10"
+  },
+  "files": {
+    "src/ui/gui.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "6514346fe120628611e907d9517f8ebc560dde5f14981cfadbdbf9c588c39235",
+      "old": "ae853b87e0435d5e322da99a740aaab20a68c40ab66fda53c39c05cb24055614"
+    },
+    "tools/desk_bench.py": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "dbd30c38fe55c6e28b91f470cea23517c3fb704c4b6c33b995eb0ca429752117",
+      "old": "98979fa83878dc600d37ecd8309f7683d542fd877acda9ddf849db097c1f95ea"
+    }
+  },
+  "log": "20261115_015903 parche 153B: cintas del orbe a media resolucion (continuas, -27..-79% de coste) y movimiento del escritorio por tiempo (sin saltos), fondo a 15 fps",
+  "version": 1
+}

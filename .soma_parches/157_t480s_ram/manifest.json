@@ -1,0 +1,71 @@
+{
+  "created": {
+    "docs/PARCHE_157_T480S_RAM.md": "6e94b2a3d1aa00426d6bb75bd004f40bc6da4fb2c6d8d44dc2cfbd386fb3a97d",
+    "src/arch/x86_64/pmm_core.h": "12065a1b8a10709dff8457b8f0ee264b0c9cebcf81fd38165c9b111a33f8cc1b",
+    "tests/test_pmm_157.c": "228ac04f57e59ab5f66a16d812b8c023e876787293c16d0de9431a42b959b15a"
+  },
+  "files": {
+    "docs/PLAN_T480S.md": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "9318359264f5fab88bf05acefb176035eb23acbc3549a669bf49aa81264b6879",
+      "old": "1591309a7af739658127d63f891419c6a81d25b013012953d19b7a921d7809ab"
+    },
+    "docs/T480S_HARDWARE.md": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "d1bf493c9e14cc96e99747b8c3f93321509add084f71c092683b588d936a662f",
+      "old": "68c366dafa5a776c2aee8e39aa905b53994754057eaacef44255c0bb5d198885"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "a2c3e0c3ca3b27084cb7018229dbc228a3dced082432291fa9f6e63a5f03adc7",
+      "old": "246d7640fd1d33b1bf66d32b78ba956f4cd9e6d791c9d70567ee4af557354d64"
+    },
+    "src/arch/x86_64/hwscan.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "7b20172f36af110a8d4f65f34be1daedbc4300d5c61705daa3ab92442ad54006",
+      "old": "0e23261b38f6920a2ccfabf60cf575ce3e50f6496cd722ae34e2e315e7eb127c"
+    },
+    "src/arch/x86_64/hwscan.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "0253397481cfa6dcd31ccc42a08b50fd63eb4c73004fc099e9c3a6fc8137fd80",
+      "old": "39d5e888858a8d26e14ae96a506e8a576e6cdfe512b646eae041d526f8311083"
+    },
+    "src/arch/x86_64/pmm.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "c2b7e152b92ad674b515396f3fa4f5b5658eb397feabc15f36c4c809c535f0e3",
+      "old": "bba2ee5a3478316dc143351cddaaa101a9b2b788d0eea42269f994e5ab7eb9ad"
+    },
+    "src/arch/x86_64/pmm.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "0253eb748b30e9195e400236e4d92368d32d9133ee55d6564afea2b2ab0c3dba",
+      "old": "54e95f3e4fa0045484223d7532439ed180942caa8ee4b82759a656ccc6f3c7d1"
+    },
+    "src/arch/x86_64/sysinfo.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "c11a4016f0a1b19216dbe949c1c92adafb59f3629c1cb6e312c5954562abf1bb",
+      "old": "b0016090c9ccf14bbe4a6a9d0f3f217fa8466b3a01b26fa53f861475722a94df"
+    },
+    "src/core/mem.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "01413c230d47ef5df1837e2a33c59b1c8363e8859471b8e76ef4c6cda02a5bae",
+      "old": "2f64699e0cc16bb84d69b795433aa321c33f9b792f7d4c2b57247608f4ffa6c9"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "0ecc1537d2ddd1f4e0108be574e9657b3f6518740f9fe7394fdaed8b83411fc2",
+      "old": "852072e8a23e3afe2ae83999229389f968a1e35d722400ca4510329694e7daba"
+    }
+  },
+  "log": "20261115_133040 parche 157: toda la RAM del T480s (PMM con reserva baja de identidad y alta para el monton; monton a 256 GiB virtuales, hasta 8 GiB); ramtest",
+  "version": 1
+}

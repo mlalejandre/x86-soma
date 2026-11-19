@@ -1,6 +1,9 @@
+#include "bootfb.h"   /* SOMA_154_T480S */
 #include "pmm.h"
 #include "console.h"
 #include "mem.h"
+#include "pmm_scan.h"
+#include "io.h"
 
 /* Estructuras de la especificacion Multiboot 1 */
 struct multiboot_info {
@@ -23,124 +26,84 @@ struct multiboot_mmap_entry {
     uint32_t type;
 } __attribute__((packed));
 
-/*
- * Bitmap de marcos fisicos de 4 KiB.
- * Capacidad: 512 MiB -> 131,072 marcos -> 16,384 bytes (16 KiB en BSS).
- * Bit = 1 -> Marco Ocupado / Reservado
- * Bit = 0 -> Marco Libre
- */
-#define PMM_MAX_FRAMES   131072ULL
-#define PMM_BITMAP_BYTES (PMM_MAX_FRAMES / 8ULL)
+/* SOMA_157_T480S: el asignador vive en pmm_core.h (puro, probado en el anfitrion: tests/test_pmm_157.c). Antes el mapa de bits
+ * era fijo (512 MiB, 131072 marcos); ahora cubre toda la RAM que diga el firmware (el T480s: 15,7 GiB utilizables hasta
+ * 0x4_6180_0000) y hay dos reservas: BAJA (< 512 MiB, accesible por identidad: tablas de paginas, DMA) y ALTA (el resto:
+ * solo a traves del montón). pmm_alloc_frame() sigue dando marcos bajos, asi que ningun uso existente cambia. */
+#include "pmm_core.h"
+#define PMM_RESERVED_LOWER PMMC_LOWER
+#define PMM_STATIC_FRAMES  ((size_t)(PMMC_LOW_LIMIT / PMM_FRAME_SIZE))
+static uint64_t pmm_bitmap_static[PMM_STATIC_FRAMES / 64] __attribute__((aligned(64)));   /* 16 KiB: hasta 512 MiB */
+static struct pmmc pmm;
+static void *pmm_identity(uint64_t phys) { return (void *)(uintptr_t)phys; }
 
-/* Blindaje: primeros 16 MiB reservados al hardware, kernel, virtqueues y heap inicial */
-#define PMM_RESERVED_LOWER (16 * 1024 * 1024ULL)
-
-static uint8_t pmm_bitmap[PMM_BITMAP_BYTES];
-static size_t  pmm_total_frames = 0;
-static size_t  pmm_used_frames = 0;
-
-static inline void set_bit(size_t frame)
+static int pmm_add(struct pmmc_region *r, int *n, uint64_t base, uint64_t len)
 {
-    pmm_bitmap[frame / 8] |= (uint8_t)(1U << (frame % 8));
+    if (!len || *n >= PMMC_MAX_REGIONS) return 0;
+    r[*n].base = base; r[*n].len = len; (*n)++;
+    return 1;
 }
 
-static inline void clear_bit(size_t frame)
+static const struct pmmc_region *g_regs; static int g_nregs;
+/* SOMA_159_T480S: 1 si [base, base+len) es RAM utilizable segun el firmware (la zona baja < 16 MiB nunca la reparte el PMM) */
+int pmm_range_is_ram(uint64_t base, uint64_t len)
 {
-    pmm_bitmap[frame / 8] &= (uint8_t)~(1U << (frame % 8));
-}
-
-static inline int test_bit(size_t frame)
-{
-    return (pmm_bitmap[frame / 8] & (1U << (frame % 8))) != 0;
-}
-
-static void mark_region_free(uint64_t base, uint64_t length)
-{
-    uint64_t start_frame = (base + PMM_FRAME_SIZE - 1) / PMM_FRAME_SIZE;
-    uint64_t end_frame   = (base + length) / PMM_FRAME_SIZE;
-
-    if (end_frame > PMM_MAX_FRAMES) {
-        end_frame = PMM_MAX_FRAMES;
-    }
-
-    for (uint64_t f = start_frame; f < end_frame; ++f) {
-        if (test_bit(f)) {
-            clear_bit(f);
-            if (pmm_used_frames > 0) pmm_used_frames--;
-        }
-    }
-}
-
-static void mark_region_used(uint64_t base, uint64_t length)
-{
-    uint64_t start_frame = base / PMM_FRAME_SIZE;
-    uint64_t end_frame   = (base + length + PMM_FRAME_SIZE - 1) / PMM_FRAME_SIZE;
-
-    if (end_frame > PMM_MAX_FRAMES) {
-        end_frame = PMM_MAX_FRAMES;
-    }
-
-    for (uint64_t f = start_frame; f < end_frame; ++f) {
-        if (!test_bit(f)) {
-            set_bit(f);
-            pmm_used_frames++;
-        }
-    }
+    for (int i = 0; i < g_nregs; i++) if (base >= g_regs[i].base && base + len <= g_regs[i].base + g_regs[i].len) return 1;
+    return 0;
 }
 
 void pmm_init(uint32_t mb_magic, uint32_t mb_info_addr)
 {
-    /* 1. Por defecto, marcar toda la memoria como ocupada/reservada */
-    memset(pmm_bitmap, 0xFF, sizeof(pmm_bitmap));
-    pmm_total_frames = 0; /* ramstat: se calcula con el techo real de RAM */
-    pmm_used_frames  = PMM_MAX_FRAMES;
-
-    int parsed_mmap = 0;
-
-    /* 2. Si Multiboot 1 esta presente y reporta mmap valido (flag bit 6) */
+    static struct pmmc_region regs[PMMC_MAX_REGIONS];
+    int n = 0;
+    /* 1. Multiboot 1: mapa de memoria (flag bit 6) */
     if (mb_magic == 0x2BADB002 && mb_info_addr != 0) {
         struct multiboot_info *mbi = (struct multiboot_info *)(uintptr_t)mb_info_addr;
         if (mbi->flags & (1 << 6)) {
-            uintptr_t mmap_curr = (uintptr_t)mbi->mmap_addr;
-            uintptr_t mmap_end  = mmap_curr + mbi->mmap_length;
-
-            while (mmap_curr < mmap_end) {
-                struct multiboot_mmap_entry *entry = (struct multiboot_mmap_entry *)mmap_curr;
-                if (entry->type == 1) { /* Type 1 = RAM Utilizable */
-                    mark_region_free(entry->addr, entry->len);
-                    uint64_t top = entry->addr + entry->len;
-                    size_t top_frame = (size_t)(top / PMM_FRAME_SIZE);
-                    if (top_frame > pmm_total_frames) {
-                        pmm_total_frames = (top_frame < PMM_MAX_FRAMES) ? top_frame : PMM_MAX_FRAMES;
-                    }
-                }
-                mmap_curr += (entry->size + sizeof(uint32_t));
+            uintptr_t cur = (uintptr_t)mbi->mmap_addr, end = cur + mbi->mmap_length;
+            while (cur < end) {
+                struct multiboot_mmap_entry *e = (struct multiboot_mmap_entry *)cur;
+                if (e->type == 1) pmm_add(regs, &n, e->addr, e->len);       /* 1 = RAM utilizable */
+                cur += (e->size + sizeof(uint32_t));
             }
-            parsed_mmap = 1;
         }
     }
-
-    /* Fallback si no hay mmap de GRUB: asumir 256 MiB estandar de QEMU */
-    if (!parsed_mmap) {
-        pmm_total_frames = (256 * 1024 * 1024ULL) / PMM_FRAME_SIZE;
-        mark_region_free(0, 256 * 1024 * 1024ULL);
+    /* 2. Multiboot 2 (GRUB "multiboot2", UEFI): tag 6 */
+    if (!n && bootinfo_is_mb2()) {
+        uint32_t it = 0; uint64_t base, len; uint32_t type;
+        while (bootinfo_mmap_next(&it, &base, &len, &type)) if (type == 1) pmm_add(regs, &n, base, len);
     }
-
-    /* 3. Blindaje critico: los primeros 16 MiB quedan estrictamente reservados */
-    mark_region_used(0, PMM_RESERVED_LOWER);
-
-    /* ramstat: sin mapa valido, usar el maximo; luego recontar usados
-     * solo dentro de la RAM real (los marcos por encima no existen). */
-    if (pmm_total_frames == 0) pmm_total_frames = PMM_MAX_FRAMES;
-    {
-        size_t real_used = 0;
-        for (size_t f = 0; f < pmm_total_frames; ++f) {
-            if (test_bit(f)) real_used++;
+    /* 3. Sin mapa: los 256 MiB de siempre */
+    if (!n) pmm_add(regs, &n, 0, 256 * 1024 * 1024ULL);
+    /* soma.ram=512: limita a la reserva baja (comportamiento de antes del 157), por si algo fallara en un equipo */
+    if (bootinfo_disabled("ram") || bootinfo_has_option("soma.ram=512")) {
+        for (int i = 0; i < n; i++) {
+            if (regs[i].base >= PMMC_LOW_LIMIT) { regs[i].len = 0; continue; }
+            if (regs[i].base + regs[i].len > PMMC_LOW_LIMIT) regs[i].len = PMMC_LOW_LIMIT - regs[i].base;
         }
-        pmm_used_frames = real_used;
     }
-
+    /* SOMA_175A_T480S: la memoria de los modulos de GRUB (firmware WiFi) no se reparte */
+    for (int m = 0; m < bootinfo_module_count(); m++) {
+        uint64_t ms, ml; if (!bootinfo_module_at(m, &ms, &ml, 0) || !ml) continue;
+        uint64_t a = ms & ~0xFFFULL, b = (ms + ml + 0xFFFULL) & ~0xFFFULL;
+        for (int i = 0; i < n; i++) {
+            uint64_t rs = regs[i].base, re = regs[i].base + regs[i].len;
+            if (b <= rs || a >= re) continue;
+            if (a > rs && b < re && n < PMMC_MAX_REGIONS) { regs[n].base = b; regs[n].len = re - b; n++; regs[i].len = a - rs; }
+            else if (a <= rs && b >= re) regs[i].len = 0;
+            else if (a <= rs) { regs[i].base = b; regs[i].len = re - b; }
+            else regs[i].len = a - rs;
+        }
+    }
+    g_regs = regs; g_nregs = n;                          /* SOMA_159_T480S: pmm_range_is_ram (trampolin de los nucleos) */
+    pmmc_build(&pmm, regs, n, pmm_bitmap_static, PMM_STATIC_FRAMES, pmm_identity);
     kprint("PMM: Inicializado (Bitmap Allocator 4 KiB)\n");
+    if (pmm.bm_bytes) {
+        kprint("PMM: mapa de bits de "); kprint_dec((uint32_t)(pmm.bm_bytes / 1024)); kprint(" KiB en 0x"); kprint_hex32((uint32_t)pmm.bm_phys);
+        kprint(" | reserva baja (identidad, DMA) "); kprint_dec((uint32_t)((uint64_t)pmm.low_end * PMM_FRAME_SIZE >> 20));
+        kprint(" MiB | reserva alta (monton) hasta "); kprint_dec((uint32_t)((uint64_t)pmm.frames * PMM_FRAME_SIZE >> 20)); kprint(" MiB\n");
+    }
+    if (pmm.capped) kprint("PMM: AVISO: no hay sitio para el mapa de bits grande; se usan solo los primeros 512 MiB\n");
     pmm_dump_stats();
 }
 
@@ -149,58 +112,28 @@ static long pmm_inject_left = -1;
 static unsigned long pmm_inject_hits;
 void pmm_inject_oom_after(long n) { pmm_inject_left = n; pmm_inject_hits = 0; }
 unsigned long pmm_inject_oom_hits(void) { return pmm_inject_hits; }
+static int pmm_injected_oom(void)
+{
+    if (pmm_inject_left < 0) return 0;
+    if (pmm_inject_left == 0) { pmm_inject_hits++; return 1; }
+    pmm_inject_left--;
+    return 0;
+}
 
 uintptr_t pmm_alloc_frame(void)
 {
-    if (pmm_inject_left >= 0) {
-        if (pmm_inject_left == 0) { pmm_inject_hits++; return 0; }
-        pmm_inject_left--;
-    }
-    /* Comenzamos la busqueda por encima de los 16 MiB reservados */
-    size_t start_f = PMM_RESERVED_LOWER / PMM_FRAME_SIZE;
-
-    for (size_t f = start_f; f < pmm_total_frames; ++f) {
-        if (!test_bit(f)) {
-            set_bit(f);
-            pmm_used_frames++;
-            return (uintptr_t)(f * PMM_FRAME_SIZE);
-        }
-    }
-
-    return 0; /* Out of Physical Memory */
+    if (pmm_injected_oom()) return 0;
+    return (uintptr_t)pmmc_alloc_low(&pmm);
 }
-
-void pmm_free_frame(uintptr_t phys_addr)
+uintptr_t pmm_alloc_frame_high(void)
 {
-    if (phys_addr < PMM_RESERVED_LOWER) {
-        return; /* Prohibido liberar memoria reservada del sistema */
-    }
-
-    size_t f = (size_t)(phys_addr / PMM_FRAME_SIZE);
-    if (f < pmm_total_frames) {
-        if (test_bit(f)) {
-            clear_bit(f);
-            if (pmm_used_frames > 0) pmm_used_frames--;
-        }
-    }
+    if (pmm_injected_oom()) return 0;
+    return (uintptr_t)pmmc_alloc_high(&pmm);
 }
+void pmm_free_frame(uintptr_t phys_addr) { pmmc_free(&pmm, phys_addr); }
 
-/* SOMA_PARCHE_020_AUDIO */
-uintptr_t pmm_alloc_contig(size_t nframes)
-{
-    if (nframes == 0) return 0;
-    size_t start_f = PMM_RESERVED_LOWER / PMM_FRAME_SIZE;
-    size_t run = 0;
-    for (size_t f = start_f; f < pmm_total_frames; ++f) {
-        if (test_bit(f)) { run = 0; continue; }
-        if (++run == nframes) {
-            size_t first = f + 1 - nframes;
-            for (size_t k = first; k <= f; ++k) { set_bit(k); pmm_used_frames++; }
-            return (uintptr_t)(first * PMM_FRAME_SIZE);
-        }
-    }
-    return 0;
-}
+/* SOMA_PARCHE_020_AUDIO: contiguos para DMA (siempre en la reserva baja) */
+uintptr_t pmm_alloc_contig(size_t nframes) { return (uintptr_t)pmmc_alloc_contig(&pmm, nframes); }
 
 void pmm_free_contig(uintptr_t phys_addr, size_t nframes)
 {
@@ -209,10 +142,17 @@ void pmm_free_contig(uintptr_t phys_addr, size_t nframes)
 
 void pmm_get_stats(size_t *free_frames, size_t *used_frames, size_t *total_frames)
 {
-    if (total_frames) *total_frames = pmm_total_frames;
-    if (used_frames)  *used_frames  = pmm_used_frames;
-    if (free_frames)  *free_frames  = (pmm_total_frames > pmm_used_frames)
-                                      ? (pmm_total_frames - pmm_used_frames) : 0;
+    if (total_frames) *total_frames = pmm.usable;
+    if (used_frames)  *used_frames  = pmm.used;
+    if (free_frames)  *free_frames  = pmm.usable > pmm.used ? pmm.usable - pmm.used : 0;
+}
+void pmm_get_pools(size_t *low_free, size_t *high_free)     /* SOMA_157: libres en cada reserva (orden hw mem) */
+{
+    size_t lf = 0, hf = 0;
+    for (size_t f = (size_t)(PMMC_LOWER / PMM_FRAME_SIZE); f < pmm.frames; f++)
+        if (!pmmc_test(&pmm, f)) { if (f < pmm.low_end) lf++; else hf++; }
+    if (low_free) *low_free = lf;
+    if (high_free) *high_free = hf;
 }
 
 void pmm_dump_stats(void)
@@ -256,7 +196,7 @@ int pmm_test_self(void)
 
     /* Comprobar que estan por encima de los 16 MiB reservados */
     if (frame1 < PMM_RESERVED_LOWER || frame2 < PMM_RESERVED_LOWER || frame3 < PMM_RESERVED_LOWER) {
-        kprint("  FALLO: frame asignado invade la zona reservada de 16 MiB\n");
+        kprint("  FALLO: frame asignado invade la zona reservada del principio\n");
         return 0;
     }
 
@@ -290,4 +230,38 @@ int pmm_test_self(void)
     kprint("  Liberacion y recontabilizacion verficada OK (0 fugas)\n");
     kprint("[PMM AUTO-TEST] SUPERADO CON EXITO.\n\n");
     return 1;
+}
+
+/* PARCHE 127: banco de pruebas. Con 8192 marcos ocupados al principio, compara el coste de asignar 256 marcos con el
+ * escaneo antiguo (bit a bit desde los 16 MiB) y con el nuevo (pista + palabras de 64). Devuelve 1 si todo es correcto. */
+int pmm_bench(void)
+{
+    enum { BASE = 8192, N = 256 };
+    static uintptr_t held[BASE + N];
+    size_t free0, used0, tot0; pmm_get_stats(&free0, &used0, &tot0);
+    if (free0 < BASE + 2 * N) { kprint("[PMMBENCH] poca memoria libre para la prueba\n"); return 1; }
+    int ok = 1, nb = 0;
+    for (int i = 0; i < BASE; ++i) { held[nb] = pmm_alloc_frame(); if (!held[nb]) { ok = 0; break; } nb++; }
+    /* escaneo antiguo: bit a bit desde el inicio (de la reserva baja) */
+    uint64_t t0 = rdtsc(); int nold = 0; size_t old_first = 0;
+    for (int i = 0; i < N; ++i) {
+        size_t f = PMM_RESERVED_LOWER / PMM_FRAME_SIZE;
+        while (f < pmm.low_end && pmmc_test(&pmm, f)) f++;
+        if (f >= pmm.low_end) break;
+        pmmc_set(&pmm, f); pmm.used++; held[nb + nold++] = (uintptr_t)(f * PMM_FRAME_SIZE); if (!i) old_first = f;
+    }
+    uint64_t c_old = rdtsc() - t0;
+    for (int i = 0; i < nold; ++i) pmm_free_frame(held[nb + i]);
+    pmm.hint = PMM_RESERVED_LOWER / PMM_FRAME_SIZE;      /* misma situacion de partida: la pista aun no sabe nada */
+    t0 = rdtsc(); int nnew = 0; size_t new_first = 0;
+    for (int i = 0; i < N; ++i) { uintptr_t a = pmm_alloc_frame(); if (!a) break; held[nb + nnew++] = a; if (!i) new_first = a / PMM_FRAME_SIZE; }
+    uint64_t c_new = rdtsc() - t0;
+    if (nold != N || nnew != N || old_first != new_first) ok = 0;      /* el nuevo devuelve exactamente los mismos marcos */
+    for (int i = 0; i < nb + nnew; ++i) pmm_free_frame(held[i]);
+    size_t free1, used1, tot1; pmm_get_stats(&free1, &used1, &tot1);
+    if (free1 != free0 || used1 != used0) ok = 0;                       /* sin fugas */
+    kprint("[PMMBENCH] 256 asignaciones tras 8192 ocupados: antes "); kprint_dec((uint32_t)(c_old / N));
+    kprint(" ciclos/marco, ahora "); kprint_dec((uint32_t)(c_new / N)); kprint(" ciclos/marco\n");
+    kprint(ok ? "[PMMBENCH] OK\n" : "[PMMBENCH] FALLO\n");
+    return ok;
 }

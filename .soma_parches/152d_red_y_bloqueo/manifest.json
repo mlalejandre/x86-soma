@@ -1,0 +1,28 @@
+{
+  "created": {
+    "docs/PARCHE_152D_RED_Y_BLOQUEO.md": "ca0f8242e63ed445d4faf55b12f64ca602a4198a0e73586f7bfa4a33d17808d3",
+    "tests/test_web_152d.c": "6b1fecbc6409c80f9375f6fb2c1ee96d8e5d978f386b0b8c902c46fe2f7b7ec5"
+  },
+  "files": {
+    "src/apps/web_fluido_152.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "371007981ebc922668e5ae218776db9e41d44f1835865353aa909eb67a317e33",
+      "old": "f1fa9efd9fc0522a0744e3baa1bf3164e3fea76366aad2eb5eff7dbdcb87a08a"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "4e0da55f2c963f5d71a5aa2a29b7f99bfbc080d994095528059d6a9803d7e37b",
+      "old": "1d51ffa81f13d31ef1292630ce0e18f1f9292e2d98d7cc42355b7a5463b0866d"
+    },
+    "src/apps/web_page.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "3f5d513d4d3377c5f90ff60d667a21abe18becb5b2dd6844d0015948adf04156",
+      "old": "6c29b10438f06f2e4abd0eed1b5c08ad0348f2e9048ef8f00568c001f4cdcbf5"
+    }
+  },
+  "log": "20261115_011005 parche 152D: descarga de scripts en el hilo de red (la pestana no se bloquea) y lista de bloqueo del usuario /etc/bloqueo_web.txt",
+  "version": 1
+}

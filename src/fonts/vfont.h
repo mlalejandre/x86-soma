@@ -23,8 +23,10 @@ struct vf_font {
 };
 
 static struct vf_font vf;
+static uint32_t vf_face;        /* SOMA_182: cara activa (0 por defecto); separa las entradas de la cache */
 static uint16_t vf_ascii[256];
 static int vf_pct = 100;        /* tamano relativo (%) */
+static int vf_emk = 12;         /* SOMA_184: em (px) por unidad de escala en vfont_draw_cp; cada cara fija el suyo (las proporcionales, mas pequeno) */
 static int vf_contrast = 70;    /* contraste 0..100 */
 
 static int32_t  vf_px[VF_MAX_PTS];
@@ -269,7 +271,7 @@ VF_FN uint8_t *vf_alloc(uint32_t n)
 
 VF_FN struct vf_ce *vf_get(uint32_t gid, int px)
 {
-    uint32_t key = (gid << 8) | (uint32_t)px;
+    uint32_t key = (gid << 8) | (uint32_t)px | (vf_face << 24);
     struct vf_ce *ce = &vf_cache[(key * 2654435761u) >> 23];
     if (ce->key == key) return ce;
     ce->key = key; ce->cov = 0; ce->w = 0; ce->h = 0; ce->bx = 0; ce->by = 0;
@@ -324,7 +326,7 @@ VF_FN void vfont_draw_cp(int32_t x, int32_t y, uint32_t cp, uint32_t fg, int sca
     if (gid == 0) gid = vf_ascii[(uint8_t)'?'];
     if (gid == 0) return;
 
-    int em = (12 * scale * vf_pct + 50) / 100;
+    int em = (vf_emk * scale * vf_pct + 50) / 100;
     if (em < 4) em = 4;
     if (em > VF_MAX_EM) em = VF_MAX_EM;
 

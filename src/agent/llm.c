@@ -3,12 +3,71 @@
 #include "console.h"
 #include "http.h"
 #include "llm.h"
+#include "llm_proto.h"
+#include "web_net.h"
+#include "fs.h"
+#include "thread.h"
+#include "idt.h"            /* timer_get_uptime_ms */
 #include "mem.h"
 #include "net.h"
 #include "sysinfo.h"
 
-static const uint8_t llm_ip[4] = { 192, 168, 1, 200 };
-static const uint16_t llm_port = 8087;
+/* SOMA_195: el servidor y el modelo ya no estan fijos en el codigo. Se leen de /etc/llm.conf (Ajustes > IA o la orden llm-config):
+ * un servidor local o de la red local, o las API de ChatGPT, Claude o Gemini (llm_proto.h). Sin archivo vale lo de siempre
+ * (192.168.1.200:8087, modelo nail-35b), y un servidor local por IP y sin clave se sigue pidiendo exactamente igual que antes. */
+static struct llm_conf g_conf; static int g_conf_loaded;
+char llm_last_error[200];
+static volatile char g_llm_busy;
+
+static void set_err(const char *a, const char *b)
+{
+    uint32_t n = 0;
+    for (; a && *a && n < sizeof llm_last_error - 1; a++) llm_last_error[n++] = *a;
+    for (; b && *b && n < sizeof llm_last_error - 1; b++) llm_last_error[n++] = (*b == '\n' || *b == '\r') ? ' ' : *b;
+    llm_last_error[n] = 0;
+}
+static void conf_load(void)
+{
+    if (g_conf_loaded) return;
+    static char t[4096];
+    /* /etc/llm.conf es un secreto para los agentes (parche 193). Esta lectura es del nucleo, no del agente: el contenido no sale de aqui. */
+    struct tcb *th = thread_current(); int am = th ? th->agent_mode : 0;
+    if (th) th->agent_mode = 0;
+    int n = vfs_read("/etc/llm.conf", t, sizeof t - 1);
+    if (th) th->agent_mode = am;
+    t[n > 0 ? n : 0] = 0;
+    llm_conf_parse(&g_conf, t);
+    g_conf_loaded = 1;
+}
+const struct llm_conf *llm_conf_get(void) { conf_load(); return &g_conf; }
+int llm_conf_save(const struct llm_conf *c)
+{
+    static char t[4096];
+    uint32_t n = llm_conf_format(c, t, sizeof t);
+    g_conf = *c; g_conf_loaded = 1;
+    return vfs_write("/etc/llm.conf", t, n) < 0 ? -1 : 0;
+}
+/* "http://A.B.C.D:puerto" sin clave: el camino de siempre (cliente HTTP minimo del nucleo) */
+static int conf_legacy(uint8_t ip[4], uint16_t *port)
+{
+    const struct llm_conf *c = llm_conf_get();
+    if (c->prov != LLM_LOCAL || c->key[LLM_LOCAL][0]) return 0;
+    const char *b = c->base[LLM_LOCAL];
+    const char *pre = "http://"; for (int i = 0; i < 7; i++) if (b[i] != pre[i]) return 0;
+    b += 7;
+    for (int k = 0; k < 4; k++) {
+        uint32_t v = 0; int nd = 0;
+        while (*b >= '0' && *b <= '9' && nd < 4) { v = v * 10 + (uint32_t)(*b - '0'); b++; nd++; }
+        if (!nd || v > 255) return 0;
+        ip[k] = (uint8_t)v;
+        if (k < 3) { if (*b != '.') return 0; b++; }
+    }
+    uint32_t p = 80;
+    if (*b == ':') { b++; p = 0; while (*b >= '0' && *b <= '9' && p < 100000) p = p * 10 + (uint32_t)(*b++ - '0'); }
+    if (*b || p == 0 || p > 65535) return 0;
+    *port = (uint16_t)p;
+    return 1;
+}
 
 char llm_last_reply[4096];
 int  llm_test_passed = 0;
@@ -263,7 +322,14 @@ static int llm_health_unlocked(void)
 {
     if (!ensure_llm_buffers()) return 0;
     struct http_response resp;
-    int code = http_get(llm_ip, llm_port, "/health", http_resp_buf, 65536, &resp, 5000);
+    uint8_t ip[4]; uint16_t port;
+    if (!conf_legacy(ip, &port)) {                       /* SOMA_195: API en la nube o servidor con nombre/clave: "sano" = bien configurado (sin gastar una peticion) */
+        struct llm_http h; int r = llm_proto_models(llm_conf_get(), &h);
+        if (r != LLM_P_OK) { set_err("LLM: ", llm_proto_strerror(r)); return 0; }
+        return 1;
+    }
+    int code = http_get(ip, port, "/health", http_resp_buf, 65536, &resp, 5000);
+    if (code != 200) set_err("LLM: el servidor local no responde en ", llm_conf_get()->base[LLM_LOCAL]);
     return (code == 200);
 }
 
@@ -285,84 +351,169 @@ int llm_json_get(const char *json, const char *key, char *out, uint32_t out_max)
     return extract_json_field(json, quoted_key, out, out_max);
 }
 
-static int llm_chat_json_unlocked(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+/* SOMA_195: peticion por el cliente HTTP/HTTPS del navegador (nombres DNS, TLS 1.3 con certificado verificado, gzip). */
+static int llm_fetch(const struct llm_http *h, const char *body, uint32_t blen, uint32_t timeout_ms, struct wn_resp *rs)
 {
-    if (!ensure_llm_buffers()) return 0;
-    if (build_chat_payload_mode(prompt, payload_buf, 65536, 1) < 0) {
-        kprint("LLM: payload too large\n");
-        return 0;
-    }
-
-    struct http_response resp;
-    int code = http_post_json(
-        llm_ip,
-        llm_port,
-        "/v1/chat/completions",
-        payload_buf,
-        http_resp_buf,
-        65536,
-        &resp,
-        timeout_ms
-    );
-
-    if (code != 200 || !resp.body) {
-        return 0;
-    }
-
-    return extract_json_content(resp.body, reply_out, reply_max);
+    struct wn_req rq; memset(&rq, 0, sizeof rq); memset(rs, 0, sizeof *rs);
+    rq.url = h->url; rq.method = h->method; rq.body = body; rq.body_len = blen; rq.ctype = "application/json"; rq.accept = "application/json";
+    rq.timeout_ms = timeout_ms; rq.max_body = 262144; rq.no_redirect = 1;      /* sin redirecciones: la clave no viaja a otro sitio */
+    rq.extra_headers = h->headers; rq.direct = 1;
+    return wn_fetch(&rq, rs);
+}
+static void llm_fetch_error(int rc, const struct wn_resp *rs)
+{
+    static char m[160];
+    if (rc != 0) { const char *t = wn_tls_last_error(); set_err("LLM: sin conexion con el servidor: ", rs->err[0] ? rs->err : (t[0] ? t : "error de red")); if (t[0] && rs->err[0]) { uint32_t n = 0; while (llm_last_error[n]) n++; if (n < sizeof llm_last_error - 4) { llm_last_error[n++] = ' '; llm_last_error[n++] = '('; while (*t && n < sizeof llm_last_error - 2) llm_last_error[n++] = *t++; llm_last_error[n++] = ')'; llm_last_error[n] = 0; } } return; }
+    if (rs->body && llm_proto_error(rs->body, m, sizeof m)) { set_err(rs->status == 401 || rs->status == 403 ? "LLM: el proveedor rechaza la clave: " : "LLM: el proveedor responde: ", m); return; }
+    char st[40] = "LLM: respuesta HTTP "; uint32_t n = 20; int v = rs->status; char d[8]; int k = 0;
+    do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v > 0 && k < 7);
+    while (k) st[n++] = d[--k];
+    st[n] = 0; set_err(st, "");
 }
 
-static int llm_chat_unlocked(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+static int llm_request(const char *prompt, int json_mode, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
     if (!ensure_llm_buffers()) return 0;
-    if (build_chat_payload(prompt, payload_buf, 65536) < 0) {
-        kprint("LLM: payload too large\n");
-        return 0;
+    const struct llm_conf *c = llm_conf_get();
+    static struct llm_http h;
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);          /* una peticion al LLM cada vez (bufferes compartidos) */
+    int ok = 0;
+    llm_last_error[0] = 0;
+    int blen = llm_proto_chat(c, prompt, json_mode, payload_buf, 65536, &h);
+    if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); kprint(llm_last_error); kprint("\n"); goto out; }
+    uint8_t ip[4]; uint16_t port;
+    if (conf_legacy(ip, &port)) {                                                           /* el camino de siempre */
+        struct http_response resp;
+        net_client_lock();
+        int code = http_post_json(ip, port, "/v1/chat/completions", payload_buf, http_resp_buf, 65536, &resp, timeout_ms);
+        net_client_unlock();
+        if (code != 200) {
+            set_err("LLM: el servidor local no responde bien en ", c->base[LLM_LOCAL]);
+            kprint("LLM: HTTP error status "); if (code >= 0) kprint_dec((uint32_t)code); else kprint("CONN_ERR"); kprint("\n");
+        } else if (!resp.body) { set_err("LLM: respuesta vacia", ""); kprint("LLM: empty HTTP response body\n"); }
+        else if (!llm_proto_reply(c, resp.body, reply_out, reply_max) && !extract_json_content(resp.body, reply_out, reply_max)) { set_err("LLM: no se pudo leer la respuesta del servidor", ""); kprint("LLM: could not extract content from JSON response\n"); }
+        else ok = 1;
+        goto out;
     }
+    {
+        static struct wn_resp rs;
+        int rc = llm_fetch(&h, payload_buf, (uint32_t)blen, timeout_ms, &rs);
+        if (rc != 0 || rs.status != 200 || !rs.body) { llm_fetch_error(rc, &rs); kprint(llm_last_error); kprint("\n"); }
+        else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
+        else ok = 1;
+        wn_free(&rs);
+    }
+out:
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    return ok;
+}
 
-    struct http_response resp;
-    int code = http_post_json(
-        llm_ip,
-        llm_port,
-        "/v1/chat/completions",
-        payload_buf,
-        http_resp_buf,
-        65536,
-        &resp,
-        timeout_ms
-    );
-
-    if (code != 200) {
-        kprint("LLM: HTTP error status ");
-        if (code >= 0) {
-            kprint_dec((uint32_t)code);
-        } else {
-            kprint("CONN_ERR");
+/* ---------------------------------------------------------------- SOMA_196: lanzador del servidor local (tools/soma_lanzador.py) */
+static int launcher_call(int what, const char *model, struct wn_resp *rs)
+{
+    static struct llm_http h; static char body[256];
+    int n = llm_proto_launcher(llm_conf_get(), what, model, body, sizeof body, &h);
+    if (n < 0) { set_err("Lanzador: ", llm_proto_strerror(n)); return -1; }
+    llm_last_error[0] = 0;
+    int rc = llm_fetch(&h, n ? body : 0, (uint32_t)n, 20000, rs);
+    if (rc != 0) { char b[LLM_BASE_MAX]; llm_launcher_base(llm_conf_get(), b, sizeof b); set_err("Lanzador: no responde en ", b); return -2; }
+    if (rs->status != 200 || !rs->body) {
+        static char m[160];
+        if (rs->body && llm_proto_error(rs->body, m, sizeof m)) set_err("Lanzador: ", m); else set_err("Lanzador: respuesta no valida", "");
+        return -1;
+    }
+    return 0;
+}
+/* Modelos que el lanzador puede arrancar, uno por linea. Devuelve cuantos o -1. */
+int llm_launcher_models(char *out, uint32_t max)
+{
+    static struct wn_resp rs; static const struct llm_conf oa = { .prov = LLM_LOCAL };
+    if (max) out[0] = 0;
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
+    int n = launcher_call(LLM_L_MODELS, 0, &rs);
+    if (n == 0) n = llm_proto_model_list(&oa, rs.body, out, max); else n = -1;
+    wn_free(&rs);
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    return n;
+}
+/* Estado del servidor segun el lanzador: 1 listo, 2 cargando, 0 parado, -1 error, -2 el lanzador no responde (motivo en llm_last_error). */
+int llm_launcher_status(char *model, uint32_t mmax)
+{
+    static struct wn_resp rs; char st[24]; static char det[180]; char mo[LLM_MODEL_MAX];
+    if (model && mmax) model[0] = 0;
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
+    int r = launcher_call(LLM_L_STATUS, 0, &rs);
+    if (r == 0) {
+        if (!llm_proto_launcher_status(rs.body, st, sizeof st, mo, sizeof mo, det, sizeof det)) { set_err("Lanzador: respuesta no valida", ""); r = -1; }
+        else {
+            if (model) { uint32_t i = 0; for (; mo[i] && i + 1 < mmax; i++) model[i] = mo[i]; if (mmax) model[i] = 0; }
+            r = st[0] == 'l' ? 1 : st[0] == 'c' ? 2 : st[0] == 'p' ? 0 : -1;
+            if (r < 0) set_err("Lanzador: ", det[0] ? det : "el servidor no arranco");
         }
-        kprint("\n");
-        return 0;
     }
-
-    if (!resp.body) {
-        kprint("LLM: empty HTTP response body\n");
-        return 0;
+    wn_free(&rs);
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    return r;
+}
+static int launcher_post(int what, const char *model)
+{
+    static struct wn_resp rs;
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
+    int r = launcher_call(what, model, &rs);
+    wn_free(&rs);
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    return r;
+}
+int llm_launcher_stop(void) { return launcher_post(LLM_L_STOP, 0) == 0 ? 0 : -1; }
+/* Arranca llama-server con ese modelo y espera a que este listo (cargar un modelo grande tarda). progress(segundos) se llama cada
+ * par de segundos. Si arranca, deja el modelo y el proveedor local elegidos y guardados. 1 = listo. */
+int llm_launcher_start(const char *model, uint32_t max_wait_ms, void (*progress)(uint32_t secs))
+{
+    if (launcher_post(LLM_L_START, model) != 0) return 0;
+    uint64_t t0 = timer_get_uptime_ms();
+    int fails = 0;
+    for (;;) {
+        thread_sleep(2000);
+        uint32_t el = (uint32_t)(timer_get_uptime_ms() - t0);
+        if (progress) progress(el / 1000);
+        int st = llm_launcher_status(0, 0);
+        if (st == 1) break;
+        if (st == 0) { set_err("Lanzador: el servidor se ha parado sin llegar a arrancar", ""); return 0; }
+        if (st == -1 || (st == -2 && ++fails > 5)) return 0;                    /* llama-server fallo; o el lanzador dejo de responder */
+        if (st == 2) fails = 0;
+        if (el > max_wait_ms) { set_err("Lanzador: el modelo no termino de cargar a tiempo", ""); return 0; }
     }
-
-    if (!extract_json_content(resp.body, reply_out, reply_max)) {
-        kprint("LLM: could not extract content from JSON response\n");
-        return 0;
-    }
-
+    static struct llm_conf c; c = *llm_conf_get();
+    c.prov = LLM_LOCAL;
+    if (llm_conf_set(&c, LLM_LOCAL, "modelo", model) == 0) (void)llm_conf_save(&c);
     return 1;
+}
+
+/* Lista de modelos del proveedor activo, uno por linea. Devuelve cuantos (o -1; el motivo queda en llm_last_error). */
+int llm_list_models(char *out, uint32_t max)
+{
+    const struct llm_conf *c = llm_conf_get();
+    static struct llm_http h; static struct wn_resp rs;
+    if (max) out[0] = 0;
+    int r = llm_proto_models(c, &h);
+    if (r != LLM_P_OK) { set_err("LLM: ", llm_proto_strerror(r)); return -1; }
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
+    llm_last_error[0] = 0;
+    int n = -1;
+    int rc = llm_fetch(&h, 0, 0, 15000, &rs);
+    if (rc != 0 || rs.status != 200 || !rs.body) llm_fetch_error(rc, &rs);
+    else n = llm_proto_model_list(c, rs.body, out, max);
+    wn_free(&rs);
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    return n;
 }
 
 void net_run_llm_test(void)
 {
     kprint("\n============================================================\n");
     kprint("SOMA - HTTP & LLM INTEGRATION TEST\n");
-    kprint("Target server: ");
-    kprint_ip(llm_ip);
-    kprint(":8087 (model: nail-35b)\n");
+    { const struct llm_conf *c = llm_conf_get();
+      kprint("Target server: "); kprint(c->base[c->prov]); kprint(" ("); kprint(llm_prov_label(c->prov)); kprint(", model: "); kprint(c->model[c->prov][0] ? c->model[c->prov] : "sin elegir"); kprint(")\n"); }
     kprint("============================================================\n");
 
     if (!net_init()) {
@@ -382,7 +533,7 @@ void net_run_llm_test(void)
     kprint("Prompt: \"");
     kprint(test_prompt);
     kprint("\"\n");
-    kprint("Waiting for nail-35b to generate response...\n");
+    kprint("Waiting for the model to generate response...\n");
 
     memset(llm_last_reply, 0, sizeof(llm_last_reply));
 
@@ -440,16 +591,10 @@ int llm_health(void)
 
 int llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
-    net_client_lock();
-    int r = llm_chat_json_unlocked(prompt, reply_out, reply_max, timeout_ms);
-    net_client_unlock();
-    return r;
+    return llm_request(prompt, 1, reply_out, reply_max, timeout_ms);       /* SOMA_195 */
 }
 
 int llm_chat(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
-    net_client_lock();
-    int r = llm_chat_unlocked(prompt, reply_out, reply_max, timeout_ms);
-    net_client_unlock();
-    return r;
+    return llm_request(prompt, 0, reply_out, reply_max, timeout_ms);       /* SOMA_195 */
 }

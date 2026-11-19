@@ -107,10 +107,31 @@ WU_FN char *wa_strdup(struct wa_arena *a, const char *s) { return wa_strndup(a, 
 
 /* ---- Buffer creciente (heap) ---- */
 struct wb { char *p; uint32_t len, cap; int err; };
+/* SOMA_188: memoria del navegador segun el montón del nucleo (T480s 16 GiB: 7,8 GiB de montón). 1 = equipo con >= 2 GiB de montón */
+#if defined(__x86_64__) && !defined(WEB_HOST_TEST) && !defined(SOMA_HOST_TEST)
+size_t kheap_max_bytes(void);
+/* SOMA 189: "memoria grande" desde 960 MiB de monton (equipos con 2 GiB de RAM o mas). Antes pedia 2 GiB justos y un QEMU
+ * de 4 GiB (monton de 2047 MiB) se quedaba fuera: 20 MiB para imagenes y "sin memoria para mas imagenes" en los periodicos. */
+static inline int web_big_mem(void) { return kheap_max_bytes() >= ((size_t)960 << 20); }
+/* SOMA 188B: tope del monton JS = 1/4 del monton del kernel, entre 24 MiB y 1536 MiB (crece bajo demanda). El interprete no
+ * tiene recolector de basura y la portada de Google gasta 260 MiB: con 1/6 y tope de 512 se quedaba corto en paginas grandes,
+ * y los equipos con menos de 2 GiB de monton tenian 24 MiB fijos (QEMU con 512 MB: "memoria del script agotada"). */
+/* SOMA 189: memoria para imagenes decodificadas = 1/8 del monton, entre 20 y 192 MiB */
+static inline uint32_t web_img_budget(void) { size_t m = kheap_max_bytes() / 8; if (m < ((size_t)20 << 20)) m = (size_t)20 << 20; if (m > ((size_t)192 << 20)) m = (size_t)192 << 20; return (uint32_t)m; }
+static inline uint32_t web_js_heap_big(void) { size_t m = kheap_max_bytes() / 4; if (m < ((size_t)24 << 20)) m = (size_t)24 << 20; if (m > ((size_t)1536 << 20)) m = (size_t)1536 << 20; return (uint32_t)m; }
+#else
+static inline int web_big_mem(void) { return 1; }
+static inline uint32_t web_js_heap_big(void) { return 384u << 20; }
+static inline uint32_t web_img_budget(void) { return 192u << 20; }
+#endif
 WU_FN int wb_reserve(struct wb *b, uint32_t extra) {
     if (b->err) return 0;
-    if (b->len + extra + 1 <= b->cap) return 1;
-    uint32_t nc = b->cap ? b->cap : 256; while (nc < b->len + extra + 1) nc *= 2;
+    /* SOMA_201: en 64 bits. Con 32, len + extra + 1 daba la vuelta: un `extra` enorme "cabia" (y wb_addn copiaba 4 GiB) o el
+     * bucle de duplicar no terminaba nunca. Ningun bufer del navegador puede pasar de 2 GiB. */
+    uint64_t need = (uint64_t)b->len + extra + 1;
+    if (need > 0x7FFFFFFFu) { b->err = 1; return 0; }
+    if (need <= b->cap) return 1;
+    uint32_t nc = b->cap ? b->cap : 256; while (nc < need) nc *= 2;
     char *np = (char *)kmalloc(nc); if (!np) { b->err = 1; return 0; }
     if (b->p) { memcpy(np, b->p, b->len); kfree(b->p); }
     b->p = np; b->cap = nc; return 1;
@@ -134,5 +155,32 @@ static uint64_t wu_ylast WU_UNUSED;
 WU_FN void wu_tick(void) { if ((++wu_ycnt & 3u) == 0) { uint64_t t = web_now_ms(); if (t - wu_ylast >= 4) { wu_ylast = t; web_yield(); } } }
 /* Margen de pila restante del hilo actual en bytes (kernel: calculado; host: grande) */
 uint32_t web_stack_left(void);
+
+/* SOMA_190: pagina /sorry de Google (reCAPTCHA) -> URL de busqueda equivalente en DuckDuckGo HTML */
+WU_FN int wu_pct_val190(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
+WU_FN int wu_google_sorry_alt(const char *u, int status, char *out, uint32_t max)
+{
+    if (!wu_startsi(u, "https://www.google.") && !wu_startsi(u, "https://google.")) return 0;
+    const char *path = u + 8; while (*path && *path != '/') path++;
+    char dec[1024]; const char *src = 0;
+    if (wu_startsi(path, "/sorry/")) {
+        const char *c = wu_find(path, "continue=");
+        if (!c) return 0;
+        c += 9; uint32_t k = 0;                                   /* el valor de continue= va codificado: se decodifica una vez */
+        while (*c && *c != '&' && *c != '#' && k < sizeof dec - 1) {
+            if (*c == '%' && wu_pct_val190(c[1]) >= 0 && wu_pct_val190(c[2]) >= 0) { dec[k++] = (char)(wu_pct_val190(c[1]) * 16 + wu_pct_val190(c[2])); c += 3; }
+            else { dec[k++] = *c == '+' ? ' ' : *c; c++; }
+        }
+        dec[k] = 0; src = dec;
+    } else if (status == 429 && wu_startsi(path, "/search")) src = u;
+    else return 0;
+    const char *q = 0;
+    for (const char *c = src; *c; c++) if ((c[0] == '?' || c[0] == '&') && c[1] == 'q' && c[2] == '=') { q = c + 3; break; }
+    if (!q || !*q || *q == '&') return 0;
+    struct wb b = {0}; wb_add(&b, "https://html.duckduckgo.com/html/?q=");
+    for (; *q && *q != '&' && *q != '#'; q++) wb_addc(&b, *q);
+    wu_copy(out, b.p ? b.p : "", max); wb_free(&b);
+    return out[0] != 0;
+}
 
 #endif

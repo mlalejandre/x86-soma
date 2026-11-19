@@ -1,3 +1,6 @@
+#ifdef __x86_64__
+#include "bootfb.h"   /* SOMA_154_T480S */
+#endif
 #include "fb.h"
 #include "smp.h"                                     /* PARCHE 082 */
 #include "clipboard.h"   /* SOMA_PARCHE_PORTAPAPELES */
@@ -42,10 +45,19 @@
 static volatile uint32_t *fb_vram = (volatile uint32_t *)FB_VIRT_ADDR;
 /* PARCHE 076: la pantalla de la Pi 5 real es de 16 bits (RGB565) y su pitch puede no ser ancho*4: el backbuffer sigue siendo de 32 bits y al volcarlo
  * se convierte. En x86_64 (VGA/BGA) la pantalla es siempre de 32 bits contiguos. */
-#ifdef __aarch64__
+/* SOMA_154_T480S: en x86 la pantalla tambien puede ser la del firmware (GOP/VBE de un portatil real), con pitch propio,
+ * 24 o 32 bits y rojo/azul en cualquier orden: se usa el mismo volcado general que en la Pi. Con BGA (QEMU) sigue el
+ * camino rapido de siempre (32 bits contiguos). */
+#if defined(__aarch64__) || defined(__x86_64__)
 static uint32_t fb_hw_bpp = 32, fb_hw_pitch = 0;
-#define FB_HW_NATIVE() (fb_hw_bpp == 32 && fb_hw_pitch == fb_cur_w * 4u && !rpi_fb_swap_rb())
-static inline uint32_t fb_hw_c(uint32_t c) { return rpi_fb_swap_rb() ? ((c & 0xFF00u) | ((c >> 16) & 0xFFu) | ((c & 0xFFu) << 16)) : c; }
+#ifdef __aarch64__
+static inline int fb_swap_rb(void) { return rpi_fb_swap_rb(); }
+#else
+static int fb_fw_mode;                      /* 1 = framebuffer del firmware (bootfb), 0 = BGA */
+static inline int fb_swap_rb(void) { return fb_fw_mode && bootfb_swap_rb(); }
+#endif
+#define FB_HW_NATIVE() (fb_hw_bpp == 32 && fb_hw_pitch == fb_cur_w * 4u && !fb_swap_rb())
+static inline uint32_t fb_hw_c(uint32_t c) { return fb_swap_rb() ? ((c & 0xFF00u) | ((c >> 16) & 0xFFu) | ((c & 0xFFu) << 16)) : c; }
 static void fb_hw_put_span(int32_t x, int32_t y, const uint32_t *src, int32_t n)
 {
     volatile uint8_t *row = (volatile uint8_t *)fb_vram + (uint64_t)y * fb_hw_pitch + (uint64_t)x * (fb_hw_bpp / 8);
@@ -63,6 +75,7 @@ static void fb_hw_put_span(int32_t x, int32_t y, const uint32_t *src, int32_t n)
 #else
 #define FB_HW_NATIVE() 1
 #endif
+
 static uint32_t *fb_backbuffer = 0;
 static size_t fb_bb_bytes = 0;            /* SOMA_PARCHE_021_FPU: tamano reservado del backbuffer */
 static volatile int fb_user_owned = 0;    /* un proceso de usuario tiene la pantalla en exclusiva */
@@ -81,7 +94,7 @@ static int32_t clip_x1 = FB_RES_FHD_W;
 static int32_t clip_y1 = FB_RES_FHD_H;
 
 /* Lista de rectángulos de daño */
-#define FB_MAX_DIRTY_RECTS 16
+#define FB_MAX_DIRTY_RECTS 48   /* SOMA_209: 16 se llenaban solo con los iconos del escritorio */
 struct fb_dirty_rect {
     int32_t x0, y0, x1, y1;
 };
@@ -113,7 +126,7 @@ volatile uint32_t *fb_get_buffer(void)
     return (volatile uint32_t *)fb_target();
 }
 
-static void bga_write(uint16_t reg, uint16_t val)
+__attribute__((unused)) static void bga_write(uint16_t reg, uint16_t val)
 {
 #ifdef __x86_64__
     outw(BGA_INDEX_PORT, reg);
@@ -123,7 +136,7 @@ static void bga_write(uint16_t reg, uint16_t val)
 #endif
 }
 
-static uint16_t bga_read(uint16_t reg)
+__attribute__((unused)) static uint16_t bga_read(uint16_t reg)
 {
 #ifdef __x86_64__
     outw(BGA_INDEX_PORT, reg);
@@ -157,6 +170,9 @@ int fb_init(void)
 #ifdef __aarch64__
     fb_mapped = 1;                                   /* PARCHE 063: la memoria de pantalla la reserva el firmware en fb_set_mode */
     return 0;
+#endif
+#ifdef __x86_64__
+    if (bootfb_use_firmware()) { if (bootfb_map() != 0) return -1; fb_mapped = 1; return 0; }   /* SOMA_154 */
 #endif
     fb_phys_base = pci_find_vga_lfb();
 
@@ -236,6 +252,18 @@ static void rect_add(struct fb_dirty_rect *list, int *count, int32_t x0, int32_t
     for (int i = 0; i < *count; ++i) {
         if (x0 <= list[i].x1 && x1 >= list[i].x0 &&
             y0 <= list[i].y1 && y1 >= list[i].y0) {
+            {   /* SOMA_209: si fundirlos crea un rectangulo mucho mayor que los dos juntos (una ventana y el orbe que apenas se
+                 * tocan daban media pantalla), se dejan separados; que se solapen no hace dano. 'Mucho mayor' = el hueco que
+                 * sobraria supera 1/8 del rectangulo fundido. */
+                int32_t ux0 = x0 < list[i].x0 ? x0 : list[i].x0, uy0 = y0 < list[i].y0 ? y0 : list[i].y0;
+                int32_t ux1 = x1 > list[i].x1 ? x1 : list[i].x1, uy1 = y1 > list[i].y1 ? y1 : list[i].y1;
+                int32_t ix0 = x0 > list[i].x0 ? x0 : list[i].x0, iy0 = y0 > list[i].y0 ? y0 : list[i].y0;
+                int32_t ix1 = x1 < list[i].x1 ? x1 : list[i].x1, iy1 = y1 < list[i].y1 ? y1 : list[i].y1;
+                int64_t in = (ix1 > ix0 && iy1 > iy0) ? (int64_t)(ix1 - ix0) * (iy1 - iy0) : 0;
+                int64_t un = (int64_t)(ux1 - ux0) * (uy1 - uy0);
+                int64_t sm = (int64_t)(x1 - x0) * (y1 - y0) + (int64_t)(list[i].x1 - list[i].x0) * (list[i].y1 - list[i].y0) - in;
+                if (un - sm > un / 8 && un - sm > 4096 && *count < FB_MAX_DIRTY_RECTS) continue;   /* sobra demasiado: separados */
+            }
             if (x0 < list[i].x0) list[i].x0 = x0;
             if (y0 < list[i].y0) list[i].y0 = y0;
             if (x1 > list[i].x1) list[i].x1 = x1;
@@ -251,11 +279,19 @@ static void rect_add(struct fb_dirty_rect *list, int *count, int32_t x0, int32_t
         list[*count].y1 = y1;
         (*count)++;
     } else {
-        /* Búfer lleno: fusionar en el rectángulo 0 abarcando todo */
-        if (x0 < list[0].x0) list[0].x0 = x0;
-        if (y0 < list[0].y0) list[0].y0 = y0;
-        if (x1 > list[0].x1) list[0].x1 = x1;
-        if (y1 > list[0].y1) list[0].y1 = y1;
+        /* SOMA_209: lista llena. Se fusiona con el rectangulo que menos crece (antes siempre con el 0, que con los iconos del
+         * escritorio a la vista acababa abarcando la pantalla entera y obligaba a borrarla y volcarla en cada fotograma). */
+        int best = 0; int64_t bestg = -1;
+        for (int i = 0; i < *count; ++i) {
+            int32_t ux0 = x0 < list[i].x0 ? x0 : list[i].x0, uy0 = y0 < list[i].y0 ? y0 : list[i].y0;
+            int32_t ux1 = x1 > list[i].x1 ? x1 : list[i].x1, uy1 = y1 > list[i].y1 ? y1 : list[i].y1;
+            int64_t g = (int64_t)(ux1 - ux0) * (uy1 - uy0) - (int64_t)(list[i].x1 - list[i].x0) * (list[i].y1 - list[i].y0);
+            if (bestg < 0 || g < bestg) { bestg = g; best = i; }
+        }
+        if (x0 < list[best].x0) list[best].x0 = x0;
+        if (y0 < list[best].y0) list[best].y0 = y0;
+        if (x1 > list[best].x1) list[best].x1 = x1;
+        if (y1 > list[best].y1) list[best].y1 = y1;
     }
 }
 
@@ -279,6 +315,11 @@ void fb_target_end(void)
     clip_x0 = tg_c[0]; clip_y0 = tg_c[1]; clip_x1 = tg_c[2]; clip_y1 = tg_c[3];
     dirty_count = tg_dc; drawn_count = tg_dn; memcpy(dirty_rects, tg_dr, sizeof tg_dr); memcpy(drawn_rects, tg_dn_r, sizeof tg_dn_r);
 }
+#ifdef SOMA_WEBSVC
+/* SOMA_202: en el proceso del navegador aislado (ring 3) no hay pantalla: las primitivas de dibujo de este archivo se usan solo
+ * sobre la superficie que se fija con fb_target_begin(). */
+void fb_offscreen_enable(void) { fb_active = 1; }
+#endif
 void fb_damage(int32_t x, int32_t y, int32_t w, int32_t h)
 {
     if (w <= 0 || h <= 0) return;
@@ -380,9 +421,7 @@ static void fb_rows_part(int idx, int n, void *arg)
     int32_t a = (int32_t)((int64_t)j->h * idx / n), b = (int32_t)((int64_t)j->h * (idx + 1) / n);
     for (int32_t r = a; r < b; ++r) {
         uint32_t off = (uint32_t)((j->y0 + r) * fb_cur_w + j->x0);
-#ifdef __aarch64__
         if (!FB_HW_NATIVE()) { fb_hw_put_span(j->x0, j->y0 + r, fb_backbuffer + off, j->w); continue; }
-#endif
         fast_copy_span(fb_vram + off, fb_backbuffer + off, j->w);
         FB_SYNC(fb_vram + off, (size_t)j->w * 4);
     }
@@ -425,12 +464,23 @@ static inline uint32_t tr_mix(uint32_t top, uint32_t under, uint32_t a)
     uint32_t g = ((top & 0x0000FF00u) * a + (under & 0x0000FF00u) * ia + 0x00008000u) >> 8;
     return (rb & 0x00FF00FFu) | (g & 0x0000FF00u);
 }
+typedef void (*fb_rows_fn)(void *ctx, int32_t y0, int32_t y1);
+static void fb_rows_run(fb_rows_fn fn, void *ctx, int32_t y0, int32_t y1, int64_t area);
+/* SOMA_164D_T480S: copia de un rectangulo de la pantalla por filas (antes pixel a pixel), repartida si es grande */
+struct cp_ctx { uint32_t *dst; uint32_t dst_stride, dst_x0; int32_t x, w, y0; };
+static void copy_rows(void *c, int32_t y0, int32_t y1)
+{
+    struct cp_ctx *k = (struct cp_ctx *)c;
+    for (int32_t y = y0; y < y1; y++)
+        memcpy(k->dst + (uint32_t)(y - k->y0) * k->dst_stride + k->dst_x0, fb_backbuffer + (uint32_t)y * fb_cur_w + (uint32_t)k->x, (size_t)k->w * 4);
+}
 void fb_tr_begin(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t alpha)
 {
     tr_alpha = alpha > 255 ? 255 : alpha;
     if (tr_alpha >= 255 || !fb_backbuffer || !tr_clip(&x, &y, &w, &h) || !tr_alloc()) { tr_alpha = 255; return; }
     tr_x = x; tr_y = y; tr_w = w; tr_h = h; tr_fresh = 1;
-    for (int32_t r = 0; r < h; r++) { uint32_t o = (uint32_t)(y + r) * fb_cur_w + (uint32_t)x; for (int32_t c = 0; c < w; c++) tr_under[o + c] = fb_backbuffer[o + c]; }
+    struct cp_ctx k = { tr_under + (uint32_t)y * fb_cur_w, fb_cur_w, (uint32_t)x, x, w, y };
+    fb_rows_run(copy_rows, &k, y, y + h, (int64_t)w * h);
 }
 void fb_tr_off(void) { tr_alpha = 255; }
 void fb_tr_release(void) { tr_alpha = 255; if (tr_under) kfree(tr_under); if (tr_last) kfree(tr_last); tr_under = tr_last = 0; tr_cap = 0; }   /* PARCHE 086 */
@@ -440,7 +490,8 @@ uint32_t *fb_rect_save(int32_t x, int32_t y, int32_t w, int32_t h)
 {
     if (!fb_backbuffer || !tr_clip(&x, &y, &w, &h)) return 0;
     uint32_t *b = (uint32_t *)kmalloc((size_t)w * h * 4); if (!b) return 0;
-    for (int32_t r = 0; r < h; r++) for (int32_t c = 0; c < w; c++) b[r * w + c] = fb_backbuffer[(uint32_t)(y + r) * fb_cur_w + (uint32_t)(x + c)];
+    struct cp_ctx k = { b, (uint32_t)w, 0, x, w, y };
+    fb_rows_run(copy_rows, &k, y, y + h, (int64_t)w * h);
     return b;
 }
 void fb_rect_blend_saved(uint32_t *saved, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t alpha)
@@ -470,11 +521,24 @@ static void tr_process_rect(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
         }
     }
 }
+/* SOMA_164B_T480S: la mezcla de la ventana translucida por franjas de filas entre los nucleos (cada pixel es independiente) */
+struct tr_job { int32_t x0, y0, x1, y1; };
+static void tr_rows_part(int idx, int n, void *arg)
+{
+    struct tr_job *j = (struct tr_job *)arg;
+    int32_t h = j->y1 - j->y0;
+    tr_process_rect(j->x0, j->y0 + (int32_t)((int64_t)h * idx / n), j->x1, j->y0 + (int32_t)((int64_t)h * (idx + 1) / n));
+}
+static void tr_process_rect_par(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
+{
+    if ((int64_t)(x1 - x0) * (y1 - y0) >= 32768 && smp_cpus() > 1) { struct tr_job j = { x0, y0, x1, y1 }; smp_parallel(tr_rows_part, &j); }
+    else tr_process_rect(x0, y0, x1, y1);
+}
 static void tr_present(void)
 {
     if (tr_alpha >= 255 || !tr_under || !fb_backbuffer) return;
-    if (tr_fresh) { tr_process_rect(tr_x, tr_y, tr_x + tr_w, tr_y + tr_h); fb_damage(tr_x, tr_y, tr_w, tr_h); tr_fresh = 0; }
-    else for (int i = 0; i < dirty_count; i++) tr_process_rect(dirty_rects[i].x0, dirty_rects[i].y0, dirty_rects[i].x1, dirty_rects[i].y1);
+    if (tr_fresh) { tr_process_rect_par(tr_x, tr_y, tr_x + tr_w, tr_y + tr_h); fb_damage(tr_x, tr_y, tr_w, tr_h); tr_fresh = 0; }
+    else for (int i = 0; i < dirty_count; i++) tr_process_rect_par(dirty_rects[i].x0, dirty_rects[i].y0, dirty_rects[i].x1, dirty_rects[i].y1);
     tr_ex_w = 0;
 }
 
@@ -484,20 +548,18 @@ void fb_get_info(struct fb_info *o)
 {
     memset(o, 0, sizeof *o);
     o->w = fb_cur_w; o->h = fb_cur_h;
-#ifdef __aarch64__
     o->bpp = fb_hw_bpp ? fb_hw_bpp : 32; o->pitch = fb_hw_pitch ? fb_hw_pitch : fb_cur_w * 4;
-#else
-    o->bpp = 32; o->pitch = fb_cur_w * 4;
-#endif
     o->phys = (uint64_t)(uintptr_t)fb_vram; o->backbuffer_bytes = fb_bb_bytes; o->presents = fb_presents; o->active = fb_active;
     o->tr_bytes = (uint64_t)tr_cap * 8u;
 #ifdef __aarch64__
     o->driver = "VideoCore (buzon de la Pi)";
 #else
-    { uint16_t id = bga_read(BGA_REG_ID); o->driver = (id & 0xFFF0) == 0xB0C0 ? "Bochs VBE (BGA)" : "VGA"; o->hw_id = id; o->phys = fb_phys_base; }
+    if (fb_fw_mode) { o->driver = bootinfo_efi() ? "Firmware UEFI GOP (framebuffer lineal)" : "Firmware VBE (framebuffer lineal)"; o->phys = bootfb_get()->addr; }
+    else { uint16_t id = bga_read(BGA_REG_ID); o->driver = (id & 0xFFF0) == 0xB0C0 ? "Bochs VBE (BGA)" : "VGA"; o->hw_id = id; o->phys = fb_phys_base; }
 #endif
 }
 
+uint64_t fb_dirty_px; uint32_t fb_dirty_n;
 void fb_present(void)
 {
     if (!fb_mapped) return;
@@ -514,11 +576,13 @@ void fb_present(void)
 
         /* 1. Volcar sólo los rectángulos sucios */
         if (dirty_count > 0) {
+            fb_dirty_n++;
             for (int i = 0; i < dirty_count; ++i) {
                 int32_t x0 = dirty_rects[i].x0;
                 int32_t y0 = dirty_rects[i].y0;
                 int32_t w  = dirty_rects[i].x1 - x0;
                 int32_t h  = dirty_rects[i].y1 - y0;
+                fb_dirty_px += (uint64_t)((int64_t)w * h);       /* SOMA_209: para 'orbe' (parte de la pantalla que se vuelca) */
                 if ((int64_t)w * h >= 32768 && smp_cpus() > 1) {
                     struct fb_rows_job j = { x0, y0, w, h };
                     smp_parallel(fb_rows_part, &j);
@@ -528,9 +592,7 @@ void fb_present(void)
 
                 for (int32_t r = 0; r < h; ++r) {
                     uint32_t off = (uint32_t)((y0 + r) * fb_cur_w + x0);
-#ifdef __aarch64__
                     if (!FB_HW_NATIVE()) { fb_hw_put_span(x0, y0 + r, fb_backbuffer + off, w); continue; }
-#endif
                     fast_copy_span(fb_vram + off, fb_backbuffer + off, w);
                     FB_SYNC(fb_vram + off, (size_t)w * 4);
                 }
@@ -552,9 +614,7 @@ void fb_present(void)
                     if ((fg >> 24) != 0) {
                         uint32_t off = (uint32_t)(vy * fb_cur_w + vx);
                         uint32_t bg = fb_backbuffer[off];
-#ifdef __aarch64__
                         if (!FB_HW_NATIVE()) { uint32_t px = fb_blend_color(bg, fg); fb_hw_put_span(vx, vy, &px, 1); continue; }
-#endif
                         fb_vram[off] = fb_blend_color(bg, fg);
                         FB_SYNC(&fb_vram[off], 4);
                     }
@@ -608,6 +668,16 @@ int fb_set_mode(uint32_t width, uint32_t height)
         fb_mapped = 1;
     }
 #else
+    if (bootfb_use_firmware()) {
+        /* SOMA_154_T480S: pantalla del firmware. No se puede cambiar de resolucion sin un controlador de la GPU (Intel UHD
+         * 620): se usa la nativa que dejo el firmware/GRUB y la GUI se adapta (lee fb_get_width/height). */
+        const struct bootfb_info *bf = bootfb_get();
+        if (bootfb_map() != 0) return -2;
+        fb_mapped = 1; fb_fw_mode = 1;
+        fb_vram = (volatile uint32_t *)(uintptr_t)(FB_VIRT_ADDR + (bf->addr & 0xFFFull));
+        width = bf->width; height = bf->height; fb_hw_bpp = bf->bpp; fb_hw_pitch = bf->pitch;
+        bootfb_console_stop();                               /* la GUI toma la pantalla */
+    } else {
     uint16_t id = bga_read(BGA_REG_ID);
     if ((id & 0xFFF0) != 0xB0C0) return -1;
     if (!fb_mapped) { if (fb_init() != 0) return -2; }
@@ -620,6 +690,8 @@ int fb_set_mode(uint32_t width, uint32_t height)
     bga_write(BGA_REG_X_OFFSET, 0);
     bga_write(BGA_REG_Y_OFFSET, 0);
     bga_write(BGA_REG_ENABLE, BGA_ENABLED | BGA_LFB_ENABLED);
+    fb_hw_bpp = 32; fb_hw_pitch = width * 4;
+    }
 #endif
 
     fb_cur_w = width;
@@ -657,6 +729,9 @@ int fb_user_begin(uint32_t w, uint32_t h)
 {
     if (fb_user_owned) return -16;
     if (w < 160 || h < 120 || (w & 7) || (uint64_t)w * h > 1920ULL * 1080ULL) return -22;
+#ifdef __x86_64__
+    if (bootfb_use_firmware() && (w != bootfb_get()->width || h != bootfb_get()->height)) return -19;   /* SOMA_154: sin cambio de modo */
+#endif
     fb_prev_active = fb_active; fb_prev_w = fb_cur_w; fb_prev_h = fb_cur_h;
     if (fb_set_mode(w, h) != 0) return -19;
     fb_clear(0);
@@ -742,6 +817,7 @@ static void vga_hardware_restore_mode3(void)
 void fb_restore_text_mode(void)
 {
 #ifdef __x86_64__
+    if (fb_fw_mode) { fb_active = 0; bootfb_console_resume(); return; }   /* SOMA_154: no hay modo texto VGA en UEFI */
     bga_write(BGA_REG_ENABLE, BGA_DISABLED);
     vga_hardware_restore_mode3();
     fb_active = 0;
@@ -755,12 +831,23 @@ int fb_is_active(void) { return fb_active; }
  * PRIMITIVAS 2D DE ALTO RENDIMIENTO
  * ==================================================================== */
 
+struct fb_clear_job { uint32_t *p; uint32_t color, n; };
+static void fb_clear_part(int idx, int n, void *arg)
+{
+    struct fb_clear_job *j = (struct fb_clear_job *)arg;
+    uint32_t a = (uint32_t)((uint64_t)j->n * (uint32_t)idx / (uint32_t)n) & ~15u, b = idx == n - 1 ? j->n : (uint32_t)((uint64_t)j->n * (uint32_t)(idx + 1) / (uint32_t)n) & ~15u;
+    if (b > a) fast_fill_span(j->p + a, j->color, (int32_t)(b - a));
+}
 void fb_clear(uint32_t color)
 {
     if (!fb_active) return;
     fb_cguard_drop();                /* SOMA_PARCHE_028_UI: el fondo guardado ya no vale */
     uint32_t *target = fb_target();
-    fast_fill_span(target, color, (int32_t)(fb_cur_w * fb_cur_h));
+    uint32_t total = fb_cur_w * fb_cur_h;
+    if (total >= 1024u * 1024u && smp_cpus() > 1) {               /* SOMA_164B_T480S: pantalla entera repartida entre los nucleos */
+        struct fb_clear_job j = { target, color, total };
+        smp_parallel(fb_clear_part, &j);
+    } else fast_fill_span(target, color, (int32_t)total);
     fb_damage(0, 0, (int32_t)fb_cur_w, (int32_t)fb_cur_h);
     drawn_count = 0;                 /* todo es fondo ahora */
     drawn_valid = 1;
@@ -795,6 +882,7 @@ void fb_clear_changed(uint32_t color)
 volatile int fb_verify_enabled = 0;
 static uint32_t verify_frames, verify_bad_total, verify_bad_worst;
 
+int32_t fb_verify_box[4] = { 1 << 30, 1 << 30, -1, -1 };   /* SOMA_209: caja de los pixeles sueltos vistos */
 uint32_t fb_debug_verify(uint32_t bg)
 {
     if (!fb_active || !fb_backbuffer) return 0;
@@ -807,12 +895,26 @@ uint32_t fb_debug_verify(uint32_t bg)
                 if ((int32_t)x >= dirty_rects[i].x0 && (int32_t)x < dirty_rects[i].x1 &&
                     (int32_t)y >= dirty_rects[i].y0 && (int32_t)y < dirty_rects[i].y1) { inside = 1; break; }
             }
-            if (!inside) bad++;
+            if (!inside) { bad++; if ((int32_t)x < fb_verify_box[0]) fb_verify_box[0] = (int32_t)x; if ((int32_t)y < fb_verify_box[1]) fb_verify_box[1] = (int32_t)y; if ((int32_t)x > fb_verify_box[2]) fb_verify_box[2] = (int32_t)x; if ((int32_t)y > fb_verify_box[3]) fb_verify_box[3] = (int32_t)y; }
         }
     }
     verify_frames++;
     verify_bad_total += bad;
     if (bad > verify_bad_worst) verify_bad_worst = bad;
+    return bad;
+}
+
+/* SOMA_209: pixeles en los que la pantalla real no coincide con el backbuffer tras un volcado (sin contar el puntero). Solo para
+ * comprobar el volcado por zonas; leer la VRAM es lento. */
+uint32_t fb_debug_vram_diff(void)
+{
+    if (!fb_mapped || !fb_backbuffer || !FB_HW_NATIVE()) return 0;
+    uint32_t bad = 0;
+    for (uint32_t y = 0; y < fb_cur_h; ++y) for (uint32_t x = 0; x < fb_cur_w; ++x) {
+        if (cursor_drawn_visible && (int32_t)x >= cursor_drawn_x && (int32_t)x < cursor_drawn_x + cursor_overlay_w &&
+            (int32_t)y >= cursor_drawn_y && (int32_t)y < cursor_drawn_y + cursor_overlay_h) continue;
+        if ((fb_vram[y * fb_cur_w + x] ^ fb_backbuffer[y * fb_cur_w + x]) & 0x00FFFFFFu) bad++;
+    }
     return bad;
 }
 
@@ -833,6 +935,28 @@ void fb_draw_pixel(uint32_t x, uint32_t y, uint32_t color)
     fb_damage((int32_t)x, (int32_t)y, 1, 1);
 }
 
+/* SOMA_164D_T480S: rellenos, cajas redondeadas y sombras grandes por franjas de filas entre los nucleos (cada fila es
+ * independiente; mismo resultado). Solo para areas grandes: en las pequenas no compensa despertar a los demas. */
+#define FB_PAR_MIN_PX 65536
+struct fb_rows_par { fb_rows_fn fn; void *ctx; int32_t y0, y1; };
+static void fb_rows_par_part(int idx, int n, void *arg)
+{
+    struct fb_rows_par *j = (struct fb_rows_par *)arg;
+    int32_t h = j->y1 - j->y0;
+    j->fn(j->ctx, j->y0 + (int32_t)((int64_t)h * idx / n), j->y0 + (int32_t)((int64_t)h * (idx + 1) / n));
+}
+static void fb_rows_run_min(fb_rows_fn fn, void *ctx, int32_t y0, int32_t y1, int64_t area, int64_t min)
+{
+    if (area >= min && y1 - y0 >= 16 && smp_cpus() > 1) { struct fb_rows_par j = { fn, ctx, y0, y1 }; smp_parallel(fb_rows_par_part, &j); }
+    else fn(ctx, y0, y1);
+}
+static void fb_rows_run(fb_rows_fn fn, void *ctx, int32_t y0, int32_t y1, int64_t area) { fb_rows_run_min(fn, ctx, y0, y1, area, FB_PAR_MIN_PX); }
+struct fr_ctx { uint32_t *t; int32_t cx, cw; uint32_t color; };
+static void fill_rows(void *c, int32_t y0, int32_t y1)
+{
+    struct fr_ctx *f = (struct fr_ctx *)c;
+    for (int32_t y = y0; y < y1; ++y) fast_fill_span(f->t + (uint32_t)y * fb_cur_w + (uint32_t)f->cx, f->color, f->cw);
+}
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
 {
     if (!fb_active) return;
@@ -840,12 +964,8 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color
     if (!clip_rect(&cx, &cy, &cw, &ch)) return;
 
     fb_damage(cx, cy, cw, ch);
-    uint32_t *target = fb_target();
-
-    for (int32_t r = 0; r < ch; ++r) {
-        uint32_t *row = target + (cy + r) * fb_cur_w + cx;
-        fast_fill_span(row, color, cw);
-    }
+    struct fr_ctx f = { fb_target(), cx, cw, color };
+    fb_rows_run_min(fill_rows, &f, cy, cy + ch, (int64_t)cw * ch, 4 * FB_PAR_MIN_PX);   /* relleno simple: solo si es muy grande */
 }
 
 void fb_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color)
@@ -885,6 +1005,14 @@ uint32_t fb_blend_color(uint32_t bg, uint32_t fg)
     return (r << 16) | (g << 8) | b | 0xFF000000;
 }
 
+static void alpha_rows(void *c, int32_t y0, int32_t y1)
+{
+    struct fr_ctx *f = (struct fr_ctx *)c;
+    for (int32_t y = y0; y < y1; ++y) {
+        uint32_t *row = f->t + (uint32_t)y * fb_cur_w + (uint32_t)f->cx;
+        for (int32_t i = 0; i < f->cw; ++i) row[i] = fb_blend_color(row[i], f->color);
+    }
+}
 void fb_fill_rect_alpha(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
 {
     if (!fb_active) return;
@@ -892,14 +1020,8 @@ void fb_fill_rect_alpha(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t col
     if (!clip_rect(&cx, &cy, &cw, &ch)) return;
 
     fb_damage(cx, cy, cw, ch);
-    uint32_t *target = fb_target();
-
-    for (int32_t r = 0; r < ch; ++r) {
-        uint32_t *row = target + (cy + r) * fb_cur_w + cx;
-        for (int32_t c = 0; c < cw; ++c) {
-            row[c] = fb_blend_color(row[c], color);
-        }
-    }
+    struct fr_ctx f = { fb_target(), cx, cw, color };
+    fb_rows_run(alpha_rows, &f, cy, cy + ch, (int64_t)cw * ch);   /* SOMA_168B: velo de pantalla completa repartido */
 }
 
 /* ====================================================================
@@ -952,7 +1074,35 @@ static void ui_span(int32_t x0, int32_t x1, int32_t y, uint32_t rgb, uint32_t a)
     if (a >= 256u) { fast_fill_span(row + x0, rgb & 0x00FFFFFFu, x1 - x0); return; }
     for (int32_t x = x0; x < x1; ++x) ui_mix(row + x, rgb, a);
 }
+/* SOMA_190: primer i (0..r) de la fila j de la esquina con cobertura > 0 (busqueda binaria: la distancia decrece con i) */
+static inline int32_t ui_corner_first(int32_t r, int32_t j)
+{
+    int32_t lo = 0, hi = r;
+    while (lo < hi) {
+        int32_t m = (lo + hi) >> 1;
+        if (ui_cov(r * 256, ui_corner_d256(r, m, j)) > 0u) hi = m; else lo = m + 1;
+    }
+    return lo;
+}
 /* relleno redondeado con antialias; alpha 0..256 */
+struct rrf_ctx { int32_t x, y, w, h, r; uint32_t rgb, alpha; };
+static void rr_fill_rows(void *ctx, int32_t y0, int32_t y1)
+{
+    struct rrf_ctx *c = (struct rrf_ctx *)ctx;
+    int32_t x = c->x, y = c->y, w = c->w, h = c->h, r = c->r; uint32_t rgb = c->rgb, alpha = c->alpha;
+    for (int32_t py = y0; py < y1; ++py) {
+        int32_t row = py - y;
+        int32_t j = row < r ? row : (row >= h - r ? h - 1 - row : -1);
+        if (j < 0) { ui_span(x, x + w, py, rgb, alpha); continue; }
+        int32_t i = ui_corner_first(r, j);
+        for (; i < r; ++i) {
+            uint32_t cv = ui_cov(r * 256, ui_corner_d256(r, i, j));
+            if (cv >= 256u) break;
+            if (cv) { uint32_t a = (cv * alpha) >> 8; ui_px(x + i, py, rgb, a); ui_px(x + w - 1 - i, py, rgb, a); }
+        }
+        ui_span(x + i, x + w - i, py, rgb, alpha);
+    }
+}
 static void ui_rr_fill(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, uint32_t rgb, uint32_t alpha)
 {
     if (!fb_active || w <= 0 || h <= 0 || !alpha) return;
@@ -962,18 +1112,8 @@ static void ui_rr_fill(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, ui
     int32_t cx = x, cy = y, cw = w, ch = h;
     if (!clip_rect(&cx, &cy, &cw, &ch)) return;
     fb_damage(cx, cy, cw, ch);
-    for (int32_t py = cy; py < cy + ch; ++py) {
-        int32_t row = py - y;
-        int32_t j = row < r ? row : (row >= h - r ? h - 1 - row : -1);
-        if (j < 0) { ui_span(x, x + w, py, rgb, alpha); continue; }
-        int32_t i = 0;
-        for (; i < r; ++i) {
-            uint32_t c = ui_cov(r * 256, ui_corner_d256(r, i, j));
-            if (c >= 256u) break;
-            if (c) { uint32_t a = (c * alpha) >> 8; ui_px(x + i, py, rgb, a); ui_px(x + w - 1 - i, py, rgb, a); }
-        }
-        ui_span(x + i, x + w - i, py, rgb, alpha);
-    }
+    struct rrf_ctx c = { x, y, w, h, r, rgb, alpha };
+    fb_rows_run(rr_fill_rows, &c, cy, cy + ch, (int64_t)cw * ch);
 }
 /* contorno redondeado de 1 px con antialias; alpha 0..256 */
 static void ui_rr_stroke(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, uint32_t rgb, uint32_t alpha)
@@ -991,9 +1131,12 @@ static void ui_rr_stroke(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, 
     for (int32_t j = 0; j < r; ++j) {
         int32_t yt = y + j, yb = y + h - 1 - j;
         if ((yt < clip_y0 || yt >= clip_y1) && (yb < clip_y0 || yb >= clip_y1)) continue;
-        for (int32_t i = 0; i < r; ++i) {
+        /* SOMA_190: la distancia al centro de la esquina baja al aumentar i: solo el anillo de 1 px tiene cobertura distinta (antes se recorrian
+         * los r*r pixeles de la esquina con una raiz cuadrada cada uno: cajas grandes con radio enorme tardaban segundos en maquinas lentas) */
+        for (int32_t i = ui_corner_first(r, j); i < r; ++i) {
             int32_t d = ui_corner_d256(r, i, j);
             uint32_t co = ui_cov(r * 256, d), ci = ui_cov((r - 1) * 256, d);
+            if (ci >= 256u) break;
             if (co <= ci) continue;
             uint32_t a = ((co - ci) * alpha) >> 8;
             ui_px(x + i, yt, rgb, a); ui_px(x + w - 1 - i, yt, rgb, a);
@@ -1070,6 +1213,23 @@ static struct shc *shadow_mask(int32_t w, int32_t h, int32_t r, int32_t dx, int3
     }
     return slot;
 }
+struct shd_ctx { struct shc *m; uint32_t *target; int32_t x, y, w, h, r, bx, by, cx, cw; uint32_t rgb; };
+static void shadow_rows(void *ctx, int32_t y0, int32_t y1)
+{
+    struct shd_ctx *c = (struct shd_ctx *)ctx;
+    for (int32_t py = y0; py < y1; ++py) {
+        /* tramo tapado por la propia caja en esta fila (no se pinta: su fondo la cubre) */
+        int32_t hx0 = 0, hx1 = 0;
+        if (py >= c->y && py < c->y + c->h) { int32_t row = py - c->y, ins = (row < c->r || row >= c->h - c->r) ? c->r : 0; hx0 = c->x + ins; hx1 = c->x + c->w - ins; }
+        const uint8_t *mr = c->m->m + (uint32_t)(py - c->by) * (uint32_t)c->m->bw - c->bx;
+        uint32_t *row = c->target + (uint32_t)py * fb_cur_w;
+        for (int32_t px = c->cx; px < c->cx + c->cw; ++px) {
+            if (px >= hx0 && px < hx1) { px = hx1 - 1; continue; }
+            uint32_t al = mr[px];
+            if (al) ui_mix(row + px, c->rgb, al);
+        }
+    }
+}
 void fb_draw_box_shadow(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, int32_t dx, int32_t dy, int32_t spread, int32_t blur, uint32_t argb)
 {
     if (!fb_active || w <= 0 || h <= 0) return;
@@ -1085,19 +1245,8 @@ void fb_draw_box_shadow(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, i
     int32_t cx = bx, cy = by, cw = m->bw, ch = m->bh;
     if (!clip_rect(&cx, &cy, &cw, &ch)) return;
     fb_damage(cx, cy, cw, ch);
-    uint32_t *target = fb_target();
-    for (int32_t py = cy; py < cy + ch; ++py) {
-        /* tramo tapado por la propia caja en esta fila (no se pinta: su fondo la cubre) */
-        int32_t hx0 = 0, hx1 = 0;
-        if (py >= y && py < y + h) { int32_t row = py - y, ins = (row < r || row >= h - r) ? r : 0; hx0 = x + ins; hx1 = x + w - ins; }
-        const uint8_t *mr = m->m + (uint32_t)(py - by) * (uint32_t)m->bw - bx;
-        uint32_t *row = target + (uint32_t)py * fb_cur_w;
-        for (int32_t px = cx; px < cx + cw; ++px) {
-            if (px >= hx0 && px < hx1) { px = hx1 - 1; continue; }
-            uint32_t al = mr[px];
-            if (al) ui_mix(row + px, rgb, al);
-        }
-    }
+    struct shd_ctx c = { m, fb_target(), x, y, w, h, r, bx, by, cx, cw, rgb };
+    fb_rows_run(shadow_rows, &c, cy, cy + ch, (int64_t)cw * ch);
 }
 void fb_draw_shadow(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, int32_t blur, int32_t off_y, uint32_t argb)
 {
@@ -1280,7 +1429,9 @@ void fb_draw_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color
 void fb_fill_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color)
 {
     if (!fb_active || r <= 0) return;
-    int32_t min_x = cx - r, min_y = cy - r, max_w = r * 2, max_h = r * 2;
+    /* SOMA_209: el circulo pinta las filas cy-r..cy+r y las columnas cx-r-1..cx+r; antes se declaraba una caja de 2r x 2r y el
+     * borde derecho/inferior quedaba sin declarar (con borrado por zonas podia quedar un resto hasta el siguiente borrado completo). */
+    int32_t min_x = cx - r - 1, min_y = cy - r, max_w = r * 2 + 2, max_h = r * 2 + 1;
     if (!clip_rect(&min_x, &min_y, &max_w, &max_h)) return;
 
     fb_damage(min_x, min_y, max_w, max_h);
@@ -1358,6 +1509,13 @@ void fb_gradient_v(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t c_top, u
  * MAPAS DE BITS, FOTOGRAFÍAS Y VÍDEO
  * ==================================================================== */
 
+struct bl_ctx { uint32_t *t; const uint32_t *src; int32_t stride, cx, cw, cy, off_x, off_y; };
+static void blit_rows(void *c, int32_t y0, int32_t y1)
+{
+    struct bl_ctx *k = (struct bl_ctx *)c;
+    for (int32_t y = y0; y < y1; ++y)
+        fast_copy_span(k->t + (uint32_t)y * fb_cur_w + (uint32_t)k->cx, k->src + (int64_t)(k->off_y + y - k->cy) * k->stride + k->off_x, k->cw);
+}
 void fb_blit(int32_t dx, int32_t dy, const uint32_t *src, int32_t sw, int32_t sh, int32_t stride)
 {
     if (!fb_active || !src || sw <= 0 || sh <= 0) return;
@@ -1368,13 +1526,8 @@ void fb_blit(int32_t dx, int32_t dy, const uint32_t *src, int32_t sw, int32_t sh
     int32_t off_y = cy - dy;
 
     fb_damage(cx, cy, cw, ch);
-    uint32_t *target = fb_target();
-
-    for (int32_t r = 0; r < ch; ++r) {
-        uint32_t *dst_row = target + (cy + r) * fb_cur_w + cx;
-        const uint32_t *src_row = src + (off_y + r) * stride + off_x;
-        fast_copy_span(dst_row, src_row, cw);
-    }
+    struct bl_ctx k = { fb_target(), src, stride, cx, cw, cy, off_x, off_y };
+    fb_rows_run(blit_rows, &k, cy, cy + ch, (int64_t)cw * ch);     /* SOMA_168B: copias grandes repartidas */
 }
 
 void fb_blit_alpha(int32_t dx, int32_t dy, const uint32_t *src, int32_t sw, int32_t sh, int32_t stride)

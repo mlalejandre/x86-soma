@@ -424,7 +424,7 @@ static void run_session(const char *path)
             if (cn_size == 0) { st_shown++; continue; }
             if (cn_size > VBUF_BYTES || !rd(cn_here + 8, vbuf, cn_size)) { st_bad++; continue; }
             struct jpeg_info ji;
-            int jr = jpeg_decode(vbuf, cn_size, fbuf[back], fw, fbuf_px / fw, &ji);
+            int jr = jpeg_decode_isolated(vbuf, cn_size, fbuf[back], fw, fbuf_px / fw, &ji);   /* PARCHE 139: en ring 3 */
             if (jr != JPEG_OK || ji.width != fw || ji.height != fh) { st_bad++; continue; }
             front = back; back ^= 1; have_frame = 1; st_shown++; last_idx = cn_idx;
             uint64_t now = clock_us();

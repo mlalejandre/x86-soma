@@ -11,6 +11,7 @@ typedef long i64;
 #define SYS_YIELD  2
 #define SYS_SLEEP  3
 #define SYS_GETPID 4
+#include "errno.h"            /* PARCHE 124: codigos de error unicos del sistema (SOMA_E*), los mismos que ve el kernel */
 #define SYS_OPEN    5
 #define SYS_READ    6
 #define SYS_SEEK    7
@@ -54,7 +55,7 @@ static inline i64 u_fb_info(unsigned int out[3]) { return u_sys3(SYS_FB_INFO, (i
 static inline i64 u_fb_blit(const void *px, u64 w, u64 h, u64 x, u64 y) { return u_sys3(SYS_FB_BLIT, (i64)px, (i64)((w << 16) | h), (i64)((x << 16) | y)); }
 static inline i64 u_fb_close(void) { return u_sys3(SYS_FB_CLOSE, 0, 0, 0); }
 
-/* Ficheros del almacen BIGFS (solo lectura). Errores: valores negativos (-2 no existe, -14 puntero invalido, ...). */
+/* Ficheros del almacen BIGFS (solo lectura). Errores: valores negativos de errno.h (SOMA_ENOENT -2 no existe, SOMA_EFAULT -14 puntero invalido, SOMA_EACCES -13 ruta privada, ...). */
 static inline u64 u_strlen(const char *s);
 static inline i64 u_open(const char *path) { return u_sys3(SYS_OPEN, (i64)path, (i64)u_strlen(path), 0); }
 static inline i64 u_read(i64 fd, void *buf, u64 n) { return u_sys3(SYS_READ, fd, (i64)buf, (i64)n); }

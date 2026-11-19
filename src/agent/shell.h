@@ -17,6 +17,9 @@ struct command_entry {
 } __attribute__((aligned(8)));
 
 int  cmd_lang_lint(const char *args, char *out_buf, uint32_t max_out);
+/* SOMA_200_MENU_ENERGIA: controles de energia invocables desde la GUI. */
+void shell_system_reboot(void);
+void shell_system_poweroff(void);
 void shell_run(void);
 int  dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out);
 int  dispatch_agent_command(const char *cmd_line, char *out_buf, uint32_t max_out);

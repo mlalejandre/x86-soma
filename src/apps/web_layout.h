@@ -3,7 +3,7 @@
 #include "web_css.h"
 
 /* informacion de imagen aportada por el cargador */
-struct wimginfo { int w, h; const uint32_t *px; int state; int has_alpha; int pw, ph; };   /* w,h: tamano natural; pw,ph: pixeles guardados (0 = iguales) */   /* state: 0 desconocida, 1 cargando, 2 lista, 3 fallo */
+struct wimginfo { int w, h; const uint32_t *px; int state; int has_alpha; int pw, ph; uint32_t serial; int need_size; int ratio_only; int painting; };   /* SOMA_188: painting (entrada): se pide al pintar (esta a la vista) */   /* SOMA_188: ratio_only = SVG con viewBox y sin width/height (ocupa el ancho disponible) */   /* SOMA_152B: need_size (entrada): la maquetacion necesita el tamano natural */   /* SOMA_152: serial unico por mapa de bits decodificado (0 = desconocido) */   /* w,h: tamano natural; pw,ph: pixeles guardados (0 = iguales) */   /* state: 0 desconocida, 1 cargando, 2 lista, 3 fallo */
 typedef int (*wl_img_cb)(void *ud, const char *url, struct wimginfo *out);
 
 enum { CTL_NONE = 0, CTL_IMG, CTL_TEXT, CTL_PASSWORD, CTL_CHECK, CTL_RADIO, CTL_BUTTON, CTL_BTN_INPUT, CTL_SELECT, CTL_TEXTAREA, CTL_PLACEHOLDER, CTL_RANGE, CTL_COLOR, CTL_FILE };
@@ -31,6 +31,7 @@ struct wbox {
     int32_t list_n, colspan, rowspan, col, row;
     int32_t *tcols; int32_t ncols;       /* tablas: anchos de columna */
     int32_t cont_h;                      /* altura del contenido (sin relleno) */
+    int32_t sch;                         /* SOMA_181: altura natural del contenido (para desplazar overflow:auto) */
     int32_t zi, def_h, cbh;
     uint8_t mauto;                       /* bit0 izq, bit1 der, bit2 arriba, bit3 abajo */
     struct wbox *abs_chain;              /* lista de absolutos de este bloque contenedor */
@@ -44,6 +45,7 @@ struct wlay {
     int vw, vh, doc_w, doc_h;
     wl_img_cb img_cb; void *img_ud;
     int zoom;
+    int painting;                 /* SOMA_188: dentro de wl_paint */
     struct wbox **deferred; int ndef, capdef;
     int link_color_ok;
     struct wnode *hover;
@@ -51,6 +53,7 @@ struct wlay {
     int caret_on;
     uint32_t canvas_bg; int depth; int scroll_x, scroll_y;
     struct wnode *canvas_nodes[2];
+    uint32_t inner_gen;                  /* SOMA_181: cambia al desplazar una caja con overflow */
 };
 
 struct wlay *wl_new(struct wdoc *d, struct wcss *css, wl_img_cb cb, void *ud);
@@ -62,6 +65,11 @@ void wl_paint(struct wlay *L, int sx, int sy, int sw, int sh, int scroll_x, int 
 struct wnode *wl_hit(struct wlay *L, int px, int py, struct wnode **link, struct wbox **boxout);
 /* rectangulo de pagina de un elemento (primera caja); devuelve 0 si no tiene */
 int wl_node_rect(struct wlay *L, struct wnode *n, int *x, int *y, int *w, int *h);
+/* SOMA_181: desplaza la caja con overflow bajo (px,py) (coordenadas de pagina); 1 si consumio el gesto */
+int wl_inner_scroll(struct wlay *L, int px, int py, int dy);
+uint32_t wl_inner_gen(const struct wlay *L);
+int wl_scan_flags(struct wlay *L);   /* SOMA_203 */
+int wl_node_scroll_max(struct wlay *L, struct wnode *n);
 const char *wl_ctl_text(struct wnode *n);
 const char *wl_img_src(const struct wnode *n);
 int wl_select_count(struct wnode *n);

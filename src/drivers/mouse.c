@@ -2,6 +2,17 @@
 #include "fb.h"
 #include "io.h"
 #include "arch.h"
+#ifdef __x86_64__
+#include "i8042.h"                  /* SOMA_155_T480S */
+#ifdef __x86_64__
+#include "syn_gest.h"                /* SOMA_167_T480S */
+#include "fs.h"
+#include "console.h"
+#include "bootfb.h"
+#include "idt.h"
+void trackpad_apply_config(void);
+#endif
+#endif
 #include "cursors/cursor_arrow.h"
 #include "cursors/cursor_crosshair.h"
 #include "cursors/cursor_hand.h"
@@ -234,57 +245,11 @@ void mouse_draw_cursor(int32_t mx, int32_t my)
     fb_cursor_show(mx, my);
 }
 
-static void mouse_wait_write(void)
-{
-    uint32_t timeout = 50000;
-    while ((inb(0x64) & 0x02) && --timeout) arch_pause();
-}
-
-static int mouse_wait_read(void)
-{
-    uint32_t timeout = 50000;
-    while (!(inb(0x64) & 0x01) && --timeout) arch_pause();
-    return (timeout > 0);
-}
-
-static void mouse_write_cmd(uint8_t cmd)
-{
-    mouse_wait_write();
-    outb(0x64, 0xD4);
-    mouse_wait_write();
-    outb(0x60, cmd);
-}
-
-static uint8_t mouse_read_data(void)
-{
-    if (!mouse_wait_read()) return 0;
-    return inb(0x60);
-}
-
-static int mouse_set_rate(uint8_t rate)
-{
-    mouse_write_cmd(0xF3);
-    if (mouse_read_data() != 0xFA) return 0;
-    mouse_write_cmd(rate);
-    return mouse_read_data() == 0xFA;
-}
-
 void mouse_shutdown(void)
 {
 #ifdef __x86_64__
-    mouse_write_cmd(0xF5);
-    mouse_read_data();
-    mouse_wait_write();
-    outb(0x64, 0xA7);
-    mouse_wait_write();
-    outb(0x64, 0x60);
-    mouse_wait_write();
-    outb(0x60, 0x65);
-
-    for (int i = 0; i < 2000; ++i) {
-        if (inb(0x64) & 0x01) inb(0x60);
-        arch_pause();
-    }
+    /* SOMA_155_T480S: el controlador ya esta configurado (i8042_init); solo se para el envio de movimientos */
+    if (i8042_aux_present()) i8042_aux_stream(0);
     mouse_cycle = 0;
 #endif
 }
@@ -292,35 +257,141 @@ void mouse_shutdown(void)
 void mouse_init(void)
 {
 #ifdef __x86_64__
-    for (int i = 0; i < 2000; ++i) {
-        if (inb(0x64) & 0x01) inb(0x60);
-        arch_pause();
-    }
-    mouse_wait_write();
-    outb(0x64, 0xA8);
-    mouse_wait_write();
-    outb(0x64, 0x60);
-    mouse_wait_write();
-    outb(0x60, 0x45);
-
-    mouse_write_cmd(0xF6);
-    mouse_read_data();
-    /* SOMA_PARCHE_024_TERM: activa la rueda (secuencia magica de IntelliMouse: tasas 200, 100, 80 y pedir el ID).
-     * Si el raton no la tiene (ID 0), todo sigue con paquetes de 3 bytes. */
-    mouse_intelli = 0;
-    if (mouse_set_rate(200) && mouse_set_rate(100) && mouse_set_rate(80)) {
-        mouse_write_cmd(0xF2);
-        if (mouse_read_data() == 0xFA && mouse_read_data() == 3) mouse_intelli = 1;
-    }
-    mouse_write_cmd(0xF4);
-    mouse_read_data();
+    /* SOMA_155_T480S: antes esta funcion reprogramaba el 8042 entero cada vez que se abria la GUI (y sin mirar el estado del
+     * firmware). Ahora la inicializacion es la de i8042_init (estilo Linux) y aqui solo se reanuda el envio de paquetes. */
+    mouse_intelli = i8042_aux_wheel();
     mouse_cycle = 0;
-
+    if (i8042_aux_present()) i8042_aux_stream(1);
+    trackpad_apply_config();                                 /* SOMA_167_T480S: gestos (modo absoluto) si se puede */
     reload_cursor_bitmap();
 #else
     reload_cursor_bitmap();                          /* PARCHE 064: sin PS/2 solo hace falta la imagen del cursor (el raton llega por USB) */
 #endif
 }
+
+#ifdef __x86_64__
+/* SOMA_155_T480S: puntero del trackpad. Aceleracion sencilla segun la velocidad (como el perfil "adaptive" de libinput, pero
+ * en entero): de 1x a ~2,9x, y x1,5 en pantallas de 2400 px o mas. Con el boton central pulsado, el TrackPoint (o el
+ * trackpad) desplaza en vez de mover el puntero (lo que hace Linux con el TrackPoint). Solo para el trackpad Synaptics:
+ * con un raton normal o en QEMU todo queda como antes. */
+static int32_t acc_rx, acc_ry, mid_acc, mid_prev;
+static void touchpad_shape(int32_t *dx, int32_t *dy)
+{
+    int middle = (mouse_packet[0] & 0x04) ? 1 : 0;
+    if (middle) {
+        if (!mid_prev) mid_acc = 0;
+        mid_acc += *dy;
+        while (mid_acc >= 12) { mouse_wheel_acc += 1; mid_acc -= 12; }   /* positivo = hacia arriba */
+        while (mid_acc <= -12) { mouse_wheel_acc -= 1; mid_acc += 12; }
+        *dx = 0; *dy = 0;
+        mid_prev = 1;
+        return;
+    }
+    mid_prev = 0;
+    int32_t ax = *dx < 0 ? -*dx : *dx, ay = *dy < 0 ? -*dy : *dy, v = ax > ay ? ax : ay;
+    if (v > 20) v = 20;
+    int32_t f = 256 + v * 24;                                      /* factor en 1/256 */
+    if (fb_get_width() >= 2400u) f = f * 3 / 2;
+    acc_rx += *dx * f; acc_ry += *dy * f;
+    *dx = acc_rx / 256; *dy = acc_ry / 256;
+    acc_rx -= *dx * 256; acc_ry -= *dy * 256;
+}
+static uint64_t mouse_t_last;
+
+/* ---- SOMA_167_T480S: trackpad en modo absoluto (gestos). Configuracion en /etc/trackpad.conf:
+ *   modo=gestos|relativo  natural=0|1  toque=0|1  velocidad=1..10
+ * Si en modo absoluto llegan paquetes que no encajan (otro trackpad, firmware raro), se vuelve solo al modo relativo. */
+static struct syn_state g_syn;
+static uint8_t syn_pkt[6]; static int syn_n;
+static uint32_t syn_bad_bytes, syn_good_at, syn_fallbacks;
+static int tp_mode_gestos = 1, tp_natural = 0, tp_tap = 1, tp_speed = 5;
+static int conf_val(const char *b, const char *k, int def)
+{
+    for (int i = 0; b[i]; i++) {
+        if (i && b[i - 1] != '\n' && b[i - 1] != ' ') continue;
+        int j = 0; while (k[j] && b[i + j] == k[j]) j++;
+        if (k[j] || b[i + j] != '=') continue;
+        const char *v = b + i + j + 1;
+        if (*v == 'g') return 1;
+        if (*v == 'r') return 0;
+        int n = 0; while (*v >= '0' && *v <= '9') n = n * 10 + (*v++ - '0');
+        return n;
+    }
+    return def;
+}
+void trackpad_apply_config(void)
+{
+    if (!i8042_touchpad()) return;
+    static char b[160]; int n = vfs_read("/etc/trackpad.conf", b, sizeof b - 1);
+    if (n > 0) { b[n] = 0; tp_mode_gestos = conf_val(b, "modo", 1); tp_natural = conf_val(b, "natural", 0); tp_tap = conf_val(b, "toque", 1); tp_speed = conf_val(b, "velocidad", 5); }
+    if (bootinfo_disabled("gestos")) tp_mode_gestos = 0;
+    struct syn_cfg c = { i8042_syn_clickpad(), tp_natural, tp_tap, tp_speed, fb_get_width() >= 2400u };
+    syn_init(&g_syn, &c);
+    syn_n = 0; syn_bad_bytes = 0; syn_good_at = (uint32_t)timer_get_uptime_ms();
+    int want = tp_mode_gestos;
+    if (want != i8042_touchpad_abs()) {
+        int r = i8042_touchpad_set_abs(want);
+        if (want && r != 0) kprint("TRACKPAD: el trackpad no acepto el modo absoluto: sigue en modo relativo\n");
+    }
+}
+int trackpad_save_config(int gestos, int natural, int tap, int speed)
+{
+    tp_mode_gestos = gestos; tp_natural = natural; tp_tap = tap; tp_speed = speed;
+    char b[96]; int k = 0; const char *a = gestos ? "modo=gestos\n" : "modo=relativo\n";
+    while (*a) b[k++] = *a++;
+    a = "natural="; while (*a) b[k++] = *a++; b[k++] = (char)('0' + (natural ? 1 : 0)); b[k++] = '\n';
+    a = "toque="; while (*a) b[k++] = *a++; b[k++] = (char)('0' + (tap ? 1 : 0)); b[k++] = '\n';
+    a = "velocidad="; while (*a) b[k++] = *a++; if (speed >= 10) { b[k++] = '1'; b[k++] = '0'; } else b[k++] = (char)('0' + speed); b[k++] = '\n';
+    vfs_write("/etc/trackpad.conf", b, (uint32_t)k);
+    trackpad_apply_config();
+    return 0;
+}
+void trackpad_status(int *gestos, int *natural, int *tap, int *speed, const struct syn_state **st, uint32_t *fallbacks)
+{
+    *gestos = i8042_touchpad_abs(); *natural = tp_natural; *tap = tp_tap; *speed = tp_speed; *st = &g_syn; *fallbacks = syn_fallbacks;
+}
+static int syn_deliver(const struct syn_out *o, int32_t *out_dx, int32_t *out_dy, int *out_left_click)
+{
+    *out_dx = o->dx; *out_dy = o->dy;
+    mouse_wheel_acc += o->wheel;
+    int left = o->buttons & 1, right = (o->buttons >> 1) & 1;
+    if (left && !mouse_left_prev) *out_left_click = 1;
+    mouse_left_prev = left; mouse_left_down = left;
+    if (right && !mouse_right_prev) mouse_right_clicks++;
+    mouse_right_prev = right; mouse_right_down = right;
+    return o->dx || o->dy || o->wheel || o->changed;
+}
+/* bytes del modo absoluto: paquetes de 6 con cabeceras fijas (b0 = 10xx0xxx, b3 = 11xx0xxx); si no encajan se resincroniza */
+static int syn_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
+{
+    uint8_t b; uint64_t bt; struct syn_out o;
+    uint32_t now = (uint32_t)timer_get_uptime_ms();
+    while (i8042_aux_get(&b, &bt)) {
+        if (syn_n && bt - mouse_t_last > 50u) syn_n = 0;
+        mouse_t_last = bt;
+        if (syn_n == 0 && (b & 0xC8) != 0x80) { syn_bad_bytes++; continue; }
+        if (syn_n == 3 && (b & 0xC8) != 0xC0) { syn_bad_bytes++; syn_n = 0; continue; }
+        syn_pkt[syn_n++] = b;
+        if (syn_n < 6) continue;
+        syn_n = 0;
+        syn_good_at = now;
+        syn_process(&g_syn, syn_pkt, (uint32_t)bt, &o);
+        if (syn_deliver(&o, out_dx, out_dy, out_left_click)) return 1;
+    }
+    /* muchos bytes que no encajan y ningun paquete bueno en 2 s: este trackpad no habla asi -> modo relativo */
+    if (syn_bad_bytes > 96 && now - syn_good_at > 2000u) {
+        syn_fallbacks++;
+        kprint("TRACKPAD: paquetes del modo absoluto incorrectos: vuelta al modo relativo (trackpad gestos para reintentar)\n");
+        i8042_touchpad_set_abs(0);
+        syn_bad_bytes = 0;
+        return 0;
+    }
+    if (now - syn_good_at > 2000u) syn_bad_bytes = 0;
+    syn_tick(&g_syn, now, &o);
+    if (o.changed) return syn_deliver(&o, out_dx, out_dy, out_left_click);
+    return 0;
+}
+#endif
 
 static int mouse_finish_packet(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
 {
@@ -328,6 +399,9 @@ static int mouse_finish_packet(int32_t *out_dx, int32_t *out_dy, int *out_left_c
     int32_t dy = (int32_t)mouse_packet[2];
     if (mouse_packet[0] & 0x10) dx |= 0xFFFFFF00;
     if (mouse_packet[0] & 0x20) dy |= 0xFFFFFF00;
+#ifdef __x86_64__
+    if (i8042_touchpad()) touchpad_shape(&dx, &dy);              /* SOMA_155_T480S */
+#endif
     *out_dx = dx; *out_dy = dy;
     int current_left = (mouse_packet[0] & 0x01) ? 1 : 0;
     if (current_left && !mouse_left_prev) *out_left_click = 1;
@@ -389,10 +463,20 @@ int mouse_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
 #if defined(__x86_64__) || defined(__aarch64__)
     if (mouse_take_injected(out_dx, out_dy, out_left_click)) return 1;
 #endif
+#ifdef __x86_64__
+    /* SOMA_155_T480S: los bytes llegan por la cola de i8042 (IRQ 12 / reloj), sin pelearse con el teclado por el puerto 0x60.
+     * Si un paquete se queda a medias mas de 50 ms se descarta y se busca el siguiente byte de cabecera (psmouse: resync). */
+    if (i8042_touchpad_abs()) return syn_poll(out_dx, out_dy, out_left_click);   /* SOMA_167_T480S */
+    uint8_t b; uint64_t bt;
+    while (i8042_aux_get(&b, &bt)) {
+        if (mouse_cycle != 0 && bt - mouse_t_last > 50u) mouse_cycle = 0;
+        mouse_t_last = bt;
+#else
     while (inb(0x64) & 0x01) {
         uint8_t status = inb(0x64);
         if (!(status & 0x20)) break;
         uint8_t b = inb(0x60);
+#endif
 
         if (mouse_cycle == 0) {
             if ((b & 0x08) == 0) continue;
@@ -409,7 +493,8 @@ int mouse_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
             mouse_packet[3] = b; mouse_cycle = 0;
             if (mouse_packet[0] & 0xC0) continue;
             int z = (int8_t)mouse_packet[3];                    /* ID 3: Z con signo (positivo = hacia el usuario) */
-            if (z > 7) z = 7; if (z < -7) z = -7;
+            if (z > 7) z = 7;
+            if (z < -7) z = -7;
             mouse_wheel_acc += -z;                              /* acumulado: positivo = rueda hacia arriba */
             return mouse_finish_packet(out_dx, out_dy, out_left_click);
         }

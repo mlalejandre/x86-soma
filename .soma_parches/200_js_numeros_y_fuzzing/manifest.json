@@ -1,0 +1,42 @@
+{
+  "created": {
+    "docs/PARCHE_200_JS_NUMEROS_Y_FUZZING.md": "10ac38feb26c14de1ee243d94901fae8381f349cec8f5fdc4f6ea60b9d333175",
+    "tests/fuzz_js_200.c": "0a05454d15d90917b46fecfc4ced79c6c63989722beff3910d3cde0713bb968e",
+    "tests/fuzz_web_200.c": "c5a2a33129defbc85bf31f5f8495142b2249c0103f645b0a71ead9a65e25ee46",
+    "tests/test_f64_200.c": "336373c24739f3571c45fb2672ec48d577cab31d04ff0db8c5f82f23561638a2"
+  },
+  "date": "20261118_094345",
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "4f8b84900d0cc16d080ba9a223267f7edaffc2964d013f85f0285202db1e0543",
+      "old": "c103f8ed33a78e9ae8afd3a49e724d0dfe134e7bffb702d267509e52d5770aaf"
+    },
+    "src/apps/web_f64.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "7f09886750002412a665cb2a328b725526ec31b29f68d9e9d4c1f1c86dca07bb",
+      "old": "f2c6ee3e13c5b61973301a129731a9c2c77956ac0f67bae396b42393c7dfc48f"
+    },
+    "src/apps/web_f64.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "66845aeb99c56089127f115eed6b81f1c43cf6e6bbed9c548524097e1b29c38e",
+      "old": "52bbd8189575568c0c13134f4a6ec53fde16454c874f77a1c8847efad6c3b22c"
+    },
+    "src/apps/web_js_lib3.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "bf421526a21105da22c3b7207f5dc7a0a89036a561def8aa8cc65941aa9c28c5",
+      "old": "9df0bc9c3f768c5919a913fd30dee83c5a7d1bdcc54811aa9e472113cd09d1f6"
+    },
+    "tests/layhost/fbhost.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "199753c1fa0f577fa18c7ff9d8cfed158b11e780edcb7bd3592f4fd25ac1efa4",
+      "old": "415113e9d7c9c086494ebb8e95aed28bd663874e8426eba15520d8027e20f165"
+    }
+  },
+  "name": "200_js_numeros_y_fuzzing"
+}

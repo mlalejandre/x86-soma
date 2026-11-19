@@ -18,9 +18,11 @@ struct xhci_evring {                                                /* anillo de
 #define TRB_SETUP    2
 #define TRB_DATA     3
 #define TRB_STATUS   4
+#define TRB_ISOCH    5
 #define TRB_LINK     6
 #define TRB_ENABLE_SLOT 9
 #define TRB_ADDRESS_DEV 11
+#define TRB_STOP_EP  15
 #define TRB_EV_TRANSFER 32
 #define TRB_EV_CMD_DONE 33
 #define TRB_EV_PORT_CHG 34
@@ -49,6 +51,13 @@ uint8_t  xhci_ep_interval(uint8_t speed, uint8_t binterval);
 /* Contexto de entrada de Configure Endpoint para UN extremo de interrupcion IN (dci = 2*numero+1). out_ctx = contexto de salida del
  * dispositivo (de el se copia el de ranura). ctx: area de 33 contextos. */
 void     xhci_build_cfgep_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci, uint16_t mps, uint8_t interval, uint64_t ring_phys);
+/* SOMA_178_T480S: extremo ISOCRONO IN de alta velocidad (camaras UVC). mps_raw = wMaxPacketSize del descriptor (bits 10:0 tamano,
+ * 12:11 transacciones extra por microtrama). interval = valor del contexto (bInterval - 1). Deja el extremo en el contexto dci. */
+void     xhci_build_cfg_isoc_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci, uint16_t mps_raw, uint8_t interval, uint64_t ring_phys);
+/* Configure Endpoint que SUELTA el extremo dci (la ranura se copia de out_ctx). */
+void     xhci_build_drop_ep_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci);
+/* Palabra d3 (sin bit de ciclo) de un TRB isocrono de un solo TRB por TD: SIA, IOC y TLBPC = paquetes - 1 (alta velocidad: TBC = 0). */
+uint32_t xhci_isoc_d3(uint32_t packets, int ioc, int sia);
 /* PARCHE 049: contexto de entrada de Configure Endpoint para un par de extremos BULK (entrada y salida de una interfaz Mass Storage). */
 void     xhci_build_cfg_bulk_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci_in, uint8_t dci_out, uint16_t mps,
                                    uint64_t ring_in_phys, uint64_t ring_out_phys);

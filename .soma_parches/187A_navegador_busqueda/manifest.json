@@ -1,0 +1,46 @@
+{
+  "created": {
+    "docs/PARCHE_187A_NAVEGADOR_BUSQUEDA.md": "873228089bef454a82f922836068141d386c2fda64a04f2c5f7adf781953eaec",
+    "tests/test_web_js_187a.c": "1f83370aea07e25178bb68765d9a0ca14c370d1d74bea21bbcfb5fda8a44c6a5"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "0b32976909f9e1bd6d98ea6039438d1fbe9dcfae51a90f9d3621082565bf86c6",
+      "old": "f4f96dcf8f1b07fb961d581ffaeb328502a595bb9a699229c6052bad1ed7e156"
+    },
+    "src/apps/web_css.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "67e9f7e2a43b146d99142f8c1425a46f672af0ae7335a6c18b4215d8b43f3560",
+      "old": "0e46bf046de85c01caf5e684a93624df62195ba6869d9aee428c0dc21a3457b4"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "26d94d9926e5e1ee92dc0cb0c29f0b7c372f0f7cd5653288cb293fd518cf9cf8",
+      "old": "0c4e43aceff3589a6c7e9091ee4c1e865635080bbe17ba65bd167e4b575204e7"
+    },
+    "src/apps/web_js_i.h": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "a481748720fa6164c706ce0bcca33fce350e856b910a21f3e7d72fe116bb5b04",
+      "old": "7b3ef82aaf1098f55e54b77c7258cc633833e4bf7f13ce1fcc654672cf155e95"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "70fdc0a99511e064afda90e7354368a4a97c2b8dc1c124adf4e5065bcf2c84df",
+      "old": "8afd63a07573d552ff2d66939c7792f04916c4849f3fb9094d5cd24285c5130d"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "8771d414bca4575fb5e5aad557ed016417c2560e86df933866b902a860d605ae",
+      "old": "f2989472fc6b5c9082e90cfe8436869bcacbc82bc508b48a455937c029d03f98"
+    }
+  },
+  "log": "20261117_002255 parche 187A: navegador: input oculto, keypress y Enter, document.f y form.q, KeyboardEvent.code, about:log",
+  "version": 1
+}

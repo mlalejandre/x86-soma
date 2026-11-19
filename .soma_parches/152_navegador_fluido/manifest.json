@@ -1,0 +1,90 @@
+{
+  "created": {
+    "docs/PARCHE_152_NAVEGADOR_FLUIDO.md": "aa7697b3b11f231545316aea1700d2b77cba2adccc8b82af859779b6cb81ea99",
+    "src/apps/web_fluido_152.h": "f1fa9efd9fc0522a0744e3baa1bf3164e3fea76366aad2eb5eff7dbdcb87a08a",
+    "tests/test_web_fluido_152.c": "d805198a8a10b6131f3afe2637ef05089513b75b0e74d732da93fd0062f4d3f0",
+    "tools/web_bench.py": "3935cfb990bb9326cdfc3efac17f75097b2ffea851d61ba809d301b2262d83ad"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "4249586985729b0c02363560a307b96c0800833f04901135910b2e50df623a80",
+      "old": "d5d87440d36287d6f89ccb859da6d13cb79aea291b47e795e84a56fd8554f48b"
+    },
+    "src/apps/browser.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "e6bb3a69fae2f5303cb9ee3a821208f8891f369a16a592deb7739bf46d19584f",
+      "old": "3be347648b591b33767821af1c5d60626951da80f37cff70907f8d5a341a5850"
+    },
+    "src/apps/browser.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "18757699bccb76b89f0d0277729650867de557a398835f8088142af8b28b879f",
+      "old": "299272adfdece6ae9c31a81874fde9866975c5b313831e5489331f3c17566cb3"
+    },
+    "src/apps/web_css.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "6585a7b4a0379fb685f99e1e0248d25dded394a120e3efdb13a73c235b128535",
+      "old": "fc78b57201395dbcbeeebeb540cec1217ce7b27b50d39356d187d9b93daba0e1"
+    },
+    "src/apps/web_css.h": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "a86f35806991864c50b471409baa7f30ce234a23b1b01ff8a91a43c96fcd4323",
+      "old": "d03ad737162785b661f67712073fe7fd4f05535cfc603f8cfbf6e2afc34406f8"
+    },
+    "src/apps/web_dom.h": {
+      "backup": "original_11.bin",
+      "kind": "exacto",
+      "new": "b179106067c85c0a6062b15f54742b0ec9e9bb70220ed510f2f27eec1aefcd49",
+      "old": "16284d523ff90157539a9966759503bf505d54d2a409d2d219206dded01b659d"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_12.bin",
+      "kind": "exacto",
+      "new": "1fedc43ba294a400f885c11614c88f76ac01bb7c2defec0511024c34343a29f7",
+      "old": "c05c032f381b412c0651dfffc8054529ef5d7f2359dc16e16b6ff2467bcbf9c1"
+    },
+    "src/apps/web_layout.c": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "580db891cd65c6d20439df3b63676e56706ea44ff0bd9ca8c0a9612ecc985d83",
+      "old": "621eb20a76976bb7c0f5c0454f42ba4edc74369110efaca0a292fb3f1752cf0d"
+    },
+    "src/apps/web_layout.h": {
+      "backup": "original_10.bin",
+      "kind": "exacto",
+      "new": "bb35dfdbdc92e2dea6f5a9a331795cd3faf8a8be1275731c18fa2010436041dc",
+      "old": "cf315c6b0e433ddedf48a0751f832d0cd8430c02f1225a9ec8230d1aa5293731"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "88e6c0e9e8d0454a5917834b85671da85989ad103f7af8c70a40a95f1d471722",
+      "old": "d3b56a17f136bd5692761c9dffe7f45dcedf987341cd9d5812ae500212e9128e"
+    },
+    "src/apps/web_page.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "b7af6050fc8a974b10e83e0df133cf6a255aa0ca804335ded985e16643531911",
+      "old": "d0b5ea6f4922b8c84b7704ce16648a4b48050a5b0ad696b53845072831badf54"
+    },
+    "src/core/kernel.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "8bfdc4f05395203e69a3486e6a24450f1f7b8260da4a02029b019a9d0593b4e2",
+      "old": "fea30618076f309ac803a192116d14c7ac1afe717daa6e276974b901a8c4ebef"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "9755cf281868f2daa18196e11eba474de4a4e4ebfaf7d947166f5c646c66320e",
+      "old": "48a5202a28d62fe0c53122f303231374e2b0acfcb783d57ea2bb9496f6cc8482"
+    }
+  },
+  "log": "20261115_000452 parche 152: Navegador fluido (compositor por demanda, desplazamiento suave, :hover selectivo, estilos rapidos, arena sin fugas, compilacion en macOS)",
+  "version": 1
+}

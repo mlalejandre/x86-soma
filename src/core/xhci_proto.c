@@ -147,6 +147,39 @@ void xhci_build_cfgep_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uin
     ep[4] = (uint32_t)mps | ((uint32_t)mps << 16);                                                            /* longitud media y maxima por intervalo */
 }
 
+void xhci_build_cfg_isoc_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci, uint16_t mps_raw, uint8_t interval, uint64_t ring_phys)
+{
+    uint32_t cs = csz64 ? 64u : 32u;
+    zero(ctx, 33 * cs);
+    for (uint32_t i = 0; i < cs; i++) ctx[cs + i] = out_ctx[i];
+    uint32_t *icc = (uint32_t *)ctx, *slot = (uint32_t *)(ctx + cs);
+    icc[1] = 1u | (1u << dci);
+    if (((slot[0] >> 27) & 0x1Fu) < dci) slot[0] = (slot[0] & 0x07FFFFFFu) | ((uint32_t)dci << 27);
+    uint32_t mps = mps_raw & 0x7FFu, mult = (mps_raw >> 11) & 3u, esit = mps * (mult + 1u);
+    uint32_t *ep = (uint32_t *)(ctx + (uint32_t)(dci + 1) * cs);
+    ep[0] = ((uint32_t)interval << 16) | (mult << 8);                                                        /* Mult (0 = 1 transaccion) e intervalo */
+    ep[1] = (5u << 3) | (mps << 16);                                                                        /* CErr 0, tipo Isoch IN, rafaga 0 */
+    ep[2] = (uint32_t)ring_phys | 1u;
+    ep[3] = (uint32_t)(ring_phys >> 32);
+    ep[4] = esit | (esit << 16);                                                                            /* longitud media y carga maxima por intervalo */
+}
+
+void xhci_build_drop_ep_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci)
+{
+    uint32_t cs = csz64 ? 64u : 32u;
+    zero(ctx, 33 * cs);
+    for (uint32_t i = 0; i < cs; i++) ctx[cs + i] = out_ctx[i];
+    uint32_t *icc = (uint32_t *)ctx;
+    icc[0] = 1u << dci;                                                                                     /* D(dci) */
+    icc[1] = 1u;                                                                                            /* A0 */
+}
+
+uint32_t xhci_isoc_d3(uint32_t packets, int ioc, int sia)
+{
+    uint32_t tl = packets ? packets - 1u : 0u;
+    return TRB_TYPE(TRB_ISOCH) | (ioc ? (1u << 5) : 0u) | ((tl & 0xFu) << 16) | (sia ? (1u << 31) : 0u);
+}
+
 void xhci_build_cfg_bulk_input(uint8_t *ctx, int csz64, const uint8_t *out_ctx, uint8_t dci_in, uint8_t dci_out, uint16_t mps,
                                uint64_t ring_in_phys, uint64_t ring_out_phys)
 {

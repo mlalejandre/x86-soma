@@ -20,12 +20,14 @@ jstr *js_json_stringify(struct jrt *rt, jv v, jv replacer, jv indent);
 static jobj *own_keys(struct jrt *rt, jv v, int all)
 {
     jobj *out = js_arr_new(rt, 8);
-    if (v.t == JT_STR) { for (uint32_t i = 0; i < v.u.s->len; i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_str_new(rt, t, (uint32_t)l))); } return out; }
+    if (v.t == JT_STR) { uint32_t n16 = js_u16len(v.u.s); for (uint32_t i = 0; i < n16; i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_str_new(rt, t, (uint32_t)l))); } return out; }
     if (v.t != JT_OBJ) return out;
     jobj *o = v.u.o;
+    if (o->cls == JC_PROXY) return js_proxy_own_keys(rt, o, all);   /* SOMA_188 */
     if (o->cls == JC_HOST && (o->flag & 1) && rt->dyn && rt->dyn->keys) { jobj *dk = rt->dyn->keys(rt, o); for (uint32_t i = 0; i < dk->alen; i++) js_arr_push(rt, out, dk->el[i]); }
-    if (o->cls == JC_ARRAY || o->cls == JC_ARGS) for (uint32_t i = 0; i < o->alen; i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_intern_n(rt, t, (uint32_t)l))); }
-    if (o->cls == JC_STRING) for (uint32_t i = 0; i < o->el[0].u.s->len; i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_str_new(rt, t, (uint32_t)l))); }
+    if (o->cls == JC_ARRAY || o->cls == JC_ARGS) for (uint32_t i = 0; i < o->alen; i++) { if (IS_HOLE(o->el[i])) continue; char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_intern_n(rt, t, (uint32_t)l))); }
+    if (o->cls == JC_STRING) for (uint32_t i = 0; i < js_u16len(o->el[0].u.s); i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_str_new(rt, t, (uint32_t)l))); }
+    if (o->cls == JC_TYPED) for (uint32_t i = 0; i < js_ta_length(o); i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_intern_n(rt, t, (uint32_t)l))); }   /* SOMA_186 */
     for (uint32_t i = 0; i < o->np; i++) { struct jprop *p = &o->props[i]; if ((!all && !(p->flags & JP_ENUM)) || (p->key->d[0] == '@' && p->key->d[1] == '@')) continue; js_arr_push(rt, out, jstrv(p->key)); }
     return out;
 }
@@ -86,13 +88,26 @@ static jv obj_static(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         if (argc > 1 && args[1].t == JT_OBJ) { jobj *ks = own_keys(rt, args[1], 0); for (uint32_t i = 0; i < ks->alen; i++) from_desc(rt, o, ks->el[i].u.s, js_get(rt, args[1], ks->el[i].u.s)); }
         return jobjv(o);
     }
-    case O_GETPROTO: { if (IS_NULLISH(a)) js_throw_err(rt, E_TYPE, "No se puede convertir a objeto"); jobj *o = a.t == JT_OBJ ? a.u.o : js_toobj(rt, a); return o->proto ? jobjv(o->proto) : jnull(); }
+    case O_GETPROTO: { if (IS_NULLISH(a)) js_throw_err(rt, E_TYPE, "No se puede convertir a objeto"); jobj *o = a.t == JT_OBJ ? a.u.o : js_toobj(rt, a); if (o->cls == JC_PROXY) { jobj *pp = js_proxy_proto(rt, o); return pp ? jobjv(pp) : jnull(); } return o->proto ? jobjv(o->proto) : jnull(); }
     case O_SETPROTO: if (a.t == JT_OBJ) a.u.o->proto = ARG(1).t == JT_OBJ ? args[1].u.o : 0; return a;
-    case O_DEFPROP: if (a.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Object.defineProperty llamado en un valor que no es objeto"); from_desc(rt, a.u.o, js_tostr(rt, ARG(1)), ARG(2)); return a;
+    case O_DEFPROP: if (a.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Object.defineProperty llamado en un valor que no es objeto");
+        if (a.u.o->cls == JC_PROXY) {   /* SOMA_188 */
+            jobj *ph = a.u.o->el[1].t == JT_OBJ ? a.u.o->el[1].u.o : 0; if (!ph) js_throw_err(rt, E_TYPE, "Proxy revocado");
+            jv tr = js_get(rt, jobjv(ph), js_intern_c(rt, "defineProperty"));
+            if (js_is_callable(tr)) { jv ta[3] = { a.u.o->el[0], ARG(1), ARG(2) }; js_call(rt, tr, jobjv(ph), ta, 3); return a; }
+            jv ta[3] = { a.u.o->el[0], ARG(1), ARG(2) }; obj_static(rt, thisv, ta, 3, O_DEFPROP); return a;
+        }
+        from_desc(rt, a.u.o, js_tostr(rt, ARG(1)), ARG(2)); return a;
     case O_DEFPROPS: { if (a.t != JT_OBJ) js_throw_err(rt, E_TYPE, "no es un objeto"); jobj *ks = own_keys(rt, ARG(1), 0); for (uint32_t i = 0; i < ks->alen; i++) from_desc(rt, a.u.o, ks->el[i].u.s, js_get(rt, args[1], ks->el[i].u.s)); return a; }
     case O_GETOWNNAMES: { jobj *ks = own_keys(rt, a, 1); if (a.t == JT_OBJ && (a.u.o->cls == JC_ARRAY)) js_arr_push(rt, ks, jstrv(rt->s_length)); return jobjv(ks); }
     case O_GETOWNDESC: case O_GETOWNDESCS: {
         if (a.t != JT_OBJ) return jundef();
+        if (a.u.o->cls == JC_PROXY && magic == O_GETOWNDESC) {   /* SOMA_188 */
+            jobj *ph = a.u.o->el[1].t == JT_OBJ ? a.u.o->el[1].u.o : 0; if (!ph) js_throw_err(rt, E_TYPE, "Proxy revocado");
+            jv tr = js_get(rt, jobjv(ph), js_intern_c(rt, "getOwnPropertyDescriptor"));
+            if (js_is_callable(tr)) { jv ta[2] = { a.u.o->el[0], ARG(1) }; return js_call(rt, tr, jobjv(ph), ta, 2); }
+            jv ta[2] = { a.u.o->el[0], ARG(1) }; return obj_static(rt, thisv, ta, 2, O_GETOWNDESC);
+        }
         jstr *k = js_intern(rt, js_tostr(rt, ARG(1)));
         struct jprop *p = js_find_own(a.u.o, k);
         if (!p) {
@@ -157,6 +172,7 @@ static jv func_proto(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     }
     case F_TOSTRING: {
         jobj *f = thisv.u.o;
+        if (f->cls == JC_FUNC && f->u.fn.cls && f->u.fn.cls->p) { struct jfi *ci = (struct jfi *)f->u.fn.cls->p; if (ci->src) return jstrv(js_str_new(rt, ci->src, ci->srclen)); }   /* SOMA 188B */
         if (f->cls == JC_FUNC && f->u.fn.node && f->u.fn.node->p) { struct jfi *fi = (struct jfi *)f->u.fn.node->p; if (fi->src) return jstrv(js_str_new(rt, fi->src, fi->srclen)); }
         if (f->cls == JC_FUNC && f->u.fn.cls) return jstrv(js_str_cstr(rt, "class { }"));
         jv nm = js_get(rt, thisv, rt->s_name); char b[120]; wu_copy(b, "function ", sizeof b); uint32_t n = wu_strlen(b); if (nm.t == JT_STR) n += wu_copy(b + n, nm.u.s->d, sizeof b - n); wu_copy(b + n, "() { [native code] }", sizeof b - n); return jstrv(js_str_cstr(rt, b));
@@ -185,7 +201,7 @@ static jv err_ctor(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     if (argc > 1 && args[1].t == JT_OBJ) { jv c = js_get_c(rt, args[1], "cause"); if (!IS_UNDEF(c)) js_def(rt, e, js_intern_c(rt, "cause"), c, 0); }
     char st[200]; jv nm = js_get(rt, jobjv(e), rt->s_name); wu_copy(st, nm.t == JT_STR ? nm.u.s->d : "Error", sizeof st);
     jv mm = js_get(rt, jobjv(e), rt->s_message); if (mm.t == JT_STR && mm.u.s->len) { uint32_t n = wu_strlen(st); st[n++] = ':'; st[n++] = ' '; wu_copy(st + n, mm.u.s->d, sizeof st - n); }
-    js_def(rt, e, rt->s_stack, jstrv(js_str_cstr(rt, st)), 0);
+    { struct wb b = {0}; js_stack_trace(rt, st, &b); js_def(rt, e, rt->s_stack, b.p ? jstrv(js_str_new(rt, b.p, b.len)) : jstrv(js_str_cstr(rt, st)), 0); wb_free(&b); }   /* SOMA_188 */
     return jobjv(e);
 }
 static jv err_tostring(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
@@ -211,10 +227,25 @@ static jv sym_for(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
     char b[120]; jstr *d = js_tostr(rt, ARG(0)); wu_copy(b, "@@for:", sizeof b); wu_copy(b + 6, d->d, sizeof b - 6); return jstrv(js_intern_c(rt, b));
 }
+/* SOMA_187: los simbolos son cadenas "@@descripcion#n" (propios), "@@for:clave" (Symbol.for) o "@@nombre" (bien conocidos). description y toString los
+ * presentan como lo hace un navegador: Symbol(a), Symbol(), Symbol.iterator. */
+jv js_sym_description(struct jrt *rt, jstr *s)
+{
+    const char *d = s->d + 2; uint32_t n = s->len - 2, hash = n;
+    for (uint32_t i = 0; i < n; i++) if (d[i] == '#') hash = i;
+    if (hash < n) { int dig = hash + 1 < n; for (uint32_t i = hash + 1; i < n; i++) if (d[i] < '0' || d[i] > '9') dig = 0; if (dig) return hash ? jstrv(js_str_new(rt, d, hash)) : jundef(); }
+    if (n >= 4 && !memcmp(d, "for:", 4)) return jstrv(js_str_new(rt, d + 4, n - 4));
+    char b[96]; uint32_t k = wu_copy(b, "Symbol.", sizeof b); k += wu_copy(b + k, d, sizeof b - k); return jstrv(js_str_new(rt, b, k));
+}
+jstr *js_sym_tostring(struct jrt *rt, jstr *s)
+{
+    jv d = js_sym_description(rt, s); struct wb b = {0}; wb_add(&b, "Symbol("); if (d.t == JT_STR) wb_addn(&b, d.u.s->d, d.u.s->len); wb_addc(&b, ')');
+    jstr *r = js_str_new(rt, b.p, b.len); wb_free(&b); return r;
+}
 static jv sym_tostring(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
-    if (thisv.t != JT_STR) return jstrv(js_tostr(rt, thisv));
-    char b[140]; wu_copy(b, "Symbol(", sizeof b); const char *s = thisv.u.s->d + 2; uint32_t n = 7; while (*s && *s != '#' && n + 2 < sizeof b) b[n++] = *s++; b[n++] = ')'; b[n] = 0; return jstrv(js_str_cstr(rt, b));
+    if (thisv.t != JT_STR || thisv.u.s->len < 3) return jstrv(js_tostr(rt, thisv));
+    return jstrv(js_sym_tostring(rt, thisv.u.s));
 }
 static jv bool_ctor(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
@@ -229,7 +260,7 @@ static jv bool_proto(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 static const char *HEXC = "0123456789ABCDEF";
 static int uri_keep(int c, int comp, int full) { if (wu_isalnum(c)) return 1; if (wu_strchr("-_.!~*'()", c)) return 1; if (!comp && wu_strchr(";/?:@&=+$,#", c)) return 1; (void)full; return 0; }
 static jv glob_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic);
-enum { G_PARSEINT, G_PARSEFLOAT, G_ISNAN, G_ISFINITE, G_ENCURI, G_ENCCOMP, G_DECURI, G_DECCOMP, G_ESCAPE, G_ATOB, G_BTOA, G_EVAL, G_STRUCTCLONE, G_QUEUEMICRO };
+enum { G_PARSEINT, G_PARSEFLOAT, G_ISNAN, G_ISFINITE, G_ENCURI, G_ENCCOMP, G_DECURI, G_DECCOMP, G_ESCAPE, G_UNESCAPE, G_ATOB, G_BTOA, G_EVAL, G_STRUCTCLONE, G_QUEUEMICRO };
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static jv glob_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
@@ -266,7 +297,28 @@ static jv glob_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         }
         return jstrv(js_str_new(rt, b.p ? b.p : "", b.len));
     }
-    case G_ESCAPE: return jstrv(js_tostr(rt, ARG(0)));
+    case G_ESCAPE: {                     /* SOMA_185: escape/unescape de verdad (antes devolvian la cadena tal cual) */
+        jstr *s = js_tostr(rt, ARG(0)); struct wb b = {0}; uint32_t n16 = js_u16len(s);
+        for (uint32_t i = 0; i < n16; i++) {
+            uint32_t u = (uint32_t)js_u16_unit(rt, s, i);
+            if (u < 128 && (wu_isalnum((char)u) || wu_strchr("@*_+-./", (int)u))) wb_addc(&b, (char)u);
+            else if (u < 256) { wb_addc(&b, '%'); wb_addc(&b, HEXC[u >> 4]); wb_addc(&b, HEXC[u & 15]); }
+            else { wb_add(&b, "%u"); for (int k = 12; k >= 0; k -= 4) wb_addc(&b, HEXC[(u >> k) & 15]); }
+        }
+        jstr *r = js_str_new(rt, b.p ? b.p : "", b.len); wb_free(&b); return jstrv(r);
+    }
+    case G_UNESCAPE: {
+        jstr *s = js_tostr(rt, ARG(0)); struct wb b = {0};
+        for (uint32_t i = 0; i < s->len; i++) {
+            char c = s->d[i];
+            if (c == '%' && i + 5 < s->len && s->d[i + 1] == 'u' && wu_ishex(s->d[i + 2]) && wu_ishex(s->d[i + 3]) && wu_ishex(s->d[i + 4]) && wu_ishex(s->d[i + 5])) {
+                js_wb_unit(&b, (uint32_t)(wu_hexval(s->d[i + 2]) << 12 | wu_hexval(s->d[i + 3]) << 8 | wu_hexval(s->d[i + 4]) << 4 | wu_hexval(s->d[i + 5]))); i += 5;
+            } else if (c == '%' && i + 2 < s->len && wu_ishex(s->d[i + 1]) && wu_ishex(s->d[i + 2])) {
+                js_wb_unit(&b, (uint32_t)(wu_hexval(s->d[i + 1]) * 16 + wu_hexval(s->d[i + 2]))); i += 2;
+            } else wb_addc(&b, c);
+        }
+        jstr *r = js_str_new(rt, b.p ? b.p : "", b.len); wb_free(&b); return jstrv(r);
+    }
     case G_BTOA: {
         jstr *s = js_tostr(rt, ARG(0)); struct wb in = {0};
         for (uint32_t i = 0; i < s->len;) { uint32_t adv; uint32_t cp = wu_utf8_next(s->d + i, &adv); if (!adv) adv = 1; if (cp > 255) js_throw_err(rt, E_ERROR, "La cadena contiene caracteres fuera del rango Latin1"); wb_addc(&in, (char)cp); i += adv; }
@@ -280,25 +332,77 @@ static jv glob_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         jstr *r = js_str_new(rt, o.p ? o.p : "", o.len); wb_free(&o); return jstrv(r);
     }
     case G_EVAL: { if (ARG(0).t != JT_STR) return ARG(0); int ok; jv r = js_eval_string(rt, args[0].u.s->d, args[0].u.s->len, &ok); if (!ok) js_throw(rt, r); return r; }
-    case G_STRUCTCLONE: { jstr *j = js_json_stringify(rt, ARG(0), jundef(), jundef()); if (!j) return jundef(); return js_json_parse(rt, j->d, j->len); }
+    case G_STRUCTCLONE: { if (ARG(0).t == JT_OBJ && (args[0].u.o->cls == JC_ABUF || args[0].u.o->cls == JC_TYPED || args[0].u.o->cls == JC_DVIEW)) return js_bin_clone(rt, args[0]);   /* SOMA_186 */
+        jstr *j = js_json_stringify(rt, ARG(0), jundef(), jundef()); if (!j) return jundef(); return js_json_parse(rt, j->d, j->len); }
     case G_QUEUEMICRO: js_micro_enqueue(rt, ARG(0), jundef(), jundef(), 0, 0); return jundef();
     }
     return jundef();
 }
 
 /* ------------------------------ Reflect ------------------------------ */
-enum { R_OWNKEYS, R_HAS, R_GET, R_SET, R_APPLY, R_CONSTRUCT, R_GETPROTO, R_DEFINE, R_DELETE };
+enum { R_OWNKEYS, R_HAS, R_GET, R_SET, R_APPLY, R_CONSTRUCT, R_GETPROTO, R_DEFINE, R_DELETE, R_GETOWNDESC, R_SETPROTO, R_ISEXT, R_PREVENT };
 static jv reflect_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
     jv t = ARG(0);
     switch (magic) {
     case R_OWNKEYS: return jobjv(own_keys(rt, t, 1));
-    case R_HAS: return jbool(t.t == JT_OBJ && js_has(rt, t.u.o, js_tostr(rt, ARG(1))));
-    case R_GET: return js_getv(rt, t, ARG(1));
-    case R_SET: js_putv(rt, t, ARG(1), ARG(2)); return jbool(1);
+    case R_HAS: if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.has llamado sobre un valor que no es objeto"); return jbool(js_has(rt, t.u.o, js_tostr(rt, ARG(1))));
+    case R_GET:
+        if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.get llamado sobre un valor que no es objeto");
+        if (argc > 2 && !(args[2].t == JT_OBJ && args[2].u.o == t.u.o) && t.u.o->cls != JC_ARRAY && t.u.o->cls != JC_TYPED) {   /* SOMA_188: getters con el receptor (Vue) */
+            jstr *k = js_intern(rt, js_tostr(rt, ARG(1)));
+            for (jobj *q = t.u.o; q; q = q->proto) {
+                if (q->cls == JC_PROXY) return js_proxy_get(rt, q, k, args[2]);
+                struct jprop *pp = js_find_own(q, k);
+                if (pp) { if (pp->flags & JP_ACC) return pp->val.t == JT_OBJ ? js_call(rt, pp->val, args[2], 0, 0) : jundef(); return pp->val; }
+            }
+            return js_get(rt, t, k);
+        }
+        return js_getv(rt, t, ARG(1));
+    case R_SET: {
+        if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.set llamado sobre un valor que no es objeto");
+        if (t.u.o->cls == JC_PROXY) return jbool(js_proxy_set(rt, t.u.o, js_intern(rt, js_tostr(rt, ARG(1))), ARG(2), argc > 3 ? args[3] : t));
+        if (argc < 4 || (args[3].t == JT_OBJ && args[3].u.o == t.u.o)) { js_putv(rt, t, ARG(1), ARG(2)); return jbool(1); }
+        /* SOMA_188: OrdinarySet con receptor distinto (core-js lo comprueba con Object.prototype: antes se contaminaba) */
+        jstr *k = js_intern(rt, js_tostr(rt, ARG(1))); jv recv = args[3];
+        for (jobj *q = t.u.o; q; q = q->proto) {
+            if (q->cls == JC_PROXY) return jbool(js_proxy_set(rt, q, k, ARG(2), recv));
+            struct jprop *pp = js_find_own(q, k);
+            if (pp) {
+                if (pp->flags & JP_ACC) { if (pp->set.t != JT_OBJ) return jbool(0); jv v = ARG(2); js_call(rt, pp->set, recv, &v, 1); return jbool(1); }
+                if (pp->flags & JP_RO) return jbool(0);
+                break;
+            }
+        }
+        if (recv.t != JT_OBJ) return jbool(0);
+        /* SOMA_188: receptor Proxy (la trampa set de Vue hace Reflect.set(target, k, v, proxy)): el estandar pide
+           Receiver.[[GetOwnProperty]] y [[DefineOwnProperty]], no [[Set]] (que volveria a la trampa: recursion infinita) */
+        while (recv.t == JT_OBJ && recv.u.o->cls == JC_PROXY) {
+            jobj *px = recv.u.o; jv h = px->el ? px->el[1] : jnull();
+            if (h.t != JT_OBJ) js_throw_err(rt, E_TYPE, "No se puede operar sobre un Proxy revocado");
+            jv dp = js_get(rt, h, js_intern_c(rt, "defineProperty"));
+            if (js_is_callable(dp)) {
+                jv ga[2] = { recv, jstrv(k) }; jv ex = obj_static(rt, jundef(), ga, 2, O_GETOWNDESC);
+                jobj *d = js_obj_new(rt, rt->p_object); js_put(rt, jobjv(d), js_intern_c(rt, "value"), ARG(2));
+                if (ex.t != JT_OBJ) { js_put(rt, jobjv(d), js_intern_c(rt, "writable"), jbool(1)); js_put(rt, jobjv(d), js_intern_c(rt, "enumerable"), jbool(1)); js_put(rt, jobjv(d), js_intern_c(rt, "configurable"), jbool(1)); }
+                jv ca[3] = { px->el[0], jstrv(k), jobjv(d) };
+                return jbool(js_truthy(js_call(rt, dp, h, ca, 3)));
+            }
+            recv = px->el[0];
+        }
+        if (recv.t != JT_OBJ) return jbool(0);
+        struct jprop *rp = js_find_own(recv.u.o, k);
+        if (rp) { if ((rp->flags & (JP_ACC | JP_RO)) || recv.u.o->frozen) return jbool(0); rp->val = ARG(2); return jbool(1); }
+        if (!recv.u.o->extensible || recv.u.o->frozen) return jbool(0);
+        js_put(rt, recv, k, ARG(2)); return jbool(1);
+    }
     case R_APPLY: { jv a2[2] = { ARG(1), ARG(2) }; return func_proto(rt, t, a2, 2, F_APPLY); }
     case R_CONSTRUCT: { jv a = ARG(1); return js_construct(rt, t, a.t == JT_OBJ ? a.u.o->el : 0, a.t == JT_OBJ ? (int)a.u.o->alen : 0, argc > 2 && args[2].t == JT_OBJ ? args[2].u.o : 0); }
-    case R_GETPROTO: return t.t == JT_OBJ && t.u.o->proto ? jobjv(t.u.o->proto) : jnull();
+    case R_GETPROTO: if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.getPrototypeOf llamado sobre un valor que no es objeto"); return obj_static(rt, thisv, args, argc, O_GETPROTO);
+    case R_GETOWNDESC: if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.getOwnPropertyDescriptor llamado sobre un valor que no es objeto"); return obj_static(rt, thisv, args, argc, O_GETOWNDESC);   /* SOMA_188 */
+    case R_SETPROTO: if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.setPrototypeOf llamado sobre un valor que no es objeto"); obj_static(rt, thisv, args, argc, O_SETPROTO); return jbool(1);
+    case R_ISEXT: return t.t == JT_OBJ ? obj_static(rt, thisv, args, argc, O_ISEXT) : jbool(0);
+    case R_PREVENT: if (t.t == JT_OBJ) obj_static(rt, thisv, args, argc, O_PREVENT); return jbool(t.t == JT_OBJ);
     case R_DEFINE: if (t.t == JT_OBJ) { from_desc(rt, t.u.o, js_tostr(rt, ARG(1)), ARG(2)); return jbool(1); } return jbool(0);
     case R_DELETE: return jbool(t.t == JT_OBJ && js_delete(rt, t.u.o, js_tostr(rt, ARG(1))));
     }
@@ -310,7 +414,7 @@ static void inspect_into(struct jrt *rt, struct wb *b, jv v, int depth, int top,
 {
     switch (v.t) {
     case JT_STR: if (top) wb_addn(b, v.u.s->d, v.u.s->len); else { wb_addc(b, '\''); wb_addn(b, v.u.s->d, v.u.s->len); wb_addc(b, '\''); } return;
-    case JT_OBJ: break;
+    case JT_OBJ: if (v.u.o->cls == JC_BIGINT) { jstr *s = js_big_tostr(rt, v, 10); wb_addn(b, s->d, s->len); if (!top) wb_addc(b, 'n'); return; } break;   /* SOMA 188B */
     default: { jstr *s = js_tostr(rt, v); wb_addn(b, s->d, s->len); return; }
     }
     jobj *o = v.u.o;
@@ -446,16 +550,21 @@ void js_lib_init(struct jrt *rt)
     mkctor(rt, "Boolean", bool_ctor, 1, 0, rt->p_boolean); js_method(rt, rt->p_boolean, "toString", bool_proto, 0, 0); js_method(rt, rt->p_boolean, "valueOf", bool_proto, 0, 1);
     /* globales */
     static const struct { const char *n; int m; int a; } GS[] = { { "parseInt", G_PARSEINT, 2 }, { "parseFloat", G_PARSEFLOAT, 1 }, { "isNaN", G_ISNAN, 1 }, { "isFinite", G_ISFINITE, 1 }, { "encodeURI", G_ENCURI, 1 }, { "encodeURIComponent", G_ENCCOMP, 1 },
-        { "decodeURI", G_DECURI, 1 }, { "decodeURIComponent", G_DECCOMP, 1 }, { "escape", G_ESCAPE, 1 }, { "unescape", G_ESCAPE, 1 }, { "atob", G_ATOB, 1 }, { "btoa", G_BTOA, 1 }, { "eval", G_EVAL, 1 }, { "structuredClone", G_STRUCTCLONE, 1 }, { "queueMicrotask", G_QUEUEMICRO, 1 }, { 0, 0, 0 } };
+        { "decodeURI", G_DECURI, 1 }, { "decodeURIComponent", G_DECCOMP, 1 }, { "escape", G_ESCAPE, 1 }, { "unescape", G_UNESCAPE, 1 }, { "atob", G_ATOB, 1 }, { "btoa", G_BTOA, 1 }, { "eval", G_EVAL, 1 }, { "structuredClone", G_STRUCTCLONE, 1 }, { "queueMicrotask", G_QUEUEMICRO, 1 }, { 0, 0, 0 } };
     for (int i = 0; GS[i].n; i++) js_method(rt, rt->global, GS[i].n, glob_fn, GS[i].a, GS[i].m);
+    { rt->s_eval188 = js_intern_c(rt, "eval"); jv ev = js_get(rt, jobjv(rt->global), rt->s_eval188); rt->eval_fn = ev.t == JT_OBJ ? ev.u.o : 0; }   /* SOMA_188 */
     /* Reflect */
     jobj *rf = js_obj_new(rt, rt->p_object); js_def(rt, rt->global, js_intern_c(rt, "Reflect"), jobjv(rf), 0);
-    static const struct { const char *n; int m; } RS[] = { { "ownKeys", R_OWNKEYS }, { "has", R_HAS }, { "get", R_GET }, { "set", R_SET }, { "apply", R_APPLY }, { "construct", R_CONSTRUCT }, { "getPrototypeOf", R_GETPROTO }, { "defineProperty", R_DEFINE }, { "deleteProperty", R_DELETE }, { 0, 0 } };
+    static const struct { const char *n; int m; } RS[] = { { "ownKeys", R_OWNKEYS }, { "has", R_HAS }, { "get", R_GET }, { "set", R_SET }, { "apply", R_APPLY }, { "construct", R_CONSTRUCT }, { "getPrototypeOf", R_GETPROTO }, { "defineProperty", R_DEFINE }, { "deleteProperty", R_DELETE },
+        { "getOwnPropertyDescriptor", R_GETOWNDESC }, { "setPrototypeOf", R_SETPROTO }, { "isExtensible", R_ISEXT }, { "preventExtensions", R_PREVENT }, { 0, 0 } };
     for (int i = 0; RS[i].n; i++) js_method(rt, rf, RS[i].n, reflect_fn, 2, RS[i].m);
     /* console */
     jobj *con = js_obj_new(rt, rt->p_object); rt->g_console = con; js_def(rt, rt->global, js_intern_c(rt, "console"), jobjv(con), 0);
     static const struct { const char *n; int m; } CS[] = { { "log", CON_LOG }, { "info", CON_INFO }, { "warn", CON_WARN }, { "error", CON_ERROR }, { "debug", CON_DEBUG }, { "assert", CON_ASSERT }, { "clear", CON_CLEAR }, { "group", CON_LOG }, { "groupCollapsed", CON_LOG },
         { "groupEnd", CON_NOP }, { "table", CON_LOG }, { "dir", CON_LOG }, { "count", CON_NOP }, { "time", CON_TIME }, { "timeEnd", CON_TIMEEND }, { "timeLog", CON_TIMEEND }, { "trace", CON_TRACE }, { "profile", CON_NOP }, { "profileEnd", CON_NOP }, { 0, 0 } };
     for (int i = 0; CS[i].n; i++) js_method(rt, con, CS[i].n, console_fn, 0, CS[i].m);
-    js_lib_arrays_init(rt); js_lib_numbers_init(rt); js_lib_async_init(rt); js_regex_init(rt);
+    js_lib_arrays_init(rt); js_lib_numbers_init(rt); js_lib_async_init(rt); js_regex_init(rt); js_co_init(rt);   /* SOMA_183 */
+    js_bin_init(rt);                                                                                      /* SOMA_186 */
+    js_proxy_init(rt); js_big_init(rt);                                                                                    /* SOMA_188 */
+    js_module_init(rt);                                                                                   /* SOMA_188 */
 }

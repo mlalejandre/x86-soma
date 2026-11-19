@@ -51,14 +51,33 @@ static const struct soma_font_entry SOMA_FONTS[FONT_COUNT] = {
     [FONT_TREBUCHET] = { "trebuchet", "Sans dinámica, inspirada en Trebuchet MS 8x8", font_glyph_trebuchet },
     [FONT_UBUNTU] = { "ubuntu", "Sans geométrico de trazo marcado, estilo Ubuntu 8x8", font_glyph_ubuntu },
     [FONT_COMIC] = { "comic", "Estilo informal redondeado tipo cómic 8x8", font_glyph_comic },
-    [FONT_VECTOR] = { "vector", "Vectorial TrueType suavizada y escalable", font_glyph_classic }
+    [FONT_VECTOR] = { "vector", "Vectorial TrueType: DejaVu Sans Mono, suavizada y escalable", font_glyph_classic },
+    [FONT_DEJAVU_SANS] = { "dejavu-sans", "Vectorial TrueType proporcional: DejaVu Sans (la de la interfaz y la web)", font_glyph_classic },
+    [FONT_LIBERATION] = { "liberation-sans", "Vectorial TrueType: Liberation Sans, anchos de Arial (la de la web)", font_glyph_classic },
+    [FONT_LIBERATION_BOLD] = { "liberation-sans-bold", "Vectorial TrueType: Liberation Sans Negrita", font_glyph_classic }
 };
 
 static int current_font_id = FONT_VECTOR;
 
+/* SOMA_184: soma.sysfont=off (y el modo seguro): el catalogo vuelve a las 33 fuentes de antes del parche (sin DejaVu Sans ni Liberation) */
+#if defined(SOMA_FONT_HOST_TEST)
+int g_sysfont_off;
+int font_sysfont_off(void) { return g_sysfont_off; }
+#elif defined(__x86_64__)
+int font_sysfont_off(void)
+{
+    extern int bootinfo_disabled(const char *name);
+    static int v = -1; if (v < 0) v = bootinfo_disabled("sysfont") ? 1 : 0;
+    return v;
+}
+#else
+int font_sysfont_off(void) { return 0; }
+#endif
+static int font_n(void) { return font_sysfont_off() ? FONT_DEJAVU_SANS : FONT_COUNT; }
+
 int font_set(int font_id)
 {
-    if (font_id < 0 || font_id >= FONT_COUNT) return 0;
+    if (font_id < 0 || font_id >= font_n()) return 0;
     current_font_id = font_id;
     return 1;
 }
@@ -66,7 +85,7 @@ int font_set(int font_id)
 int font_set_by_name(const char *name)
 {
     if (!name || !*name) return 0;
-    for (int i = 0; i < FONT_COUNT; ++i) {
+    for (int i = 0; i < font_n(); ++i) {
         const char *a = name, *b = SOMA_FONTS[i].name;
         int eq = 1;
         while (*a && *b) {
@@ -90,19 +109,19 @@ int font_get_current(void)
 
 const char *font_get_name(int font_id)
 {
-    if (font_id < 0 || font_id >= FONT_COUNT) return "";
+    if (font_id < 0 || font_id >= font_n()) return "";
     return SOMA_FONTS[font_id].name;
 }
 
 const char *font_get_desc(int font_id)
 {
-    if (font_id < 0 || font_id >= FONT_COUNT) return "";
+    if (font_id < 0 || font_id >= font_n()) return "";
     return SOMA_FONTS[font_id].desc;
 }
 
 int font_get_count(void)
 {
-    return FONT_COUNT;
+    return font_n();
 }
 
 /* Compara nombres ASCII sin distinguir mayúsculas/minúsculas. */
@@ -125,10 +144,11 @@ static int font_name_compare(const char *a, const char *b)
  * Así se ordena `font` sin renumerar IDs ni romper `font <id>`. */
 int font_get_sorted_id(int order)
 {
-    if (order < 0 || order >= FONT_COUNT) return -1;
-    for (int i = 0; i < FONT_COUNT; ++i) {
+    int n = font_n();
+    if (order < 0 || order >= n) return -1;
+    for (int i = 0; i < n; ++i) {
         int rank = 0;
-        for (int j = 0; j < FONT_COUNT; ++j) {
+        for (int j = 0; j < n; ++j) {
             int cmp = font_name_compare(SOMA_FONTS[j].name, SOMA_FONTS[i].name);
             if (cmp < 0 || (cmp == 0 && j < i)) ++rank;
         }
@@ -331,16 +351,94 @@ static void font_draw_string_ansi_bitmap(uint32_t x, uint32_t y, const char *str
 
 /* ======================================================================
  * SOMA_VECTOR_FONTS_PATCH: capa vectorial (FONT_VECTOR)
+ * SOMA_184: varias caras TrueType. La mono (DejaVu Sans Mono) es la de siempre; las demas son las del navegador (DejaVu Sans y
+ * Liberation Sans regular/negrita), cuyos bytes viven en web_font.o: una sola copia en el kernel. Cada cara guarda su estado del
+ * lector (vf, vf_ascii) y ff_use() lo activa; la cache de glifos distingue las caras (vf_face).
  * ====================================================================== */
-static int vf_loaded = 0;   /* 0 = sin intentar, 1 = OK, -1 = fallo */
+extern const uint8_t web_ttf_blob[], web_ttf_blob_end[], web_ttf_sans[], web_ttf_sans_end[], web_ttf_sansb[], web_ttf_sansb_end[];
+static struct { struct vf_font f; uint16_t ascii[256]; int8_t state; } ff_tab[FFACE_COUNT];   /* state: 0 sin intentar, 1 lista, -1 fallo */
+static int ff_cur = -1;
+static const int8_t FF_EMK[FFACE_COUNT] = { 12, 11, 12, 12 };       /* em por unidad de escala: las proporcionales (mas anchas que la mono en m, w) apenas desbordan la celda de 8 px */
+static const char *const FF_NAME[FFACE_COUNT] = { "DejaVu Sans Mono", "DejaVu Sans", "Liberation Sans", "Liberation Sans Negrita" };
+static const int FF_CAT[FFACE_COUNT] = { FONT_VECTOR, FONT_DEJAVU_SANS, FONT_LIBERATION, FONT_LIBERATION_BOLD };
 
-static int vf_active(void)
+int font_face_of(int font_id)
 {
-    if (current_font_id != FONT_VECTOR) return 0;
-    if (vf_loaded == 0)
-        vf_loaded = vfont_init(vfont_ttf_data, vfont_ttf_len) ? 1 : -1;
-    return vf_loaded == 1;
+    switch (font_id) {
+    case FONT_VECTOR:          return FFACE_MONO;
+    case FONT_DEJAVU_SANS:     return FFACE_DEJAVU;
+    case FONT_LIBERATION:      return FFACE_LIBERATION;
+    case FONT_LIBERATION_BOLD: return FFACE_LIBERATION_BOLD;
+    default:                   return -1;
+    }
 }
+int font_face_catalog_id(int face) { return (face >= 0 && face < FFACE_COUNT) ? FF_CAT[face] : FONT_VECTOR; }
+const char *font_face_name(int face) { return (face >= 0 && face < FFACE_COUNT) ? FF_NAME[face] : ""; }
+int font_vec_em(int face, int em) { if (face < 0 || face >= FFACE_COUNT) face = 0; return (em * FF_EMK[face] + 6) / 12; }
+
+static int ff_ready(int face)
+{
+    if (face < 0 || face >= FFACE_COUNT) return 0;
+    if (ff_tab[face].state == 0) {
+        const uint8_t *d; uint32_t n;
+        switch (face) {
+        case FFACE_MONO:   d = vfont_ttf_data;  n = vfont_ttf_len; break;
+        case FFACE_DEJAVU: d = web_ttf_blob;    n = (uint32_t)(web_ttf_blob_end - web_ttf_blob); break;
+        case FFACE_LIBERATION: d = web_ttf_sans; n = (uint32_t)(web_ttf_sans_end - web_ttf_sans); break;
+        default:           d = web_ttf_sansb;   n = (uint32_t)(web_ttf_sansb_end - web_ttf_sansb); break;
+        }
+        vf_face = (uint32_t)face;
+        int ok = vfont_init(d, n);                    /* deja el estado del lector en vf / vf_ascii */
+        ff_tab[face].f = vf;
+        for (int i = 0; i < 256; i++) ff_tab[face].ascii[i] = vf_ascii[i];
+        ff_tab[face].state = ok ? 1 : -1;
+        ff_cur = face;
+    }
+    return ff_tab[face].state == 1;
+}
+/* activa la cara (y su tamano em por escala); 1 si esta disponible */
+static int ff_use(int face)
+{
+    if (!ff_ready(face)) return 0;
+    if (ff_cur != face) {
+        vf = ff_tab[face].f;
+        for (int i = 0; i < 256; i++) vf_ascii[i] = ff_tab[face].ascii[i];
+        vf_face = (uint32_t)face; ff_cur = face;
+    }
+    vf_emk = FF_EMK[face];
+    return 1;
+}
+static int ff_has(uint32_t cp)
+{
+    uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp);
+    return g != 0;
+}
+/* cara que dibuja un codepoint: la pedida y, si no lo tiene, DejaVu Sans y luego la mono (flechas, simbolos...). -1 = ninguna */
+static int ff_pick(int face, uint32_t cp)
+{
+    int cand[3] = { face, FFACE_DEJAVU, FFACE_MONO };
+    for (int i = 0; i < 3; i++) {
+        if (i && cand[i] == face) continue;
+        if (ff_use(cand[i]) && ff_has(cp)) return cand[i];
+    }
+    return ff_use(face) ? face : (ff_use(FFACE_MONO) ? FFACE_MONO : -1);
+}
+static void ff_draw_cp(int face, int32_t x, int32_t y, uint32_t cp, uint32_t fg, int scale)
+{
+    int u = ff_pick(face, cp);
+    if (u < 0) return;
+    ff_use(u);
+    vfont_draw_cp(x, y, cp, fg, scale);
+}
+/* cara del escritorio si la fuente activa es vectorial (con respaldo a la mono); -1 = mapa de bits */
+static int vf_face_now(void)
+{
+    int face = font_face_of(current_font_id);
+    if (face < 0) return -1;
+    if (ff_ready(face)) return face;
+    return ff_ready(FFACE_MONO) ? FFACE_MONO : -1;
+}
+static int vf_active(void) { return vf_face_now() >= 0; }
 
 /* Decodificador UTF-8 -> codepoint */
 static uint32_t vf_utf8(const char *s, int *n)
@@ -368,13 +466,14 @@ static uint32_t vf_utf8(const char *s, int *n)
 
 static void vf_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, int scale)
 {
+    int face = vf_face_now(); if (face < 0) return;
     uint32_t cx = x, cy = y;
     const char *p = str;
     while (*p) {
         if (*p == '\n') { cx = x; cy += (uint32_t)(10 * scale); p++; continue; }
         int n = 1;
         uint32_t cp = vf_utf8(p, &n);
-        vfont_draw_cp((int32_t)cx, (int32_t)cy, cp, fg, scale);
+        ff_draw_cp(face, (int32_t)cx, (int32_t)cy, cp, fg, scale);
         cx += (uint32_t)(8 * scale);
         p += n;
     }
@@ -382,6 +481,7 @@ static void vf_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg,
 
 static void vf_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_t def_color)
 {
+    int face = vf_face_now(); if (face < 0) return;
     uint32_t cx = x, col = def_color;
     while (*str) {
         if ((uint8_t)*str == 27 && str[1] == '[') {
@@ -410,7 +510,7 @@ static void vf_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_
         }
         int n = 1;
         uint32_t cp = vf_utf8(str, &n);
-        vfont_draw_cp((int32_t)cx, (int32_t)y, cp, col, 1);
+        ff_draw_cp(face, (int32_t)cx, (int32_t)y, cp, col, 1);
         cx += 8;
         str += n;
     }
@@ -418,9 +518,10 @@ static void vf_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_
 
 void font_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, int scale)
 {
-    if (vf_active()) {
+    int face = vf_face_now();
+    if (face >= 0) {
         uint32_t cp = ((uint8_t)c >= 32 && (uint8_t)c < 127) ? (uint8_t)c : (uint32_t)'?';
-        vfont_draw_cp((int32_t)x, (int32_t)y, cp, fg, scale);
+        ff_draw_cp(face, (int32_t)x, (int32_t)y, cp, fg, scale);
         return;
     }
     font_draw_char_bitmap(x, y, c, fg, scale);
@@ -443,14 +544,25 @@ void font_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_t def
 /* SOMA_PARCHE_024_TERM: texto de terminal en rejilla fija */
 int font_vec_available(void)
 {
-    if (vf_loaded == 0) vf_loaded = vfont_init(vfont_ttf_data, vfont_ttf_len) ? 1 : -1;
-    return vf_loaded == 1;
+    return ff_ready(FFACE_MONO);
 }
 
-void font_vec_draw(int32_t x, int32_t y, uint32_t cp, uint32_t fg, int em, int cell_w, int baseline)
+/* SOMA_184: dibuja con una cara concreta (el editor de texto elige la suya); sin ella, con la mono. Si la cara no tiene el glifo
+ * sale de DejaVu Sans o de la mono. */
+void font_vec_draw_face(int face, int32_t x, int32_t y, uint32_t cp, uint32_t fg, int em, int cell_w, int baseline)
 {
     if (!font_vec_available()) return;
+    if (face < 0 || face >= FFACE_COUNT) face = FFACE_MONO;
+    int u = ff_pick(face, cp);
+    if (u < 0) return;
+    ff_use(u);
     vfont_draw_em(x, y, cp, fg, em, cell_w, baseline);
+}
+
+/* el terminal usa siempre la mono, sea cual sea la fuente del escritorio */
+void font_vec_draw(int32_t x, int32_t y, uint32_t cp, uint32_t fg, int em, int cell_w, int baseline)
+{
+    font_vec_draw_face(FFACE_MONO, x, y, cp, fg, em, cell_w, baseline);
 }
 
 /* Dibuja una celda bitmap con acentos (seq = 1 byte ASCII o 2 bytes UTF-8) a escala entera. */
@@ -513,7 +625,8 @@ void vicon_draw_tile(int id, int32_t x, int32_t y, int32_t size, uint32_t fg, ui
 int font_draw_cell_vector(int32_t x, int32_t y, uint8_t base, uint32_t mark,
                           uint32_t col, int sc)
 {
-    if (sc <= 0 || !vf_active()) return 0;
+    int face = vf_face_now();
+    if (sc <= 0 || face < 0) return 0;
     uint32_t cp = base;
     if (mark == 1u) {
         switch (base) {
@@ -540,6 +653,6 @@ int font_draw_cell_vector(int32_t x, int32_t y, uint8_t base, uint32_t mark,
         else if (base == '!') cp = 0xA1u;
     }
     if (cp < 32u) return 1;
-    vfont_draw_cp(x, y, cp, col, sc);
+    ff_draw_cp(face, x, y, cp, col, sc);
     return 1;
 }

@@ -1,10 +1,112 @@
-# 🧠 SOMA v0.2 — AI-Native Operating System with Cosmic GUI
+# 🧠 SOMA v0.3 pre-beta — AI-Native Operating System with Cosmic GUI
 
 SOMA (Sistema Operativo Multi-Agente) es un sistema operativo experimental de 64 bits para arquitecturas x86_64 y AArch64 desarrollado desde cero en C freestanding y ensamblador, sin Linux, sin glibc ni dependencias externas.
 
 > **🍓 Primera versión que arranca en una Raspberry Pi 5 real.** Probada en placa: consola de texto y escritorio gráfico por HDMI a la resolución del monitor, teclado y ratón USB en los cuatro puertos y ventilador activo. También se puede probar sin placa en una Pi 5 emulada (QEMU `raspi5b`).
 
 Diseñado desde el hardware como entorno nativo para agentes de Inteligencia Artificial, SOMA integra un escritorio gráfico TrueColor acelerado en Ring 0, multitarea multiventana, pila de red TCP/IP y almacenamiento persistente.
+
+> **🧪 Fase pre-beta (v0.3.0-prebeta).** El sistema se usa a diario en QEMU y en un ThinkPad T480s real, pero sigue siendo
+> experimental: guarda copia de tus datos y no lo instales como único sistema. Los cambios de esta fase están en
+> [CHANGELOG.md](CHANGELOG.md). Para informar de un fallo, abre una *issue* con lo que hiciste, el equipo y, si puedes, la
+> salida de la consola serie (las líneas `[ESCRITORIO]`, `[WATCHDOG]` o el informe de pánico).
+
+---
+
+## 💽 Novedad de la v0.3: arrancar SOMA desde un pendrive en un PC x86_64
+
+La principal novedad de esta versión es que SOMA arranca **en un PC real desde un pendrive USB**, sin instalar nada en el
+disco del ordenador. Está probado a fondo en un **Lenovo ThinkPad T480s** (pantalla, teclado, trackpad, USB, Ethernet, WiFi
+Intel 8265, audio, cámara, batería y brillo); en otros PC x86_64 con UEFI debería arrancar, aunque el soporte de su
+hardware puede ser parcial.
+
+**Qué necesitas:** un pendrive de **8 GB o más** (se borra entero), un PC x86_64 con **UEFI** y, para compilar,
+**Docker** (Docker Desktop en Windows y Mac) y **Python 3**.
+
+El pendrive lleva dos particiones en una tabla **MBR**:
+
+| Partición | Formato | Etiqueta | Tamaño | Para qué |
+|---|---|---|---|---|
+| 1 | FAT32 | `SOMA` | 1 GB | El arranque: `EFI/BOOT/BOOTX64.EFI` (GRUB + núcleo + firmware WiFi en un solo archivo) |
+| 2 | FAT32 | `SOMADATA` | 4 GB | El disco de SOMA. Al primer arranque SOMA la reclama y la formatea con su propio sistema de archivos |
+
+> ⚠️ Los pasos de abajo **borran el pendrive entero**. Comprueba dos veces que eliges el pendrive y no el disco del ordenador.
+
+### Paso 1 · Compilar el archivo de arranque (igual en los tres sistemas)
+
+Desde la carpeta del repositorio, con Docker abierto:
+
+    docker build --platform linux/amd64 -t soma-toolchain .
+    docker run --rm --platform linux/amd64 -v "$PWD":/soma -w /soma soma-toolchain make ARCH=x86_64 PLATFORM=qemu_virt EXTRA_CFLAGS=-DSOMA_WEB_ASYNC_IMAGES=1 t480s-usb
+
+En Windows (PowerShell) cambia `"$PWD"` por `"${PWD}"`; en el `cmd` clásico, por `"%cd%"`.
+El resultado es **`build/usb/EFI/BOOT/BOOTX64.EFI`** (unos 5 MB).
+
+### Paso 2 · Preparar el pendrive
+
+#### 🍎 macOS (automático)
+
+    python3 ejecutar.py -t t480s-usb
+
+Compila, lista **solo discos externos**, pide escribir `BORRAR` y deja el pendrive listo (incluida una tercera partición
+`DATOS` para ti). Si el pendrive ya estaba preparado, solo copia el arranque y **conserva tus archivos de SOMA**.
+Si macOS dice que no puede leer un disco, es `SOMADATA`: pulsa **Ignorar**, nunca «Inicializar».
+
+#### 🐧 Linux
+
+1. Localiza el pendrive (fíjate en el tamaño y en `TRAN usb`):
+
+        lsblk -o NAME,SIZE,TRAN,MODEL
+
+2. Particiona y formatea (cambia `/dev/sdX` por tu pendrive, **sin número al final**):
+
+        sudo umount /dev/sdX?* 2>/dev/null
+        sudo parted -s /dev/sdX mklabel msdos \
+             mkpart primary fat32 1MiB 1GiB \
+             mkpart primary fat32 1GiB 5GiB
+        sudo mkfs.vfat -F 32 -n SOMA     /dev/sdX1
+        sudo mkfs.vfat -F 32 -n SOMADATA /dev/sdX2
+
+3. Copia el arranque:
+
+        sudo mkdir -p /mnt/soma && sudo mount /dev/sdX1 /mnt/soma
+        sudo cp -r build/usb/EFI /mnt/soma/
+        sudo umount /mnt/soma && sync
+
+#### 🪟 Windows
+
+1. Abre **PowerShell como administrador** y ejecuta `diskpart`.
+2. Dentro de `diskpart` (cambia `N` por el número de tu pendrive; compruébalo por el tamaño en `list disk`):
+
+        list disk
+        select disk N
+        clean
+        convert mbr
+        create partition primary size=1024
+        format fs=fat32 quick label=SOMA
+        assign letter=S
+        create partition primary size=4096
+        format fs=fat32 quick label=SOMADATA
+        exit
+
+3. Copia la carpeta `EFI` a la raíz de la unidad `S:`:
+
+        Copy-Item -Recurse build\usb\EFI S:\
+
+   Si Windows ofrece «formatear» la segunda unidad tras el primer arranque de SOMA, pulsa **Cancelar**.
+
+En los tres casos el pendrive debe quedar así: `S:\EFI\BOOT\BOOTX64.EFI` (o `/EFI/BOOT/BOOTX64.EFI`) en la partición `SOMA`.
+
+### Paso 3 · Arrancar el PC desde el pendrive
+
+1. En la BIOS/UEFI del PC: **desactiva Secure Boot** (SOMA no está firmado) y deja activado el arranque UEFI desde USB.
+   En el ThinkPad T480s: `F1` al encender → *Security → Secure Boot → Disabled*.
+2. Enchufa el pendrive y abre el menú de arranque (`F12` en Lenovo; `F11`, `F8` o `Esc` en otras marcas) y elige el USB.
+3. En el menú de GRUB elige **SOMA** (o *resolución segura 1024x768* si la pantalla se queda en negro).
+4. El primer arranque reclama `SOMADATA`: a partir de ahí lo que guardes en SOMA se conserva entre arranques.
+
+**Si algo falla:** prueba otro puerto USB, comprueba que Secure Boot está desactivado y que el PC arranca en modo UEFI
+(no «Legacy/CSM»). Para informar de un fallo abre una *issue* con la marca y el modelo del PC.
 
 ---
 
@@ -102,8 +204,8 @@ Requisitos en el equipo anfitrión: Python 3, Docker y QEMU (`qemu-system-x86_64
 
 1. Clonar el repositorio:
 
-        git clone https://github.com/mlalejandre/raspy-soma.git
-        cd raspy-soma
+        git clone https://github.com/mlalejandre/x86-soma.git
+        cd x86-soma
 
 2. Elegir destino con el menú o con `-t`:
 

@@ -1,0 +1,45 @@
+{
+  "created": {
+    "docs/PARCHE_168B_ORBE_AL_FRENTE.md": "fdd8df64b745602a4d498b233135f7f5173cf5d97152ef09feeedc9adf170410"
+  },
+  "files": {
+    "docs/PLAN_T480S.md": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "738ec58d448f963daf80863a44445d5cff98a385bfe24bb7afc554c41f83f2bd",
+      "old": "687d189b2f5a079bb519400cff58175c065e48e0bc535f52a19bb62224b95f50"
+    },
+    "src/arch/x86_64/i8042.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "c667b176de1c61089e17318d68534a51fcfac9612e7e663fc37cd8d15e110649",
+      "old": "e69befc254a75b2bd388dcd7973045379b6d1a1611fb9adc09bcb8a18f976917"
+    },
+    "src/drivers/fb.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "5ab271820b5c393751120ea63891d2ad610a62d5c3a85f49866c0129f273d8cb",
+      "old": "e1e5aad5bdbb51ee77bbc7a432b6588bd41025f4d16d3634aa2ed211449a0daa"
+    },
+    "src/ui/console.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "331494ea33fe54041c786f73d90c1cfdd3016df51fdc6193e63c1ba62c33cab9",
+      "old": "7ff5eb09f4031ff2b43a8f423003013f45e3f8f2cee10309e4c9be888a17774e"
+    },
+    "src/ui/console.h": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "d636efbacd6fe9f8de008065df04c85cab21a6d7c02466f0b8355437e643e7e5",
+      "old": "2675fcde4aef29b59c9e0dce146a3ee48098abb11b34b7455410d96eed693a44"
+    },
+    "src/ui/gui.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "ba1ee886c184b68f3e8f69935725b734dce3bd2beb38ead4bbde9dab9d44946f",
+      "old": "0b8277b7b036517c9950aa8b98bb9684142ff2d93aeea6baf71fd2fdbd39cf82"
+    }
+  },
+  "log": "20261115_234552 parche 168B: el orbe al frente con la tecla Windows (u Option sola en el Mac) y animacion de salto estelar; la x ya no llama al orbe; diagnostico Synaptics/Elan del trackpad",
+  "version": 1
+}

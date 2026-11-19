@@ -1,0 +1,15 @@
+{
+  "created": {
+    "docs/PARCHE_175C4_T480S_WIFI_SIN_AHORRO.md": "9591593667ed3eb138d2ad51390dbdec0a33b883d8e7f47f075b9c348a016845"
+  },
+  "files": {
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "9c9ad2998ba2f41b1a07a3a78a707bc2ffd144d0d1c643ad67db0848f4761f70",
+      "old": "e2ccb533c9fa6c41aba7585763ac6463165416b6b07ea94e651125c9aa5ea5bc"
+    }
+  },
+  "log": "20261116_130500 parche 175C4: WiFi: POWER_TABLE_CMD en CAM, balizas tras asociarse con lectura del TIM y nulas sin PM para recoger tramas guardadas",
+  "version": 1
+}

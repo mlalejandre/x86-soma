@@ -1,12 +1,17 @@
 /* SOMA_PARCHE_NAVEGADOR: motor de maquetacion (cajas, texto en linea, flotantes, flex, grid, tablas) y pintado. */
 #include "web_layout.h"
+#include "web_raster_150.h" /* SOMA_150_WEB_RASTER */
 #include "web_font.h"
 #include "fb.h"
 /* PARCHE 085: el contenido de las paginas no usa los ajustes de fuente de la interfaz */
-#define wf_draw(x, y, s, n, px, c, fl, a) wf_draw((x), (y), (s), (n), (px), (c), (fl) | WF_RAW, (a))
-#define wf_width64(s, n, px, fl) wf_width64((s), (n), (px), (fl) | WF_RAW)
+#define wf_draw(x, y, s, n, px, c, fl, a) wf_draw((x), (y), (s), (n), (px), (c), (fl) | WF_RAW | WF_WEB, (a))
+#define wf_width64(s, n, px, fl) wf_width64((s), (n), (px), (fl) | WF_RAW | WF_WEB)
+#define wf_cp_adv64(cp, px, fl) wf_cp_adv64((cp), (px), (fl) | WF_WEB)   /* SOMA_182 */
+#define wf_ascent(px) wf_web_ascent(px)
+#define wf_descent(px) wf_web_descent(px)
 
 #define MAXD 100
+static inline int wl181_off(void) { return g_wl181_off; }
 #define BIG 0x3fffffff
 enum { BK_BLOCK = 1, BK_FLEX, BK_GRID, BK_TABLE, BK_TROW, BK_REPL };
 enum { TS_CAPTION = 1, TS_CELL = 2 };
@@ -14,7 +19,7 @@ enum { TS_CAPTION = 1, TS_CELL = 2 };
 static inline int wmax(int a, int b) { return a > b ? a : b; }
 static inline int wmin(int a, int b) { return a < b ? a : b; }
 static inline int wclamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
-static inline int ceil64(int v) { return (v + 63) >> 6; }
+static inline int ceil64(int v) { return g_wl181_off ? ((v + 63) >> 6) : ((v + 32) >> 6); }   /* SOMA_181: redondeo al entero mas cercano (antes por exceso: cada palabra sumaba ~0,5 px y las lineas ajustadas se partian de mas) */
 
 static int lenv(const struct wlen *l, int base, int def)
 {
@@ -29,6 +34,16 @@ static int textw(const struct wstyle *s, const char *t, uint32_t n)
     return w;
 }
 static int spacew(const struct wstyle *s) { int w = (wf_cp_adv64(' ', s->font_px, fontfl(s)) + 32) >> 6; return w + s->letter_sp; }
+/* SOMA_182: con Liberation Sans el espacio mide fracciones de pixel (16 px: 4,44); redondear cada espacio acumula un error del 1 % por linea.
+ * Se arrastra el resto en 1/64 px por linea para que la suma sea la de Chrome. La anchura intrinseca usa la misma cuenta. */
+static int spacew64(const struct wstyle *s) { return wf_cp_adv64(' ', s->font_px, fontfl(s)) + s->letter_sp * 64; }
+static int sp_carry(int *fr, const struct wstyle *s)
+{
+    if (!g_wf182_on) return spacew(s);
+    int w64 = spacew64(s), w = w64 >> 6; *fr += w64 & 63;
+    if (*fr >= 64) { w++; *fr -= 64; }
+    return w;
+}
 
 /* ----------------------------- contexto de flotantes ----------------------------- */
 struct wflr { int x0, y0, x1, y1; };
@@ -165,9 +180,15 @@ static const char *norm_text(struct wlay *L, const char *s, uint32_t n, const st
 }
 
 /* ---- enlace con el cargador: lectura de imagen ---- */
+static int img_info_need(struct wlay *L, const char *url, struct wimginfo *o, int need)
+{
+    memset(o, 0, sizeof(*o)); o->need_size = need; if (!L->img_cb || !url || !*url) return 0;
+    return L->img_cb(L->img_ud, url, o);
+}
 static int img_info(struct wlay *L, const char *url, struct wimginfo *o)
 {
     memset(o, 0, sizeof(*o)); if (!L->img_cb || !url || !*url) return 0;
+    o->painting = L->painting;
     return L->img_cb(L->img_ud, url, o);
 }
 
@@ -210,12 +231,44 @@ static void flush_run(struct wcont *C)
 
 static void emit_node(struct wcont *C, struct wnode *c, struct wnode *link);
 
+/* SOMA_188: <slot> dentro de un arbol sombra: su anfitrion (o NULL) y que hijos del anfitrion le tocan */
+static struct wnode *slot_host(const struct wnode *n)
+{
+    if (!n || n->type != WN_ELEM || !n->name || !wu_streq(n->name, "slot")) return 0;
+    for (const struct wnode *a = n->parent; a; a = a->parent) if (wd_is_shadow_root(a)) return a->parent;
+    return 0;
+}
+static int slot_takes(const struct wnode *c, const char *slotname)
+{
+    if (c->type == WN_TEXT) return !slotname || !*slotname;
+    if (c->type != WN_ELEM) return 0;
+    const char *s = wd_attr(c, "slot");
+    if (!slotname || !*slotname) return !s || !*s;
+    return s && wu_streq(s, slotname);
+}
+/* SOMA_188: ::before / ::after activos de un elemento */
+static struct wnode *pse_of(const struct wnode *n, int k)
+{
+    if (!n || n->type != WN_ELEM || !n->st) return 0;
+    struct wnode *p = n->st->pse[k];
+    return p && p->st && p->st->display != D_NONE ? p : 0;
+}
 static void emit_children(struct wcont *C, struct wnode *n, struct wnode *link)
 {
     struct wbld *B = C->B;
     if (B->depth > MAXD || web_stack_left() < 6000) return;
     B->depth++;
+    struct wnode *pb = pse_of(n, 0), *pa = pse_of(n, 1);
+    if (pb) emit_node(C, pb, link);
+    if (n->type == WN_ELEM && n->shadow && !wl181_off()) {   /* SOMA_188: shadow DOM: se dibuja el arbol sombra */
+        for (struct wnode *c = n->shadow->first; c; c = c->next) emit_node(C, c, link);
+    } else if (slot_host(n)) {   /* <slot>: nodos asignados del anfitrion o, si no hay, su contenido por defecto */
+        struct wnode *h = slot_host(n); const char *nm = wd_attr(n, "name"); int any = 0;
+        for (struct wnode *c = h->first; c; c = c->next) if (slot_takes(c, nm)) { emit_node(C, c, link); any = 1; }
+        if (!any) for (struct wnode *c = n->first; c; c = c->next) emit_node(C, c, link);
+    } else
     for (struct wnode *c = n->first; c; c = c->next) emit_node(C, c, link);
+    if (pa) emit_node(C, pa, link);
     B->depth--;
 }
 
@@ -281,14 +334,16 @@ static void build_content(struct wbld *B, struct wbox *b, struct wnode *n, int f
     C.need_blocks = flexlike;
     if (!C.need_blocks) {
         struct wnode *stack[MAXD + 2]; int sp = 0; (void)stack; (void)sp;
-        for (struct wnode *c = n->first; c && !C.need_blocks; c = c->next) {
+        for (struct wnode *c = (n->shadow && !wl181_off()) ? n->shadow->first : n->first; c && !C.need_blocks; c = c->next) {
             if (c->type != WN_ELEM || !c->st) continue;
+            if (slot_host(c)) { struct wnode *h = slot_host(c); const char *nm = wd_attr(c, "name"); for (struct wnode *k = h->first; k; k = k->next) if (k->type == WN_ELEM && k->st && slot_takes(k, nm) && blocklevel(edisp(k)) && !is_float(k->st) && !is_abs(k->st)) C.need_blocks = 1; continue; }
             int d = edisp(c); if (d == D_NONE) continue;
             if (is_float(c->st) || is_abs(c->st)) continue;
             if (d == D_CONTENTS) { if (has_block_desc(c, 0)) C.need_blocks = 1; continue; }
             if (is_replaced(c)) continue;
             if (blocklevel(d)) C.need_blocks = 1; else if (d == D_INLINE && has_block_desc(c, 0)) C.need_blocks = 1;
         }
+        for (int k = 0; k < 2 && !C.need_blocks; k++) { struct wnode *ps = pse_of(n, k); if (ps && !is_float(ps->st) && !is_abs(ps->st) && blocklevel(edisp(ps))) C.need_blocks = 1; }   /* SOMA_188 */
     }
     emit_children(&C, n, n->tag == WT_A && wd_attr(n, "href") ? n : 0);
     flush_run(&C);
@@ -526,17 +581,24 @@ static void repl_size(struct wlay *L, struct wbox *b, int cbw, int cbh, int *pw,
         h = -1;
     }
     if (s->box_sizing && w >= 0) w = wmax(0, w - hextra(b));
+    if (s->box_sizing && h >= 0 && !wl181_off()) h = wmax(0, h - (b->pt + b->pb + b->bt + b->bb));   /* SOMA_188: border-box tambien en el alto */
     int px = s->font_px, lh = wc_line_px(s);
     switch (b->ctl) {
     case CTL_IMG: {
         struct wimginfo ii; const char *src = wl_img_src(n);
-        if (src && img_info(L, src, &ii) && ii.state == 2 && ii.w > 0 && ii.h > 0) { nw = ii.w; nh = ii.h; aspect = 1; }
+        /* SOMA_152B: si el CSS/atributos ya fijan ancho y alto, el tamano natural no cambia la maquetacion */
+        if (src && img_info_need(L, src, &ii, w < 0 || h < 0) && ii.state == 2 && ii.w > 0 && ii.h > 0) { nw = ii.w; nh = ii.h; aspect = 1;
+            if (ii.ratio_only && w < 0 && h < 0 && !intr && cbw > 0 && !wl181_off()) { w = cbw - hextra(b); if (w < 0) w = 0; }   /* SOMA_188: SVG solo con proporcion: ancho disponible */
+        }
         else if (src && ii.state == 3 && n->tag != WT_SVG) { const char *alt = wd_attr(n, "alt"); nw = alt ? textw(s, alt, wu_strlen(alt)) + 4 : 0; nh = alt && *alt ? lh + 2 : 0; if (w < 0 && h < 0 && !alt) { nw = 16; nh = 16; } }
         else if (w < 0 && h < 0) { nw = 0; nh = 0; }
         break; }
     case CTL_TEXT: case CTL_PASSWORD: {
         const char *sz = wd_attr(n, "size"); int c = sz ? wclamp(wu_atoi(sz), 1, 200) : 20;
-        nw = c * ((wf_cp_adv64('0', px, fontfl(s)) * 87 / 100 + 32) >> 6); nh = lh; break; }
+        if (wl181_off()) { nw = c * ((wf_cp_adv64('0', px, fontfl(s)) * 87 / 100 + 32) >> 6); nh = lh; break; }
+        /* SOMA_188: como Chrome (LayoutTextControlSingleLine): size x ancho medio + (ancho maximo - ancho medio), medido con Liberation Sans */
+        if (s->mono) nw = ((c - 1) * px * 602 + px * 1700 + 500) / 1000; else nw = ((c - 1) * px * 574 + px * 2190 + 500) / 1000;
+        nh = lh; break; }
     case CTL_CHECK: case CTL_RADIO: nw = 13; nh = 13; break;
     case CTL_BTN_INPUT: { const char *t = wl_ctl_text(n); nw = textw(s, t, wu_strlen(t)); nh = lh; break; }
     case CTL_RANGE: nw = 129; nh = 16; break;
@@ -545,14 +607,21 @@ static void repl_size(struct wlay *L, struct wbox *b, int cbw, int cbh, int *pw,
     case CTL_SELECT: {
         struct wnode *o[256]; int c = 0, mx = 0; opt_collect(n, o, &c, 256);
         for (int i = 0; i < c; i++) { const char *l = opt_label(o[i]); int t = textw(s, l, wu_strlen(l)); if (t > mx) mx = t; }
-        nw = (mx ? mx : 40) + 22; nh = lh; break; }
+        if (wl181_off()) { nw = (mx ? mx : 40) + 22; nh = lh; break; }
+        nw = (mx ? mx : 40) + 18; nh = lh + 2; break; }   /* SOMA_188: sin relleno de UA (como Chrome): hueco de la flecha y margen interno */
     case CTL_TEXTAREA: {
         const char *cs = wd_attr(n, "cols"), *rs = wd_attr(n, "rows"); int cols = cs ? wclamp(wu_atoi(cs), 1, 300) : 20, rows = rs ? wclamp(wu_atoi(rs), 1, 100) : 2;
-        nw = cols * ((wf_cp_adv64('0', px, fontfl(s)) * 87 / 100 + 32) >> 6); nh = rows * lh; break; }
+        if (wl181_off()) { nw = cols * ((wf_cp_adv64('0', px, fontfl(s)) * 87 / 100 + 32) >> 6); nh = rows * lh; break; }
+        nw = cols * (s->mono ? (px * 602 + 500) / 1000 : (px * 574 + 500) / 1000) + 15; nh = rows * lh; break; }   /* SOMA_188: cols x ancho medio (entero) + barra de 15px (como Chrome) */
     default:
         nw = (n->tag == WT_AUDIO) ? 300 : 300; nh = (n->tag == WT_AUDIO) ? 32 : 150;
         if (n->tag == WT_EMBED || n->tag == WT_OBJECT) { nw = 0; nh = 0; }
         break;
+    }
+    if (s->ar_w && s->ar_h && !wl181_off() && b->ctl == CTL_IMG) {   /* SOMA_181: aspect-ratio explicito sobre la proporcion natural */
+        if (w >= 0 && h < 0) { h = (int)((int64_t)w * s->ar_h / s->ar_w); }
+        else if (h >= 0 && w < 0) { w = (int)((int64_t)h * s->ar_w / s->ar_h); }
+        else if (w < 0 && h < 0 && nw > 0) { w = nw; h = (int)((int64_t)nw * s->ar_h / s->ar_w); }
     }
     if (w < 0 && h < 0) { w = nw; h = nh; }
     else if (w < 0) { w = (aspect && nh > 0) ? (int)((int64_t)h * nw / nh) : nw; }
@@ -577,7 +646,7 @@ static int hextra_half(const struct wstyle *s, int right)   /* margen+relleno+bo
 
 static void intr_items(struct wlay *L, struct wbox *b)
 {
-    int cur = 0, mx = 0, mn = 0; int sp_pend = 0;
+    int cur = 0, mx = 0, mn = 0; int sp_pend = 0, spfr = 0;
     for (int i = 0; i < b->nitems; i++) {
         struct wii *it = &b->items[i];
         switch (it->type) {
@@ -593,8 +662,8 @@ static void intr_items(struct wlay *L, struct wbox *b)
                     if (cp >= 0x2E80 && cp < 0xA000) pos += adv; else { while (pos < it->len && it->txt[pos] != ' ' && it->txt[pos] != '\n') { cp = wu_utf8_next(it->txt + pos, &adv); if (cp >= 0x2E80 && cp < 0xA000) break; pos += adv; } }
                 }
                 k.s = s0; k.n = pos - s0;
-                if (k.kind == 2) { mx = wmax(mx, cur); cur = 0; sp_pend = 0; mn = wmax(mn, runw); runw = 0; continue; }
-                if (k.kind == 1) { if (pre) { cur += (int)k.n * wsw; runw += (int)k.n * wsw; } else if (cur > 0) sp_pend = wsw; if (!pre && nw) runw += cur ? wsw : 0; continue; }
+                if (k.kind == 2) { mx = wmax(mx, cur); cur = 0; sp_pend = 0; spfr = 0; mn = wmax(mn, runw); runw = 0; continue; }
+                if (k.kind == 1) { if (pre) { cur += (int)k.n * wsw; runw += (int)k.n * wsw; } else if (cur > 0) sp_pend = sp_carry(&spfr, st); if (!pre && nw) runw += cur ? wsw : 0; continue; }
                 int w = textw(st, it->txt + k.s, k.n);
                 if (sp_pend && cur > 0) { cur += sp_pend; } sp_pend = 0;
                 cur += w;
@@ -604,7 +673,7 @@ static void intr_items(struct wlay *L, struct wbox *b)
             break; }
         case II_OPEN: { cur += hextra_half(it->st, 0); break; }
         case II_CLOSE: { cur += hextra_half(it->st, 1); break; }
-        case II_BR: mx = wmax(mx, cur); cur = 0; sp_pend = 0; break;
+        case II_BR: mx = wmax(mx, cur); cur = 0; sp_pend = 0; spfr = 0; break;
         case II_ATOM: case II_FLOAT: {
             struct wbox *x = it->box; if (!x) break; intrinsic(L, x);
             int ex = hextra(x) + hmargin(x); int xo = x->imax + ex, xi = x->imin + ex;
@@ -718,14 +787,14 @@ static void intrinsic(struct wlay *L, struct wbox *b)
         if (row) { mx = sx + gap * (cnt > 0 ? cnt - 1 : 0); if (!s->flex_wrap) mn = sm + gap * (cnt > 0 ? cnt - 1 : 0); }
         break; }
     case BK_GRID: {
-        int nc = s->grid_cols > 0 ? s->grid_cols : 1, gap = lenv(&s->gap_c, 0, 0); int cmn[8], cmx[8]; memset(cmn, 0, sizeof cmn); memset(cmx, 0, sizeof cmx);
+        int nc = s->grid_cols > 0 ? s->grid_cols : 1, gap = lenv(&s->gap_c, 0, 0); int cmn[GRID_MAX_TRACKS], cmx[GRID_MAX_TRACKS]; memset(cmn, 0, sizeof cmn); memset(cmx, 0, sizeof cmx);
         int idx = 0;
         for (struct wbox *c = b->first; c; c = c->next) {
             if (c->flags & BF_ABS) continue;
             intrinsic(L, c); int a, z; outer_mm(c, &a, &z); int col = idx % nc; idx++;
-            if (col < 8) { cmn[col] = wmax(cmn[col], a); cmx[col] = wmax(cmx[col], z); }
+            if (col < GRID_MAX_TRACKS) { cmn[col] = wmax(cmn[col], a); cmx[col] = wmax(cmx[col], z); }
         }
-        for (int i = 0; i < nc && i < 8; i++) {
+        for (int i = 0; i < nc && i < GRID_MAX_TRACKS; i++) {
             const struct wlen *t = &s->grid_tracks[i];
             if (t->kind == LK_VAL && !t->pct) { mn += t->px; mx += t->px; } else { mn += cmn[i]; mx += cmx[i]; }
         }
@@ -760,9 +829,9 @@ static void size_block_w(struct wlay *L, struct wbox *b, int cbw, int cbh, int f
         int minw = s->min_w.kind == LK_VAL ? lenv(&s->min_w, cbw, 0) : 0, maxw = s->max_w.kind == LK_VAL ? lenv(&s->max_w, cbw, BIG) : BIG;
         if (s->box_sizing) { minw = wmax(0, minw - ex); if (maxw != BIG) maxw = wmax(0, maxw - ex); }
         if (s->width.kind == LK_VAL && !(b->flags & BF_ANON)) { content = lenv(&s->width, cbw, 0); if (s->box_sizing) content = wmax(0, content - ex); }
-        else if (fit || b->kind == BK_TABLE) {
+        else if (fit || b->kind == BK_TABLE || ((s->width.kind == LK_FIT || s->width.kind == LK_MINC) && !(b->flags & BF_ANON))) {
             intrinsic(L, b); int avail = wmax(0, cbw - b->ml - b->mr - ex);
-            content = wmin(wmax(b->imin, avail), b->imax); unconstrained = 1;
+            content = s->width.kind == LK_MINC ? b->imin : wmin(wmax(b->imin, avail), b->imax); unconstrained = 1;
         } else { content = wmax(0, cbw - b->ml - b->mr - ex); unconstrained = 2; }
         if (content > maxw) content = maxw;
         if (content < minw) content = minw;
@@ -782,6 +851,10 @@ static void size_block_w(struct wlay *L, struct wbox *b, int cbw, int cbh, int f
     if (b->kind != BK_REPL && s->height.kind == LK_VAL && !(s->height.pct && cbh < 0) && !(b->flags & BF_ANON)) {
         int hv = lenv(&s->height, cbh < 0 ? 0 : cbh, 0); if (s->box_sizing) hv -= b->pt + b->pb + b->bt + b->bb;
         b->def_h = wmax(0, hv);
+    }
+    if (b->kind != BK_REPL && b->def_h < 0 && s->ar_w && s->ar_h && s->height.kind != LK_VAL && !(b->flags & BF_ANON) && !wl181_off()) {   /* SOMA_181: aspect-ratio */
+        int64_t hh = s->box_sizing ? (int64_t)b->w * s->ar_h / s->ar_w - (b->pt + b->pb + b->bt + b->bb) : (int64_t)(b->w - ex) * s->ar_h / s->ar_w;
+        b->def_h = (int)wmax(0, (int)(hh > 100000 ? 100000 : hh));
     }
     b->rdx = b->rdy = 0;
     if (b->flags & BF_REL) {
@@ -832,7 +905,7 @@ struct went { const struct wstyle *st; struct wnode *node; int x0, first, visual
 struct wldeco { int x0, x1, depth; const struct wstyle *st; struct wnode *node; uint8_t first, last; };
 struct wil {
     struct wlay *L; struct wbox *b; struct wctx *cx;
-    int cw, left0, right0, ly, lleft, lright, lx, lstart_x, lhas, pend_sp, first_line;
+    int cw, left0, right0, ly, lleft, lright, lx, lstart_x, lhas, pend_sp, first_line, spfr;
     int asc, dsc, tbh, last_base, indent;
     struct wfrag *fr; int nfr, capfr, fs;
     struct wlat *la; int nla, capla;
@@ -882,7 +955,7 @@ static void il_start_line(struct wil *S)
     if (r != BIG) S->lright = wmin(S->lright, r - S->cx->ox);
     if (S->lright < S->lleft) S->lright = S->lleft;
     if (S->first_line) S->lleft += S->indent;
-    S->lx = S->lleft; S->lstart_x = S->lx; S->lhas = 0; S->pend_sp = 0; S->asc = S->dsc = S->tbh = 0;
+    S->lx = S->lleft; S->lstart_x = S->lx; S->lhas = 0; S->pend_sp = 0; S->spfr = 0; S->asc = S->dsc = S->tbh = 0;
     S->fs = S->nfr; S->nla = 0; S->nld = 0;
     for (int i = 0; i < S->sp; i++) { S->stk[i].x0 = S->lx; }
 }
@@ -1027,10 +1100,10 @@ static void il_text(struct wil *S, const struct wii *it)
             }
         }
         uint32_t n = pos - s0;
-        if (kind == 2) { if (keepnl) { il_flush_seg(S); il_finish_line(S, 1, st); } else if (S->lhas) S->pend_sp = sw; continue; }
+        if (kind == 2) { if (keepnl) { il_flush_seg(S); il_finish_line(S, 1, st); } else if (S->lhas) S->pend_sp = sp_carry(&S->spfr, st); continue; }
         if (kind == 1) {
             if (pre) { il_word(S, it, s0, n, (int)n * sw); }
-            else if (S->lhas) S->pend_sp = sw;
+            else if (S->lhas) S->pend_sp = sp_carry(&S->spfr, st);
             continue;
         }
         il_word(S, it, s0, n, textw(st, it->txt + s0, n));
@@ -1185,6 +1258,16 @@ static void shift_content(struct wbox *b, int dy)
 /* ----------------------------- flex ----------------------------- */
 struct wfi { struct wbox *b; int base, minv, maxv, grow, shrink, main, frozen, cross, auto_m; };
 
+/* SOMA_181: una columna flex con hijos que crecen/encogen o reparten espacio necesita recolocarse cuando su alto cambia por estiramiento */
+static int col_needs_height(const struct wbox *c)
+{
+    const struct wstyle *s = c->st; if (s->justify != JC_START) return 1;
+    for (const struct wbox *k = c->first; k; k = k->next) {
+        if (k->flags & BF_ABS) continue;
+        if (k->st && (k->st->flex_grow > 0 || ((k->st->overflow_x || k->st->overflow_y) && k->st->flex_shrink > 0) || (k->mauto & 12))) return 1;
+    }
+    return 0;
+}
 static int lay_flex(struct wlay *L, struct wbox *b, int cw)
 {
     const struct wstyle *s = b->st; int row = s->flex_dir < 2, rev = s->flex_dir & 1;
@@ -1258,7 +1341,10 @@ static int lay_flex(struct wlay *L, struct wbox *b, int cw)
                 struct wbox *c = it[i].b; int ex = c->pl + c->pr + c->bl + c->br;
                 c->w = wmax(ex, it[i].main - c->ml - c->mr); used += it[i].main;
                 if (c->kind == BK_REPL) { int w, h; repl_size(L, c, cw, cbh, &w, &h); if (c->w - ex != w && w > 0 && c->st->height.kind != LK_VAL) { c->cont_h = (int)((int64_t)h * (c->w - ex) / w); } else c->cont_h = h; c->h = c->cont_h + c->pt + c->pb + c->bt + c->bb; c->baseline = c->h; }
-                else { c->def_h = (c->st->height.kind == LK_VAL && !c->st->height.pct) ? wmax(0, lenv(&c->st->height, 0, 0) - (c->st->box_sizing ? c->pt + c->pb + c->bt + c->bb : 0)) : -1; lay_bfc(L, c); }
+                else { c->def_h = (c->st->height.kind == LK_VAL && !c->st->height.pct) ? wmax(0, lenv(&c->st->height, 0, 0) - (c->st->box_sizing ? c->pt + c->pb + c->bt + c->bb : 0)) : -1;
+                    if (c->def_h < 0 && c->st->ar_w && c->st->ar_h && c->st->height.kind != LK_VAL && !(c->flags & BF_ANON) && !wl181_off()) {   /* SOMA_181 */
+                        int64_t hh = c->st->box_sizing ? (int64_t)c->w * c->st->ar_h / c->st->ar_w - (c->pt + c->pb + c->bt + c->bb) : (int64_t)(c->w - ex) * c->st->ar_h / c->st->ar_w; c->def_h = (int)wmax(0, (int)(hh > 100000 ? 100000 : hh)); }
+                    lay_bfc(L, c); }
                 it[i].cross = c->h + c->mt + c->mb; if (it[i].cross > lineh) lineh = it[i].cross;
             }
             if (!s->flex_wrap && b->def_h >= 0) lineh = b->def_h;
@@ -1287,7 +1373,12 @@ static int lay_flex(struct wlay *L, struct wbox *b, int cw)
                 switch (al) {
                 case AI_END: dy = lineh - outer; break; case AI_CENTER: dy = (lineh - outer) / 2; break;
                 case AI_BASELINE: { int bl = c->baseline >= 0 ? c->baseline : c->h; dy = maxasc - (c->mt + bl); break; }
-                case AI_STRETCH: if (c->st->height.kind != LK_VAL && c->kind != BK_REPL && lineh > outer) { int add = lineh - outer; c->h += add; if (c->items == 0 && c->first == 0 && 0) {} } break;
+                case AI_STRETCH: if (c->st->height.kind != LK_VAL && c->kind != BK_REPL && lineh > outer) {
+                        int add = lineh - outer;
+                        if (!wl181_off() && c->kind == BK_FLEX && c->st->flex_dir >= 2 && col_needs_height(c)) {   /* SOMA_181: la columna estirada reparte el alto nuevo entre sus hijos */
+                            c->def_h = wmax(0, c->h + add - (c->pt + c->pb + c->bt + c->bb)); lay_bfc(L, c);
+                        } else c->h += add;
+                    } break;
                 default: break;
                 }
                 c->y = ycur + c->mt + (dy > 0 ? dy : 0);
@@ -1306,14 +1397,54 @@ static int lay_flex(struct wlay *L, struct wbox *b, int cw)
         size_block_w(L, c, cw, -1, al != AI_STRETCH || cs->width.kind == LK_VAL ? 1 : 0);
         if (c->kind == BK_REPL) c->h = c->cont_h + c->pt + c->pb + c->bt + c->bb; else lay_bfc(L, c);
         if (cs->flex_basis.kind == LK_VAL && cs->flex_basis.px > 0 && !cs->flex_basis.pct) c->h = cs->flex_basis.px;
+        it[i].grow = cs->flex_grow; it[i].shrink = cs->flex_shrink;   /* SOMA_181: antes la columna no leia flex-grow (solo la fila) */
         it[i].main = c->h + c->mt + c->mb; total_h += it[i].main; nv++;
     }
     total_h += gapm * (n - 1);
     int free_ = b->def_h >= 0 ? b->def_h - total_h : 0, off = 0, extra = 0;
+    if (!wl181_off() && b->def_h >= 0) {
+        /* SOMA_181: reparto de flex-grow/flex-shrink en columna con base y minimos (min-height: auto = contenido, salvo con overflow) */
+        int vx = 0;
+        for (int i = 0; i < n; i++) {
+            struct wbox *c = it[i].b; const struct wstyle *cs = c->st; vx = c->pt + c->pb + c->bt + c->bb;
+            int hyp = c->h, base = hyp;
+            if (cs->flex_basis.kind == LK_VAL) { base = lenv(&cs->flex_basis, b->def_h, 0) + (cs->box_sizing ? 0 : vx); if (cs->box_sizing) base = wmax(base, vx); }
+            int mn = cs->min_h.kind == LK_VAL ? lenv(&cs->min_h, b->def_h, 0) + (cs->box_sizing ? 0 : vx) : 0;
+            if (!(cs->overflow_x || cs->overflow_y) && cs->flex_basis.kind != LK_VAL) { if (mn < hyp) mn = hyp; }
+            else if (!(cs->overflow_x || cs->overflow_y) && mn < hyp && cs->flex_grow > 0) mn = hyp;
+            int mx = cs->max_h.kind == LK_VAL && !cs->max_h.pct ? cs->max_h.px + (cs->box_sizing ? 0 : vx) : BIG;
+            it[i].base = base; it[i].minv = mn; it[i].maxv = mx; it[i].main = base; it[i].frozen = 0;
+        }
+        int tot = gapm * (n - 1); for (int i = 0; i < n; i++) tot += it[i].main + it[i].b->mt + it[i].b->mb;
+        int fr = b->def_h - tot;
+        for (int pass = 0; pass < 4 && fr != 0; pass++) {
+            int64_t tg = 0;
+            for (int i = 0; i < n; i++) if (!it[i].frozen) tg += fr > 0 ? it[i].grow : (int64_t)it[i].shrink * (it[i].base > 0 ? it[i].base : 1);
+            if (tg <= 0) break;
+            int moved = 0, viol = 0;
+            for (int i = 0; i < n; i++) if (!it[i].frozen) {
+                int64_t w = fr > 0 ? it[i].grow : (int64_t)it[i].shrink * (it[i].base > 0 ? it[i].base : 1);
+                int delta = (int)((int64_t)fr * w / (fr > 0 ? (tg < 100 ? 100 : tg) : tg)), nv2 = it[i].main + delta;
+                if (nv2 < it[i].minv) { nv2 = it[i].minv; it[i].frozen = 1; viol = 1; } else if (nv2 > it[i].maxv) { nv2 = it[i].maxv; it[i].frozen = 1; viol = 1; }
+                moved += nv2 - it[i].main; it[i].main = nv2;
+            }
+            fr -= moved; if (!viol && (fr >= 0 ? fr <= 1 : fr >= -1)) break; if (!moved) break;
+        }
+        total_h = gapm * (n - 1);
+        for (int i = 0; i < n; i++) {
+            struct wbox *c = it[i].b;
+            if (it[i].main != c->h) {
+                if (c->kind == BK_FLEX && c->st->flex_dir >= 2 && col_needs_height(c)) { c->def_h = wmax(0, it[i].main - (c->pt + c->pb + c->bt + c->bb)); lay_bfc(L, c); }
+                else { c->h = it[i].main; c->cont_h = wmax(0, c->h - (c->pt + c->pb + c->bt + c->bb)); }
+            }
+            it[i].main = c->h + c->mt + c->mb; total_h += it[i].main;
+        }
+        free_ = b->def_h - total_h; if (free_ < 0) free_ = 0;
+    }
     if (free_ > 0) {
         int tg = 0; for (int i = 0; i < n; i++) tg += it[i].grow;
-        if (tg > 0) { for (int i = 0; i < n; i++) { int add = (int)((int64_t)free_ * it[i].grow / (tg < 100 ? 100 : tg)); it[i].b->h += add; it[i].main += add; } total_h = b->def_h; free_ = 0; }
-        else {
+        if (wl181_off() && tg > 0) { for (int i = 0; i < n; i++) { int add = (int)((int64_t)free_ * it[i].grow / (tg < 100 ? 100 : tg)); it[i].b->h += add; it[i].main += add; } total_h = b->def_h; free_ = 0; }
+        else if (!wl181_off() || tg <= 0) {
             int jc = s->justify; if (rev) { if (jc == JC_START) jc = JC_END; else if (jc == JC_END) jc = JC_START; }
             switch (jc) { case JC_END: off = free_; break; case JC_CENTER: off = free_ / 2; break; case JC_BETWEEN: if (n > 1) extra = free_ / (n - 1); break; case JC_AROUND: extra = free_ / n; off = extra / 2; break; case JC_EVENLY: extra = free_ / (n + 1); off = extra; break; default: break; }
         }
@@ -1332,80 +1463,243 @@ static int lay_flex(struct wlay *L, struct wbox *b, int cw)
 }
 
 /* ----------------------------- grid ----------------------------- */
+/* SOMA_181: nombres de area de grid-template-areas -> rectangulo (fila0, col0, fila1, col1; fin exclusivo) */
+struct garea { const char *name; int nl, r0, c0, r1, c1; };
+static int grid_areas_parse(const char *t, struct garea *out, int max, int *nrows_out, int *ncols_out)
+{
+    int na = 0, row = 0, maxc = 0;
+    while (t && *t) {
+        while (*t && *t != '"' && *t != '\'') t++;
+        if (!*t) break;
+        char q = *t++; int col = 0;
+        while (*t && *t != q) {
+            while (*t == ' ' || *t == '\t' || *t == '\n') t++;
+            if (!*t || *t == q) break;
+            const char *w = t; while (*t && *t != q && *t != ' ' && *t != '\t' && *t != '\n') t++;
+            int wl = (int)(t - w);
+            if (!(wl == 1 && *w == '.')) {
+                int k; for (k = 0; k < na; k++) if (out[k].nl == wl && !memcmp(out[k].name, w, (size_t)wl)) break;
+                if (k == na && na < max) { out[na].name = w; out[na].nl = wl; out[na].r0 = row; out[na].c0 = col; out[na].r1 = row + 1; out[na].c1 = col + 1; na++; }
+                else if (k < na) { if (col + 1 > out[k].c1) out[k].c1 = col + 1; if (row + 1 > out[k].r1) out[k].r1 = row + 1; if (col < out[k].c0) out[k].c0 = col; }
+            }
+            col++;
+        }
+        if (col > maxc) maxc = col;
+        if (*t) t++;
+        row++;
+    }
+    *nrows_out = row; *ncols_out = maxc; return na;
+}
+static int gr_free(const uint8_t *occ, int nc, int r, int c, int rs, int cs) { for (int y = r; y < r + rs; y++) for (int x = c; x < c + cs; x++) if (occ[y * nc + x]) return 0; return 1; }
+static void gr_mark(uint8_t *occ, int nc, int r, int c, int rs, int cs) { for (int y = r; y < r + rs; y++) for (int x = c; x < c + cs; x++) occ[y * nc + x] = 1; }
+
 static int lay_grid(struct wlay *L, struct wbox *b, int cw)
 {
     const struct wstyle *s = b->st; int left = b->pl + b->bl, top = b->pt + b->bt;
-    int nc = s->grid_cols > 0 ? s->grid_cols : 1; if (nc > 8) nc = 8;
+    int legacy = wl181_off();
+    int nc = s->grid_cols > 0 ? s->grid_cols : 1; if (nc > GRID_MAX_TRACKS) nc = GRID_MAX_TRACKS;
     int gapc = lenv(&s->gap_c, cw, 0), gapr = lenv(&s->gap_r, cw, 0);
-    struct wlen gtr[8]; memcpy(gtr, s->grid_tracks, sizeof gtr);
+    struct wlen gtr[GRID_MAX_TRACKS]; memcpy(gtr, s->grid_tracks, sizeof gtr);
+    int explicit_cols = s->grid_cols;
     if (s->grid_auto_min > 0) {      /* SOMA_PARCHE_028_UI: repeat(auto-fit, minmax(N, 1fr)) */
-        nc = (cw + gapc) / (s->grid_auto_min + gapc); if (nc < 1) nc = 1; if (nc > 8) nc = 8;
+        nc = (cw + gapc) / (s->grid_auto_min + gapc); if (nc < 1) nc = 1; if (nc > GRID_MAX_TRACKS) nc = GRID_MAX_TRACKS;
         for (int c = 0; c < nc; c++) { gtr[c].kind = LK_FR; gtr[c].px = 100; gtr[c].pct = 0; }
     }
+    /* areas con nombre: dan columnas y filas aunque no haya plantilla */
+    struct garea areas[16]; int na = 0, arows = 0, acols = 0;
+    if (!legacy && s->gx && s->gx->areas) na = grid_areas_parse(s->gx->areas, areas, 16, &arows, &acols);
+    if (!legacy && acols > nc && explicit_cols == 0) { nc = wmin(acols, GRID_MAX_TRACKS); for (int c = 0; c < nc; c++) { gtr[c].kind = LK_FR; gtr[c].px = 100; gtr[c].pct = 0; } explicit_cols = nc; }
     int n = 0; for (struct wbox *c = b->first; c; c = c->next) if (!(c->flags & BF_ABS) && c->kind != BK_TROW) n++; else if (c->flags & BF_ABS) { c->sx = left; c->sy = top; }
     if (!n) return 0;
-    struct wbox **its = (struct wbox **)kmalloc(sizeof(*its) * (size_t)n); int *pc = (int *)kmalloc(sizeof(int) * 3 * (size_t)n);
-    if (!its || !pc) { if (its) kfree(its); if (pc) kfree(pc); return 0; }
+    /* SOMA_188: grid-auto-flow: column sin plantilla de columnas: columnas implicitas "auto", colocacion por columnas */
+    int colflow = 0, cf_rows = 1;
+    if (!legacy && (s->grid_flow & 1) && explicit_cols == 0 && na == 0 && s->grid_auto_min <= 0) {
+        cf_rows = s->gx && s->gx->nrows > 0 ? s->gx->nrows : 1;
+        nc = (n + cf_rows - 1) / cf_rows; if (nc < 1) nc = 1; if (nc > GRID_MAX_TRACKS) nc = GRID_MAX_TRACKS;
+        for (int c = 0; c < nc; c++) { memset(&gtr[c], 0, sizeof gtr[c]); gtr[c].kind = LK_AUTO; }
+        explicit_cols = nc; colflow = 1;
+    }
+    struct wbox **its = (struct wbox **)kmalloc(sizeof(*its) * (size_t)n);
+    int maxrows = n * 2 + GRID_MAX_ROWS + 4; if (!legacy) maxrows += 64;
+    int *pc = (int *)kmalloc(sizeof(int) * 4 * (size_t)n);                       /* fila, col, span col, span fila */
+    uint8_t *occ = (uint8_t *)kmalloc((size_t)maxrows * (size_t)nc);
+    if (!its || !pc || !occ) { if (its) kfree(its); if (pc) kfree(pc); if (occ) kfree(occ); return 0; }
+    memset(occ, 0, (size_t)maxrows * (size_t)nc);
     int k = 0; for (struct wbox *c = b->first; c; c = c->next) if (!(c->flags & BF_ABS) && c->kind != BK_TROW) { its[k] = c; c->flags &= ~BF_FLOAT; k++; }
     for (int i = 1; i < n; i++) { struct wbox *t = its[i]; int j = i - 1; while (j >= 0 && its[j]->st->order > t->st->order) { its[j + 1] = its[j]; j--; } its[j + 1] = t; }
     /* colocacion */
-    int col = 0, row = 0, nrows = 0;
-    for (int i = 0; i < n; i++) {
-        int span = its[i]->st->col_span > 0 ? wmin(its[i]->st->col_span, nc) : 1;
-        if (col + span > nc) { col = 0; row++; }
-        pc[i * 3] = row; pc[i * 3 + 1] = col; pc[i * 3 + 2] = span; col += span; if (col >= nc) { col = 0; row++; }
-        if (pc[i * 3] + 1 > nrows) nrows = pc[i * 3] + 1;
+    int nrows = 0;
+    if (legacy) {
+        int col = 0, row = 0;
+        for (int i = 0; i < n; i++) {
+            int span = its[i]->st->col_span > 0 ? wmin(its[i]->st->col_span, nc) : 1;
+            if (col + span > nc) { col = 0; row++; }
+            pc[i * 4] = row; pc[i * 4 + 1] = col; pc[i * 4 + 2] = span; pc[i * 4 + 3] = 1; col += span; if (col >= nc) { col = 0; row++; }
+            if (pc[i * 4] + 1 > nrows) nrows = pc[i * 4] + 1;
+        }
+    } else {
+        int fixed_r[2] = { 0, 0 }; (void)fixed_r;
+        int *def = (int *)kmalloc(sizeof(int) * (size_t)n);   /* 0 auto, 1 fila y columna fijas, 2 solo columna, 3 solo fila */
+        if (!def) { kfree(its); kfree(pc); kfree(occ); return 0; }
+        for (int i = 0; i < n; i++) {
+            const struct wstyle *cs = its[i]->st; int r0 = -1, c0 = -1, rs = 1, csn = 1;
+            if (cs->garea) {
+                for (int a = 0; a < na; a++) if (areas[a].nl == (int)wu_strlen(cs->garea) && !memcmp(areas[a].name, cs->garea, (size_t)areas[a].nl)) { r0 = areas[a].r0; c0 = areas[a].c0; rs = areas[a].r1 - areas[a].r0; csn = areas[a].c1 - areas[a].c0; break; }
+            }
+            if (c0 < 0) {
+                int st0 = cs->gs[0], en = cs->ge[0], sp = cs->gsp[0] ? cs->gsp[0] : (cs->col_span > 1 ? cs->col_span : 0);
+                int tl = nc + 1;   /* numero de lineas */
+                if (st0 < 0) st0 = tl + st0 + 1;
+                if (en < 0) en = tl + en + 1;
+                if (st0 > 0 && en > st0) { c0 = st0 - 1; csn = en - st0; }
+                else if (st0 > 0) { c0 = st0 - 1; csn = sp ? sp : 1; }
+                else if (en > 0 && sp) { c0 = wmax(0, en - 1 - sp); csn = sp; }
+                else if (sp) csn = sp;
+                else if (en > 1) { c0 = 0; csn = en - 1; }
+            }
+            if (r0 < 0) {
+                int st0 = cs->gs[1], en = cs->ge[1], sp = cs->gsp[1];
+                int tl = (s->gx ? s->gx->nrows : 0) + 1; if (arows + 1 > tl) tl = arows + 1;
+                if (st0 < 0) st0 = tl + st0 + 1;
+                if (en < 0) en = tl + en + 1;
+                if (st0 > 0 && en > st0) { r0 = st0 - 1; rs = en - st0; }
+                else if (st0 > 0) { r0 = st0 - 1; rs = sp ? sp : 1; }
+                else if (en > 0 && sp) { r0 = wmax(0, en - 1 - sp); rs = sp; }
+                else if (sp) rs = sp;
+            }
+            if (csn < 1) csn = 1;
+            if (csn > nc) csn = nc;
+            if (rs < 1) rs = 1;
+            if (rs > 32) rs = 32;
+            if (c0 >= 0 && c0 + csn > nc) c0 = nc - csn;
+            pc[i * 4] = r0; pc[i * 4 + 1] = c0; pc[i * 4 + 2] = csn; pc[i * 4 + 3] = rs;
+            def[i] = (r0 >= 0 && c0 >= 0) ? 1 : (c0 >= 0 ? 2 : (r0 >= 0 ? 3 : 0));
+        }
+        for (int i = 0; i < n; i++) if (def[i] == 1) { int r = pc[i * 4], rs = pc[i * 4 + 3]; if (r + rs <= maxrows) { gr_mark(occ, nc, r, pc[i * 4 + 1], rs, pc[i * 4 + 2]); if (r + rs > nrows) nrows = r + rs; } else def[i] = -1; }
+        int cr = 0, cc = 0;
+        for (int i = 0; i < n; i++) {
+            if (def[i] == 1) continue;
+            int csn = pc[i * 4 + 2], rs = pc[i * 4 + 3];
+            if (def[i] == 2) { int c0 = pc[i * 4 + 1], r = 0; while (r + rs < maxrows && !gr_free(occ, nc, r, c0, rs, csn)) r++; pc[i * 4] = r; }
+            else if (def[i] == 3) { int r0 = pc[i * 4], c = 0; if (r0 + rs > maxrows) r0 = maxrows - rs; pc[i * 4] = r0; while (c + csn <= nc && !gr_free(occ, nc, r0, c, rs, csn)) c++; if (c + csn > nc) c = 0; pc[i * 4 + 1] = c; }
+            else if (colflow) {   /* SOMA_188: por columnas (filas de la plantilla), lo que no cabe sigue debajo */
+                int r = 0, c = 0, ok = 0;
+                for (c = 0; c + csn <= nc && !ok; c++) for (r = 0; r + rs <= cf_rows; r++) if (gr_free(occ, nc, r, c, rs, csn)) { ok = 1; break; }
+                if (ok) { c--; pc[i * 4] = r; pc[i * 4 + 1] = c; }
+                else { r = cf_rows; while (r + rs < maxrows && !gr_free(occ, nc, r, 0, rs, csn)) r++; pc[i * 4] = r; pc[i * 4 + 1] = 0; }
+            }
+            else {
+                if (cc + csn > nc) { cc = 0; cr++; }
+                while (cr + rs < maxrows && !gr_free(occ, nc, cr, cc, rs, csn)) { cc++; if (cc + csn > nc) { cc = 0; cr++; } }
+                pc[i * 4] = cr; pc[i * 4 + 1] = cc; cc += csn; if (cc >= nc) { cc = 0; cr++; }
+            }
+            if (pc[i * 4] + rs > maxrows) pc[i * 4] = wmax(0, maxrows - rs);
+            gr_mark(occ, nc, pc[i * 4], pc[i * 4 + 1], rs, csn);
+            if (pc[i * 4] + rs > nrows) nrows = pc[i * 4] + rs;
+        }
+        for (int i = 0; i < n; i++) if (def[i] == -1) { pc[i * 4] = wmax(0, nrows - 1); pc[i * 4 + 1] = 0; pc[i * 4 + 3] = 1; }
+        kfree(def);
+        { int er = s->gx ? s->gx->nrows : 0; if (arows > er) er = arows; if (er > nrows) nrows = er; }
     }
-    int tw[8]; int autoc[8]; memset(autoc, 0, sizeof autoc);
+    if (nrows < 1) nrows = 1;
+    /* anchos de columna */
+    int tw[GRID_MAX_TRACKS]; int autoc[GRID_MAX_TRACKS]; memset(autoc, 0, sizeof autoc);
     int fr_sum = 0, fixed = 0;
     for (int c = 0; c < nc; c++) {
         const struct wlen *t = &gtr[c];
-        if (s->grid_cols > 0 && t->kind == LK_VAL) { tw[c] = lenv(t, cw, 0); fixed += tw[c]; }
-        else if (s->grid_cols > 0 && t->kind == LK_FR) { tw[c] = 0; fr_sum += t->px; }
+        if (explicit_cols > 0 && t->kind == LK_VAL) { tw[c] = lenv(t, cw, 0); fixed += tw[c]; }
+        else if (explicit_cols > 0 && t->kind == LK_FR) { tw[c] = 0; fr_sum += t->px; }
         else { tw[c] = 0; autoc[c] = 1; }
     }
-    if (s->grid_cols == 0) { autoc[0] = 0; tw[0] = cw; }
+    if (explicit_cols == 0) { autoc[0] = 0; tw[0] = cw; }
     int auto_total = 0;
     for (int c = 0; c < nc; c++) if (autoc[c]) {
         int mx = 0;
-        for (int i = 0; i < n; i++) if (pc[i * 3 + 1] == c && pc[i * 3 + 2] == 1) { intrinsic(L, its[i]); int a, z; outer_mm(its[i], &a, &z); if (z > mx) mx = z; }
+        for (int i = 0; i < n; i++) if (pc[i * 4 + 1] == c && pc[i * 4 + 2] == 1) { intrinsic(L, its[i]); int a, z; outer_mm(its[i], &a, &z); if (z > mx) mx = z; }
         tw[c] = mx; auto_total += mx;
     }
     int avail = cw - gapc * (nc - 1);
     if (fr_sum > 0) {
         int rem = avail - fixed - auto_total; if (rem < 0) rem = 0;
-        for (int c = 0; c < nc; c++) if (s->grid_cols > 0 && gtr[c].kind == LK_FR) {
+        for (int c = 0; c < nc; c++) if (explicit_cols > 0 && gtr[c].kind == LK_FR) {
             tw[c] = (int)((int64_t)rem * gtr[c].px / fr_sum);
             /* los fr no bajan del contenido minimo */
-            int mn = 0; for (int i = 0; i < n; i++) if (pc[i * 3 + 1] == c && pc[i * 3 + 2] == 1) { intrinsic(L, its[i]); int a, z; outer_mm(its[i], &a, &z); if (a > mn) mn = a; }
+            int mn = 0; for (int i = 0; i < n; i++) if (pc[i * 4 + 1] == c && pc[i * 4 + 2] == 1) { intrinsic(L, its[i]); int a, z; outer_mm(its[i], &a, &z); if (a > mn) mn = a; }
             if (tw[c] < mn && gtr[c].px > 0) tw[c] = mn;
         }
-    } else if (s->grid_cols > 0) {
-        int sum = fixed + auto_total, na = 0; for (int c = 0; c < nc; c++) na += autoc[c];
-        if (na && avail > sum) { int add = (avail - sum) / na; for (int c = 0; c < nc; c++) if (autoc[c]) tw[c] += add; }
+    } else if (explicit_cols > 0) {
+        int sum = fixed + auto_total, na2 = 0; for (int c = 0; c < nc; c++) na2 += autoc[c];
+        if (na2 && avail > sum) { int add = (avail - sum) / na2; for (int c = 0; c < nc; c++) if (autoc[c]) tw[c] += add; }
     }
-    int colx[9]; colx[0] = left; for (int c = 0; c < nc; c++) colx[c + 1] = colx[c] + tw[c] + gapc;
-    int y = top, i = 0;
-    for (int r = 0; r < nrows; r++) {
-        int rh = 0, first = i;
-        for (; i < n && pc[i * 3] == r; i++) {
-            struct wbox *c = its[i]; int c0 = pc[i * 3 + 1], span = pc[i * 3 + 2];
-            int cellw = colx[c0 + span] - gapc - colx[c0];
-            size_block_w(L, c, cellw, -1, c->st->width.kind == LK_VAL ? 1 : 0);
-            if (c->kind == BK_REPL) c->h = c->cont_h + c->pt + c->pb + c->bt + c->bb; else lay_bfc(L, c);
-            c->x = colx[c0] + c->ml;
-            int oh = c->h + c->mt + c->mb; if (oh > rh) rh = oh;
-        }
-        for (int j = first; j < i; j++) {
-            struct wbox *c = its[j]; int al = c->st->align_self == AI_AUTO ? s->align_items : c->st->align_self, outer = c->h + c->mt + c->mb, dy = 0;
-            if (al == AI_STRETCH) { if (c->st->height.kind != LK_VAL && c->kind != BK_REPL) c->h += rh - outer; }
-            else if (al == AI_END) dy = rh - outer; else if (al == AI_CENTER) dy = (rh - outer) / 2;
-            c->y = y + c->mt + dy;
-        }
-        y += rh + gapr;
+    int colx[GRID_MAX_TRACKS + 1]; colx[0] = left; for (int c = 0; c < nc; c++) colx[c + 1] = colx[c] + tw[c] + gapc;
+    /* maquetar cada elemento en su celda (ancho) y medir su alto */
+    int *rh = (int *)kmalloc(sizeof(int) * (size_t)(nrows + 1) * 2); if (!rh) { kfree(its); kfree(pc); kfree(occ); return 0; }
+    int *ry = rh + nrows + 1;
+    for (int r = 0; r < nrows; r++) rh[r] = 0;
+    int ex_v = b->pt + b->pb + b->bt + b->bb;
+    for (int i = 0; i < n; i++) {
+        struct wbox *c = its[i]; int c0 = pc[i * 4 + 1], span = pc[i * 4 + 2];
+        int cellw = colx[c0 + span] - gapc - colx[c0];
+        int js = c->st->justify_self ? c->st->justify_self : s->justify_items;
+        size_block_w(L, c, cellw, -1, (c->st->width.kind == LK_VAL || (!legacy && js)) ? 1 : 0);
+        if (c->kind == BK_REPL) c->h = c->cont_h + c->pt + c->pb + c->bt + c->bb; else lay_bfc(L, c);
+        if (legacy) { int oh = c->h + c->mt + c->mb; int r = pc[i * 4]; if (oh > rh[r]) rh[r] = oh; }
     }
-    kfree(its); kfree(pc);
-    return y - gapr - top;
+    int total_h = 0;
+    if (legacy) {
+        for (int r = 0; r < nrows; r++) { ry[r] = top + total_h; total_h += rh[r] + gapr; }
+        total_h -= gapr;
+        int y = top;
+        for (int r = 0; r < nrows; r++) { ry[r] = y; y += rh[r] + gapr; }
+    } else {
+        /* alto de filas: pistas explicitas (px, %, fr, auto) y filas implicitas (grid-auto-rows) */
+        const struct wgx *gx = s->gx; int64_t frsum = 0; int fixed_h = 0;
+        int target = b->def_h;
+        if (target < 0 && s->min_h.kind == LK_VAL) { int mh = lenv(&s->min_h, b->cbh < 0 ? 0 : b->cbh, 0); if (s->box_sizing) mh -= ex_v; if (mh > 0) target = mh; }
+        int *kind = (int *)kmalloc(sizeof(int) * (size_t)(nrows + 1)); int *fr = (int *)kmalloc(sizeof(int) * (size_t)(nrows + 1));
+        if (!kind || !fr) { if (kind) kfree(kind); if (fr) kfree(fr); kfree(rh); kfree(its); kfree(pc); kfree(occ); return 0; }
+        for (int r = 0; r < nrows; r++) {
+            struct wlen t; if (gx && r < gx->nrows) t = gx->rows[r]; else if (gx) t = gx->auto_rows; else { memset(&t, 0, sizeof t); t.kind = LK_AUTO; }
+            kind[r] = 0; fr[r] = 0;                              /* 0 auto, 1 fija, 2 fr */
+            if (t.kind == LK_VAL && !(t.pct && target < 0)) { kind[r] = 1; rh[r] = lenv(&t, target < 0 ? 0 : target - ex_v * 0, 0); }
+            else if (t.kind == LK_FR) { kind[r] = 2; fr[r] = t.px; frsum += t.px; rh[r] = 0; }
+            else rh[r] = 0;
+        }
+        for (int i = 0; i < n; i++) if (pc[i * 4 + 3] == 1) { struct wbox *c = its[i]; int r = pc[i * 4]; int oh = c->h + c->mt + c->mb; if (kind[r] != 1 && oh > rh[r]) rh[r] = oh; }
+        for (int i = 0; i < n; i++) if (pc[i * 4 + 3] > 1) {            /* elementos de varias filas: el deficit va a la ultima fila no fija */
+            struct wbox *c = its[i]; int r0 = pc[i * 4], rs = pc[i * 4 + 3], oh = c->h + c->mt + c->mb, sum = gapr * (rs - 1);
+            for (int r = r0; r < r0 + rs && r < nrows; r++) sum += rh[r];
+            if (sum < oh) { int last = r0; for (int r = r0; r < r0 + rs && r < nrows; r++) if (kind[r] != 1) last = r; if (kind[last] != 1) rh[last] += oh - sum; }
+        }
+        for (int r = 0; r < nrows; r++) if (kind[r] == 1) fixed_h += rh[r]; else if (kind[r] == 0) fixed_h += rh[r]; else fixed_h += 0;
+        if (frsum > 0) {
+            int rem = target >= 0 ? target - fixed_h - gapr * (nrows - 1) : 0;
+            for (int r = 0; r < nrows; r++) if (kind[r] == 2) { int sh = rem > 0 ? (int)((int64_t)rem * fr[r] / frsum) : 0; rh[r] = wmax(rh[r], sh); }
+        }
+        int y = top; for (int r = 0; r < nrows; r++) { ry[r] = y; y += rh[r] + gapr; }
+        total_h = y - gapr - top;
+        kfree(kind); kfree(fr);
+    }
+    for (int i = 0; i < n; i++) {
+        struct wbox *c = its[i]; int c0 = pc[i * 4 + 1], span = pc[i * 4 + 2], r0 = pc[i * 4], rs = pc[i * 4 + 3];
+        int cellw = colx[c0 + span] - gapc - colx[c0];
+        int celh = ry[wmin(r0 + rs - 1, nrows - 1)] + rh[wmin(r0 + rs - 1, nrows - 1)] - ry[r0];
+        int js = legacy ? 0 : (c->st->justify_self ? c->st->justify_self : s->justify_items), dx = 0;
+        if (js) { int outer_w = c->w + c->ml + c->mr; dx = js == 2 ? cellw - outer_w : js == 3 ? (cellw - outer_w) / 2 : 0; if (dx < 0) dx = 0; }
+        c->x = colx[c0] + c->ml + dx;
+        int al = c->st->align_self == AI_AUTO ? s->align_items : c->st->align_self, outer = c->h + c->mt + c->mb, dy = 0;
+        if (al == AI_STRETCH) {
+            if (c->st->height.kind != LK_VAL && c->kind != BK_REPL && celh > outer) {
+                int add = celh - outer;
+                if (!legacy && c->kind == BK_FLEX && c->st->flex_dir >= 2 && col_needs_height(c)) { c->def_h = wmax(0, c->h + add - (c->pt + c->pb + c->bt + c->bb)); lay_bfc(L, c); }
+                else c->h += add;
+            }
+        }
+        else if (al == AI_END) dy = celh - outer; else if (al == AI_CENTER) dy = (celh - outer) / 2;
+        c->y = ry[r0] + c->mt + (dy > 0 ? dy : 0);
+    }
+    kfree(its); kfree(pc); kfree(occ); kfree(rh);
+    return total_h;
 }
 
 /* ----------------------------- tablas ----------------------------- */
@@ -1511,6 +1805,16 @@ static void lay_abs(struct wlay *L, struct wbox *cb, struct wbox *a)
 static void lay_content(struct wlay *L, struct wbox *b, struct wctx *cx)
 {
     wu_tick();
+    if (b->node && b->node->tag == WT_BUTTON && b->kind == BK_BLOCK && b->def_h >= 0 && !b->pad0 && !(b->flags & BF_ANON) && !wl181_off()) {
+        /* SOMA_181: el contenido de un <button> con alto fijo se centra en vertical (como en los navegadores) */
+        b->pad0 = 1; int sdh = b->def_h, spt = b->pt, spb = b->pb;
+        b->def_h = -1; lay_bfc(L, b);
+        int ch0 = b->cont_h; b->def_h = sdh;
+        if (ch0 < sdh) { int off = (sdh - ch0) / 2; b->pt = spt + off; b->pb = spb + (sdh - ch0 - off); b->def_h = ch0; }
+        lay_bfc(L, b);
+        b->def_h = sdh; b->pt = spt; b->pb = spb; b->pad0 = 0;
+        return;
+    }
     int ex_v = b->pt + b->pb + b->bt + b->bb, top = b->pt + b->bt;
     int cw = wmax(0, b->w - b->pl - b->pr - b->bl - b->br);
     if (web_stack_left() < 5000 || L->depth > 180) { b->h = ex_v; return; }
@@ -1530,6 +1834,7 @@ static void lay_content(struct wlay *L, struct wbox *b, struct wctx *cx)
             int bm = -BIG; for (int i = 0; i < cx->fl->n; i++) if (cx->fl->r[i].y0 >= cx->oy + top && cx->fl->r[i].y1 > bm) bm = cx->fl->r[i].y1;
             if (bm != -BIG && bm - cx->oy - top > ch) ch = bm - cx->oy - top;
         }
+        b->sch = ch;   /* SOMA_181 */
         if (b->def_h >= 0) ch = b->def_h;
         else if (b->st && !(b->flags & BF_ANON)) {
             const struct wstyle *s = b->st;
@@ -1538,7 +1843,14 @@ static void lay_content(struct wlay *L, struct wbox *b, struct wctx *cx)
         if (b->st && !(b->flags & BF_ANON) && b->st->max_h.kind == LK_VAL && !b->st->max_h.pct) { int mh = b->st->max_h.px; if (b->st->box_sizing) mh -= ex_v; if (ch > mh) ch = mh; }
         b->cont_h = ch;
     }
+    if (b->kind != BK_REPL && b->st && !(b->flags & BF_ANON) && b->st->line_clamp && b->st->overflow_y && !wl181_off()) {   /* SOMA_181: -webkit-line-clamp */
+        int mh = wc_line_px(b->st) * b->st->line_clamp; if (ch > mh) { ch = mh; b->cont_h = ch; }
+    }
     b->h = ch + top + b->pb + b->bb;
+    if (b->st && !(b->flags & BF_ANON) && (b->st->tr_x.kind == LK_VAL || b->st->tr_y.kind == LK_VAL) && !wl181_off()) {   /* SOMA_181: transform: translate() */
+        if (b->st->tr_x.kind == LK_VAL) b->rdx += lenv(&b->st->tr_x, b->w, 0);
+        if (b->st->tr_y.kind == LK_VAL) b->rdy += lenv(&b->st->tr_y, b->h, 0);
+    }
     for (struct wbox *a = b->abs_chain; a; a = a->abs_next) lay_abs(L, b, a);
     L->depth--;
 }
@@ -1557,13 +1869,12 @@ void wl_free(struct wlay *L)
 }
 static void clear_boxes(struct wnode *n)
 {
-    struct wnode *c = n;
-    while (c) {
+    /* SOMA_188: arbol compuesto (los arboles sombra tambien) y nodos de ::before/::after: si no, quedaban punteros a cajas
+       de la maquetacion anterior (ya liberada) en los nodos sombra -> uso tras liberar al hacer clic en un <input> sombra */
+    for (struct wnode *c = n; c; c = wd_walk_next(c, n)) {
         c->box = 0;
-        if (c->first) { c = c->first; continue; }
-        while (c && c != n && !c->next) c = c->parent;
-        if (!c || c == n) break;
-        c = c->next;
+        if (c->type == WN_ELEM && c->st) for (int k = 0; k < 2; k++) { struct wnode *ps = c->st->pse[k]; if (ps) { ps->box = 0; for (struct wnode *t = ps->first; t; t = t->next) t->box = 0; } }
+        if (c->type == WN_ELEM && c->shadow) c->shadow->box = 0;
     }
 }
 static void extent(struct wlay *L, struct wbox *b, int ox, int oy, int depth)
@@ -1606,7 +1917,7 @@ void wl_layout(struct wlay *L, int vw, int vh)
 }
 
 /* ============================== pintado ============================== */
-struct wpt { struct wlay *L; int cx0, cy0, cx1, cy1; int scx, scy; uint32_t bg; };
+struct wpt { struct wlay *L; int cx0, cy0, cx1, cy1; int scx, scy; uint32_t bg; int vx, vy; /* SOMA_181: origen del visor en pantalla */ };
 
 static uint32_t mul_alpha(uint32_t c, int alpha)
 {
@@ -1681,6 +1992,79 @@ static void gradient_r(struct wpt *P, int x, int y, int w, int h, uint32_t a, ui
         for (int j = y0; j < y1; j++) { int k = j - y, e = k < r ? k : (h - 1 - k < r ? h - 1 - k : -1), in = e >= 0 ? corner_inset(r, e) : 0; fillr(P, x + in, j, w - 2 * in, 1, mul_alpha(lerp_col(a, b, k, h > 1 ? h - 1 : 1), alpha)); }
     }
 }
+/* SOMA_152_WEB_FLUIDO: cache de imagenes ya escaladas (y recortadas al radio). Antes cada repintado completo de la vista
+ * (al terminar una maquetacion, un reloj en JS, una imagen nueva...) volvia a escalar pixel a pixel todas las fotos
+ * visibles: en una pagina de tarjetas era la mayor parte de los ~25 ms de pintado en QEMU. Ahora se escala una vez y se
+ * copia. Clave: serial del mapa de bits (unico por decodificacion: nunca se confunde aunque se reutilice la direccion),
+ * tamano mostrado, radio y opacidad. Mismo algoritmo y mismos pixeles que el camino sin cache. Solo hilo de la GUI. */
+#ifndef SOMA_WEB_IMG_CACHE_KB
+#define SOMA_WEB_IMG_CACHE_KB 12288
+#endif
+struct ic152 { uint32_t serial; int w, h, radius, alpha, opaque_mid; uint32_t *px; uint32_t bytes; uint64_t used; };
+static struct ic152 s_ic152[32];
+static uint32_t s_ic152_bytes; static uint64_t s_ic152_tick;
+/* devuelve 1 si todas las filas fuera de las esquinas quedaron opacas (alfa 255): se pueden copiar sin mezclar */
+static int scale_rows152(const struct wimginfo *ii, int w, int h, int radius, int alpha, uint32_t *out)
+{
+    int opaque_mid = 1;
+    int iw = ii->pw > 0 ? ii->pw : ii->w, ih = ii->ph > 0 ? ii->ph : ii->h; int stepx = iw / w, stepy = ih / h;
+    int nsx = stepx >= 2 ? wmin(stepx, 3) : 1, nsy = stepy >= 2 ? wmin(stepy, 3) : 1;
+    if (radius > w / 2) radius = w / 2;
+    if (radius > h / 2) radius = h / 2;
+    for (int py = 0; py < h; py++) {
+        int sys[3];
+        for (int sj = 0; sj < nsy; sj++) { int sy = (int)(((int64_t)py * ih * nsy + (int64_t)sj * ih + ih / 2) / ((int64_t)h * nsy)); sys[sj] = sy >= ih ? ih - 1 : sy; }
+        uint32_t *o = out + (size_t)py * (size_t)w;
+        for (int px = 0; px < w; px++) {
+            uint32_t r = 0, g = 0, bl = 0, a = 0, cnt = 0;
+            for (int sj = 0; sj < nsy; sj++) {
+                const uint32_t *row = ii->px + (size_t)sys[sj] * iw;
+                for (int si = 0; si < nsx; si++) {
+                    int sx = (int)(((int64_t)px * iw * nsx + (int64_t)si * iw + iw / 2) / ((int64_t)w * nsx)); if (sx >= iw) sx = iw - 1;
+                    uint32_t c = row[sx], ca = c >> 24;
+                    r += ((c >> 16) & 255) * ca; g += ((c >> 8) & 255) * ca; bl += (c & 255) * ca; a += ca; cnt++;
+                }
+            }
+            uint32_t oa = cnt ? a / cnt : 0, orr = a ? r / a : 0, og = a ? g / a : 0, ob = a ? bl / a : 0;
+            if (radius > 0) {
+                int cxp = px < radius ? radius - px : (px >= w - radius ? px - (w - radius - 1) : 0), cyp = py < radius ? radius - py : (py >= h - radius ? py - (h - radius - 1) : 0);
+                if (cxp && cyp) { int d2 = cxp * cxp + cyp * cyp, r2 = radius * radius; if (d2 > r2 + radius) oa = 0; else if (d2 > r2 - radius) oa = oa * (uint32_t)(r2 + radius - d2) / (uint32_t)(2 * radius + 1); }
+            }
+            oa = oa * (uint32_t)alpha / 255u;
+            if (oa != 255u && py >= radius && py < h - radius) opaque_mid = 0;
+            o[px] = (oa << 24) | (orr << 16) | (og << 8) | ob;
+        }
+    }
+    return opaque_mid;
+}
+static const struct ic152 *icache_get152(const struct wimginfo *ii, int w, int h, int radius, int alpha)
+{
+    if (!ii->serial || w <= 0 || h <= 0) return 0;
+    uint64_t bytes64 = (uint64_t)w * (uint64_t)h * 4u;
+    if (bytes64 > (uint64_t)SOMA_WEB_IMG_CACHE_KB * 1024u / 3u) return 0;   /* imagenes enormes: camino normal (recortado) */
+    uint32_t bytes = (uint32_t)bytes64;
+    s_ic152_tick++;
+    for (int i = 0; i < 32; i++) {
+        struct ic152 *e = &s_ic152[i];
+        if (e->px && e->serial == ii->serial && e->w == w && e->h == h && e->radius == radius && e->alpha == alpha) { e->used = s_ic152_tick; return e; }
+    }
+    /* hueco: la entrada menos usada, liberando hasta caber en el presupuesto */
+    for (;;) {
+        int victim = -1, empty = -1; uint64_t old = ~0ull;
+        for (int i = 0; i < 32; i++) { if (!s_ic152[i].px) { if (empty < 0) empty = i; continue; } if (s_ic152[i].used < old) { old = s_ic152[i].used; victim = i; } }
+        if (empty >= 0 && s_ic152_bytes + bytes <= (uint32_t)SOMA_WEB_IMG_CACHE_KB * 1024u) {
+            struct ic152 *e = &s_ic152[empty];
+            uint32_t *px = (uint32_t *)kmalloc(bytes); if (!px) return 0;
+            e->opaque_mid = scale_rows152(ii, w, h, radius, alpha, px);
+            e->serial = ii->serial; e->w = w; e->h = h; e->radius = radius; e->alpha = alpha; e->px = px; e->bytes = bytes; e->used = s_ic152_tick;
+            s_ic152_bytes += bytes;
+            return e;
+        }
+        if (victim < 0) return 0;
+        kfree(s_ic152[victim].px); s_ic152_bytes -= s_ic152[victim].bytes; memset(&s_ic152[victim], 0, sizeof s_ic152[victim]);
+    }
+}
+
 /* imagen escalada con promedio de muestras; radio opcional */
 static void draw_image(struct wpt *P, int x, int y, int w, int h, const struct wimginfo *ii, int radius, int alpha)
 {
@@ -1688,8 +2072,46 @@ static void draw_image(struct wpt *P, int x, int y, int w, int h, const struct w
     int x0 = wmax(x, P->cx0), y0 = wmax(y, P->cy0), x1 = wmin(x + w, P->cx1), y1 = wmin(y + h, P->cy1);
     if (x1 <= x0 || y1 <= y0) return;
     int vw = x1 - x0, vh = y1 - y0;
-    uint32_t *tmp = (uint32_t *)kmalloc((size_t)vw * vh * 4); if (!tmp) return;
     int iw = ii->pw > 0 ? ii->pw : ii->w, ih = ii->ph > 0 ? ii->ph : ii->h; int stepx = iw / w, stepy = ih / h;      /* >=1 al reducir */
+    if (!soma150_direct_image(w, h, iw, ih, radius, alpha)) {                    /* SOMA_152: cache de la imagen escalada */
+        const struct ic152 *c = icache_get152(ii, w, h, radius, alpha);
+        if (c) {
+            const uint32_t *src = c->px + (size_t)(y0 - y) * (size_t)w + (size_t)(x0 - x);
+            int r = radius > w / 2 ? w / 2 : radius; if (r > h / 2) r = h / 2;
+            if (c->opaque_mid) {
+                /* foto opaca: solo las filas de las esquinas redondeadas necesitan mezcla */
+                int top = r - (y0 - y), bot = (y + h - r) - y0;            /* filas [0,top) y [bot,vh) llevan esquina */
+                if (top < 0) top = 0;
+                if (top > vh) top = vh;
+                if (bot < top) bot = top;
+                if (bot > vh) bot = vh;
+                if (top > 0) fb_blit_alpha(x0, y0, src, vw, top, w);
+                if (bot > top) fb_blit(x0, y0 + top, src + (size_t)top * (size_t)w, vw, bot - top, w);
+                if (vh > bot) fb_blit_alpha(x0, y0 + bot, src + (size_t)bot * (size_t)w, vw, vh - bot, w);
+            } else fb_blit_alpha(x0, y0, src, vw, vh, w);
+            return;
+        }
+    }
+#if SOMA_WEB_IMAGE_FASTPATH
+    /* Sin escalado ni mascara: usar el bitmap original, sin copiar ni reservar
+     * un temporal de la altura completa. fb_blit_alpha conserva la transparencia. */
+    if (soma150_direct_image(w, h, iw, ih, radius, alpha)) {
+        fb_blit_alpha(x0, y0, ii->px + (size_t)(y0 - y) * (size_t)iw + (size_t)(x0 - x), vw, vh, iw);
+        return;
+    }
+#endif
+    int tile_rows = vh;
+#if SOMA_WEB_IMAGE_FASTPATH
+    tile_rows = soma150_tile_rows(vw, vh);
+#endif
+    if (tile_rows <= 0) return;
+    uint32_t *tmp = (uint32_t *)kmalloc((size_t)vw * (size_t)tile_rows * 4u);
+#if SOMA_WEB_IMAGE_FASTPATH
+    while (!tmp && tile_rows > 1) { tile_rows = (tile_rows + 1) / 2; if (tile_rows == 1) break;
+        tmp = (uint32_t *)kmalloc((size_t)vw * (size_t)tile_rows * 4u); }
+    if (!tmp && tile_rows == 1) tmp = (uint32_t *)kmalloc((size_t)vw * 4u);
+#endif
+    if (!tmp) return;
     int nsx = stepx >= 2 ? wmin(stepx, 3) : 1, nsy = stepy >= 2 ? wmin(stepy, 3) : 1;
     if (radius > w / 2) radius = w / 2;
     if (radius > h / 2) radius = h / 2;
@@ -1699,11 +2121,13 @@ static void draw_image(struct wpt *P, int x, int y, int w, int h, const struct w
         int px = x0 + i - x; int sx = (int)(((int64_t)px * iw * nsx + (int64_t)si * iw + iw / 2) / ((int64_t)w * nsx)); if (sx >= iw) sx = iw - 1; xt[i * nsx + si] = sx;
     }
     int opaque_fast = (nsx == 1 && nsy == 1 && radius == 0 && alpha >= 255);
-    for (int j = 0; j < vh; j++) {
+    for (int row0 = 0; row0 < vh; row0 += tile_rows) {
+        int nr = vh - row0 < tile_rows ? vh - row0 : tile_rows;
+        for (int j = row0; j < row0 + nr; j++) {
         int py = y0 + j - y;
         if (opaque_fast) {
             int sy = (int)(((int64_t)py * ih + ih / 2) / h); if (sy >= ih) sy = ih - 1;
-            const uint32_t *row = ii->px + (size_t)sy * iw; uint32_t *o = tmp + (size_t)j * vw;
+            const uint32_t *row = ii->px + (size_t)sy * iw; uint32_t *o = tmp + (size_t)(j - row0) * vw;
             for (int i = 0; i < vw; i++) o[i] = row[xt[i]];
             continue;
         }
@@ -1724,11 +2148,12 @@ static void draw_image(struct wpt *P, int x, int y, int w, int h, const struct w
                 if (cxp && cyp) { int d2 = cxp * cxp + cyp * cyp, r2 = radius * radius; if (d2 > r2 + radius) oa = 0; else if (d2 > r2 - radius) oa = oa * (uint32_t)(r2 + radius - d2) / (uint32_t)(2 * radius + 1); }
             }
             oa = oa * (uint32_t)alpha / 255u;
-            tmp[j * vw + i] = (oa << 24) | (orr << 16) | (og << 8) | ob;
+            tmp[(size_t)(j - row0) * (size_t)vw + (size_t)i] = (oa << 24) | (orr << 16) | (og << 8) | ob;
         }
+        }
+        fb_blit_alpha(x0, y0 + row0, tmp, vw, nr, vw);
     }
     kfree(xt);
-    fb_blit_alpha(x0, y0, tmp, vw, vh, vw);
     kfree(tmp);
 }
 static void draw_border(struct wpt *P, int x, int y, int w, int h, const struct wbox *b, int alpha)
@@ -1736,6 +2161,15 @@ static void draw_border(struct wpt *P, int x, int y, int w, int h, const struct 
     const struct wstyle *s = b->st; int r = s->radius;
     int bt = b->bt, br = b->br, bb = b->bb, bl = b->bl;
     if (!(bt || br || bb || bl)) return;
+    if (s->border_style[0] >= 4 && s->border_style[1] >= 4 && s->border_style[2] >= 4 && s->border_style[3] >= 4) {
+        /* SOMA_188: borde de control como el tema de Chrome: linea de 1px gris redondeada; el resto del grosor es relleno */
+        uint32_t c = s->border_color[0] == 1 ? s->color : s->border_color[0]; if ((c & 0xFFFFFF) == 0) c = 0xFF767676u;
+        int rr = r > 0 ? r : 2;
+        rrect(P, x, y, w, h, rr, mul_alpha(c, alpha));
+        uint32_t in = s->bg_color && (s->bg_color >> 24) == 255 ? s->bg_color : (P->bg | 0xFF000000u);
+        rrect(P, x + 1, y + 1, w - 2, h - 2, wmax(0, rr - 1), mul_alpha(in, 255));
+        return;
+    }
     if (r > 0 && bt == br && br == bb && bb == bl && s->border_style[0] == 1) {
         uint32_t c = s->border_color[0] == 1 ? s->color : s->border_color[0];
         rrect(P, x, y, w, h, r, mul_alpha(c, alpha));
@@ -1748,7 +2182,7 @@ static void draw_border(struct wpt *P, int x, int y, int w, int h, const struct 
         int rx, ry, rw, rh;
         switch (side) { case 0: rx = x; ry = y; rw = w; rh = wd; break; case 1: rx = x + w - wd; ry = y + bt; rw = wd; rh = h - bt - bb; break; case 2: rx = x; ry = y + h - wd; rw = w; rh = wd; break; default: rx = x; ry = y + bt; rw = wd; rh = h - bt - bb; break; }
         int st = s->border_style[side];
-        if (st == 1) fillr(P, rx, ry, rw, rh, c);
+        if (st == 1 || st >= 4) fillr(P, rx, ry, rw, rh, c);
         else {
             int seg = st == 3 ? wd : wd * 3, gap = st == 3 ? wd : wd * 2; if (seg < 2) seg = 2; if (gap < 2) gap = 2;
             if (side & 1) { for (int p = 0; p < rh; p += seg + gap) fillr(P, rx, ry + p, rw, wmin(seg, rh - p), c); }
@@ -1769,12 +2203,13 @@ static void draw_bgimage(struct wpt *P, const struct wbox *b, int x, int y, int 
     default: break;
     }
     if (dw <= 0 || dh <= 0) return;
-    int ox = px + (int)((int64_t)(pw - dw) * s->bg_pos_x / 100), oy = py + (int)((int64_t)(ph - dh) * s->bg_pos_y / 100);
+    int ox = px + (int)((int64_t)(pw - dw) * s->bg_pos_x / 100) + s->bg_off_x, oy = py + (int)((int64_t)(ph - dh) * s->bg_pos_y / 100) + s->bg_off_y;
     struct wpt Q = *P; clip_isect(&Q, px, py, pw, ph);
-    int rep = s->bg_repeat;     /* 0 repetir, 1 no repetir, 2 x, 3 y */
+    int rep = s->bg_repeat;     /* SOMA_181: 0 repetir, 1 repeat-x, 2 repeat-y, 3 no-repeat (el pintado tenia 1=no-repeat, 2=x, 3=y: no-repeat se repetia en vertical) */
+    int repx = wl181_off() ? (rep == 0 || rep == 2) : (rep == 0 || rep == 1), repy = wl181_off() ? (rep == 0 || rep == 3) : (rep == 0 || rep == 2);
     int tx0 = ox, ty0 = oy, tx1 = ox + dw, ty1 = oy + dh;
-    if (rep == 0 || rep == 2) { while (tx0 > px) tx0 -= dw; tx1 = px + pw; }
-    if (rep == 0 || rep == 3) { while (ty0 > py) ty0 -= dh; ty1 = py + ph; }
+    if (repx) { while (tx0 > px) tx0 -= dw; tx1 = px + pw; }
+    if (repy) { while (ty0 > py) ty0 -= dh; ty1 = py + ph; }
     int count = 0;
     for (int ty = ty0; ty < ty1 && count < 400; ty += dh) for (int tx = tx0; tx < tx1 && count < 400; tx += dw) { draw_image(&Q, tx, ty, dw, dh, &ii, 0, alpha); count++; }
     P->cx0 = Q.cx0 * 0 + P->cx0; clip_apply(P);
@@ -1818,6 +2253,34 @@ static void paint_marker(struct wpt *P, struct wbox *b, int x, int y, int alpha)
     int w = textw(s, t, len); wf_draw(right - w, base, t, len, px, s->color & 0xFFFFFF, fontfl(s), alpha);
 }
 
+/* SOMA_188: box-shadow inset: franjas concentricas desde el borde interior; grosor por lado = spread +/- desplazamiento,
+   difuminado lineal sobre el blur (aprox. de la gaussiana). Cada pixel se pinta una sola vez. */
+static int ish_alpha(int d, int t, int blur)
+{
+    int h = blur / 2; if (t <= 0 && !blur) return 0;
+    if (d < t - h) return 256;
+    if (d >= t + h + (blur & 1)) return 0;
+    if (!blur) return d < t ? 256 : 0;
+    return (int)(256 * (t + h + (blur & 1) - d) / (blur + 1));
+}
+static void paint_inset_shadow(struct wpt *P, const struct wstyle *s, int x, int y, int w, int h, int alpha)
+{
+    if (w <= 0 || h <= 0) return;
+    uint32_t c = mul_alpha(s->ish_color, alpha); if (!(c >> 24)) return;
+    int sp = s->ish_spread, bl = s->ish_blur;
+    int tt = sp + s->ish_y, tb = sp - s->ish_y, tlf = sp + s->ish_x, tr = sp - s->ish_x;
+    int maxd = wmax(wmax(tt, tb), wmax(tlf, tr)) + bl; if (maxd <= 0) return;
+    if (maxd > wmin(w, h) / 2 + 1) maxd = wmin(w, h) / 2 + 1;
+    uint32_t ca = c >> 24, rgb = c & 0xFFFFFF;
+    for (int d = 0; d < maxd; d++) {
+        int iw = w - 2 * d, ih = h - 2 * d; if (iw <= 0 || ih <= 0) break;
+        int at = ish_alpha(d, tt, bl), ab = ish_alpha(d, tb, bl), al = ish_alpha(d, tlf, bl), ar = ish_alpha(d, tr, bl);
+        if (at) fillr(P, x + d, y + d, iw, 1, ((ca * (uint32_t)at >> 8) << 24) | rgb);
+        if (ab && ih > 1) fillr(P, x + d, y + h - 1 - d, iw, 1, ((ca * (uint32_t)ab >> 8) << 24) | rgb);
+        if (al && ih > 2) fillr(P, x + d, y + d + 1, 1, ih - 2, ((ca * (uint32_t)al >> 8) << 24) | rgb);
+        if (ar && ih > 2 && iw > 1) fillr(P, x + w - 1 - d, y + d + 1, 1, ih - 2, ((ca * (uint32_t)ar >> 8) << 24) | rgb);
+    }
+}
 static uint32_t parse_hex_attr(const char *v)
 {
     if (!v) return 0xFF000000u;
@@ -1836,7 +2299,15 @@ static void paint_ctl(struct wpt *P, struct wbox *b, int x, int y, int alpha)
     switch (b->ctl) {
     case CTL_IMG: {
         struct wimginfo ii; const char *src = wl_img_src(n);
-        if (src && img_info(L, src, &ii) && ii.state == 2) { draw_image(P, cx_, cy_, cw, ch, &ii, s->radius, alpha); }
+        if (src && img_info(L, src, &ii) && ii.state == 2) {
+            if (s->obj_fit && !wl181_off() && ii.w > 0 && ii.h > 0 && cw > 0 && ch > 0) {   /* SOMA_181: object-fit / object-position */
+                int64_t sx = (int64_t)cw * 1000 / ii.w, sy = (int64_t)ch * 1000 / ii.h, sc = 1000;
+                switch (s->obj_fit) { case 1: sc = sx < sy ? sx : sy; break; case 2: sc = sx > sy ? sx : sy; break; case 4: sc = (sx < sy ? sx : sy); if (sc > 1000) sc = 1000; break; default: sc = 1000; break; }
+                int dw = (int)(ii.w * sc / 1000), dh = (int)(ii.h * sc / 1000); if (dw < 1) dw = 1; if (dh < 1) dh = 1;
+                int ox = cx_ + (int)((int64_t)(cw - dw) * s->obj_pos_x / 100), oy = cy_ + (int)((int64_t)(ch - dh) * s->obj_pos_y / 100);
+                struct wpt Q = *P; clip_isect(&Q, cx_, cy_, cw, ch); draw_image(&Q, ox, oy, dw, dh, &ii, 0, alpha); clip_apply(P);
+            } else draw_image(P, cx_, cy_, cw, ch, &ii, s->radius, alpha);
+        }
         else {
             if (n->tag == WT_SVG) { /* sin pasarela no hay dibujo: se deja el hueco */ }
             else if (ii.state == 3 || !src) {
@@ -1857,19 +2328,25 @@ static void paint_ctl(struct wpt *P, struct wbox *b, int x, int y, int alpha)
             pw = (char *)kmalloc(cnt * 3 + 1); if (pw) { for (uint32_t k = 0; k < cnt; k++) { pw[k * 3] = (char)0xE2; pw[k * 3 + 1] = (char)0x80; pw[k * 3 + 2] = (char)0xA2; } pw[cnt * 3] = 0; t = pw; tl = cnt * 3; }
         }
         struct wpt Q = *P; clip_isect(&Q, cx_, cy_, cw, wmax(ch, 1));
-        uint32_t tc = showph ? mul_alpha(0xFF8A8A8Au, alpha) : col;
+        uint32_t tc = col; int tal = alpha;
+        if (showph) {   /* SOMA_188: ::placeholder (color con alfa, cursiva, negrita); por defecto el gris de Chrome */
+            uint32_t pc = s->ph_color ? s->ph_color : 0xFF757575u; if (pc == 0x00000001u) pc = 0;
+            tc = pc; tal = (int)((uint32_t)alpha * (pc >> 24) / 255u);
+            if (s->ph_italic >= 0) fl = (fl & ~WF_ITALIC) | (s->ph_italic ? WF_ITALIC : 0);
+            if (s->ph_bold >= 0) fl = (fl & ~WF_BOLD) | (s->ph_bold ? WF_BOLD : 0);
+        }
         int is_focus = (L->focus == n);
         if (b->ctl == CTL_TEXTAREA) {
             int lh = wc_line_px(s), line = 0; uint32_t ls = 0;
             for (uint32_t i = 0; i <= tl; i++) {
-                if (i == tl || t[i] == '\n') { if (i > ls) wf_draw(cx_, cy_ + line * lh + asc, t + ls, i - ls, px, tc & 0xFFFFFF, fl, alpha); line++; ls = i + 1; if (line * lh > ch + lh) break; }
+                if (i == tl || t[i] == '\n') { if (i > ls) wf_draw(cx_, cy_ + line * lh + asc, t + ls, i - ls, px, tc & 0xFFFFFF, fl, tal); line++; ls = i + 1; if (line * lh > ch + lh) break; }
             }
             if (is_focus && L->caret_on) { int cur = n->sel < 0 ? 0 : (n->sel > (int)tl ? (int)tl : n->sel); int ln = 0; uint32_t st0 = 0; for (int i = 0; i < cur; i++) if (t[i] == '\n') { ln++; st0 = i + 1; } int cxp = textw(s, t + st0, cur - st0); fillr(&Q, cx_ + cxp, cy_ + ln * lh + 1, 1, lh - 2, col); }
         } else {
             int cur = n->sel < 0 ? 0 : (n->sel > (int)tl ? (int)tl : n->sel); if (showph) cur = 0;
             int carx = textw(s, t, cur), off = carx > cw - 3 ? carx - cw + 3 : 0;
             int ty = cy_ + (ch - (asc + dsc)) / 2 + asc;
-            wf_draw(cx_ - off, ty, t, tl, px, tc & 0xFFFFFF, fl, alpha);
+            wf_draw(cx_ - off, ty, t, tl, px, tc & 0xFFFFFF, fl, tal);
             if (is_focus && L->caret_on) fillr(&Q, cx_ + carx - off, cy_ + 1, 1, ch - 2, col);
         }
         if (pw) kfree(pw);
@@ -1890,8 +2367,9 @@ static void paint_ctl(struct wpt *P, struct wbox *b, int x, int y, int alpha)
         wf_draw(cx_ + (cw - tw_) / 2, cy_ + (ch - (asc + dsc)) / 2 + asc, t, tl, px, col & 0xFFFFFF, fl, alpha); break; }
     case CTL_SELECT: {
         const char *t = wl_ctl_text(n); int tl = wu_strlen(t);
-        struct wpt Q = *P; clip_isect(&Q, cx_, cy_, cw - 16, ch);
-        wf_draw(cx_, cy_ + (ch - (asc + dsc)) / 2 + asc, t, tl, px, col & 0xFFFFFF, fl, alpha);
+        int sx0 = wl181_off() ? 0 : wmax(0, 4 - b->pl);   /* SOMA_188: margen interno del menu (Chrome) con padding 0 */
+        struct wpt Q = *P; clip_isect(&Q, cx_, cy_, cw - 14 + sx0 / 2, ch);
+        wf_draw(cx_ + sx0, cy_ + (ch - (asc + dsc)) / 2 + asc, t, tl, px, col & 0xFFFFFF, fl, alpha);
         clip_apply(P);
         int ax = cx_ + cw - 12, ay = cy_ + ch / 2 - 2;
         for (int i = 0; i < 4; i++) fillr(P, ax + i, ay + i, 9 - 2 * i, 1, col);
@@ -1933,10 +2411,34 @@ static void paint_text_lines(struct wpt *P, struct wbox *b, int x, int y, int al
             else if (sd == 3 && d->first) fillr(P, dx, dy, wd, dh, c); else if (sd == 1 && d->last) fillr(P, dx + dw - wd, dy, wd, dh, c);
         }
     }
+    /* SOMA_188: text-overflow: ellipsis (una linea) y -webkit-line-clamp (ultima linea visible) terminan en ... */
+    const struct wstyle *bs = (b->st && !(b->flags & BF_ANON)) ? b->st : 0;
+    for (struct wbox *q = b; !bs && q; q = q->parent) if (q->st && !(q->flags & BF_ANON)) bs = q->st;
+    int ell = bs && bs->text_overflow && bs->overflow_x && !wl181_off(), limit = b->w - b->br - b->pr;
+    int clamp_y = INT32_MIN, done_y = INT32_MIN;
+    if (bs && bs->line_clamp && bs->overflow_y && !wl181_off()) {
+        int nl = 0, ly = INT32_MIN; for (int i = 0; i < b->nfrags; i++) if (b->frags[i].y != ly) { ly = b->frags[i].y; if (++nl == bs->line_clamp) clamp_y = ly; }
+        if (nl <= bs->line_clamp) clamp_y = INT32_MIN;
+    }
     for (int i = 0; i < b->nfrags; i++) {
         const struct wfrag *f = &b->frags[i]; const struct wstyle *s = f->st; int by = y + f->y;
+        if (f->y == done_y) continue;
         if (by - f->asc > P->cy1 || by + f->dsc < P->cy0 || x + f->x > P->cx1 || x + f->x + f->w < P->cx0) continue;
-        if (s->visibility) continue;
+        if (s->visibility || s->fs_zero) continue;   /* SOMA_188: font-size: 0 no se dibuja */
+        int last_on_line = i + 1 >= b->nfrags || b->frags[i + 1].y != f->y;
+        if ((ell && f->x + f->w > limit) || (f->y == clamp_y && last_on_line)) {
+            static const char E3[] = "\xE2\x80\xA6"; int fl2 = fontfl(s), ew = textw(s, E3, 3);
+            int room = (ell ? limit : limit) - f->x - ew; uint32_t n2 = 0;
+            if (f->y == clamp_y && !(ell && f->x + f->w > limit) && f->x + f->w + ew <= limit) n2 = f->len;
+            else while (n2 < f->len) { uint32_t nx = n2 + 1; while (nx < f->len && ((unsigned char)f->txt[nx] & 0xC0) == 0x80) nx++; if (textw(s, f->txt, nx) > room) break; n2 = nx; }
+            while (n2 > 0 && f->txt[n2 - 1] == ' ') n2--;
+            int a8 = (int)(((s->color >> 24) * (uint32_t)alpha) / 255);
+            if (n2) wf_draw(x + f->x, by, f->txt, n2, s->font_px, s->color & 0xFFFFFF, fl2, a8);
+            int tw2 = n2 ? textw(s, f->txt, n2) : 0;
+            wf_draw(x + f->x + tw2, by, E3, 3, s->font_px, s->color & 0xFFFFFF, fl2, a8);
+            if (s->text_decor & 1) fillr(P, x + f->x, by + s->font_px / 10 + 1, tw2 + ew, wmax(1, s->font_px / 14), mul_alpha(s->color, alpha));
+            done_y = f->y; continue;
+        }
         wf_draw(x + f->x, by, f->txt, f->len, s->font_px, s->color & 0xFFFFFF, fontfl(s), (int)(((s->color >> 24) * (uint32_t)alpha) / 255));
         if (s->text_decor) {
             int th = wmax(1, s->font_px / 14); uint32_t c = mul_alpha(s->color, alpha);
@@ -1947,6 +2449,37 @@ static void paint_text_lines(struct wpt *P, struct wbox *b, int x, int y, int al
     }
 }
 
+/* SOMA_181: desplazamiento interno de cajas con overflow */
+static int box_scroll_max(const struct wbox *b)
+{
+    const struct wstyle *s = b->st;
+    if (!s || (b->flags & BF_ANON) || b->kind == BK_REPL || s->overflow_y == 0 || b->node == 0 || wl181_off()) return 0;
+    int m = b->sch - b->cont_h; return m > 0 ? m : 0;
+}
+static int box_scroll(const struct wbox *b)
+{
+    int m = box_scroll_max(b); if (m <= 0 || !b->node) return 0;
+    int v = b->node->scy; return v < 0 ? 0 : v > m ? m : v;
+}
+/* SOMA_181: position: sticky (solo con top en px/%): el cuadro se queda pegado al borde superior del visor sin salir de su padre.
+ * y_cur: y actual del cuadro en el sistema de coordenadas de y_view (borde superior del visor en ese mismo sistema). */
+static int sticky_dy(const struct wlay *L, const struct wbox *b, int y_cur, int y_view)
+{
+    const struct wstyle *s = b->st;
+    if (!s || s->position != P_STICKY || s->top.kind != LK_VAL || (b->flags & BF_ANON) || wl181_off()) return 0;
+    int top = lenv(&s->top, L->vh, 0);
+    int dy = y_view + top - y_cur; if (dy <= 0) return 0;
+    const struct wbox *par = b->parent;
+    if (par) {
+        int oy = y_cur - b->y - b->rdy;                                  /* origen (borde superior) del padre */
+        int room = oy + par->h - par->pb - par->bb - b->mb - (y_cur + b->h);
+        if (room < dy) dy = room;
+    }
+    return dy > 0 ? dy : 0;
+}
+
+/* SOMA_181: posicionados relativos con z-index > 0 y sticky se pintan (y reciben el clic) por encima del resto del flujo de su padre */
+static int is_lifted(const struct wbox *c) { const struct wstyle *s = c->st; return s && !(c->flags & BF_ANON) && !wl181_off() && (s->position == P_STICKY || (s->position == P_RELATIVE && s->z_index > 0)); }
 static void paint_abs_list(struct wpt *P, struct wbox *cb, int x, int y, int alpha, int depth, int fixed_pass)
 {
     struct wbox *arr[64]; int n = 0;
@@ -1954,9 +2487,81 @@ static void paint_abs_list(struct wpt *P, struct wbox *cb, int x, int y, int alp
     /* la cadena esta en orden inverso de construccion */
     for (int i = 0; i < n / 2; i++) { struct wbox *t = arr[i]; arr[i] = arr[n - 1 - i]; arr[n - 1 - i] = t; }
     for (int i = 1; i < n; i++) { struct wbox *t = arr[i]; int j = i - 1; while (j >= 0 && arr[j]->zi > t->zi) { arr[j + 1] = arr[j]; j--; } arr[j + 1] = t; }
-    for (int i = 0; i < n; i++) paint_box(P, arr[i], fixed_pass ? 0 : x, fixed_pass ? 0 : y, alpha, depth + 1);
+    for (int i = 0; i < n; i++) paint_box(P, arr[i], fixed_pass ? P->vx : x, fixed_pass ? P->vy : y, alpha, depth + 1);   /* SOMA_181: fixed es relativo al visor, no a la pantalla */
 }
 
+/* SOMA_188: transform rotate()/scale() en cajas decorativas (iconos CSS: X, chevrones, hamburguesas). Aritmetica entera:
+ * seno en 1/16384, coordenadas en 1/256 px, relleno convexo con 4 subfilas y cobertura horizontal exacta. */
+static const uint16_t SIN90[91] = { 0, 286, 572, 857, 1143, 1428, 1713, 1997, 2280, 2563, 2845, 3126, 3406, 3686, 3964, 4240, 4516, 4790, 5063, 5334, 5604, 5872, 6138, 6402, 6664,
+    6924, 7182, 7438, 7692, 7943, 8192, 8438, 8682, 8923, 9162, 9397, 9630, 9860, 10087, 10311, 10531, 10749, 10963, 11174, 11381, 11585, 11786, 11982, 12176, 12365, 12551, 12733, 12911,
+    13085, 13255, 13421, 13583, 13741, 13894, 14044, 14189, 14330, 14466, 14598, 14726, 14849, 14968, 15082, 15191, 15296, 15396, 15491, 15582, 15668, 15749, 15826, 15897, 15964, 16026,
+    16083, 16135, 16182, 16225, 16262, 16294, 16322, 16344, 16362, 16374, 16382, 16384 };
+static int isin10(int d10)
+{
+    d10 = ((d10 % 3600) + 3600) % 3600; int q = d10 / 900, r = d10 % 900, sgn = q >= 2 ? -1 : 1; if (q & 1) r = 900 - r;
+    int a = r / 10, f = r % 10; int v = SIN90[a] + (a < 90 ? (SIN90[a + 1] - SIN90[a]) * f / 10 : 0);
+    return sgn * v;
+}
+static int icos10(int d10) { return isin10(d10 + 900); }
+static void fill_quad(struct wpt *P, const int64_t *qx, const int64_t *qy, int n, uint32_t argb)
+{
+    int64_t ymin = qy[0], ymax = qy[0], xmin = qx[0], xmax = qx[0];
+    for (int i = 1; i < n; i++) { if (qy[i] < ymin) ymin = qy[i]; if (qy[i] > ymax) ymax = qy[i]; if (qx[i] < xmin) xmin = qx[i]; if (qx[i] > xmax) xmax = qx[i]; }
+    int px0 = (int)(xmin >> 8) - 1, px1 = (int)(xmax >> 8) + 2, py0 = (int)(ymin >> 8), py1 = (int)(ymax >> 8) + 1;
+    if (px0 < P->cx0) px0 = P->cx0;
+    if (px1 > P->cx1) px1 = P->cx1;
+    if (py0 < P->cy0) py0 = P->cy0;
+    if (py1 > P->cy1) py1 = P->cy1;
+    int w = px1 - px0; if (w <= 0 || py1 <= py0 || w > 4096) return;
+    uint16_t *cov = (uint16_t *)kmalloc((uint32_t)w * 2u); if (!cov) return;
+    int a0 = (int)(argb >> 24);
+    for (int py = py0; py < py1; py++) {
+        memset(cov, 0, (size_t)w * 2u); int any = 0;
+        for (int k = 0; k < 4; k++) {
+            int64_t sy = ((int64_t)py << 8) + 32 + 64 * k, xl = INT64_MAX, xr = INT64_MIN;
+            for (int i = 0; i < n; i++) {
+                int64_t ax = qx[i], ay = qy[i], bx = qx[(i + 1) % n], by = qy[(i + 1) % n];
+                if ((ay <= sy && by > sy) || (by <= sy && ay > sy)) { int64_t xx = ax + (bx - ax) * (sy - ay) / (by - ay); if (xx < xl) xl = xx; if (xx > xr) xr = xx; }
+            }
+            if (xl >= xr) continue;
+            any = 1;
+            for (int64_t cx = xl >> 8; cx <= (xr >> 8); cx++) {
+                int ix = (int)cx - px0; if (ix < 0 || ix >= w) continue;
+                int64_t l = cx << 8, r = l + 256; if (xl > l) l = xl; if (xr < r) r = xr;
+                if (r > l) cov[ix] = (uint16_t)(cov[ix] + (r - l));
+            }
+        }
+        if (!any) continue;
+        for (int i = 0; i < w; i++) if (cov[i]) { int a = a0 * (cov[i] > 1024 ? 1024 : cov[i]) / 1024; if (a > 0) fb_fill_rect_alpha(px0 + i, py, 1, 1, ((uint32_t)a << 24) | (argb & 0xFFFFFF)); }
+    }
+    kfree(cov);
+}
+static void xf_rect(struct wpt *P, int64_t cx, int64_t cy, int rx0, int ry0, int rx1, int ry1, int s10, int c10, int scx, int scy, uint32_t argb)
+{   /* rectangulo relativo al centro (px) -> escalado, girado y trasladado */
+    int64_t qx[4], qy[4]; int xs[4] = { rx0, rx1, rx1, rx0 }, ys[4] = { ry0, ry0, ry1, ry1 };
+    for (int i = 0; i < 4; i++) {
+        int64_t px = (int64_t)xs[i] * 256 * scx / 100, py = (int64_t)ys[i] * 256 * scy / 100;
+        qx[i] = cx + (px * c10 - py * s10) / 16384; qy[i] = cy + (px * s10 + py * c10) / 16384;
+    }
+    fill_quad(P, qx, qy, 4, argb);
+}
+static void paint_xform_box(struct wpt *P, struct wbox *b, int x, int y, int a2)
+{
+    const struct wstyle *s = b->st; int sn = isin10(s->rot10), cs = icos10(s->rot10);
+    int scx = s->sc_x ? s->sc_x : 100, scy = s->sc_y ? s->sc_y : 100;
+    int64_t cx = ((int64_t)x << 8) + ((int64_t)b->w << 7), cy = ((int64_t)y << 8) + ((int64_t)b->h << 7);
+    int hw = b->w / 2, hh = b->h / 2, rw = b->w - hw, rh = b->h - hh;
+    if (s->bg_color) xf_rect(P, cx, cy, -hw, -hh, rw, rh, sn, cs, scx, scy, mul_alpha(s->bg_color, a2));
+    for (int side = 0; side < 4; side++) {
+        int bw = side == 0 ? b->bt : side == 1 ? b->br : side == 2 ? b->bb : b->bl; uint32_t bc = s->border_color[side];
+        if (bw <= 0 || !s->border_style[side] || !(bc >> 24)) continue;
+        bc = mul_alpha(bc, a2);
+        if (side == 0) xf_rect(P, cx, cy, -hw, -hh, rw, -hh + bw, sn, cs, scx, scy, bc);
+        else if (side == 1) xf_rect(P, cx, cy, rw - bw, -hh, rw, rh, sn, cs, scx, scy, bc);
+        else if (side == 2) xf_rect(P, cx, cy, -hw, rh - bw, rw, rh, sn, cs, scx, scy, bc);
+        else xf_rect(P, cx, cy, -hw, -hh, -hw + bw, rh, sn, cs, scx, scy, bc);
+    }
+}
 static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, int depth)
 {
     if (depth > 90 || web_stack_left() < 4000) return;
@@ -1964,9 +2569,16 @@ static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, 
     int x = ox + b->x + b->rdx, y = oy + b->y + b->rdy;
     int anon = (b->flags & BF_ANON) != 0;
     if (s && !anon && s->display == D_NONE) return;
+    if (s && s->position == P_STICKY) y += sticky_dy(L, b, y, P->vy);
     int a2 = (s && !anon && s->opacity < 255) ? alpha * s->opacity / 255 : alpha;
     if (a2 <= 0) return;
     if (b->h > 0 && b->abs_chain == 0 && (y > P->cy1 + 600 || y + b->h < P->cy0 - 600)) return;
+    if (s && !anon && !wl181_off()) {   /* SOMA_188: transform scale(0) oculta; rotate/scale en cajas decorativas se dibujan transformadas */
+        if (s->sc_x == -32768 || s->sc_y == -32768) return;
+        if ((s->rot10 || (s->sc_x && s->sc_x != 100) || (s->sc_y && s->sc_y != 100)) && !b->first && !b->nfrags && !b->abs_chain && b->kind != BK_REPL && !s->visibility && s->radius == 0 && b->w > 0 && b->h > 0) {
+            clip_apply(P); paint_xform_box(P, b, x, y, a2); return;
+        }
+    }
     struct wpt save = *P; uint32_t save_bg = P->bg;
     int vis = !(s && !anon && s->visibility);
     /* SOMA_PARCHE_028_UI: overflow:hidden con border-radius -> el contenido (p. ej. la foto de una tarjeta) se recorta al arco */
@@ -1981,6 +2593,10 @@ static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, 
         int onscreen = !(y > P->cy1 || y + b->h < P->cy0 || x > P->cx1 || x + b->w < P->cx0);
         if (onscreen) {
             if (!skipbg) {
+                for (int k = 3; k >= 0; k--) if ((s->xsh_c[k] >> 24) && !wl181_off()) {   /* SOMA_188: sombras adicionales (la primera queda encima) */
+                    uint32_t sc = mul_alpha(s->xsh_c[k], a2);
+                    if (sc >> 24) fb_draw_box_shadow(x, y, b->w, b->h, s->radius, s->xsh_x[k], s->xsh_y[k], s->xsh_s[k], s->xsh_b[k], sc);
+                }
                 if (s->shadow_color >> 24) {       /* SOMA_PARCHE_028_UI: box-shadow */
                     uint32_t sc = mul_alpha(s->shadow_color, a2);
                     if (sc >> 24) fb_draw_box_shadow(x, y, b->w, b->h, s->radius, s->shadow_x, s->shadow_y, s->shadow_spread, s->shadow_blur, sc);
@@ -1990,6 +2606,7 @@ static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, 
                 if (s->bg_image) draw_bgimage(P, b, x, y, b->w, b->h, a2);
             }
             if (s->bg_color && (s->bg_color >> 24) == 255) P->bg = s->bg_color & 0xFFFFFF;
+            if (!skipbg && (s->ish_color >> 24)) paint_inset_shadow(P, s, x + b->bl, y + b->bt, b->w - b->bl - b->br, b->h - b->bt - b->bb, a2);
             draw_border(P, x, y, b->w, b->h, b, a2);
             if (s->display == D_LIST_ITEM) paint_marker(P, b, x, y, a2);
         }
@@ -2002,10 +2619,12 @@ static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, 
         clip_isect(P, x + b->bl, y + b->bt, b->w - b->bl - b->br, b->h - b->bt - b->bb);
         if (s->radius > 0 && 0) {}
     }
+    int bsc = box_scroll(b); int y0 = y; y -= bsc;   /* SOMA_181: el contenido sube al desplazar */
     if (b->kind == BK_REPL) { if (vis) paint_ctl(P, b, x, y, a2); }
     else {
-        for (struct wbox *c = b->first; c; c = c->next) if (!(c->flags & (BF_ABS | BF_FLOAT))) paint_box(P, c, x, y, a2, depth + 1);
+        for (struct wbox *c = b->first; c; c = c->next) if (!(c->flags & (BF_ABS | BF_FLOAT)) && !is_lifted(c)) paint_box(P, c, x, y, a2, depth + 1);
         for (struct wbox *c = b->first; c; c = c->next) if ((c->flags & BF_FLOAT) && !(c->flags & BF_ABS)) paint_box(P, c, x, y, a2, depth + 1);
+        for (struct wbox *c = b->first; c; c = c->next) if (!(c->flags & (BF_ABS | BF_FLOAT)) && is_lifted(c)) paint_box(P, c, x, y, a2, depth + 1);
         if (b->items) {
             for (int i = 0; i < b->nitems; i++) if (b->items[i].type == II_FLOAT && b->items[i].box) paint_box(P, b->items[i].box, x, y, a2, depth + 1);
             if (vis || b->nfrags) paint_text_lines(P, b, x, y, a2);
@@ -2013,7 +2632,12 @@ static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, 
         }
     }
     if (b->abs_chain) paint_abs_list(P, b, x, y, a2, depth, 0);
-    if (b == L->root && b->abs_chain) paint_abs_list(P, b, 0, 0, a2, depth, 1);
+    if (b == L->root && b->abs_chain) paint_abs_list(P, b, P->vx, P->vy, a2, depth, 1);
+    y = y0;
+    if (bsc || (box_scroll_max(b) > 0 && s->overflow_y == 2)) {   /* barra de desplazamiento fina */
+        int m = box_scroll_max(b), th = b->h - b->bt - b->bb, bh = wmax(16, (int)((int64_t)th * b->cont_h / wmax(1, b->sch))), by = y + b->bt + (m > 0 ? (int)((int64_t)(th - bh) * bsc / m) : 0);
+        fillr(P, x + b->w - b->br - 7, by, 5, bh, 0x66808080u);
+    }
     *P = save; P->bg = save_bg; clip_apply(P);
     if (rc_buf) { fb_corners_restore(x, y, b->w, b->h, rc_r, rc_buf); kfree(rc_buf); }
 }
@@ -2022,61 +2646,112 @@ void wl_paint(struct wlay *L, int sx, int sy, int sw, int sh, int scroll_x, int 
 {
     if (!L || !L->root || sw <= 0 || sh <= 0) return;
     L->scroll_x = scroll_x; L->scroll_y = scroll_y;
-    struct wpt P; memset(&P, 0, sizeof P); P.L = L; P.cx0 = sx; P.cy0 = sy; P.cx1 = sx + sw; P.cy1 = sy + sh; P.scx = scroll_x; P.scy = scroll_y; P.bg = 0xFFFFFF;
+    struct wpt P; memset(&P, 0, sizeof P); P.L = L; P.cx0 = sx; P.cy0 = sy; P.cx1 = sx + sw; P.cy1 = sy + sh; P.vx = sx; P.vy = sy; P.scx = scroll_x; P.scy = scroll_y; P.bg = 0xFFFFFF;
     int32_t ocx0, ocy0, ocx1, ocy1; fb_get_clip(&ocx0, &ocy0, &ocx1, &ocy1);
     int cx0 = wmax(P.cx0, ocx0), cy0 = wmax(P.cy0, ocy0), cx1 = wmin(P.cx1, ocx1), cy1 = wmin(P.cy1, ocy1);
     P.cx0 = cx0; P.cy0 = cy0; P.cx1 = cx1; P.cy1 = cy1; if (P.cx1 <= P.cx0 || P.cy1 <= P.cy0) return;
     clip_apply(&P);
     uint32_t cbg = L->canvas_bg ? L->canvas_bg : 0xFFFFFFFFu;
     fillr(&P, sx, sy, sw, sh, 0xFF000000u | cbg); P.bg = cbg & 0xFFFFFF;
-    paint_box(&P, L->root, sx - scroll_x, sy - scroll_y, 255, 0);
+    L->painting = 1; paint_box(&P, L->root, sx - scroll_x, sy - scroll_y, 255, 0); L->painting = 0;   /* SOMA_188 */
     fb_set_clip(ocx0, ocy0, ocx1 - ocx0, ocy1 - ocy0);
 }
 
 /* ============================== busqueda ============================== */
+/* SOMA_188: un nodo con pointer-events:none (o texto dentro de uno) no es destino de clics */
+static int ptr_ok(const struct wnode *n)
+{
+    const struct wnode *e = n && n->type == WN_TEXT ? n->parent : n;
+    return !(e && e->type == WN_ELEM && e->st && e->st->no_ptr);
+}
 static struct wnode *hit_box(struct wlay *L, struct wbox *b, int px, int py, int ox, int oy, struct wbox **bo, int depth)
 {
     if (depth > 90 || web_stack_left() < 4000) return 0;
     const struct wstyle *s = b->st; int anon = (b->flags & BF_ANON) != 0;
     if (s && !anon && s->display == D_NONE) return 0;
     int x = ox + b->x + b->rdx, y = oy + b->y + b->rdy;
+    if (s && !anon && s->position == P_STICKY) y += sticky_dy(L, b, y, L->scroll_y);
     int clip = s && !anon && (s->overflow_x || s->overflow_y) && b != L->root;
     int inside = px >= x && px < x + b->w && py >= y && py < y + b->h;
     if (clip && !inside) return 0;
+    y -= box_scroll(b);   /* SOMA_181: los hijos de una caja desplazada */
     if (s && !anon && s->visibility && !b->first && !b->items) return 0;
-    struct wnode *r;
+    struct wnode *r; struct wbox *neg[64]; int negn = 0;
     { struct wbox *arr[64]; int n = 0; for (struct wbox *a = b->abs_chain; a; a = a->abs_next) if (!(a->flags & BF_FIXED) && n < 64) arr[n++] = a;
       for (int i = 1; i < n; i++) { struct wbox *t = arr[i]; int j = i - 1; while (j >= 0 && arr[j]->zi < t->zi) { arr[j + 1] = arr[j]; j--; } arr[j + 1] = t; }
-      for (int i = 0; i < n; i++) if ((r = hit_box(L, arr[i], px, py, x, y, bo, depth + 1))) return r; }
+      for (int i = 0; i < n; i++) if (arr[i]->zi >= 0 && (r = hit_box(L, arr[i], px, py, x, y, bo, depth + 1))) return r;
+      negn = n; for (int i = 0; i < n; i++) neg[i] = arr[i]; }   /* SOMA_188: los de z-index negativo van detras del contenido */
     if (b == L->root) { for (struct wbox *a = b->abs_chain; a; a = a->abs_next) if ((a->flags & BF_FIXED) && (r = hit_box(L, a, px - L->scroll_x, py - L->scroll_y, 0, 0, bo, depth + 1))) return r; }
-    if (b->kind == BK_REPL) { if (inside) { if (bo) *bo = b; return b->node; } return 0; }
+    if (b->kind == BK_REPL) { if (inside && ptr_ok(b->node) && !(s && s->visibility)) { if (bo) *bo = b; return b->node; } return 0; }
     if (b->items) {
         for (int i = b->nitems - 1; i >= 0; i--) { struct wii *it = &b->items[i]; if ((it->type == II_ATOM || it->type == II_FLOAT) && it->box && (r = hit_box(L, it->box, px, py, x, y, bo, depth + 1))) return r; }
         for (int i = b->nfrags - 1; i >= 0; i--) {
             const struct wfrag *f = &b->frags[i];
-            if (px >= x + f->x && px < x + f->x + f->w && py >= y + f->y - f->asc && py < y + f->y + f->dsc) { if (bo) *bo = b; return f->node && f->node->type == WN_TEXT ? f->node->parent : f->node; }
+            if (px >= x + f->x && px < x + f->x + f->w && py >= y + f->y - f->asc && py < y + f->y + f->dsc && ptr_ok(f->node)) { if (bo) *bo = b; return f->node && f->node->type == WN_TEXT ? f->node->parent : f->node; }
         }
     }
     struct wbox *kids[2048]; int nk = 0;
     for (struct wbox *c = b->first; c && nk < 2048; c = c->next) if (!(c->flags & BF_ABS)) kids[nk++] = c;
+    for (int i = nk - 1; i >= 0; i--) if (!(kids[i]->flags & BF_FLOAT) && is_lifted(kids[i])) if ((r = hit_box(L, kids[i], px, py, x, y, bo, depth + 1))) return r;
     for (int i = nk - 1; i >= 0; i--) if (kids[i]->flags & BF_FLOAT) if ((r = hit_box(L, kids[i], px, py, x, y, bo, depth + 1))) return r;
-    for (int i = nk - 1; i >= 0; i--) if (!(kids[i]->flags & BF_FLOAT)) if ((r = hit_box(L, kids[i], px, py, x, y, bo, depth + 1))) return r;
-    if (inside && s && !anon && b->node && (b != L->root)) { if (s->bg_color || s->bg_image || s->has_grad || b->kind == BK_BLOCK) { if (bo) *bo = b; return b->node; } }
+    for (int i = nk - 1; i >= 0; i--) if (!(kids[i]->flags & BF_FLOAT) && !is_lifted(kids[i])) if ((r = hit_box(L, kids[i], px, py, x, y, bo, depth + 1))) return r;
+    for (int i = 0; i < negn; i++) if (neg[i]->zi < 0 && (r = hit_box(L, neg[i], px, py, x, y, bo, depth + 1))) return r;
+    if (inside && s && !anon && b->node && (b != L->root) && !s->no_ptr && !s->visibility) { if (s->bg_color || s->bg_image || s->has_grad || b->kind == BK_BLOCK) { if (bo) *bo = b; return b->node; } }
     if (inside && b == L->root) { if (bo) *bo = b; return b->node; }
     return 0;
 }
+int wl_inner_scroll(struct wlay *L, int px, int py, int dy)
+{
+    if (!L || !L->root || wl181_off() || !dy) return 0;
+    struct wbox *bx = 0; struct wnode *n = wl_hit(L, px, py, 0, &bx); (void)n;
+    struct wbox *b = bx; if (!b && n && (n->flags & WNF_INDOC)) { struct wnode *e = n; while (e && !e->box) e = e->parent; b = e ? e->box : 0; }   /* SOMA_188: solo nodos del documento */
+    for (int guard = 0; b && guard < 200; guard++) {
+        int m = box_scroll_max(b);
+        if (m > 0 && b->st->overflow_y == 2 && b->node) {
+            int cur = box_scroll(b), nv = cur + dy; if (nv < 0) nv = 0; if (nv > m) nv = m;
+            if (nv != cur) { b->node->scy = nv; L->inner_gen++; return 1; }
+        }
+        b = (b->flags & BF_ABS) && b->abs_cb ? b->abs_cb : b->parent;
+    }
+    return 0;
+}
+uint32_t wl_inner_gen(const struct wlay *L) { return L ? L->inner_gen : 0; }
+/* SOMA_203: lo que el navegador aislado necesita saber de la pagina para desplazarla sin repintar: bit 0 = hay elementos fijos o
+ * pegajosos (un fotograma corrido los moveria de sitio); bit 1 = hay cajas con desplazamiento propio (la rueda puede ser suya). */
+int wl_scan_flags(struct wlay *L)
+{
+    int f = 0;
+    if (!L || !L->d || !L->d->root) return 0;
+    for (struct wnode *n = L->d->root; n && f != 3;) {
+        if (n->st && (n->st->position == P_FIXED || n->st->position == P_STICKY)) f |= 1;
+        if ((n->flags & WNF_INDOC) && n->box && n->st && n->st->overflow_y == 2 && box_scroll_max(n->box) > 0) f |= 2;
+        if (n->first) { n = n->first; continue; }
+        while (n && !n->next) n = n->parent;
+        if (n) n = n->next;
+    }
+    return f;
+}
+int wl_node_scroll_max(struct wlay *L, struct wnode *n) { (void)L; return n && (n->flags & WNF_INDOC) && n->box ? box_scroll_max(n->box) : 0; }
+
 struct wnode *wl_hit(struct wlay *L, int px, int py, struct wnode **link, struct wbox **boxout)
 {
     if (link) *link = 0;
     if (boxout) *boxout = 0;
     if (!L || !L->root) return 0;
     struct wnode *n = hit_box(L, L->root, px, py, 0, 0, boxout, 0);
+    while (n && (n->flags & WNF_PSEUDO)) n = n->parent;   /* SOMA_188: clic en ::before/::after = clic en el elemento */
     if (n && link) { for (struct wnode *p = n; p; p = p->parent) if (p->type == WN_ELEM && p->tag == WT_A && wd_attr(p, "href")) { *link = p; break; } }
     return n;
 }
+static int node_within(const struct wnode *a, const struct wnode *n, const struct wnode *stop)
+{
+    for (; a && a != stop; a = a->parent) if (a == n) return 1;
+    return a == n;
+}
 int wl_node_rect(struct wlay *L, struct wnode *n, int *x, int *y, int *w, int *h)
 {
-    if (!L || !L->root) return 0;
+    if (!L || !L->root || !n) return 0;
+    if (!(n->flags & WNF_INDOC) && !(n->flags & WNF_PSEUDO)) return 0;   /* SOMA_188: nodo fuera del documento: su caja puede ser de una maquetacion liberada */
     struct wnode *e = n; while (e && !e->box) e = e->parent;
     if (!e) return 0;
     struct wbox *b = e->box; int ax = 0, ay = 0;
@@ -2086,9 +2761,30 @@ int wl_node_rect(struct wlay *L, struct wnode *n, int *x, int *y, int *w, int *h
         if (p->flags & BF_ABS) p = p->abs_cb ? p->abs_cb : L->root; else p = p->parent;
         if (p == L->root) { ax += p->x; ay += p->y; break; }
     }
-    if (x) *x = ax;
-    if (y) *y = ay;
-    if (w) *w = b->w;
-    if (h) *h = b->h;
+    int rx = ax, ry = ay, rw = b->w, rh = b->h;
+    if (e != n && !wl181_off()) {
+        /* SOMA_188: elemento en linea (o texto) sin caja propia: union de sus fragmentos, adornos y cajas atomicas dentro
+         * del bloque que lo contiene (antes se devolvia el bloque entero: getBoundingClientRect de un <span> = ancho de linea) */
+        struct { struct wbox *b; int ox, oy; } st[256]; int sp = 0; int x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
+        st[sp].b = b; st[sp].ox = ax - b->x - b->rdx; st[sp].oy = ay - b->y - b->rdy; sp++;
+        while (sp > 0) {
+            sp--; struct wbox *q = st[sp].b; int qx = st[sp].ox + q->x + q->rdx, qy = st[sp].oy + q->y + q->rdy;
+            if (q != b && q->node && !(q->flags & BF_ANON) && q->node != e && node_within(q->node, n, e)) {
+                x0 = wmin(x0, qx); y0 = wmin(y0, qy); x1 = wmax(x1, qx + q->w); y1 = wmax(y1, qy + q->h); continue;
+            }
+            for (int i = 0; i < q->ndecos; i++) { const struct wdeco *d = &q->decos[i]; if (d->node != n) continue;
+                x0 = wmin(x0, qx + d->x0); y0 = wmin(y0, qy + d->y0); x1 = wmax(x1, qx + d->x1); y1 = wmax(y1, qy + d->y1); }
+            for (int i = 0; i < q->nfrags; i++) { const struct wfrag *f = &q->frags[i]; if (!f->node || !node_within(f->node, n, e)) continue;
+                int fx = qx + f->x, fy = qy + f->y - f->asc; x0 = wmin(x0, fx); y0 = wmin(y0, fy); x1 = wmax(x1, fx + f->w); y1 = wmax(y1, qy + f->y + f->dsc); }
+            for (int i = 0; i < q->nitems && sp < 254; i++) if (q->items[i].type == II_ATOM && q->items[i].box) { st[sp].b = q->items[i].box; st[sp].ox = qx; st[sp].oy = qy; sp++; }
+            for (struct wbox *c = q->first; c && sp < 254; c = c->next) if (!(c->flags & BF_ABS)) { st[sp].b = c; st[sp].ox = qx; st[sp].oy = qy; sp++; }
+        }
+        if (x1 > x0) { rx = x0; ry = y0; rw = x1 - x0; rh = y1 - y0; }
+        else { rw = 0; rh = 0; }
+    }
+    if (x) *x = rx;
+    if (y) *y = ry;
+    if (w) *w = rw;
+    if (h) *h = rh;
     return 1;
 }

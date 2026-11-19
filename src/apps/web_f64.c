@@ -496,6 +496,8 @@ int f64_to_str(f64 a, char *out, int radix)
 }
 int f64_to_fixed(f64 a, int fd, char *out)
 {
+    if (fd < 0) fd = 0;
+    if (fd > F64_DIGITS_MAX) fd = F64_DIGITS_MAX;           /* SOMA_200: el numero de decimales lo elige la pagina; `out` es un bufer fijo de quien llama */
     if (f64_is_nan(a)) { memcpy(out, "NaN", 4); return 3; }
     int o = 0; if ((a & SIGN) && !is_zero(a)) { out[o++] = '-'; a &= ~SIGN; } else a &= ~SIGN;
     if (f64_is_inf(a)) { memcpy(out + o, "Infinity", 9); return o + 8; }
@@ -518,6 +520,7 @@ int f64_to_fixed(f64 a, int fd, char *out)
 }
 int f64_to_exponential(f64 a, int fd, char *out)
 {
+    if (fd > F64_DIGITS_MAX) fd = F64_DIGITS_MAX;           /* SOMA_200 */
     if (!f64_is_finite(a)) return f64_to_str(a, out, 10);
     int o = 0; if (a & SIGN) { if (!is_zero(a)) out[o++] = '-'; a &= ~SIGN; }
     char dig[LIMBS * 9 + 4]; int len, pt;
@@ -531,6 +534,8 @@ int f64_to_exponential(f64 a, int fd, char *out)
 }
 int f64_to_precision(f64 a, int p, char *out)
 {
+    if (p < 1) p = 1;
+    if (p > F64_DIGITS_MAX) p = F64_DIGITS_MAX;             /* SOMA_200 */
     if (!f64_is_finite(a)) return f64_to_str(a, out, 10);
     int o = 0; if ((a & SIGN) && !is_zero(a)) { out[o++] = '-'; } a &= ~SIGN;
     char dig[LIMBS * 9 + 4]; int len, pt;

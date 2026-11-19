@@ -15,4 +15,11 @@ void coder_pick_target(const char *mission, char *out, uint32_t cap);           
 int  coder_app_clip_op(int op);
 int  coder_app_mouse(int32_t mx, int32_t my, int wheel, int held);
 
+/* SOMA_217_STUDIO: varias ventanas (como notepad_inst_*) */
+int  coder_app_inst_new(void);
+void coder_app_select(int slot);
+void coder_app_inst_drop(int slot);
+int  coder_app_inst_find(const char *path);
+const char *coder_app_inst_name(int slot);
+void coder_app_open_path(const char *path);
 #endif

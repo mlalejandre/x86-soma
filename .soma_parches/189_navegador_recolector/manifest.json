@@ -1,0 +1,95 @@
+{
+  "created": {
+    "docs/PARCHE_189_NAVEGADOR_RECOLECTOR.md": "6dc3ee4179ff5b202aca361b7cda1e73b61d73589f29be4b09cbcee05e5b381b",
+    "src/apps/web_js_gc.c": "66c45d87fdf6088289db0e7b7398aa7c6b0baac3f36d7fcb7a7d80fff395c528",
+    "tests/test_web_js_gc_189.c": "c5ea2b0f71ca2e8de8bf457b7c19c0a1b189898ce32d5faee4a017e5f213d429"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "637e3948bb9de58ac01ade3c30f1e48c3652a8d2c5d0ace7cdee655e5247280d",
+      "old": "72224cf654759722e1f6ed0e7c3071a9b88726b4be70073ad1278405082e6fde"
+    },
+    "src/apps/browser.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "c994278fda4fe4a518760f67697ebc5df28feac0907b998c545c86c2c4871360",
+      "old": "e2abcd5110ae9996f76606cad80ca64ddf36ddaf1ff798ae6b63ae1e00d19fa9"
+    },
+    "src/apps/web_js.h": {
+      "backup": "original_10.bin",
+      "kind": "exacto",
+      "new": "bdec6c6079a4c84178731c0bc2babdbff9d8eeb7c8695ca94483d314e73b2be8",
+      "old": "3ece0bb0304455ab6e52e24c9295aab26c2e518e29ec1eb50793ed3b24635eb9"
+    },
+    "src/apps/web_js_api.c": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "a2a132f3b1ea4dcb1920a910526553c0d65040749aede0fafdfc941be01da534",
+      "old": "08ca032096c3a27742ee8d72f3099fd0c9fbea4e8c207467e4a453603b619ffc"
+    },
+    "src/apps/web_js_bin.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "8b055e40d05a0f11085d47d3cf6b3b11dcd0c9375cc619d512c5f4619d1c6d90",
+      "old": "b04e8792672261cdece111ec3ff061e0df4b718f9394cf5310c0e5bec11eed99"
+    },
+    "src/apps/web_js_co.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "490795cca0fe2deeb1fa85dcb0bfd3787b6e8ac62c0874b11bf5f8c8a27ae211",
+      "old": "b8d558c2abd2f8b643c1e4613904eb228f46a080f4564129a97b78bfd73ebce0"
+    },
+    "src/apps/web_js_dom.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "ee3fdb96f53995a778c268385f707007dc9a5871c3cab24376ae69e305af69ef",
+      "old": "84b31b315fe7ecaf48ea765f27367780e85d9b61e97d0fbe709c05ba58bb2ca0"
+    },
+    "src/apps/web_js_i.h": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "3eeb951c2364a475244903b0946c421b3e280ac423a8466fe7dd0b00315b5ed8",
+      "old": "31e829951de694a47bbfecdc6495c54487ad43a413c595e7f794dd77c0dd4168"
+    },
+    "src/apps/web_js_lib4.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "e9dec592464a068e78f3df511845d6945cf10a64a8f97ead29d60116d0ca2809",
+      "old": "800b3abd21e7b520118882024c1b07c86814974a0873af62a236f00b98528203"
+    },
+    "src/apps/web_js_parse.c": {
+      "backup": "original_13.bin",
+      "kind": "exacto",
+      "new": "6618b4b0cf6eca565c9fb3e3013ff66258240b3dbcab939410c1fd6e36776ad1",
+      "old": "06cc6b035d97b8a87248fd113125fb02801b2d8a575f056c392a0475af5ad779"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_12.bin",
+      "kind": "exacto",
+      "new": "58bc7ab8554c647c180d7fa675bdb2d754a270a18a197ecc637597a94877f987",
+      "old": "66bf1e0e2fd5a959d2b8bf4f3972c8cfdb555ca4eded889f3ecb17b74d2e6f9c"
+    },
+    "src/apps/web_js_u16.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "12d3ff5438b67561290aa80ffa8ebed6424d339547d4d5c55ac5861accb953dd",
+      "old": "0d5c0d1df2761142581f0abc0f27c53fe6e3e23c0f18e8ed77577555b2aebd87"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_11.bin",
+      "kind": "exacto",
+      "new": "7084322f049b09522e42f87688ed50b64095567bb7eab36d13b67885020b0a16",
+      "old": "691230aa190475f502cd3e645b53dbb7b3297c88f48aa64698e45b2784e413cd"
+    },
+    "src/apps/web_util.h": {
+      "backup": "original_9.bin",
+      "kind": "exacto",
+      "new": "3920c415d48a93046fee5a1f5842c4b80e7a5a826b862364fdcce94dc79e13d3",
+      "old": "f41cfb8437c09517507eb6128aaed2fafc27b0758c7157a0d026ab4fbc834183"
+    }
+  },
+  "log": "20261117_162823 parche 189: navegador: recolector de basura JS, indices (variables, Map/Set, UTF-16), el analizador cede la CPU, memoria de imagenes",
+  "version": 1
+}

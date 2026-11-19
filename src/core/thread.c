@@ -83,6 +83,7 @@ void thread_trampoline_c(void)
     }
 }
 
+#define STACK_PAINT 0xA5A5A5A5A5A5A5A5ULL
 static uint64_t allocate_thread_stack(uint64_t slot)
 {
 
@@ -117,8 +118,24 @@ static uint64_t allocate_thread_stack(uint64_t slot)
         }
     }
 
+    /* PARCHE 132: la pila se pinta con un patron para medir la marca de agua (cuanta pila se llego a usar de verdad) */
+    {
+        uint64_t *pp = (uint64_t *)(uintptr_t)(slot + VMM_PAGE_SIZE);
+        for (uint64_t i = 0; i < (uint64_t)THREAD_STACK_PAGES * VMM_PAGE_SIZE / 8; ++i) pp[i] = STACK_PAINT;
+    }
     return slot + (uint64_t)(THREAD_STACK_PAGES + 1) * VMM_PAGE_SIZE;
 }
+
+/* bytes de pila realmente tocados: se busca desde el extremo bajo la primera palabra distinta del patron */
+static uint32_t stack_used_bytes(uint64_t slot)
+{
+    if (slot < THREAD_STACK_BASE) return 0;       /* hilo 0 / idle: usan la pila del arranque, sin pintar */
+    const uint64_t *pp = (const uint64_t *)(uintptr_t)(slot + VMM_PAGE_SIZE);
+    uint64_t words = (uint64_t)THREAD_STACK_PAGES * VMM_PAGE_SIZE / 8, i = 0;
+    while (i < words && pp[i] == STACK_PAINT) i++;
+    return (uint32_t)((words - i) * 8);
+}
+#define STACK_TOTAL_BYTES ((uint32_t)THREAD_STACK_PAGES * VMM_PAGE_SIZE)
 
 static void free_thread_stack(uint64_t slot)
 {
@@ -222,6 +239,10 @@ void thread_reap_dead(void)
             curr = curr->next;
 
             arch_thread_cleanup(to_free);          /* SOMA_PARCHE_015_PROC */
+            {   /* PARCHE 132: aviso si el hilo estuvo cerca de agotar su pila (un desbordamiento solo se ve cuando ya es tarde) */
+                uint32_t u = stack_used_bytes(to_free->stack_slot);
+                if (u > STACK_TOTAL_BYTES / 10 * 8) { kprint("[STACK] AVISO: el hilo '"); kprint(to_free->name); kprint("' uso "); kprint_dec(u / 1024); kprint(" de "); kprint_dec(STACK_TOTAL_BYTES / 1024); kprint(" KiB de pila\n"); }
+            }
             free_thread_stack(to_free->stack_slot);
             kfree(to_free);
         } else {
@@ -242,8 +263,7 @@ static void idle_thread_func(void *arg)
     for (;;) {
         thread_reap_dead();
 #ifdef __x86_64__
-        arch_interrupts_enable();
-        arch_halt();
+        { extern void cpu_idle(void); cpu_idle(); }   /* SOMA_166_T480S: MWAIT con estado C profundo (o HLT); sale con interrupciones */
 #else
         arch_pause();
 #endif
@@ -464,6 +484,23 @@ void thread_exit(void)
     for (;;) {
         arch_halt();
     }
+}
+
+/* PARCHE 139: despierta YA a un hilo dormido (thread_sleep): pasa a listo en la siguiente vuelta del planificador.
+ * Devuelve 1 si estaba durmiendo. No cede la CPU. */
+int thread_wake(uint32_t tid)
+{
+    if (!multitasking_active || !thread_list) return 0;
+    struct tcb *t = thread_list;
+    do {
+        if (t->tid == tid) {
+            if (t->state != THREAD_STATE_SLEEPING) return 0;
+            t->sleep_until_ms = 0;
+            return 1;
+        }
+        t = t->next;
+    } while (t && t != thread_list);
+    return 0;
 }
 
 int thread_kill(uint32_t tid)
@@ -691,4 +728,27 @@ int thread_snapshot(struct thread_info *out, int max)
         t = t->next;
     } while (t && t != thread_list);
     return n;
+}
+
+/* PARCHE 132: orden `stacks`: uso maximo de pila por hilo (marca de agua). Devuelve cuantos hilos pasan del 80 %. */
+int thread_format_stacks(char *out, uint32_t max)
+{
+    uint32_t pos = 0; int hot = 0;
+    #define PUT(str) do { const char *_s = (str); while (*_s && pos + 1 < max) out[pos++] = *_s++; } while (0)
+    #define PUTN(v) do { char _b[12]; uint32_t _n = (v), _k = 0; if (!_n) _b[_k++] = '0'; while (_n) { _b[_k++] = (char)('0' + _n % 10); _n /= 10; } while (_k && pos + 1 < max) out[pos++] = _b[--_k]; } while (0)
+    if (max) out[0] = 0;
+    if (!thread_list) { PUT("(sin hilos)"); if (max) out[pos] = 0; return 0; }
+    struct tcb *t = thread_list;
+    do {
+        uint32_t u = stack_used_bytes(t->stack_slot);
+        uint32_t pct = u * 100 / STACK_TOTAL_BYTES;
+        PUTN(t->tid); PUT("  "); PUT(t->name); PUT("  "); PUTN(u); PUT("/"); PUTN(STACK_TOTAL_BYTES); PUT(" bytes ("); PUTN(pct); PUT("%)");
+        if (pct >= 80) { PUT("  <-- CERCA DEL LIMITE"); hot++; }
+        PUT("\n");
+        t = t->next;
+    } while (t != thread_list);
+    if (max) out[pos < max ? pos : max - 1] = 0;
+    #undef PUT
+    #undef PUTN
+    return hot;
 }

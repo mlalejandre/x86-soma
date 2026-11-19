@@ -1,0 +1,21 @@
+{
+  "created": {
+    "docs/PARCHE_175B1B_T480S_WIFI_ORDENES.md": "72a5bfc84df10a8b8c4e875cf36cee52f7cfb61540d11f517335e34cdc1e4751"
+  },
+  "files": {
+    "src/arch/x86_64/iwl.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "4ada574a844448bbb5064277c255ac50c8c181f6643ae00843adb40ed66298db",
+      "old": "361db7dad48914d180374267bdc263a738fe4e1c62f198190ac4c58c2628248e"
+    },
+    "src/arch/x86_64/iwl.h": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "7f7e5ad4569b9634aa9c5c190132cf8896b8c7286b8b14bba2614ab3170ddb6e",
+      "old": "80bb2d0e8eb666c306f1470df8f7af78ad868744f15f85f21e61ebd12f5484fa"
+    }
+  },
+  "log": "20261116_100033 parche 175B1B: WiFi: TB0 = min(tamano, 20) como Linux (PHY_CONFIGURATION daba BAD_COMMAND); diagnostico REPLY_ERROR y nombre del codigo de error",
+  "version": 1
+}

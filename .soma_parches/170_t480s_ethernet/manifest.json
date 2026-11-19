@@ -1,0 +1,67 @@
+{
+  "created": {
+    "docs/PARCHE_170_T480S_ETHERNET.md": "b3a0987b0f71407303b530861102f792d46e89687d7daaa8a2304037a5dc2196",
+    "src/drivers/e1000e.c": "003f6cc20fb55d71df581c18f7f80b112e68519f2fcdc7fe9eae70e537d739b0",
+    "src/drivers/e1000e.h": "a7bf7bd3e23cd5a97a5a9de9ecacbc30cda696c401f94be735b664b9e73142eb",
+    "src/net/netmgr.c": "a18f479c550860e5dc6920f7a9b49ec834f9ba90c319b8d1f035dbda61f4a2cd",
+    "src/net/netmgr.h": "db7483806611f36b80ea34da75bd55514d421a274a19f0dd3a88aa6ad13f96f8"
+  },
+  "files": {
+    "Makefile": {
+      "backup": "original_0.bin",
+      "kind": "adaptado",
+      "new": "166175db804273fe99cfb22217b29bd2cce19ea4757b51c7a434adea0ce5348e",
+      "old": "f3e1d481b2f2dadc1811eae30c4690a602bc0ca5220a4e4234b914b222518cc5"
+    },
+    "docs/PLAN_T480S.md": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "e2d3f988888ff3653fd52fada14d97dd939c9bce571203507abd4f16a1887733",
+      "old": "7039ec5f4209c6f6bf0d628df87eb2addd3bf4ba9683c70b6c205a7562a6d02b"
+    },
+    "src/agent/shell.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "4cb46f291b6192a627bc88a7c95c33803dc5a2cedbbee1ba384bdb1683d9ccaf",
+      "old": "386d5d23c6c29eecd76a96bb7fc20fc800d4ea23d77375403b7e7b0e266fb201"
+    },
+    "src/core/kernel.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "836e1e8b2fed12d201391b9a59118ed93d3ff5854cc42484e23c906b1b346230",
+      "old": "d7659b0432df9c78933c0ced58cf4c566e4a885763204a782abbfa46c387b48c"
+    },
+    "src/drivers/virtio_net.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "989f1b48164beb7945c36894386bea3f695396b23acf77bd354aae65aba93994",
+      "old": "e904ac89e2a547affbf652a3fa9d51bd2ca69a91c57e31c32183dc665cf1bc71"
+    },
+    "src/net/net.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "e28674f714857ac7aa8154980915cb4abfe4514f5c0d1c1c9d1a2ece7bda1791",
+      "old": "047d6f0b0cdc89caab701328e94170e754e36059731250031d9f585df91a9251"
+    },
+    "src/net/net.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "65ce9dc315e3d06a9d15e76dbc6a8b274dc09224850726a043384d489c304de0",
+      "old": "461e5a8ba2d82ff04eeb66bc8a08793e0eae2c21999603943f3d4104fa3489d5"
+    },
+    "src/net/netif.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "d2e90127de5fcfb0cb0e8496ab3134ad643d8b103ead733b7149b4948357976c",
+      "old": "88acbfd2d3b76a4ffed8b700394ff25a1c70928ff2042ba9c63610afdff551be"
+    },
+    "src/net/netif.h": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "808dc42e791be6453c267673c36d2982034ae5191d5be4b1216d86594efee005",
+      "old": "69efb5fd4d13ccce773215f7cb39f74efae283d265052b70830d0d92ee0a3061"
+    }
+  },
+  "log": "20261116_003341 parche 170: Ethernet Intel e1000e (I219 del T480s con ULP y semaforo del firmware; 82574L/82540EM en QEMU), gestor de red con DHCP automatico y orden red",
+  "version": 1
+}

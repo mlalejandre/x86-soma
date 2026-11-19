@@ -7,6 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
+if not (ROOT / "tools" / "fbcheck.py").exists() or not (ROOT / "tools" / "fpcheck.py").exists():   # PARCHE 138
+    print("[fpcheck+fbcheck] OMITIDO (faltan tools/fbcheck.py o tools/fpcheck.py)"); sys.exit(0)
 import fbcheck as C  # noqa: E402
 import fpcheck as F  # noqa: E402
 

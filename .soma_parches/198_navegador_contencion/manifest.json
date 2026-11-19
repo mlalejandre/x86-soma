@@ -1,0 +1,64 @@
+{
+  "created": {
+    "docs/PARCHE_198_NAVEGADOR_CONTENCION.md": "01ddb42933cceb8e82b618e8da8b458aa5169852b3eae60f0b64454dac40c1a5",
+    "src/apps/web_fault.h": "94bdf7e84dae270a7766f1104bf043ac087f86748cf5154b04fb58893fffb5fb"
+  },
+  "date": "20261118_094233",
+  "files": {
+    "src/agent/shell.c": {
+      "backup": "original_0.bin",
+      "kind": "exacto",
+      "new": "5f4eddf286b180b1ecc8c46a6a6fb3ab928e8343247714d992aba99cd6df03dd",
+      "old": "75f2ca9d257095c587fef9fbea2364f50f65b57c50d6d0483698c584801029c0"
+    },
+    "src/apps/browser.c": {
+      "backup": "original_1.bin",
+      "kind": "exacto",
+      "new": "4c8ead7ef2c97c7a56e677ca0fbc834c0cd343537888d44fb89000759355d72d",
+      "old": "c8b46d09a2a642c743327691d56b74a04f4c3402ddf0b6ac2f50e3521a530a2d"
+    },
+    "src/apps/web_js_run.c": {
+      "backup": "original_2.bin",
+      "kind": "exacto",
+      "new": "bd5cd47fbb1ffb33f5f96f4fb42f6675a5cf312342491237446f78e11fd9955d",
+      "old": "58bc7ab8554c647c180d7fa675bdb2d754a270a18a197ecc637597a94877f987"
+    },
+    "src/apps/web_page.c": {
+      "backup": "original_3.bin",
+      "kind": "exacto",
+      "new": "3c4de7547d7b8575a9aacb27a2a055954c32638b46bd7dfe20cdf01913dc56c6",
+      "old": "d66a681c66de773c3885bdaad7288ae2f172e2ea398aaaa9be2b2238b5623d42"
+    },
+    "src/arch/x86_64/idt.c": {
+      "backup": "original_4.bin",
+      "kind": "exacto",
+      "new": "dd5c1b6c1826fb8ac02faf5e7793353ce1456fba1b2c62762d1a8dc79634b362",
+      "old": "6714f987aa68e5e38d8b1ec5f45889f5a3c960048142dbfbe9046ce92f29ae22"
+    },
+    "src/core/mem.c": {
+      "backup": "original_5.bin",
+      "kind": "exacto",
+      "new": "d772c7d443771a432b23056bfd8f6244377f61d0a2d54e4bcb8228826acd18ca",
+      "old": "01413c230d47ef5df1837e2a33c59b1c8363e8859471b8e76ef4c6cda02a5bae"
+    },
+    "src/core/mem.h": {
+      "backup": "original_6.bin",
+      "kind": "exacto",
+      "new": "44f7beef7bb55d8f38dda2f71d93f44fe2eaf0fc45e71ca9289fd78df3b71e7b",
+      "old": "e5d9f63248cffeaf76e5f4ee7e9289015f2bcabee9473023620e583d153342ee"
+    },
+    "src/core/ssp.c": {
+      "backup": "original_7.bin",
+      "kind": "exacto",
+      "new": "d4e4222b2f96abd55260f3839c71ee8732c683e1563c4e8ba248bd331a1de831",
+      "old": "5d2236c1b032f32d56b68e8f8b4e216daf386431699e4ffb8e5e2633a07befbc"
+    },
+    "src/fs/fs.c": {
+      "backup": "original_8.bin",
+      "kind": "exacto",
+      "new": "a8b048a6cd57ee075e129c7195f1974115cc499c8b441451be17fd144f50c934",
+      "old": "877c3fb6bb8df3155773cee2c36b73b59a7039da35df069fd8a3a4bd436b5795"
+    }
+  },
+  "name": "198_navegador_contencion"
+}
