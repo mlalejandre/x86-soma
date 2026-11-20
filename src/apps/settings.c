@@ -15,6 +15,10 @@
 #include "mouse.h"          /* SOMA_225_AJUSTES: velocidad del puntero */
 #include "sysicon.h"         /* SOMA_225_AJUSTES: pagina Iconos */
 #include "hwmon.h"           /* SOMA_226_SISTEMA: pagina Sistema */
+#ifdef __x86_64__
+#include "bootdiag.h"         /* SOMA_228_ARRANQUE: arranque, SOMADATA e informe en la pagina Sistema */
+#include "usbdisk.h"
+#endif
 #if defined(__x86_64__)
 #include "netmgr.h"
 #include "iwl.h"
@@ -854,19 +858,59 @@ static void render_sistema(const struct sl *L)
     v[0] = 0; s_num(v, sizeof v, (int)fb_hw_width()); s_cat(v, " x ", sizeof v); s_num(v, sizeof v, (int)fb_hw_height());
     if (fb_scaled()) { s_cat(v, "  (trabajo ", sizeof v); s_num(v, sizeof v, (int)fb_get_width()); s_cat(v, " x ", sizeof v); s_num(v, sizeof v, (int)fb_get_height()); s_cat(v, ")", sizeof v); }
     kvrow(kx, ky, kw, "Pantalla", v);
-    int ry = y2 + h2 + 14, bw = 170;
+    int ry = y2 + h2 + 14, bw = 170, bw2 = 0;
+#ifdef __x86_64__
+    {   /* SOMA_228_ARRANQUE: arranque, SOMADATA e informe de hardware */
+        int y3 = y2 + h2 + 12, h3 = 4 * 30 + 50;
+        card(L->cx, y3, L->cw, h3);
+        tx(L->cx + 20, y3 + 12, 24, "Arranque y diagnostico", 14, KC_TXT, 1);
+        ky = y3 + 44;
+        if (bootdiag_in_boot()) kvrow(kx, ky, kw, "Este arranque", "en curso");
+        else { uint32_t ms = bootdiag_boot_ms(); v[0] = 0; s_cat(v, "completo en ", sizeof v); s_num(v, sizeof v, (int)(ms / 1000)); s_cat(v, ",", sizeof v); s_num(v, sizeof v, (int)(ms % 1000 / 100)); s_cat(v, " s", sizeof v); kvrow(kx, ky, kw, "Este arranque", v); }
+        ky += 30;
+        { const char *pf = bootdiag_prev_failure(); kvrow(kx, ky, kw, "Arranque anterior", pf[0] ? pf : "termino bien"); ky += 30; }
+        {
+            const struct usbdisk_info *u = usbdisk_info();
+            v[0] = 0;
+            if (u->active) {
+                s_num(v, sizeof v, (int)(u->sectors / 2048)); s_cat(v, " MiB en el pendrive", sizeof v);
+                if (u->grown_to_mb) { s_cat(v, " (ampliada desde ", sizeof v); s_num(v, sizeof v, (int)u->grown_from_mb); s_cat(v, " MiB)", sizeof v); }
+            } else s_cat(v, "sin pendrive SOMADATA", sizeof v);
+            kvrow(kx, ky, kw, "SOMADATA", v); ky += 30;
+        }
+        kvrow(kx, ky, kw, "Informe", bootdiag_report_status());
+        ry = y3 + h3 + 14; bw2 = 170;
+        int bx = L->cx + L->cw - bw - 10 - bw2;
+        fb_fill_rounded_rect(bx, ry, bw2, 32, 16, 0x00182133);
+        fb_stroke_rrect_aa(bx, ry, bw2, 32, 16, 0xFF2B6CB0u);
+        tx(bx + (bw2 - tw("Guardar informe", 13, 1)) / 2, ry, 32, "Guardar informe", 13, 0x0093C5FD, 1);
+    }
+#endif
     fb_fill_rounded_rect(L->cx + L->cw - bw, ry, bw, 32, 16, 0x00182133);
     fb_stroke_rrect_aa(L->cx + L->cw - bw, ry, bw, 32, 16, 0xFF7F1D1Du);
     tx(L->cx + L->cw - bw + (bw - tw("Restablecer todo", 13, 1)) / 2, ry, 32, "Restablecer todo", 13, 0x00FCA5A5, 1);
-    cbot(ry + 32);
-    fb_set_clip(L->cx, ry, L->cw - bw - 10, 32);
-    tx(L->cx, ry, 32, g_msg, 11, KC_FAINT, 0);
+    int my_ = bw2 ? ry + 40 : ry;                                         /* SOMA_228: con dos botones, el aviso va debajo */
+    cbot(my_ + 32);
+    fb_set_clip(L->cx, my_, bw2 ? L->cw : L->cw - bw - 10, 32);
+    tx(bw2 ? L->cx + L->cw - tw(g_msg, 11, 0) : L->cx, my_, 32, g_msg, 11, KC_FAINT, 0);
     fb_reset_clip();
 }
 void gui_desktop_layout_reset(void);
 static int click_sistema(const struct sl *L, int32_t mx, int32_t my)
 {
     int y1 = L->y + 84, h1 = 4 * 30 + 50, y2 = y1 + h1 + 12, h2 = 5 * 30 + 50, ry = y2 + h2 + 14, bw = 170;
+#ifdef __x86_64__
+    {   /* SOMA_228_ARRANQUE: boton "Guardar informe" */
+        int y3 = y2 + h2 + 12, h3 = 4 * 30 + 50, bw2 = 170;
+        ry = y3 + h3 + 14;
+        int bx = L->cx + L->cw - bw - 10 - bw2;
+        if (mx >= bx && mx < bx + bw2 && my >= ry && my < ry + 32) {
+            bootdiag_report_save_async();
+            g_msg[0] = 0; s_cat(g_msg, "Generando el informe... (resultado en la fila Informe)", sizeof g_msg);
+            return 1;
+        }
+    }
+#endif
     if (mx < L->cx + L->cw - bw || mx >= L->cx + L->cw || my < ry || my >= ry + 32) return 0;
     g_opacity = 100; g_active_opaque = 0; wf_ui_set_family(WF_FAM_SANS, 100);
     g_editor_face = FFACE_MONO; g_desk[0] = 0; (void)font_set(FONT_VECTOR);

@@ -6,6 +6,17 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+### Diagnóstico del arranque y otros equipos (228)
+- **Etapas del arranque** en pantalla (`[ARRANQUE n/13]`) y, si el núcleo falla durante el arranque, la etapa y la opción de
+  GRUB que la salta en la pantalla de error.
+- **Memoria entre arranques**: si un arranque no llega al escritorio, el siguiente dice dónde se quedó (consola, Ajustes →
+  Sistema e informe).
+- **Informe de hardware** en `INFORME.TXT` de la partición de arranque del pendrive (y `/informe.txt`): equipo, etapas,
+  dispositivos PCI con su driver en SOMA (o la falta de él), pantalla, teclado, disco, WiFi, batería, energía y registro del
+  núcleo. Orden `informe` y botón *Guardar informe* en Ajustes → Sistema.
+- **SOMADATA se amplía** en el primer arranque hasta el final del pendrive (como mucho 8 GiB) si es la última partición.
+- Entrada de GRUB **«otro PC con teclado inglés (US)»**.
+
 ### Arranque desde pendrive USB (x86_64)
 - SOMA arranca en un PC real desde un pendrive (probado en el ThinkPad T480s). Instrucciones para Windows, Linux y
   macOS en el README.

@@ -332,3 +332,41 @@ int fat_read(struct fat_vol *v, const char *path, uint32_t offset, void *buf, ui
     }
     return (int)len;
 }
+
+/* SOMA_228_ARRANQUE: sobrescribe EN SU SITIO el contenido de un fichero que ya existe (len <= su tamano; el resto se rellena con pad).
+ * No reserva clusters, no cambia el tamano ni toca la FAT ni los directorios: solo los sectores de datos de la cadena del propio
+ * fichero, comprobados uno a uno contra la particion. Asi SOMA puede dejar un texto en la particion de arranque del pendrive
+ * (INFORME.TXT, que crea vacio construyeimagen.py) sin riesgo para el resto del sistema de archivos. Devuelve 0 o <0. */
+int fat_overwrite(struct fat_vol *v, const char *path, const void *data, uint32_t len, uint8_t pad,
+                  int (*wr)(void *ctx, uint64_t lba, uint32_t n, const void *buf))
+{
+    static struct fat_dirent d;
+    if (!v || !wr) return FAT_E_ARG;
+    int r = resolve(v, path, &d);
+    if (r != 0) return r;
+    if (d.is_dir) return FAT_E_ISDIR;
+    if (len > d.size) return FAT_E_ARG;
+    if (d.size == 0) return 0;
+    if (d.cluster < 2) return FAT_E_CORRUPT;
+    const uint8_t *src = (const uint8_t *)data;
+    uint32_t cl = d.cluster, done = 0, guard = v->clusters + 8;
+    uint64_t pend = v->part_index ? v->part_lba + v->part_sectors : v->io.sectors;
+    for (;;) {
+        if (cl < 2 || cl >= v->clusters + 2) return FAT_E_CORRUPT;
+        uint64_t lba = cluster_lba(v, cl);
+        for (uint32_t s = 0; s < v->spc && done < d.size; s++, done += 512) {
+            uint64_t a = lba + s;
+            if (a < v->data_lba || a >= pend || a >= v->io.sectors) return FAT_E_CORRUPT;
+            if (d.size - done < 512 && rd(v, a, 1, v->dbuf) != 0) return FAT_E_IO;   /* ultimo sector: se conserva lo de detras del final */
+            uint32_t m = d.size - done < 512 ? d.size - done : 512;
+            for (uint32_t k = 0; k < m; k++) v->dbuf[k] = done + k < len ? src[done + k] : pad;
+            if (wr(v->io.ctx, a, 1, v->dbuf) != 0) return FAT_E_IO;
+        }
+        if (done >= d.size) break;
+        int64_t nx = fat_next(v, cl);
+        if (nx < 0) return (int)nx;
+        if (nx == 0 || !guard--) return FAT_E_CORRUPT;                             /* la cadena es mas corta que el fichero */
+        cl = (uint32_t)nx;
+    }
+    return 0;
+}

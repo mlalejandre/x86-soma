@@ -93,6 +93,8 @@ static int known(uint16_t id, int *is_pch)
     return 0;
 }
 
+int e1000e_pci_known(uint16_t id) { int p; return known(id, &p); }   /* SOMA_228_ARRANQUE: para el informe de hardware */
+
 /* ---- PHY por MDIO ---- */
 static int swflag_get(void)                  /* PCH: semaforo con el firmware para tocar el PHY */
 {

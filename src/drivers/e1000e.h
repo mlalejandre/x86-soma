@@ -4,4 +4,5 @@
 #include "netif.h"
 extern const struct netif_ops netif_e1000e;
 void e1000e_info(void);
+int e1000e_pci_known(uint16_t device);   /* SOMA_228_ARRANQUE: 1 si el driver acepta ese dispositivo Intel */
 #endif

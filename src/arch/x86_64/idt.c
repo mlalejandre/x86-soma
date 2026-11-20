@@ -6,6 +6,7 @@ int gui_hang_tick(uint64_t *rip, uint64_t *rsp);
 #include "console.h"
 #include "io.h"
 #include "panic.h"
+#include "bootdiag.h"
 #include "usermode.h"
 #include "pic_irq.h"
 #include "i8042.h"
@@ -334,6 +335,7 @@ void isr_exception_handler(struct trap_frame *tf)
     bootfb_console_panic();        /* SOMA_154_T480S: en el portatil, el panico se ve en pantalla aunque la GUI estuviera activa */
     kprint("!!! KERNEL PANIC: EXCEPCION CPU DETECTADA !!!\n");
     kprint("========================================================================\n");
+    bootdiag_panic_hint();         /* SOMA_228_ARRANQUE: si cae durante el arranque, en que etapa y como saltarla */
 
     kprint("Excepcion: [Vector ");
     kprint_dec((uint32_t)tf->vector);

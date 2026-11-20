@@ -44,4 +44,7 @@ int  fat_stat(struct fat_vol *v, const char *path, struct fat_dirent *out);
 /* Lee hasta len bytes desde offset; devuelve los leidos (0 al final del fichero) o <0. */
 int  fat_read(struct fat_vol *v, const char *path, uint32_t offset, void *buf, uint32_t len);
 const char *fat_err_str(int e);
+/* SOMA_228_ARRANQUE: reescribe en su sitio un fichero existente (sin cambiar tamano, FAT ni directorios; ver fat.c) */
+int  fat_overwrite(struct fat_vol *v, const char *path, const void *data, uint32_t len, uint8_t pad,
+                   int (*wr)(void *ctx, uint64_t lba, uint32_t n, const void *buf));
 #endif

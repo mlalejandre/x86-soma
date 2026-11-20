@@ -7,9 +7,14 @@ struct usbdisk_info {
     uint64_t part_lba, part_sectors, sectors, syncs;
     uint32_t disk_sig;
     const char *why;
+    uint32_t grown_from_mb, grown_to_mb;           /* SOMA_228_ARRANQUE: SOMADATA ampliada en este arranque (0 = no) */
+    const char *grow_why;                          /* por que no se amplio (o "") */
 };
 int usbdisk_attach(void);                         /* 0 = el disco del sistema es ahora el pendrive */
 const struct usbdisk_info *usbdisk_info(void);
 void usbdisk_stats(uint64_t *reads, uint64_t *writes, uint64_t *errors, uint64_t *retries);
 int usbdisk_flush(void);
+/* SOMA_228_ARRANQUE: reescribe en su sitio un fichero que ya existe en la particion FAT de arranque del pendrive (la "SOMA", nunca
+ * SOMADATA), por ejemplo "INFORME.TXT". No crea ficheros ni cambia su tamano (ver fat_overwrite). 0 = escrito; si no, *why dice por que. */
+int usbdisk_bootfile_write(const char *name, const char *data, uint32_t len, const char **why);
 #endif

@@ -95,6 +95,7 @@ OBJS_ARCH += $(BUILD)/ssp_init.o $(BUILD)/usermode_tests.o $(BUILD)/apic.o $(BUI
 OBJS_ARCH += $(BUILD)/bootfb.o      # SOMA_154_T480S: Multiboot 2, pantalla del firmware, consola de texto
 OBJS_ARCH += $(BUILD)/i8042.o       # SOMA_155_T480S: teclado y trackpad PS/2 (controlador i8042, Synaptics)
 OBJS_ARCH += $(BUILD)/hwscan.o      # SOMA_156_T480S: inventario del hardware (orden hw), tablas del firmware sobre 1 GiB
+OBJS_ARCH += $(BUILD)/bootdiag.o    # SOMA_228_ARRANQUE: etapas del arranque, arranque anterior fallido e informe de hardware
 OBJS_ARCH += $(BUILD)/usbdisk.o     # SOMA_162_T480S: disco del sistema en la particion SOMADATA del pendrive
 OBJS_ARCH += $(BUILD)/cpupower.o    # SOMA_166_T480S: energia, temperatura, HWP y reposo MWAIT
 OBJS_ARCH += $(BUILD)/syn_gest.o    # SOMA_167_T480S: gestos del trackpad Synaptics (modo absoluto)
@@ -553,6 +554,9 @@ test:
 	python3 tools/mkfat.py build/tests/fat
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_fat.c src/core/fat.c -o build/tests/test_fat
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_fat build/tests/fat 800
+	python3 tests/mk_informe_228.py build/tests/informe_228.img
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_arranque_228.c src/core/fat.c -o build/tests/test_arranque_228
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_arranque_228 build/tests/informe_228.img
 	./build/tests/test_sched
 	./build/tests/test_panic
 	./build/tests/test_mutex

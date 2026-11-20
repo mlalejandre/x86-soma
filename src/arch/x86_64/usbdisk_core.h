@@ -75,4 +75,38 @@ static inline int ud_map(uint64_t part_lba, uint64_t part_n, uint64_t data_secto
     *abs = a;
     return 0;
 }
+/* SOMA_228_ARRANQUE: ampliar una SOMADATA recien creada hasta el final del pendrive. La imagen de GitHub la trae de 4 GiB para
+ * que quepa en cualquier pendrive de 8 GB; en uno mayor, el primer arranque la estira. Solo si es la ULTIMA particion (ninguna
+ * empieza despues ni se solapa) y si se ganan al menos 64 MiB. El final se alinea a 1 MiB y nunca pasa del limite de datos de
+ * SOMA (UD_MAX_SECT) ni de 2^32 sectores (MBR). Devuelve el nuevo numero de sectores de la particion, o 0 si no se toca. */
+#define UD_GROW_MIN  131072u                               /* 64 MiB */
+static inline uint32_t ud_plan_grow(const uint8_t *s0, int idx, uint64_t disk_sectors)
+{
+    if (idx < 0 || idx > 3 || s0[510] != 0x55 || s0[511] != 0xAA) return 0;
+    const uint8_t *e = s0 + 0x1BE + 16 * idx;
+    uint32_t lba = ud_le32(e + 8), n = ud_le32(e + 12);
+    if (!e[4] || !lba || !n) return 0;
+    uint64_t end = (uint64_t)lba + n;
+    if (end > disk_sectors) return 0;
+    for (int i = 0; i < 4; i++) {
+        if (i == idx) continue;
+        const uint8_t *o = s0 + 0x1BE + 16 * i;
+        if (!o[4]) continue;
+        if (o[4] == 0xEE) return 0;
+        uint32_t ol = ud_le32(o + 8), on = ud_le32(o + 12);
+        if (ol >= lba || (uint64_t)ol + on > lba) return 0;                       /* otra particion detras o solapada: no */
+    }
+    uint64_t lim = disk_sectors > 0xFFFFFFFFull ? 0xFFFFFFFFull : disk_sectors;
+    uint64_t cap = (uint64_t)lba + UD_DATA_OFF + UD_MAX_SECT;
+    if (lim > cap) lim = cap;
+    lim &= ~2047ull;
+    if (lim <= end || lim - end < UD_GROW_MIN) return 0;
+    return (uint32_t)(lim - lba);
+}
+static inline void ud_apply_grow(uint8_t *s0, int idx, uint32_t new_n)
+{
+    uint8_t *e = s0 + 0x1BE + 16 * idx;
+    ud_put32(e + 12, new_n);
+    e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;                                         /* CHS final: "usa LBA" */
+}
 #endif

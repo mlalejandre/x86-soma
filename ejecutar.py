@@ -625,6 +625,16 @@ def t480s_copy(mnt: str) -> int:
     if _sha256(dst) != _sha256(T480S_EFI):
         print("ERROR: la copia en el pendrive no coincide con el original (pendrive defectuoso o lleno).")
         return 1
+    inf = Path(mnt) / "INFORME.TXT"                                   # SOMA_228_ARRANQUE: hueco para el informe de hardware
+    if not inf.exists() or inf.stat().st_size < 256 * 1024:
+        try:
+            with open(inf, "wb") as f:
+                t = (b"SOMA - informe de arranque y hardware\r\n\r\nEste archivo lo rellena SOMA cada vez que arranca desde este "
+                     b"pendrive. Si todavia ves este texto, SOMA no ha llegado a arrancar en este equipo.\r\n")
+                f.write(t + b"\n" * (256 * 1024 - len(t)))
+            os.sync()
+        except OSError as e:
+            print(f"(aviso: no se pudo crear INFORME.TXT: {e})")
     if shutil.which("dot_clean"):                                     # quita los ._* que deja macOS
         subprocess.run(["dot_clean", "-m", mnt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("[OK] Copia verificada (SHA-256 identico).")

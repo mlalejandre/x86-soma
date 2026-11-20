@@ -49,6 +49,9 @@ void xhci2_autostart(void);
 #include "smp.h"                                     /* PARCHE 082 */
 #ifdef __x86_64__
 #include "usbdisk.h"
+#ifdef __x86_64__
+#include "bootdiag.h"           /* SOMA_228_ARRANQUE */
+#endif
 #include "acpi_sys.h"
 #include "cpupower.h"
 #include "backlight.h"                               /* SOMA_168_T480S */
@@ -147,6 +150,24 @@ static void cmds_thread(void *arg)
 #endif
 
 /* SOMA_PARCHE_021_FPU */
+#ifdef __x86_64__
+#define BD(n, o) bootdiag_stage(n, o)            /* SOMA_228_ARRANQUE: etapa del arranque (pantalla, panico y memoria entre arranques) */
+#else
+#define BD(n, o) ((void)0)
+#endif
+
+#ifdef __x86_64__
+/* SOMA_228_ARRANQUE: con el escritorio ya en marcha unos segundos, el arranque se da por bueno y se guarda el informe de hardware
+ * (INFORME.TXT en la particion de arranque del pendrive y /informe.txt). soma.informe=off no lo guarda solo. */
+static void boot_done_thread(void *a)
+{
+    (void)a;
+    thread_sleep(6000);
+    bootdiag_complete();
+    if (!bootinfo_disabled("informe")) bootdiag_report_save_async();
+}
+#endif
+
 static void run_autoexec_line(const char *line)
 {
     static char out[512];
@@ -176,8 +197,10 @@ void kernel_main(void)
     if (bootfb_use_firmware()) { kprint("PANTALLA: framebuffer del firmware "); kprint_dec(bootfb_get()->width); kprint("x"); kprint_dec(bootfb_get()->height);
         kprint(bootinfo_efi() ? " (UEFI GOP)\n" : " (VBE)\n"); }
 #endif
+    BD("memoria del nucleo", 0);
     kheap_init();
     klog_grow();                   /* SOMA_156_T480S: registro del nucleo de 256 KiB (orden dmesg) */
+    BD("reloj y temporizador", 0);
     thread_init();
     timer_calibrate_tsc();
     timer_init(1000);
@@ -185,8 +208,10 @@ void kernel_main(void)
     arch_interrupts_enable();
     kprint("CPU: Interrupciones configuradas\n");
 #ifdef __x86_64__
+    BD("teclado y trackpad (PS/2)", 0);
     i8042_init();                  /* SOMA_155_T480S: teclado y trackpad PS/2 (portatil) con la secuencia de Linux */
     keyboard_layout_auto();        /* SOMA_155_T480S: distribucion espanola en el T480s (soma.teclado=us|es) */
+    BD("APIC (interrupciones)", "soma.apic=off");
     {   /* SOMA_158_T480S: APIC + IOAPIC + reloj por el temporizador del LAPIC (vuelve solo al PIC si algo falla) */
         int ar = apic_system_start();
         const struct apic_sys_info *ai = apic_system_info();
@@ -198,6 +223,7 @@ void kernel_main(void)
         }
         kprint("\n");
     }
+    BD("ACPI (bateria, tapa, apagado)", "soma.acpi=off");
     {   /* SOMA_164_T480S: interprete ACPI (uACPI): controlador embebido, apagado S5, despues bateria y tapa */
         extern void shell_poweroff_from_button(void);
         acpi_set_power_button_action(shell_poweroff_from_button);   /* SOMA_165: el boton apaga limpiamente */
@@ -216,11 +242,13 @@ void kernel_main(void)
     kprint("Reloj Hardware calibrado a "); kprint_dec((uint32_t)tsc_freq_mhz);
     kprint(" MHz ("); kprint_dec((uint32_t)tsc_ticks_per_ms); kprint(" ticks/ms)\n");
 
+    BD("disco (pendrive SOMADATA)", "soma.usbdisk=off");
     virtio_blk_init();
 #ifdef __x86_64__
     {   /* SOMA_162_T480S: sin disco virtio (el portatil), el disco del sistema es la particion SOMADATA del pendrive */
         int ur = usbdisk_attach();
         if (ur != 0 && !virtio_blk_capacity()) { kprint("DISCO USB: "); kprint(usbdisk_info()->why); kprint(" -> los archivos solo duran hasta apagar\n"); }
+        bootdiag_disk_ready();                          /* SOMA_228_ARRANQUE: el arranque anterior, y desde aqui las etapas al disco */
     }
 #endif
 
@@ -228,6 +256,7 @@ void kernel_main(void)
     (void)rpi_fb_init();
 #endif
 
+    BD("archivos y audio", "soma.audio=off");
     vfs_init();
     usermode_install_programs();   /* SOMA_PARCHE_016_EXEC: /bin/ *.elf */
     bigfs_sys_probe();             /* SOMA_PARCHE_018_BIGFS */
@@ -235,6 +264,7 @@ void kernel_main(void)
     scrcap_init();                 /* SOMA_179_T480S: captura de pantalla (imagen, video, audio interno) */
     lang_init();
 
+    BD("red, Ethernet y WiFi", "soma.wifi=off soma.ethernet=off");
     net_init(); /* PARCHE 047: la red debe estar viva antes del canary (ping al gateway) */
 #ifdef __x86_64__
     { extern void iwl_start(void); iwl_start(); }        /* SOMA_175A_T480S: WiFi Intel 8265 (arranca su firmware en segundo plano) */
@@ -254,6 +284,7 @@ void kernel_main(void)
     kprint(" \033[1;37mSOMA 0.3 pre-beta :: Escribe '\033[1;32msoma <mision>\033[1;37m' para el Agente o '\033[1;33mhelp\033[1;37m'.\033[0m\n");
     kprint("\033[1;36m----------------------------------------------------------------------\033[0m\n\n");
 
+    BD("agente y configuracion (/etc/init.sh)", 0);
     agent_state_load();
     agent_refresh_knowledge(); /* MAYORDOMO_V2_KNOWLEDGE */
     console_history_load_from_vfs();
@@ -273,6 +304,7 @@ void kernel_main(void)
 #ifdef __aarch64__
     sd_autostart();                                     /* PARCHE 061: tarjeta SD (Pi 5) */
 #endif
+    BD("USB (teclado y raton USB)", 0);
 #if defined(__x86_64__) || defined(__aarch64__)
     xhci_autostart();                                   /* PARCHE 048: teclado/raton USB (si hay xHCI) antes de abrir el escritorio */
 #endif
@@ -281,11 +313,13 @@ void kernel_main(void)
     if (rp1_fan_set(1) == 0) kprint("FAN: ventilador en marcha (GPIO45; 'fan off' lo para, 'fan inv' si gira al reves)\n");
     board_print();                                      /* PARCHE 079: modelo de placa; 'wifi prueba' arranca el chip Wi-Fi */
 #endif
+    BD("nucleos de la CPU (SMP)", "soma.smp=off");
 #if defined(__aarch64__) || defined(__x86_64__)
     smp_init();                                         /* PARCHE 082 (aarch64) / SOMA_159_T480S (x86_64): nucleos secundarios para calculo */
     if (smp_cpus() > 1) crypto_parallel = smp_parallel_n;
 #endif
 #ifdef __x86_64__
+    BD("energia de la CPU y brillo", "soma.hwp=off soma.mwait=off soma.brillo=off");
     {   /* SOMA_166_T480S: energia y temperatura del procesador */
         cpupower_init();
         const struct cpupower_info *ci = cpupower_info();
@@ -317,8 +351,10 @@ void kernel_main(void)
 #endif
     kprint("\033[1;32m[SOMA ready]\033[0m Sistema interactivo listo en consola serie.\n\n");
     kprint("\033[1;36m[DESKTOP]: Iniciando Entorno Grafico SOMA por defecto...\033[0m\n");
+    BD("escritorio", 0);
 #ifdef __x86_64__
-    thread_create("llmtest", llm_selftest_thread, 0);   /* arranca cuando kernel_main ceda la CPU */
+    thread_create("llmtest", llm_selftest_thread, 0);
+    thread_create("arranque", boot_done_thread, 0);    /* SOMA_228_ARRANQUE */   /* arranca cuando kernel_main ceda la CPU */
     if (fwcfg_read_file("opt/soma/cmds", g_cmds, sizeof g_cmds - 1)) thread_create("cmds", cmds_thread, 0);   /* SOMA_159 */
     if (fwcfg_read_file("opt/soma/selftest", g_selftest, sizeof g_selftest)) {   /* PARCHE 138 */
         kprint("[SELFTEST] pedido por QEMU: "); kprint(g_selftest); kprint("\n");

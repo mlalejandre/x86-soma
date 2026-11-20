@@ -28,7 +28,7 @@ El pendrive lleva dos particiones en una tabla **MBR**:
 | Partición | Formato | Etiqueta | Tamaño | Para qué |
 |---|---|---|---|---|
 | 1 | FAT32 | `SOMA` | 1 GB | El arranque: `EFI/BOOT/BOOTX64.EFI` (GRUB + núcleo + firmware WiFi en un solo archivo) |
-| 2 | FAT32 | `SOMADATA` | 4 GB | El disco de SOMA. Al primer arranque SOMA la reclama y la formatea con su propio sistema de archivos |
+| 2 | FAT32 | `SOMADATA` | 4 GB | El disco de SOMA. Al primer arranque SOMA la reclama, la formatea con su propio sistema de archivos y, si es la última partición, la amplía hasta el final del pendrive (como mucho 8 GiB) |
 
 ### ⚡ Opción rápida: imagen ya compilada
 
@@ -112,9 +112,28 @@ En los tres casos el pendrive debe quedar así: `S:\EFI\BOOT\BOOTX64.EFI` (o `/E
 2. Enchufa el pendrive y abre el menú de arranque (`F12` en Lenovo; `F11`, `F8` o `Esc` en otras marcas) y elige el USB.
 3. En el menú de GRUB elige **SOMA** (o *resolución segura 1024x768* si la pantalla se queda en negro).
 4. El primer arranque reclama `SOMADATA`: a partir de ahí lo que guardes en SOMA se conserva entre arranques.
+5. ¿Tu teclado no es español? Elige **SOMA - otro PC con teclado inglés (US)** en el menú de GRUB.
 
 **Si algo falla:** prueba otro puerto USB, comprueba que Secure Boot está desactivado y que el PC arranca en modo UEFI
-(no «Legacy/CSM»). Para informar de un fallo abre una *issue* con la marca y el modelo del PC.
+(no «Legacy/CSM»).
+
+#### 🩺 Diagnóstico del arranque e informe de hardware
+
+SOMA está probado a fondo en el ThinkPad T480s. En otros equipos puede faltar algún driver, y para arreglarlo hace falta
+saber qué hardware hay. SOMA ayuda de tres formas:
+
+- **Etapas en pantalla.** El arranque muestra `[ARRANQUE 1/13] ...` hasta `[ARRANQUE 13/13] escritorio`. Si el equipo se
+  cuelga, la última línea dice en qué paso.
+- **Pantalla de error útil.** Si el núcleo falla durante el arranque, la pantalla dice la etapa y qué opción de GRUB la salta
+  (por ejemplo `soma.acpi=off`): en el menú de GRUB pulsa `e`, añádela al final de la línea `multiboot2` y pulsa `F10`.
+- **`INFORME.TXT`.** En cada arranque, SOMA escribe un informe en ese archivo de la unidad *SOMA* del pendrive, que se abre
+  desde Windows, macOS o Linux. Dice el modelo del equipo, las etapas y sus tiempos, si el arranque anterior se quedó a
+  medias y dónde, y la lista de dispositivos PCI con lo que SOMA hace con cada uno (*SI: driver*, *no: aún no*, *no hace
+  falta*). No contiene contraseñas ni claves. Compártelo en una *issue*: es lo que permite añadir el driver que falta.
+  También se genera con la orden `informe` o en *Ajustes → Sistema → Guardar informe*, y se guarda en `/informe.txt`.
+
+SOMA escribe el informe **en el sitio** del `INFORME.TXT` que ya trae el pendrive (256 KiB, lo crean `construyeimagen.py`
+y `ejecutar.py`): no crea archivos ni toca la tabla FAT, así que la partición de arranque no corre ningún riesgo.
 
 ---
 

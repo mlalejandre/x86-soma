@@ -8,7 +8,7 @@ Si prefieres compilarlo tú mismo, sigue las instrucciones del [README principal
 | `soma-0.3-prebeta-x86_64-usb.img.xz` | La imagen comprimida (5.6 MB; ocupa 5 GiB al grabarla) |
 | `soma-0.3-prebeta-x86_64-usb.img.xz.sha256` | Su huella SHA-256, para comprobar que se descargó bien |
 
-Generada el 20/11/2026 11:24 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
+Generada el 20/11/2026 13:30 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
 
 **Qué necesitas:** un pendrive de **8 GB o más** (se borra entero) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
 
@@ -60,9 +60,23 @@ El resultado tiene que coincidir con el de `soma-0.3-prebeta-x86_64-usb.img.xz.s
 1. En la BIOS/UEFI del PC **desactiva Secure Boot** (SOMA no está firmado). En el ThinkPad T480s: `F1` al encender → *Security → Secure Boot → Disabled*.
 2. Enchufa el pendrive, abre el menú de arranque (`F12` en Lenovo; `F11`, `F8` o `Esc` en otras marcas) y elige el USB.
 3. En el menú de GRUB elige **SOMA** (o *resolución segura 1024x768* si la pantalla se queda en negro).
-4. El primer arranque reclama la partición `SOMADATA`: desde ahí lo que guardes en SOMA se conserva.
+4. El primer arranque reclama la partición `SOMADATA` y, si el pendrive es de más de 8 GB, la amplía hasta ocuparlo (como mucho 8 GiB): desde ahí lo que guardes en SOMA se conserva.
+
+¿Tu teclado no es español? Elige **SOMA - otro PC con teclado inglés (US)** en el menú de GRUB.
 
 ¿No arranca? Prueba otro puerto USB y comprueba que el PC está en modo **UEFI** (no «Legacy/CSM»).
+
+## ¿Algo no funciona en tu equipo? Comparte el informe
+
+SOMA está probado a fondo en un ThinkPad T480s; en otros equipos puede faltar algún driver. Para que se pueda arreglar:
+
+- **Si arranca:** SOMA guarda solo, en cada arranque, un informe en el archivo **`INFORME.TXT`** de la unidad *SOMA* del
+  pendrive. Enchufa el pendrive en tu ordenador de siempre, abre ese archivo y compártelo (en los *issues* del repositorio o
+  en los comentarios del vídeo). Dice qué equipo tienes, qué dispositivos tienen driver en SOMA y cuáles no, y en qué paso del
+  arranque hubo problemas. No contiene contraseñas ni claves. También puedes generarlo en *Ajustes → Sistema → Guardar informe*.
+- **Si se queda colgado:** la última línea `[ARRANQUE n/13] ...` de la pantalla dice en qué paso. Haz una foto. Si sale una
+  pantalla de error, dice qué opción de GRUB salta ese paso (pulsa `e` en el menú, añádela al final de la línea `multiboot2` y
+  pulsa `F10`). En el siguiente arranque que llegue al escritorio, el informe recordará dónde se quedó el anterior.
 
 ## Licencias
 

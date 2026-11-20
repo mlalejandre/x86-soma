@@ -79,6 +79,7 @@ int browser_r3_wanted(void); int browser_r3_active(void);
 #include "virtio_blk.h"
 #ifdef __x86_64__
 #include "usbdisk.h"
+#include "bootdiag.h"         /* SOMA_228_ARRANQUE */
 #include "acpi_sys.h"
 #include "cpupower.h"
 #endif
@@ -4300,6 +4301,27 @@ static int cmd_disco(const char *args, char *out_buf, uint32_t max_out)
     kprint("uso: disco | disco sync (vacia la cache del pendrive; se hace sola cada 5 s)\n");
     return 1;
 }
+/* SOMA_228_ARRANQUE: "informe": guarda el informe de arranque y hardware (INFORME.TXT del pendrive y /informe.txt); "informe ver" lo muestra */
+static int cmd_informe(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)max_out;
+    if (out_buf) out_buf[0] = 0;
+    while (args && *args == ' ') args++;
+    if (args && args[0] == 'v') {
+        uint32_t cap = 240u * 1024u; char *b = (char *)kmalloc(cap);
+        if (!b) { kprint("informe: sin memoria\n"); return 1; }
+        bootdiag_report(b, cap); kprint(b); kfree(b);
+        return 1;
+    }
+    const char *pf = bootdiag_prev_failure();
+    kprint("Arranque: "); if (bootdiag_in_boot()) kprint("en curso"); else { kprint("completo en "); kprint_dec(bootdiag_boot_ms()); kprint(" ms"); } kprint("\n");
+    if (pf[0]) { kprint("El arranque anterior no llego al escritorio: se quedo en la "); kprint(pf); kprint("\n"); }
+    bootdiag_report_save_async();
+    kprint("informe: generando y guardando en segundo plano (INFORME.TXT de la particion de arranque del pendrive y /informe.txt).\n");
+    kprint("'informe ver' lo muestra aqui. El estado aparece tambien en Ajustes > Sistema.\n");
+    return 1;
+}
+
 /* SOMA_165_T480S: "bateria": carga, autonomia, salud y cargador */
 static void pr_cap(uint32_t v, int ma) { if (v == 0xFFFFFFFF) { kprint("?"); return; } kprint_dec(v); kprint(ma ? " mAh" : " mWh"); }
 static void pr_min(uint32_t m) { kprint_dec(m / 60); kprint(" h "); if (m % 60 < 10) kprint("0"); kprint_dec(m % 60); kprint(" min"); }
@@ -5999,6 +6021,7 @@ static const struct command_entry cmd_table[] = {
     { "trackpad",     cmd_trackpad,     CMD_F_SAFE,   "Trackpad del portatil: gestos (dos dedos), toque, desplazamiento natural, velocidad" },
     { "red",          cmd_red,          CMD_F_SAFE,   "Conexion de red: cable Ethernet, movil por USB, direccion IP y estado de las tarjetas" },
     { "acpi",         cmd_acpi,         CMD_F_SAFE,   "Firmware ACPI (uACPI): estado, EC, eventos y dispositivos (bateria, tapa, botones): acpi | acpi todos" },
+    { "informe",      cmd_informe,      CMD_F_SAFE,   "Informe de arranque y hardware para compartir: lo guarda en INFORME.TXT del pendrive y /informe.txt (informe ver lo muestra)" },
     { "disco",        cmd_disco,        CMD_F_SAFE,   "Donde se guardan los archivos: particion SOMADATA del pendrive, virtio o solo RAM (disco sync)" },
 #endif
     { "dmesg",        cmd_dmesg,        CMD_F_SAFE,   "Registro del nucleo desde el arranque: dmesg [N lineas | texto a buscar]" },
