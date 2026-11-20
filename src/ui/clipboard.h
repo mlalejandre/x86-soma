@@ -39,6 +39,7 @@ int         clip_image_to_bmp(uint8_t *out, uint32_t max);
 
 /* --- avisos y panel de historial --- */
 void        clip_toast(const char *msg);                       /* aviso breve en pantalla */
+void        clip_toast_ms(const char *msg, uint32_t ms);       /* SOMA_238_GUARDADO: aviso que dura ms */
 int         clip_overlay_active(void);
 void        clip_overlay_open(void);
 void        clip_overlay_close(void);

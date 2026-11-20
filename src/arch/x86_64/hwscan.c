@@ -11,17 +11,13 @@
 #include "mem.h"
 #include "idt.h"
 #include "smp.h"
+#include "soma_str.h"
 
 /* ------------------------------------------------------------------ texto acotado */
-struct tb { char *b; uint32_t max, p; };
-static void tc(struct tb *t, char c) { if (t->p + 1 < t->max) { t->b[t->p++] = c; t->b[t->p] = 0; } }
-static void ts(struct tb *t, const char *s) { while (s && *s) tc(t, *s++); }
-static void tdec(struct tb *t, uint64_t v) { char d[24]; int n = 0; do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) tc(t, d[--n]); }
-static void thex(struct tb *t, uint64_t v, int digits) { for (int i = digits - 1; i >= 0; i--) tc(t, "0123456789ABCDEF"[(v >> (i * 4)) & 15]); }
-static void tmb(struct tb *t, uint64_t mb)            /* "512 MiB" / "7,8 GiB" */
+static void tmb(soma_sbuf_t *t, uint64_t mb)            /* "512 MiB" / "7,8 GiB" */
 {
-    if (mb < 1024) { tdec(t, mb); ts(t, " MiB"); return; }
-    tdec(t, mb / 1024); tc(t, ','); tdec(t, (mb % 1024) * 10 / 1024); ts(t, " GiB");
+    if (mb < 1024) { soma_sbuf_append_u64(t, mb); soma_sbuf_append_str(t, " MiB"); return; }
+    soma_sbuf_append_u64(t, mb / 1024); soma_sbuf_append_char(t, ','); soma_sbuf_append_u64(t, (mb % 1024) * 10 / 1024); soma_sbuf_append_str(t, " GiB");
 }
 
 /* ------------------------------------------------------------------ memoria fisica de solo lectura */
@@ -82,7 +78,7 @@ static void cpu_topology(struct cpu_topo *o)
     o->cores = o->logical / (o->threads_per_core ? o->threads_per_core : 1);
     if (!o->cores) o->cores = 1;
 }
-static void cpu_text(struct tb *t, int brief)
+static void cpu_text(soma_sbuf_t *t, int brief)
 {
     uint32_t r[4], maxl, maxe;
     char vendor[13]; cpuid(0, 0, r); maxl = r[0];
@@ -94,19 +90,19 @@ static void cpu_text(struct tb *t, int brief)
     }
     const char *bn = brand; while (*bn == ' ') bn++;
     struct cpu_topo tp; cpu_topology(&tp);
-    ts(t, "CPU: "); ts(t, *bn ? bn : vendor); ts(t, "\n");
-    ts(t, "  nucleos "); tdec(t, tp.cores); ts(t, ", hilos "); tdec(t, tp.logical);
-    ts(t, " (SOMA usa "); tdec(t, (uint32_t)smp_cpus()); ts(t, ")");   /* SOMA_159_T480S */
-    if (maxl >= 0x16) { cpuid(0x16, 0, r); if (r[0]) { ts(t, " | base "); tdec(t, r[0]); ts(t, " MHz, turbo "); tdec(t, r[1]); ts(t, " MHz"); } }
-    ts(t, " | TSC "); tdec(t, tsc_freq_mhz); ts(t, " MHz\n");
+    soma_sbuf_append_str(t, "CPU: "); soma_sbuf_append_str(t, *bn ? bn : vendor); soma_sbuf_append_str(t, "\n");
+    soma_sbuf_append_str(t, "  nucleos "); soma_sbuf_append_u64(t, tp.cores); soma_sbuf_append_str(t, ", hilos "); soma_sbuf_append_u64(t, tp.logical);
+    soma_sbuf_append_str(t, " (SOMA usa "); soma_sbuf_append_u64(t, (uint32_t)smp_cpus()); soma_sbuf_append_str(t, ")");   /* SOMA_159_T480S */
+    if (maxl >= 0x16) { cpuid(0x16, 0, r); if (r[0]) { soma_sbuf_append_str(t, " | base "); soma_sbuf_append_u64(t, r[0]); soma_sbuf_append_str(t, " MHz, turbo "); soma_sbuf_append_u64(t, r[1]); soma_sbuf_append_str(t, " MHz"); } }
+    soma_sbuf_append_str(t, " | TSC "); soma_sbuf_append_u64(t, tsc_freq_mhz); soma_sbuf_append_str(t, " MHz\n");
     if (brief) return;
     cpuid(1, 0, r);
     uint32_t fam = (r[0] >> 8) & 15, mod = (r[0] >> 4) & 15, step = r[0] & 15;
     if (fam == 15) fam += (r[0] >> 20) & 0xFF;
     if (fam == 6 || fam >= 15) mod |= ((r[0] >> 16) & 15) << 4;
     uint32_t ecx1 = r[2], edx1 = r[3];
-    ts(t, "  fabricante "); ts(t, vendor); ts(t, ", familia "); tdec(t, fam); ts(t, ", modelo 0x"); thex(t, mod, 2);
-    ts(t, ", revision "); tdec(t, step); ts(t, "\n");
+    soma_sbuf_append_str(t, "  fabricante "); soma_sbuf_append_str(t, vendor); soma_sbuf_append_str(t, ", familia "); soma_sbuf_append_u64(t, fam); soma_sbuf_append_str(t, ", modelo 0x"); soma_sbuf_append_hex(t, mod, 2, 1);
+    soma_sbuf_append_str(t, ", revision "); soma_sbuf_append_u64(t, step); soma_sbuf_append_str(t, "\n");
     uint32_t ebx7 = 0, ecx7 = 0, edx7 = 0, eax6 = 0, edx8e = 0, edx81 = 0;
     if (maxl >= 7) { cpuid(7, 0, r); ebx7 = r[1]; ecx7 = r[2]; edx7 = r[3]; }
     if (maxl >= 6) { cpuid(6, 0, r); eax6 = r[0]; }
@@ -122,30 +118,30 @@ static void cpu_text(struct tb *t, int brief)
         { (int)((edx81 >> 26) & 1), "paginas-1GiB" }, { (int)((ecx1 >> 5) & 1), "VMX" }, { (int)((ebx7 >> 20) & 1), "SMAP" },
         { (int)((ebx7 >> 7) & 1), "SMEP" }, { (int)((ecx7 >> 2) & 1), "UMIP" },
     };
-    ts(t, "  extensiones:");
+    soma_sbuf_append_str(t, "  extensiones:");
     int col = 15;
     for (unsigned i = 0; i < sizeof f / sizeof f[0]; i++) if (f[i].on) {
         int l = 0; while (f[i].n[l]) l++;
-        if (col + l + 1 > 92) { ts(t, "\n              "); col = 14; }
-        tc(t, ' '); ts(t, f[i].n); col += l + 1;
+        if (col + l + 1 > 92) { soma_sbuf_append_str(t, "\n              "); col = 14; }
+        soma_sbuf_append_char(t, ' '); soma_sbuf_append_str(t, f[i].n); col += l + 1;
     }
-    ts(t, "\n");
+    soma_sbuf_append_str(t, "\n");
     int amd = vendor[0] == 'A' && vendor[1] == 'u';           /* AMD describe las caches en 8000001Dh (mismo formato) */
     uint32_t cleaf = amd ? 0x8000001Du : 4u;
     if (amd ? maxe >= 0x8000001Du : maxl >= 4) {              /* caches (hoja 4 en Intel) */
-        ts(t, "  caches:");
+        soma_sbuf_append_str(t, "  caches:");
         for (uint32_t sub = 0; sub < 8; sub++) {
             cpuid(cleaf, sub, r);
             uint32_t type = r[0] & 31; if (!type) break;
             uint32_t lvl = (r[0] >> 5) & 7;
             uint64_t sz = (uint64_t)((r[1] >> 22) + 1) * (((r[1] >> 12) & 0x3FF) + 1) * ((r[1] & 0xFFF) + 1) * (r[2] + 1);
             uint32_t share = ((r[0] >> 14) & 0xFFF) + 1;
-            ts(t, " L"); tdec(t, lvl); ts(t, type == 1 ? "d " : type == 2 ? "i " : " ");
-            if (sz >= (1u << 20)) { tdec(t, sz >> 20); ts(t, " MiB"); } else { tdec(t, sz >> 10); ts(t, " KiB"); }
-            if (share > tp.threads_per_core) ts(t, " (compartida)");
-            tc(t, ';');
+            soma_sbuf_append_str(t, " L"); soma_sbuf_append_u64(t, lvl); soma_sbuf_append_str(t, type == 1 ? "d " : type == 2 ? "i " : " ");
+            if (sz >= (1u << 20)) { soma_sbuf_append_u64(t, sz >> 20); soma_sbuf_append_str(t, " MiB"); } else { soma_sbuf_append_u64(t, sz >> 10); soma_sbuf_append_str(t, " KiB"); }
+            if (share > tp.threads_per_core) soma_sbuf_append_str(t, " (compartida)");
+            soma_sbuf_append_char(t, ';');
         }
-        ts(t, "\n");
+        soma_sbuf_append_str(t, "\n");
     }
 }
 
@@ -155,7 +151,7 @@ static const char *mmap_type(uint32_t ty)
     switch (ty) { case 1: return "libre"; case 2: return "reservada"; case 3: return "ACPI (recuperable)"; case 4: return "ACPI NVS";
                   case 5: return "defectuosa"; default: return "otra"; }
 }
-static void mem_text(struct tb *t, int brief, int verbose)
+static void mem_text(soma_sbuf_t *t, int brief, int verbose)
 {
     uint64_t tot[6] = { 0 }, top = 0, big_base = 0, big_len = 0; int n = 0;
     uint32_t it = 0; uint64_t base, len; uint32_t ty;
@@ -165,34 +161,34 @@ static void mem_text(struct tb *t, int brief, int verbose)
         if (ty == 1) { if (base + len > top) top = base + len; if (len > big_len) { big_len = len; big_base = base; } }
     }
     size_t fr = 0, us = 0, totf = 0; pmm_get_stats(&fr, &us, &totf);
-    ts(t, "RAM: ");
-    if (n) { tmb(t, tot[1] >> 20); ts(t, " utilizables segun el firmware"); }
-    else ts(t, "(sin mapa de Multiboot 2)");
-    ts(t, " | SOMA gestiona "); tmb(t, (uint64_t)totf * 4096 >> 20); ts(t, ", libres "); tmb(t, (uint64_t)fr * 4096 >> 20); ts(t, "\n");
+    soma_sbuf_append_str(t, "RAM: ");
+    if (n) { tmb(t, tot[1] >> 20); soma_sbuf_append_str(t, " utilizables segun el firmware"); }
+    else soma_sbuf_append_str(t, "(sin mapa de Multiboot 2)");
+    soma_sbuf_append_str(t, " | SOMA gestiona "); tmb(t, (uint64_t)totf * 4096 >> 20); soma_sbuf_append_str(t, ", libres "); tmb(t, (uint64_t)fr * 4096 >> 20); soma_sbuf_append_str(t, "\n");
     if (brief || !n) return;
-    ts(t, "  mapa del firmware: "); tdec(t, (uint64_t)n); ts(t, " regiones; RAM hasta 0x"); thex(t, top, 10);
-    ts(t, " ("); tmb(t, top >> 20); ts(t, ")\n");
+    soma_sbuf_append_str(t, "  mapa del firmware: "); soma_sbuf_append_u64(t, (uint64_t)n); soma_sbuf_append_str(t, " regiones; RAM hasta 0x"); soma_sbuf_append_hex(t, top, 10, 1);
+    soma_sbuf_append_str(t, " ("); tmb(t, top >> 20); soma_sbuf_append_str(t, ")\n");
     for (uint32_t k = 1; k <= 5; k++) if (tot[k]) {
-        ts(t, "  "); ts(t, mmap_type(k)); ts(t, ": ");
-        if (tot[k] < (1u << 20)) { tdec(t, tot[k] >> 10); ts(t, " KiB"); } else tmb(t, (tot[k] + (1u << 19)) >> 20);
-        if (k == 2) ts(t, " (rangos de direcciones: incluye dispositivos, no es RAM)");
-        ts(t, "\n");
+        soma_sbuf_append_str(t, "  "); soma_sbuf_append_str(t, mmap_type(k)); soma_sbuf_append_str(t, ": ");
+        if (tot[k] < (1u << 20)) { soma_sbuf_append_u64(t, tot[k] >> 10); soma_sbuf_append_str(t, " KiB"); } else tmb(t, (tot[k] + (1u << 19)) >> 20);
+        if (k == 2) soma_sbuf_append_str(t, " (rangos de direcciones: incluye dispositivos, no es RAM)");
+        soma_sbuf_append_str(t, "\n");
     }
-    ts(t, "  mayor bloque libre: 0x"); thex(t, big_base, 10); ts(t, " + "); tmb(t, big_len >> 20); ts(t, "\n");
+    soma_sbuf_append_str(t, "  mayor bloque libre: 0x"); soma_sbuf_append_hex(t, big_base, 10, 1); soma_sbuf_append_str(t, " + "); tmb(t, big_len >> 20); soma_sbuf_append_str(t, "\n");
     {   /* SOMA_157: reservas del PMM y limite del montón */
         size_t lf = 0, hf = 0; pmm_get_pools(&lf, &hf);
-        ts(t, "  reserva baja (identidad, DMA) libre: "); tmb(t, (uint64_t)lf * 4096 >> 20);
-        ts(t, " | reserva alta (monton) libre: "); tmb(t, (uint64_t)hf * 4096 >> 20); ts(t, "\n");
-        ts(t, "  monton: limite "); tmb(t, (uint64_t)kheap_max_bytes() >> 20); ts(t, " (ramtest [MiB] comprueba la memoria alta)\n");
+        soma_sbuf_append_str(t, "  reserva baja (identidad, DMA) libre: "); tmb(t, (uint64_t)lf * 4096 >> 20);
+        soma_sbuf_append_str(t, " | reserva alta (monton) libre: "); tmb(t, (uint64_t)hf * 4096 >> 20); soma_sbuf_append_str(t, "\n");
+        soma_sbuf_append_str(t, "  monton: limite "); tmb(t, (uint64_t)kheap_max_bytes() >> 20); soma_sbuf_append_str(t, " (ramtest [MiB] comprueba la memoria alta)\n");
     }
     if (verbose) {
         it = 0; int shown = 0;
         while (bootinfo_mmap_next(&it, &base, &len, &ty) && shown < 64) {
-            ts(t, "    0x"); thex(t, base, 10); ts(t, " - 0x"); thex(t, base + len, 10); ts(t, "  ");
-            if (len >= (1u << 20)) { tmb(t, len >> 20); } else { tdec(t, len >> 10); ts(t, " KiB"); }
-            ts(t, "  "); ts(t, mmap_type(ty)); ts(t, "\n"); shown++;
+            soma_sbuf_append_str(t, "    0x"); soma_sbuf_append_hex(t, base, 10, 1); soma_sbuf_append_str(t, " - 0x"); soma_sbuf_append_hex(t, base + len, 10, 1); soma_sbuf_append_str(t, "  ");
+            if (len >= (1u << 20)) { tmb(t, len >> 20); } else { soma_sbuf_append_u64(t, len >> 10); soma_sbuf_append_str(t, " KiB"); }
+            soma_sbuf_append_str(t, "  "); soma_sbuf_append_str(t, mmap_type(ty)); soma_sbuf_append_str(t, "\n"); shown++;
         }
-    } else ts(t, "  (hw mem -v: lista completa de regiones)\n");
+    } else soma_sbuf_append_str(t, "  (hw mem -v: lista completa de regiones)\n");
 }
 
 /* ------------------------------------------------------------------ SMBIOS */
@@ -229,36 +225,36 @@ static int smbios_load(struct hw_smbios *o, const char **how)
     if (!tab) return -1;
     return hw_smbios_parse(tab, tl, ma, mi, o);
 }
-static void smbios_text(struct tb *t, int brief)
+static void smbios_text(soma_sbuf_t *t, int brief)
 {
     static struct hw_smbios s;
     const char *how = "";
-    if (smbios_load(&s, &how) != 0) { ts(t, "Equipo: SMBIOS no disponible\n"); return; }
-    ts(t, "Equipo: "); ts(t, s.sys_vendor); tc(t, ' '); ts(t, s.sys_version[0] ? s.sys_version : s.sys_family);
-    ts(t, " ("); ts(t, s.sys_product); ts(t, ")\n");
+    if (smbios_load(&s, &how) != 0) { soma_sbuf_append_str(t, "Equipo: SMBIOS no disponible\n"); return; }
+    soma_sbuf_append_str(t, "Equipo: "); soma_sbuf_append_str(t, s.sys_vendor); soma_sbuf_append_char(t, ' '); soma_sbuf_append_str(t, s.sys_version[0] ? s.sys_version : s.sys_family);
+    soma_sbuf_append_str(t, " ("); soma_sbuf_append_str(t, s.sys_product); soma_sbuf_append_str(t, ")\n");
     if (brief) return;
-    ts(t, "  SMBIOS "); tdec(t, s.major); tc(t, '.'); tdec(t, s.minor); ts(t, ", "); tdec(t, (uint64_t)s.nstructs);
-    ts(t, " estructuras ("); ts(t, how); ts(t, ")\n");
-    ts(t, "  BIOS: "); ts(t, s.bios_vendor); tc(t, ' '); ts(t, s.bios_version); ts(t, ", "); ts(t, s.bios_date); ts(t, "\n");
-    if (s.board_product[0]) { ts(t, "  placa: "); ts(t, s.board_product); ts(t, "\n"); }
+    soma_sbuf_append_str(t, "  SMBIOS "); soma_sbuf_append_u64(t, s.major); soma_sbuf_append_char(t, '.'); soma_sbuf_append_u64(t, s.minor); soma_sbuf_append_str(t, ", "); soma_sbuf_append_u64(t, (uint64_t)s.nstructs);
+    soma_sbuf_append_str(t, " estructuras ("); soma_sbuf_append_str(t, how); soma_sbuf_append_str(t, ")\n");
+    soma_sbuf_append_str(t, "  BIOS: "); soma_sbuf_append_str(t, s.bios_vendor); soma_sbuf_append_char(t, ' '); soma_sbuf_append_str(t, s.bios_version); soma_sbuf_append_str(t, ", "); soma_sbuf_append_str(t, s.bios_date); soma_sbuf_append_str(t, "\n");
+    if (s.board_product[0]) { soma_sbuf_append_str(t, "  placa: "); soma_sbuf_append_str(t, s.board_product); soma_sbuf_append_str(t, "\n"); }
     if (s.cpu_name[0]) {
-        ts(t, "  procesador: "); ts(t, s.cpu_name);
-        if (s.cpu_cores) { ts(t, " | "); tdec(t, s.cpu_cores); ts(t, " nucleos / "); tdec(t, s.cpu_threads); ts(t, " hilos"); }
-        if (s.cpu_max_mhz) { ts(t, " | max "); tdec(t, s.cpu_max_mhz); ts(t, " MHz"); }
-        ts(t, "\n");
+        soma_sbuf_append_str(t, "  procesador: "); soma_sbuf_append_str(t, s.cpu_name);
+        if (s.cpu_cores) { soma_sbuf_append_str(t, " | "); soma_sbuf_append_u64(t, s.cpu_cores); soma_sbuf_append_str(t, " nucleos / "); soma_sbuf_append_u64(t, s.cpu_threads); soma_sbuf_append_str(t, " hilos"); }
+        if (s.cpu_max_mhz) { soma_sbuf_append_str(t, " | max "); soma_sbuf_append_u64(t, s.cpu_max_mhz); soma_sbuf_append_str(t, " MHz"); }
+        soma_sbuf_append_str(t, "\n");
     }
     uint64_t inst = 0;
     for (int i = 0; i < s.nmem; i++) inst += s.mem[i].size_mb;
-    ts(t, "  memoria instalada: "); tmb(t, inst);
-    if (s.mem_max_mb) { ts(t, " (la placa admite hasta "); tmb(t, s.mem_max_mb); tc(t, ')'); }
-    ts(t, "\n");
+    soma_sbuf_append_str(t, "  memoria instalada: "); tmb(t, inst);
+    if (s.mem_max_mb) { soma_sbuf_append_str(t, " (la placa admite hasta "); tmb(t, s.mem_max_mb); soma_sbuf_append_char(t, ')'); }
+    soma_sbuf_append_str(t, "\n");
     for (int i = 0; i < s.nmem; i++) {
-        ts(t, "    "); ts(t, s.mem[i].locator[0] ? s.mem[i].locator : "zocalo"); ts(t, ": ");
-        if (!s.mem[i].size_mb) { ts(t, "vacio\n"); continue; }
-        tmb(t, s.mem[i].size_mb); tc(t, ' '); ts(t, hw_smbios_memtype(s.mem[i].type));
-        if (s.mem[i].mhz) { tc(t, ' '); tdec(t, s.mem[i].mhz); ts(t, " MT/s"); }
-        if (s.mem[i].part[0]) { ts(t, " ["); ts(t, s.mem[i].part); tc(t, ']'); }
-        ts(t, "\n");
+        soma_sbuf_append_str(t, "    "); soma_sbuf_append_str(t, s.mem[i].locator[0] ? s.mem[i].locator : "zocalo"); soma_sbuf_append_str(t, ": ");
+        if (!s.mem[i].size_mb) { soma_sbuf_append_str(t, "vacio\n"); continue; }
+        tmb(t, s.mem[i].size_mb); soma_sbuf_append_char(t, ' '); soma_sbuf_append_str(t, hw_smbios_memtype(s.mem[i].type));
+        if (s.mem[i].mhz) { soma_sbuf_append_char(t, ' '); soma_sbuf_append_u64(t, s.mem[i].mhz); soma_sbuf_append_str(t, " MT/s"); }
+        if (s.mem[i].part[0]) { soma_sbuf_append_str(t, " ["); soma_sbuf_append_str(t, s.mem[i].part); soma_sbuf_append_char(t, ']'); }
+        soma_sbuf_append_str(t, "\n");
     }
 }
 
@@ -310,14 +306,14 @@ const char *hw_pci_name(uint16_t v, uint16_t d)
 static int seq(const char *a, const char *w) { while (*w && *a == *w) { a++; w++; } return !*w && (*a == 0 || *a == ' '); }
 int hw_section_text(const char *sec, char *out, uint32_t max)
 {
-    struct tb t = { out, max, 0 };
+    soma_sbuf_t t = { out, max, 0 };
     if (max) out[0] = 0;
     while (sec && *sec == ' ') sec++;
     const char *rest = sec; while (rest && *rest && *rest != ' ') rest++; while (rest && *rest == ' ') rest++;
     int verbose = rest && rest[0] == '-' && rest[1] == 'v';
     if (!sec || !*sec || seq(sec, "resumen")) {
         smbios_text(&t, 1); cpu_text(&t, 1); mem_text(&t, 1, 0);
-        if (bootfb_use_firmware()) { ts(&t, "Pantalla: "); tdec(&t, bootfb_get()->width); tc(&t, 'x'); tdec(&t, bootfb_get()->height); ts(&t, " (firmware)\n"); }
+        if (bootfb_use_firmware()) { soma_sbuf_append_str(&t, "Pantalla: "); soma_sbuf_append_u64(&t, bootfb_get()->width); soma_sbuf_append_char(&t, 'x'); soma_sbuf_append_u64(&t, bootfb_get()->height); soma_sbuf_append_str(&t, " (firmware)\n"); }
         return 1;
     }
     if (seq(sec, "cpu")) { cpu_text(&t, 0); return 1; }
@@ -331,13 +327,13 @@ int hw_section_text(const char *sec, char *out, uint32_t max)
  * Informa de las direcciones fisicas usadas (deben estar por encima de 4 GiB en un equipo con mucha RAM) y la velocidad. */
 int hw_ramtest(uint32_t mib, char *out, uint32_t max)
 {
-    struct tb t = { out, max, 0 };
+    soma_sbuf_t t = { out, max, 0 };
     if (max) out[0] = 0;
     if (mib == 0) mib = 1024;
     if (mib > 16384) mib = 16384;
     enum { BLK = 1 << 20 };
     uint64_t **blk = (uint64_t **)kmalloc((size_t)mib * sizeof(uint64_t *));   /* en el montón: no engorda la imagen */
-    if (!blk) { ts(&t, "ramtest: sin memoria para la tabla de bloques\n"); return 0; }
+    if (!blk) { soma_sbuf_append_str(&t, "ramtest: sin memoria para la tabla de bloques\n"); return 0; }
     uint32_t got = 0, bad = 0;
     uint64_t pmin = ~0ULL, pmax = 0, above4g = 0;
     uint64_t t0 = timer_get_uptime_ms();
@@ -361,13 +357,13 @@ int hw_ramtest(uint32_t mib, char *out, uint32_t max)
     uint64_t t2 = timer_get_uptime_ms();
     for (uint32_t k = 0; k < got; k++) kfree(blk[k]);
     kfree(blk);
-    ts(&t, "ramtest: "); tdec(&t, got); ts(&t, " de "); tdec(&t, mib); ts(&t, " MiB reservados y escritos");
-    if (got < mib) ts(&t, " (el montón no dio mas: limite o RAM agotada)");
-    ts(&t, "\n  verificacion: "); ts(&t, bad ? "FALLO en " : "correcta"); if (bad) { tdec(&t, bad); ts(&t, " bloques"); }
-    ts(&t, "\n  direcciones fisicas: 0x"); thex(&t, got ? pmin : 0, 10); ts(&t, " .. 0x"); thex(&t, pmax, 10);
-    ts(&t, " | por encima de 4 GiB: "); tmb(&t, above4g * 4096 >> 20);
+    soma_sbuf_append_str(&t, "ramtest: "); soma_sbuf_append_u64(&t, got); soma_sbuf_append_str(&t, " de "); soma_sbuf_append_u64(&t, mib); soma_sbuf_append_str(&t, " MiB reservados y escritos");
+    if (got < mib) soma_sbuf_append_str(&t, " (el montón no dio mas: limite o RAM agotada)");
+    soma_sbuf_append_str(&t, "\n  verificacion: "); soma_sbuf_append_str(&t, bad ? "FALLO en " : "correcta"); if (bad) { soma_sbuf_append_u64(&t, bad); soma_sbuf_append_str(&t, " bloques"); }
+    soma_sbuf_append_str(&t, "\n  direcciones fisicas: 0x"); soma_sbuf_append_hex(&t, got ? pmin : 0, 10, 1); soma_sbuf_append_str(&t, " .. 0x"); soma_sbuf_append_hex(&t, pmax, 10, 1);
+    soma_sbuf_append_str(&t, " | por encima de 4 GiB: "); tmb(&t, above4g * 4096 >> 20);
     uint64_t dw = t1 > t0 ? t1 - t0 : 1, dr = t2 > t1 ? t2 - t1 : 1;
-    ts(&t, "\n  escritura (con reserva) "); tdec(&t, (uint64_t)got * 1000 / dw); ts(&t, " MiB/s, lectura ");
-    tdec(&t, (uint64_t)got * 1000 / dr); ts(&t, " MiB/s\n");
+    soma_sbuf_append_str(&t, "\n  escritura (con reserva) "); soma_sbuf_append_u64(&t, (uint64_t)got * 1000 / dw); soma_sbuf_append_str(&t, " MiB/s, lectura ");
+    soma_sbuf_append_u64(&t, (uint64_t)got * 1000 / dr); soma_sbuf_append_str(&t, " MiB/s\n");
     return bad ? 0 : 1;
 }

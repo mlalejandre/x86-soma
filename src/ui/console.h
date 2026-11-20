@@ -27,6 +27,14 @@ void console_capture_begin(char *buf, uint32_t cap, const char *input);
 uint32_t console_capture_end(void);
 void console_capture_abort(void);
 int  console_capture_active(void);            /* SOMA_156B */
+int  console_capture_guest(uint32_t tid);     /* SOMA_237_PYTHON: el hilo tid comparte la captura del que llama (0 = ninguno) */
+int  console_capture_mine(void);              /* SOMA_237: el hilo actual (o su invitado) esta capturado */
+int  console_capture_input_eof(void);         /* SOMA_237: el hilo actual esta capturado y ya no queda entrada simulada */
+void console_capture_live(int on);            /* SOMA_237: el dueno da la entrada linea a linea (kgetline del capturado espera) */
+int  console_capture_feed(const char *line);  /* anade una linea a la entrada viva; -1 si no cabe o no hay captura viva */
+void console_capture_feed_eof(void);          /* fin de la entrada viva */
+uint32_t console_capture_len(void);           /* bytes capturados hasta ahora (para mostrarlos mientras la orden sigue) */
+void console_capture_consume(uint32_t n);     /* descarta los n primeros bytes capturados (ya mostrados) */
 void keyboard_irq_handler(void);
 void keyboard_inject_scancode(uint8_t sc);   /* PARCHE 047: scancode PS/2 (juego 1) desde el teclado USB (solo x86_64) */
 void keyboard_reset_state(void);

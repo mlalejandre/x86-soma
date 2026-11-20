@@ -5,7 +5,7 @@
 #include "idt.h"
 #include "thread.h"
 #include "mem.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "usbdisk.h"
 #include "hwscan.h"
 #include "pci.h"
@@ -13,6 +13,7 @@
 #include "rtc.h"
 #include "fs.h"
 #include "e1000e.h"
+#include "soma_str.h"
 
 int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out);
 
@@ -46,7 +47,7 @@ static void persist(uint32_t state)
     g_rec.ms = (uint32_t)timer_get_uptime_ms();
     scpy(g_rec.name, g_n ? g_name[g_n - 1] : "", sizeof g_rec.name);
     scpy(g_rec.opt, g_n && g_opt[g_n - 1] ? g_opt[g_n - 1] : "", sizeof g_rec.opt);
-    if (virtio_blk_write(BOOTDIAG_LBA, &g_rec) == 0) (void)virtio_blk_flush();
+    if (sysdisk_write(BOOTDIAG_LBA, &g_rec) == 0) (void)sysdisk_flush();
 }
 
 void bootdiag_stage(const char *name, const char *grub_opt)
@@ -59,8 +60,8 @@ void bootdiag_stage(const char *name, const char *grub_opt)
 
 void bootdiag_disk_ready(void)
 {
-    if (g_disk || !virtio_blk_capacity() || virtio_blk_capacity() <= BOOTDIAG_LBA) return;
-    if (virtio_blk_read(BOOTDIAG_LBA, &g_rec) != 0) return;
+    if (g_disk || !sysdisk_capacity() || sysdisk_capacity() <= BOOTDIAG_LBA) return;
+    if (sysdisk_read(BOOTDIAG_LBA, &g_rec) != 0) return;
     g_prev[0] = 0;
     {
         int ok = 1; for (int i = 0; i < 8; i++) if (g_rec.magic[i] != "SOMABOOT"[i]) ok = 0;
@@ -109,11 +110,7 @@ void bootdiag_panic_hint(void)
 }
 
 /* ------------------------------------------------------------------ informe */
-struct ob { char *b; uint32_t max, n; };
-static void os(struct ob *o, const char *s) { while (s && *s && o->n + 1 < o->max) o->b[o->n++] = *s++; o->b[o->n] = 0; }
-static void od(struct ob *o, uint64_t v) { char d[24]; int n = 0; do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) { char c[2] = { d[--n], 0 }; os(o, c); } }
-static void ox(struct ob *o, uint32_t v, int digits) { for (int i = digits - 1; i >= 0; i--) { char c[2] = { "0123456789ABCDEF"[(v >> (i * 4)) & 15], 0 }; os(o, c); } }
-static void od2(struct ob *o, uint32_t v) { if (v < 10) os(o, "0"); od(o, v); }
+static void od2(soma_sbuf_t *o, uint32_t v) { if (v < 10) soma_sbuf_append_str(o, "0"); soma_sbuf_append_u64(o, v); }
 
 /* que hace SOMA con cada dispositivo PCI */
 static const char *coverage(uint16_t ven, uint16_t dev, uint32_t cc)
@@ -179,26 +176,26 @@ static void redact(char *s, uint32_t *n, uint32_t from)
     s[w] = 0; *n = w;
 }
 
-static void section(struct ob *o, const char *t) { os(o, "\n== "); os(o, t); os(o, " ==\n"); }
+static void section(soma_sbuf_t *o, const char *t) { soma_sbuf_append_str(o, "\n== "); soma_sbuf_append_str(o, t); soma_sbuf_append_str(o, " ==\n"); }
 
-static void capture(struct ob *o, const char *cmd)
+static void capture(soma_sbuf_t *o, const char *cmd)
 {
     section(o, cmd);
-    if (console_capture_active()) { os(o, "(la consola estaba ocupada)\n"); return; }
-    uint32_t room = o->max - o->n;
+    if (console_capture_active()) { soma_sbuf_append_str(o, "(la consola estaba ocupada)\n"); return; }
+    uint32_t room = o->cap - o->len;
     if (room < 2048) return;
     static char res[4096];
     res[0] = 0;
-    console_capture_begin(o->b + o->n, room - 1024, "");
+    console_capture_begin(o->buf + o->len, room - 1024, "");
     dispatch_command(cmd, res, sizeof res);
     uint32_t got = console_capture_end();
-    o->n += got; o->b[o->n] = 0;
-    os(o, res);
+    o->len += got; o->buf[o->len] = 0;
+    soma_sbuf_append_str(o, res);
 }
 
 uint32_t bootdiag_report(char *out, uint32_t max)
 {
-    struct ob o = { out, max, 0 };
+    soma_sbuf_t o = { out, max, 0 };
     if (!out || max < 4096) return 0;
     out[0] = 0;
     /* el registro del nucleo, antes de que las ordenes de abajo escriban en el */
@@ -207,26 +204,26 @@ uint32_t bootdiag_report(char *out, uint32_t max)
     if (klog) kn = klog_snapshot(klog, kcap + 1);
 
     struct rtc_time t; rtc_get_datetime(&t);
-    os(&o, "SOMA 0.3 pre-beta - informe de arranque y hardware\n");
-    os(&o, "Compartelo en https://github.com/mlalejandre/x86-soma/issues o en los comentarios del canal.\n");
-    os(&o, "No contiene contrasenas ni claves: solo el equipo, los dispositivos y el registro del nucleo.\n");
-    os(&o, "Generado: "); od(&o, t.year); os(&o, "-"); od2(&o, t.month); os(&o, "-"); od2(&o, t.day); os(&o, " ");
-    od2(&o, t.hour); os(&o, ":"); od2(&o, t.min); os(&o, " (reloj del equipo), "); od(&o, timer_get_uptime_ms() / 1000); os(&o, " s tras encender\n");
-    os(&o, "Compilado: " __DATE__ "\nOpciones de arranque: "); os(&o, bootinfo_cmdline()[0] ? bootinfo_cmdline() : "(ninguna)"); os(&o, "\n");
+    soma_sbuf_append_str(&o, "SOMA 0.3 pre-beta - informe de arranque y hardware\n");
+    soma_sbuf_append_str(&o, "Compartelo en https://github.com/mlalejandre/x86-soma/issues o en los comentarios del canal.\n");
+    soma_sbuf_append_str(&o, "No contiene contrasenas ni claves: solo el equipo, los dispositivos y el registro del nucleo.\n");
+    soma_sbuf_append_str(&o, "Generado: "); soma_sbuf_append_u64(&o, t.year); soma_sbuf_append_str(&o, "-"); od2(&o, t.month); soma_sbuf_append_str(&o, "-"); od2(&o, t.day); soma_sbuf_append_str(&o, " ");
+    od2(&o, t.hour); soma_sbuf_append_str(&o, ":"); od2(&o, t.min); soma_sbuf_append_str(&o, " (reloj del equipo), "); soma_sbuf_append_u64(&o, timer_get_uptime_ms() / 1000); soma_sbuf_append_str(&o, " s tras encender\n");
+    soma_sbuf_append_str(&o, "Compilado: " __DATE__ "\nOpciones de arranque: "); soma_sbuf_append_str(&o, bootinfo_cmdline()[0] ? bootinfo_cmdline() : "(ninguna)"); soma_sbuf_append_str(&o, "\n");
 
-    uint32_t body = o.n;                                             /* desde aqui se filtran las lineas con claves */
+    uint32_t body = o.len;                                             /* desde aqui se filtran las lineas con claves */
     section(&o, "Arranque");
-    if (g_prev[0]) { os(&o, "El arranque ANTERIOR no llego al escritorio: se quedo en la "); os(&o, g_prev); os(&o, "\n"); }
-    else os(&o, "El arranque anterior termino bien (o es el primero).\n");
+    if (g_prev[0]) { soma_sbuf_append_str(&o, "El arranque ANTERIOR no llego al escritorio: se quedo en la "); soma_sbuf_append_str(&o, g_prev); soma_sbuf_append_str(&o, "\n"); }
+    else soma_sbuf_append_str(&o, "El arranque anterior termino bien (o es el primero).\n");
     for (int i = 0; i < g_n; i++) {
-        os(&o, "  "); od(&o, (uint64_t)i + 1); os(&o, ". "); os(&o, g_name[i]); os(&o, "  ");
-        od(&o, g_t[i]); os(&o, " ms"); if (g_opt[i]) { os(&o, "  [se salta con "); os(&o, g_opt[i]); os(&o, "]"); } os(&o, "\n");
+        soma_sbuf_append_str(&o, "  "); soma_sbuf_append_u64(&o, (uint64_t)i + 1); soma_sbuf_append_str(&o, ". "); soma_sbuf_append_str(&o, g_name[i]); soma_sbuf_append_str(&o, "  ");
+        soma_sbuf_append_u64(&o, g_t[i]); soma_sbuf_append_str(&o, " ms"); if (g_opt[i]) { soma_sbuf_append_str(&o, "  [se salta con "); soma_sbuf_append_str(&o, g_opt[i]); soma_sbuf_append_str(&o, "]"); } soma_sbuf_append_str(&o, "\n");
     }
-    if (g_done) { os(&o, "Completo en "); od(&o, g_boot_ms); os(&o, " ms. Arranques registrados en este pendrive: "); od(&o, g_boots); os(&o, "\n"); }
-    else os(&o, "El arranque aun no ha terminado.\n");
+    if (g_done) { soma_sbuf_append_str(&o, "Completo en "); soma_sbuf_append_u64(&o, g_boot_ms); soma_sbuf_append_str(&o, " ms. Arranques registrados en este pendrive: "); soma_sbuf_append_u64(&o, g_boots); soma_sbuf_append_str(&o, "\n"); }
+    else soma_sbuf_append_str(&o, "El arranque aun no ha terminado.\n");
 
     section(&o, "Equipo");
-    { uint32_t cap = o.max - o.n; if (cap > 4096) { hw_section_text("resumen", o.b + o.n, cap); while (o.b[o.n]) o.n++; } }
+    { uint32_t cap = o.cap - o.len; if (cap > 4096) { hw_section_text("resumen", o.buf + o.len, cap); while (o.buf[o.len]) o.len++; } }
 
     section(&o, "Dispositivos PCI y driver de SOMA");
     {
@@ -238,37 +235,37 @@ uint32_t bootdiag_report(char *out, uint32_t max)
             uint32_t cc = pci_config_read32((uint8_t)bus, (uint8_t)sl, (uint8_t)fn, 8) >> 8;
             uint32_t sub = pci_config_read32((uint8_t)bus, (uint8_t)sl, (uint8_t)fn, 0x2C);
             const char *c = coverage(v, d, cc), *nm = hw_pci_name(v, d), *vn = hw_vendor_name(v);
-            os(&o, "  "); ox(&o, (uint32_t)bus, 2); os(&o, ":"); ox(&o, (uint32_t)sl, 2); os(&o, "."); od(&o, (uint64_t)fn);
-            os(&o, "  "); ox(&o, v, 4); os(&o, ":"); ox(&o, d, 4); os(&o, " ("); ox(&o, sub & 0xFFFF, 4); os(&o, ":"); ox(&o, sub >> 16, 4);
-            os(&o, ")  clase "); ox(&o, cc, 6); os(&o, "  "); if (vn) { os(&o, vn); os(&o, " "); } os(&o, nm ? nm : ""); os(&o, "\n      -> "); os(&o, c); os(&o, "\n");
+            soma_sbuf_append_str(&o, "  "); soma_sbuf_append_hex(&o, (uint32_t)bus, 2, 1); soma_sbuf_append_str(&o, ":"); soma_sbuf_append_hex(&o, (uint32_t)sl, 2, 1); soma_sbuf_append_str(&o, "."); soma_sbuf_append_u64(&o, (uint64_t)fn);
+            soma_sbuf_append_str(&o, "  "); soma_sbuf_append_hex(&o, v, 4, 1); soma_sbuf_append_str(&o, ":"); soma_sbuf_append_hex(&o, d, 4, 1); soma_sbuf_append_str(&o, " ("); soma_sbuf_append_hex(&o, sub & 0xFFFF, 4, 1); soma_sbuf_append_str(&o, ":"); soma_sbuf_append_hex(&o, sub >> 16, 4, 1);
+            soma_sbuf_append_str(&o, ")  clase "); soma_sbuf_append_hex(&o, cc, 6, 1); soma_sbuf_append_str(&o, "  "); if (vn) { soma_sbuf_append_str(&o, vn); soma_sbuf_append_str(&o, " "); } soma_sbuf_append_str(&o, nm ? nm : ""); soma_sbuf_append_str(&o, "\n      -> "); soma_sbuf_append_str(&o, c); soma_sbuf_append_str(&o, "\n");
             if (c[0] == 'S') si++; else if (c[0] == 'n' && c[1] == 'o' && c[2] == ':') no++;
             nd++;
             if (fn == 0 && !((pci_config_read32((uint8_t)bus, (uint8_t)sl, 0, 12) >> 16) & 0x80)) break;
         }
-        os(&o, "Con driver: "); od(&o, (uint64_t)si); os(&o, "   Sin driver (y harian falta): "); od(&o, (uint64_t)no); os(&o, "\n");
+        soma_sbuf_append_str(&o, "Con driver: "); soma_sbuf_append_u64(&o, (uint64_t)si); soma_sbuf_append_str(&o, "   Sin driver (y harian falta): "); soma_sbuf_append_u64(&o, (uint64_t)no); soma_sbuf_append_str(&o, "\n");
     }
     {   /* disco del sistema */
         const struct usbdisk_info *u = usbdisk_info();
         section(&o, "SOMADATA");
-        os(&o, sysdisk_describe()); os(&o, "\n");
-        if (u->grown_to_mb) { os(&o, "Ampliada en el primer arranque de "); od(&o, u->grown_from_mb); os(&o, " a "); od(&o, u->grown_to_mb); os(&o, " MiB\n"); }
-        else if (u->grow_why && u->grow_why[0]) { os(&o, "Sin ampliar: "); os(&o, u->grow_why); os(&o, "\n"); }
+        soma_sbuf_append_str(&o, sysdisk_describe()); soma_sbuf_append_str(&o, "\n");
+        if (u->grown_to_mb) { soma_sbuf_append_str(&o, "Ampliada en el primer arranque de "); soma_sbuf_append_u64(&o, u->grown_from_mb); soma_sbuf_append_str(&o, " a "); soma_sbuf_append_u64(&o, u->grown_to_mb); soma_sbuf_append_str(&o, " MiB\n"); }
+        else if (u->grow_why && u->grow_why[0]) { soma_sbuf_append_str(&o, "Sin ampliar: "); soma_sbuf_append_str(&o, u->grow_why); soma_sbuf_append_str(&o, "\n"); }
     }
     static const char *const cmds[] = { "pantalla", "teclado", "disco", "wifi", "bateria", "energia" };
     for (unsigned i = 0; i < sizeof cmds / sizeof cmds[0]; i++) capture(&o, cmds[i]);
 
     section(&o, "Registro del nucleo (dmesg, lo mas reciente)");
     if (klog && kn) {
-        uint32_t room = o.max - o.n > 64 ? o.max - o.n - 64 : 0, from = kn > room ? kn - room : 0;
+        uint32_t room = o.cap - o.len > 64 ? o.cap - o.len - 64 : 0, from = kn > room ? kn - room : 0;
         while (from < kn && from && klog[from - 1] != '\n') from++;          /* empezar en una linea entera */
-        for (uint32_t i = from; i < kn && o.n + 1 < o.max; i++) o.b[o.n++] = klog[i];
-        o.b[o.n] = 0;
+        for (uint32_t i = from; i < kn && o.len + 1 < o.cap; i++) o.buf[o.len++] = klog[i];
+        o.buf[o.len] = 0;
     }
     if (klog) kfree(klog);
-    os(&o, "\n-- fin del informe --\n");
-    strip_ansi(o.b, &o.n);
-    redact(o.b, &o.n, body < o.n ? body : o.n);
-    return o.n;
+    soma_sbuf_append_str(&o, "\n-- fin del informe --\n");
+    strip_ansi(o.buf, &o.len);
+    redact(o.buf, &o.len, body < o.len ? body : o.len);
+    return o.len;
 }
 
 /* ------------------------------------------------------------------ guardado en segundo plano */

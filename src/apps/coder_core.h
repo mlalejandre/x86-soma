@@ -39,7 +39,15 @@ struct cc_env {
     int      (*run)(const uint8_t *bc, uint32_t len, const char *input, char *out, uint32_t max);   /* PARCHE 116: ejecuta bytecode capturando su salida; 0 = termino bien, <0 = error o no termina */
     const struct cc_test *tests; /* PARCHE 116: casos de prueba del encargo (con `run`) */
     int      ntests;
+    /* SOMA_239_PYTHON_GRAFICO: lenguaje del programa. CC_LANG_PYTHON escribe Python (MicroPython de SOMA, modulo soma.win) y
+     * necesita check_src (compilar sin ejecutar) y, para las pruebas, run_src. Ambos devuelven 0 = bien; en out, la salida o el error. */
+    int      lang;
+    int      (*check_src)(const char *src, uint32_t n, char *out, uint32_t max);
+    int      (*run_src)(const char *src, uint32_t n, const char *input, char *out, uint32_t max);
 };
+#define CC_LANG_SOMA   0
+#define CC_LANG_PYTHON 1
+#define CC_LESSONS_PY  "/agent/coder_lessons_py.txt"
 
 struct cc_result {
     int      ok;               /* el archivo se escribio y compila */
@@ -66,5 +74,8 @@ int      cc_run(const struct cc_env *env, const char *target, const char *missio
 uint32_t cc_extract_code(const char *reply, char *out, uint32_t cap);
 int      cc_normalize(char *src, uint32_t *len, uint32_t cap);   /* devuelve el numero de correcciones */
 int      cc_mission_is_gui(const char *mission);
+int      cc_mission_wants_python(const char *mission);   /* SOMA_239: "en python", "con Python"... */
+int      cc_py_error(const char *out, uint32_t *line, char *msg, uint32_t cap);   /* SOMA_239: linea y mensaje de un error de Python */
+int      cc_py_normalize(char *src, uint32_t *len, uint32_t cap);
 int      cc_busy(void);
 #endif

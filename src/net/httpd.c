@@ -17,6 +17,7 @@
 #if defined(__x86_64__)
 #include "cpupower.h"
 #endif
+#include "soma_str.h"
 
 static int httpd_listen_h = -1;
 static uint32_t httpd_hits = 0;
@@ -46,28 +47,6 @@ static int str_eq(const char *a, const char *b)
 /* PARCHE 031: el servidor entregaba cualquier ruta del VFS salvo tres patrones: historial del shell (/etc/history.txt),
  * conversaciones y memoria del agente (/mem/, /etc/mem_*.txt), temporales, etc. Ahora solo se sirven rutas "normales"
  * (sin .. ni // ni /./) fuera de las zonas privadas; /agent/ solo expone la pizarra publica. */
-static void buf_append(char *dst, uint32_t max, uint32_t *pos, const char *src)
-{
-    while (*src && *pos < max - 1) {
-        dst[(*pos)++] = *src++;
-    }
-    dst[*pos] = '\0';
-}
-
-static void buf_append_dec(char *dst, uint32_t max, uint32_t *pos, uint64_t v)
-{
-    char tmp[24];
-    int n = 0;
-    if (v == 0) {
-        if (*pos + 1 < max) dst[(*pos)++] = '0';
-        dst[*pos] = '\0';
-        return;
-    }
-    while (v) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }
-    while (n && *pos + 1 < max) dst[(*pos)++] = tmp[--n];
-    dst[*pos] = '\0';
-}
-
 static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_pos)
 {
     uint64_t ms = timer_get_uptime_ms();
@@ -84,7 +63,7 @@ static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_p
     uint32_t files_u = 0, bytes_u = 0, dirty_c = 0;
     vfs_get_stats(&files_u, &bytes_u, &dirty_c);
 
-    buf_append(resp_body, max_len, body_pos,
+    soma_str_put(resp_body, max_len, body_pos,
         "<!DOCTYPE html>\n<html>\n<head>\n"
         "<title>SOMA v0.2 :: Bare-Metal Web Dashboard</title>\n"
         "<meta charset='utf-8'>\n"
@@ -114,31 +93,31 @@ static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_p
         "<table>\n"
         "<tr><td><b>Uptime:</b></td><td>"
     );
-    if (h > 0) { buf_append_dec(resp_body, max_len, body_pos, h); buf_append(resp_body, max_len, body_pos, "h "); }
-    buf_append_dec(resp_body, max_len, body_pos, m); buf_append(resp_body, max_len, body_pos, "m ");
-    buf_append_dec(resp_body, max_len, body_pos, s); buf_append(resp_body, max_len, body_pos, "s</td></tr>\n"
+    if (h > 0) { soma_str_put_dec(resp_body, max_len, body_pos, h); soma_str_put(resp_body, max_len, body_pos, "h "); }
+    soma_str_put_dec(resp_body, max_len, body_pos, m); soma_str_put(resp_body, max_len, body_pos, "m ");
+    soma_str_put_dec(resp_body, max_len, body_pos, s); soma_str_put(resp_body, max_len, body_pos, "s</td></tr>\n"
         "<tr><td><b>RAM (PMM):</b></td><td>"
     );
-    buf_append_dec(resp_body, max_len, body_pos, (f_used * 4096ULL) / (1024ULL * 1024ULL));
-    buf_append(resp_body, max_len, body_pos, " / ");
-    buf_append_dec(resp_body, max_len, body_pos, (f_total * 4096ULL) / (1024ULL * 1024ULL));
-    buf_append(resp_body, max_len, body_pos, " MiB</td></tr>\n"
+    soma_str_put_dec(resp_body, max_len, body_pos, (f_used * 4096ULL) / (1024ULL * 1024ULL));
+    soma_str_put(resp_body, max_len, body_pos, " / ");
+    soma_str_put_dec(resp_body, max_len, body_pos, (f_total * 4096ULL) / (1024ULL * 1024ULL));
+    soma_str_put(resp_body, max_len, body_pos, " MiB</td></tr>\n"
         "<tr><td><b>Heap Dinamico:</b></td><td>"
     );
-    buf_append_dec(resp_body, max_len, body_pos, h_free / 1024ULL);
-    buf_append(resp_body, max_len, body_pos, " KiB libres</td></tr>\n"
+    soma_str_put_dec(resp_body, max_len, body_pos, h_free / 1024ULL);
+    soma_str_put(resp_body, max_len, body_pos, " KiB libres</td></tr>\n"
         "<tr><td><b>Almacenamiento:</b></td><td>"
     );
-    buf_append_dec(resp_body, max_len, body_pos, files_u);
-    buf_append(resp_body, max_len, body_pos, "/64 inodos (");
-    buf_append_dec(resp_body, max_len, body_pos, bytes_u / 1024ULL);
-    buf_append(resp_body, max_len, body_pos, " KiB usados)</td></tr>\n"
+    soma_str_put_dec(resp_body, max_len, body_pos, files_u);
+    soma_str_put(resp_body, max_len, body_pos, "/64 inodos (");
+    soma_str_put_dec(resp_body, max_len, body_pos, bytes_u / 1024ULL);
+    soma_str_put(resp_body, max_len, body_pos, " KiB usados)</td></tr>\n"
         "<tr><td><b>Hits HTTP:</b></td><td>"
     );
-    buf_append_dec(resp_body, max_len, body_pos, httpd_hits);
-    buf_append(resp_body, max_len, body_pos, "</td></tr>\n</table>\n</div>\n");
+    soma_str_put_dec(resp_body, max_len, body_pos, httpd_hits);
+    soma_str_put(resp_body, max_len, body_pos, "</td></tr>\n</table>\n</div>\n");
 
-    buf_append(resp_body, max_len, body_pos,
+    soma_str_put(resp_body, max_len, body_pos,
         "<div class='card'>\n"
         "<h3>Pizarra Multi-Agente (/agent/blackboard.txt)</h3>\n"
         "<pre>"
@@ -147,13 +126,13 @@ static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_p
     int r = vfs_read("/agent/blackboard.txt", bb_txt, sizeof(bb_txt) - 1);
     if (r > 0) {
         bb_txt[r] = '\0';
-        buf_append(resp_body, max_len, body_pos, bb_txt);
+        soma_str_put(resp_body, max_len, body_pos, bb_txt);
     } else {
-        buf_append(resp_body, max_len, body_pos, "(Pizarra vacia o inicializandose)");
+        soma_str_put(resp_body, max_len, body_pos, "(Pizarra vacia o inicializandose)");
     }
-    buf_append(resp_body, max_len, body_pos, "</pre>\n</div>\n</div>\n");
+    soma_str_put(resp_body, max_len, body_pos, "</pre>\n</div>\n</div>\n");
 
-    buf_append(resp_body, max_len, body_pos,
+    soma_str_put(resp_body, max_len, body_pos,
         "<div class='card'>\n"
         "<h3>Explorador de Archivos VFS V2 (Espacio de Trabajo y Usuario)</h3>\n"
         "<table>\n"
@@ -185,26 +164,26 @@ static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_p
                 full[fl] = '\0';
                 if (!httpd_path_allowed(full)) continue;
             }
-            buf_append(resp_body, max_len, body_pos, "<tr><td><b>");
-            buf_append(resp_body, max_len, body_pos, fname);
-            buf_append(resp_body, max_len, body_pos, "</b></td><td>");
+            soma_str_put(resp_body, max_len, body_pos, "<tr><td><b>");
+            soma_str_put(resp_body, max_len, body_pos, fname);
+            soma_str_put(resp_body, max_len, body_pos, "</b></td><td>");
 
             static char test_read[64];
             int fsize = vfs_read(fname, test_read, sizeof(test_read) - 1);
             if (fsize >= 0) {
-                buf_append_dec(resp_body, max_len, body_pos, (uint64_t)fsize);
-                buf_append(resp_body, max_len, body_pos, " B");
+                soma_str_put_dec(resp_body, max_len, body_pos, (uint64_t)fsize);
+                soma_str_put(resp_body, max_len, body_pos, " B");
             } else {
-                buf_append(resp_body, max_len, body_pos, "-");
+                soma_str_put(resp_body, max_len, body_pos, "-");
             }
 
-            buf_append(resp_body, max_len, body_pos, "</td><td><a class='btn-link' href='");
-            buf_append(resp_body, max_len, body_pos, fname);
-            buf_append(resp_body, max_len, body_pos, "' target='_blank'>Ver Archivo</a></td></tr>\n");
+            soma_str_put(resp_body, max_len, body_pos, "</td><td><a class='btn-link' href='");
+            soma_str_put(resp_body, max_len, body_pos, fname);
+            soma_str_put(resp_body, max_len, body_pos, "' target='_blank'>Ver Archivo</a></td></tr>\n");
         }
     }
 
-    buf_append(resp_body, max_len, body_pos,
+    soma_str_put(resp_body, max_len, body_pos,
         "</table>\n</div>\n"
         "<div class='card' style='margin-top:16px;'>\n"
         "<h3>Endpoints REST API</h3>\n"
@@ -256,7 +235,7 @@ static void serve_client(int h)
     int status_code = 200;
     if (req_status) {                                              /* PARCHE 123: peticion rechazada antes de tocar el VFS */
         status_code = req_status;
-        buf_append(resp_body, 16384, &body_pos, req_status == 405 ? "405 Method Not Allowed\n" : "414 URI Too Long\n");
+        soma_str_put(resp_body, 16384, &body_pos, req_status == 405 ? "405 Method Not Allowed\n" : "414 URI Too Long\n");
         content_type = "text/plain; charset=utf-8";
     } else
 
@@ -272,60 +251,60 @@ static void serve_client(int h)
         uint32_t tx_p = 0, rx_p = 0; uint64_t tx_b = 0, rx_b = 0;
         virtio_net_stats(&tx_p, &rx_p, &tx_b, &rx_b);
 
-        buf_append(resp_body, 16384, &body_pos, "{\n");
-        buf_append(resp_body, 16384, &body_pos, "  \"os\": \"SOMA\",\n");
-        buf_append(resp_body, 16384, &body_pos, "  \"version\": \"0.2-release\",\n");
-        buf_append(resp_body, 16384, &body_pos, "  \"arch\": \"" MYOS_ARCH_NAME "\",\n");
-        buf_append(resp_body, 16384, &body_pos, "  \"uptime_ms\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, ms);
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"ram_used_mb\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, (f_used * 4096ULL) / (1024ULL * 1024ULL));
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"ram_total_mb\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, (f_total * 4096ULL) / (1024ULL * 1024ULL));
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"heap_free_kb\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, h_free / 1024ULL);
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"net_tx_bytes\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, tx_b);
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"net_rx_bytes\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, rx_b);
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"http_hits\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, (uint64_t)httpd_hits);
-        buf_append(resp_body, 16384, &body_pos, "\n}\n");
+        soma_str_put(resp_body, 16384, &body_pos, "{\n");
+        soma_str_put(resp_body, 16384, &body_pos, "  \"os\": \"SOMA\",\n");
+        soma_str_put(resp_body, 16384, &body_pos, "  \"version\": \"0.2-release\",\n");
+        soma_str_put(resp_body, 16384, &body_pos, "  \"arch\": \"" MYOS_ARCH_NAME "\",\n");
+        soma_str_put(resp_body, 16384, &body_pos, "  \"uptime_ms\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, ms);
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"ram_used_mb\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, (f_used * 4096ULL) / (1024ULL * 1024ULL));
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"ram_total_mb\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, (f_total * 4096ULL) / (1024ULL * 1024ULL));
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"heap_free_kb\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, h_free / 1024ULL);
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"net_tx_bytes\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, tx_b);
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"net_rx_bytes\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, rx_b);
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"http_hits\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, (uint64_t)httpd_hits);
+        soma_str_put(resp_body, 16384, &body_pos, "\n}\n");
     } else if (str_eq(path, "/api/blackboard")) {
         content_type = "application/json";
         static char bb_txt[1024];
         int r = vfs_read("/agent/blackboard.txt", bb_txt, sizeof(bb_txt) - 1);
         if (r > 0) bb_txt[r] = '\0'; else bb_txt[0] = '\0';
 
-        buf_append(resp_body, 16384, &body_pos, "{\n  \"blackboard\": \"");
+        soma_str_put(resp_body, 16384, &body_pos, "{\n  \"blackboard\": \"");
         for (int i = 0; bb_txt[i] && body_pos < 16000; ++i) {
             if (bb_txt[i] == '\"' || bb_txt[i] == '\\') {
-                buf_append(resp_body, 16384, &body_pos, "\\");
+                soma_str_put(resp_body, 16384, &body_pos, "\\");
             }
             if (bb_txt[i] == '\n') {
-                buf_append(resp_body, 16384, &body_pos, "\\n");
+                soma_str_put(resp_body, 16384, &body_pos, "\\n");
                 continue;
             }
             if ((unsigned char)bb_txt[i] >= 32) {
                 char ch[2] = { bb_txt[i], 0 };
-                buf_append(resp_body, 16384, &body_pos, ch);
+                soma_str_put(resp_body, 16384, &body_pos, ch);
             }
         }
-        buf_append(resp_body, 16384, &body_pos, "\"\n}\n");
+        soma_str_put(resp_body, 16384, &body_pos, "\"\n}\n");
     } else if (str_eq(path, "/api/fs")) {
         content_type = "application/json";
         uint32_t files_u = 0, bytes_u = 0, dirty_c = 0;
         vfs_get_stats(&files_u, &bytes_u, &dirty_c);
 
-        buf_append(resp_body, 16384, &body_pos, "{\n  \"inodos_usados\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, files_u);
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"inodos_max\": 64,\n  \"bytes_usados\": ");
-        buf_append_dec(resp_body, 16384, &body_pos, bytes_u);
-        buf_append(resp_body, 16384, &body_pos, ",\n  \"max_file_size\": 16384\n}\n");
+        soma_str_put(resp_body, 16384, &body_pos, "{\n  \"inodos_usados\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, files_u);
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"inodos_max\": 64,\n  \"bytes_usados\": ");
+        soma_str_put_dec(resp_body, 16384, &body_pos, bytes_u);
+        soma_str_put(resp_body, 16384, &body_pos, ",\n  \"max_file_size\": 16384\n}\n");
     } else {
         if (!httpd_path_allowed(path)) {
             status_code = 403;
-            buf_append(resp_body, 16384, &body_pos, "403 Forbidden - Acceso denegado a archivo protegido de sistema\n");
+            soma_str_put(resp_body, 16384, &body_pos, "403 Forbidden - Acceso denegado a archivo protegido de sistema\n");
         } else {
             content_type = "text/plain; charset=utf-8";
             if (httpd_strstr(path, ".bmp")) content_type = "image/bmp";
@@ -336,29 +315,29 @@ static void serve_client(int h)
                 body_pos = (uint32_t)r;
             } else {
                 status_code = 404;
-                buf_append(resp_body, 16384, &body_pos, "404 Not Found - Archivo no encontrado en RamFS\n");
+                soma_str_put(resp_body, 16384, &body_pos, "404 Not Found - Archivo no encontrado en RamFS\n");
             }
         }
     }
 
     uint32_t hdr_pos = 0;
     if (status_code == 200) {
-        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 200 OK\r\n");
+        soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 200 OK\r\n");
     } else if (status_code == 403) {
-        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 403 Forbidden\r\n");
+        soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 403 Forbidden\r\n");
     } else if (status_code == 405) {
-        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\n");
+        soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\n");
     } else if (status_code == 414) {
-        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 414 URI Too Long\r\n");
+        soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 414 URI Too Long\r\n");
     } else {
-        buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 404 Not Found\r\n");
+        soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "HTTP/1.1 404 Not Found\r\n");
     }
-    buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "Server: SOMA-Kernel/0.2\r\n");
-    buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "Content-Type: ");
-    buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, content_type);
-    buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "\r\nContent-Length: ");
-    buf_append_dec(resp_hdr, sizeof(resp_hdr), &hdr_pos, (uint64_t)body_pos);
-    buf_append(resp_hdr, sizeof(resp_hdr), &hdr_pos, "\r\nConnection: close\r\n\r\n");
+    soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "Server: SOMA-Kernel/0.2\r\n");
+    soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "Content-Type: ");
+    soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, content_type);
+    soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "\r\nContent-Length: ");
+    soma_str_put_dec(resp_hdr, sizeof(resp_hdr), &hdr_pos, (uint64_t)body_pos);
+    soma_str_put(resp_hdr, sizeof(resp_hdr), &hdr_pos, "\r\nConnection: close\r\n\r\n");
 
     tcp_send(h, resp_hdr, hdr_pos);
     if (body_pos > 0) {
@@ -440,14 +419,14 @@ int cmd_httpd(const char *args, char *out_buf, uint32_t max_out)
     int on = httpd_arg(args, "on") || httpd_arg(args, "activar"), off = httpd_arg(args, "off") || httpd_arg(args, "apagar");
     if (on || off) {                                                       /* SOMA_197 */
         struct tcb *th = thread_current();
-        if (th && th->agent_mode) { kprint("httpd: encender o apagar el servidor web es cosa del usuario, no de un agente\n"); buf_append(out_buf, max_out, &p, "httpd: denegado a los agentes"); return 1; }
+        if (th && th->agent_mode) { kprint("httpd: encender o apagar el servidor web es cosa del usuario, no de un agente\n"); soma_str_put(out_buf, max_out, &p, "httpd: denegado a los agentes"); return 1; }
         const char *t = on ? "# Servidor web de SOMA (parche 197): httpd on | httpd off\nservidor=activo\n" : "# Servidor web de SOMA (parche 197): httpd on | httpd off\nservidor=apagado\n";
         uint32_t n = 0; while (t[n]) n++;
         if (vfs_write("/etc/httpd.conf", t, n) < 0) kprint("httpd: no se pudo guardar /etc/httpd.conf (el cambio vale hasta reiniciar)\n");
         httpd_mode = on ? 1 : 0;
         kprint(on ? "httpd: servidor web ENCENDIDO. Lo ve cualquier equipo de tu red local (panel, telemetria, pizarra de agentes, /www y /public).\n"
                   : "httpd: servidor web APAGADO (el puerto 80 se cierra en un momento).\n");
-        buf_append(out_buf, max_out, &p, on ? "HTTPD: encendido" : "HTTPD: apagado");
+        soma_str_put(out_buf, max_out, &p, on ? "HTTPD: encendido" : "HTTPD: apagado");
         return 1;
     }
     int active = httpd_listen_h >= 0;
@@ -462,7 +441,7 @@ int cmd_httpd(const char *args, char *out_buf, uint32_t max_out)
     kprint("  Cambiar:          httpd on | httpd off  (se recuerda en /etc/httpd.conf)\n");
     kprint("----------------------------------------\n");
 
-    buf_append(out_buf, max_out, &p, active ? "HTTPD: Puerto 80 activo | Hits: " : "HTTPD: apagado | Hits: ");
-    buf_append_dec(out_buf, max_out, &p, (uint64_t)httpd_hits);
+    soma_str_put(out_buf, max_out, &p, active ? "HTTPD: Puerto 80 activo | Hits: " : "HTTPD: apagado | Hits: ");
+    soma_str_put_dec(out_buf, max_out, &p, (uint64_t)httpd_hits);
     return 1;
 }

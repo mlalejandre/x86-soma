@@ -370,3 +370,29 @@ int fat_overwrite(struct fat_vol *v, const char *path, const void *data, uint32_
     }
     return 0;
 }
+
+/* SOMA_238_GUARDADO: un fichero que ocupa clusters SEGUIDOS (sin huecos) se puede usar como disco: devuelve su primer sector
+ * absoluto y cuantos sectores enteros tiene. FAT_E_CORRUPT si la cadena esta rota; FAT_E_UNSUP si esta fragmentado. */
+int fat_contiguous(struct fat_vol *v, const char *path, uint64_t *lba_out, uint64_t *sectors_out)
+{
+    static struct fat_dirent d;
+    if (!v || !lba_out || !sectors_out) return FAT_E_ARG;
+    int r = resolve(v, path, &d);
+    if (r != 0) return r;
+    if (d.is_dir) return FAT_E_ISDIR;
+    if (d.size < 512 || d.cluster < 2 || d.cluster >= v->clusters + 2) return FAT_E_CORRUPT;
+    uint64_t need = ((uint64_t)d.size + v->cluster_bytes - 1) / v->cluster_bytes, have = 1;
+    uint32_t cl = d.cluster;
+    while (have < need) {
+        int64_t nx = fat_next(v, cl);
+        if (nx < 0) return (int)nx;
+        if (nx == 0) return FAT_E_CORRUPT;                                      /* la cadena es mas corta que el fichero */
+        if ((uint32_t)nx != cl + 1) return FAT_E_UNSUP;                         /* fragmentado */
+        cl = (uint32_t)nx; have++;
+    }
+    uint64_t a = cluster_lba(v, d.cluster), n = d.size / 512;
+    uint64_t pend = v->part_index ? v->part_lba + v->part_sectors : v->io.sectors;
+    if (a < v->data_lba || a + n > pend || a + n > v->io.sectors) return FAT_E_CORRUPT;
+    *lba_out = a; *sectors_out = n;
+    return 0;
+}

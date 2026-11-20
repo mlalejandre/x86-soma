@@ -10,7 +10,7 @@
  * el mismo, el disco del sistema pasa a solo lectura (nunca se escribe en otro pendrive). Interruptor: soma.usbdisk=off. */
 #include <stdint.h>
 #include "xhci.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "console.h"
 #include "mutex.h"
 #include "thread.h"
@@ -18,6 +18,7 @@
 #include "usbdisk.h"
 #include "usbdisk_core.h"
 #include "fat.h"
+#include "idt.h"           /* SOMA_238: timer_get_uptime_ms */
 
 
 static struct kmutex g_lock __attribute__((aligned(16)));
@@ -136,6 +137,25 @@ static void grow_fresh(int idx, uint64_t disk_sectors)
     g.grow_why = "no se pudo comprobar el MBR";
 }
 
+/* SOMA_238_GUARDADO: sin particion SOMADATA, el disco puede ser un fichero SOMADATA.IMG (contiguo, >= 64 MiB) en la particion de
+ * arranque FAT. Asi un pendrive preparado sin SOMADATA (o con una version antigua de ejecutar.py) guarda sin borrarlo entero.
+ * Devuelve 0 y deja part_lba/part_sectors con su sitio en el pendrive, o -1 con g.why. */
+static int bf_read(void *c, uint64_t lba, uint32_t n, void *buf);
+static int find_file(void)
+{
+    static struct fat_vol v;
+    struct fat_io io = { bf_read, 0, xhci_msc_get()->sectors };
+    if (fat_mount(&v, &io) != 0) return -1;
+    uint64_t lba = 0, n = 0;
+    int e = fat_contiguous(&v, UD_FILE_NAME, &lba, &n);
+    if (e == FAT_E_NOENT) return -1;
+    if (e == FAT_E_UNSUP) { g.why = "SOMADATA.IMG esta fragmentado (borralo y crealo de nuevo con el pendrive vacio)"; return -2; }
+    if (e != 0) { g.why = "SOMADATA.IMG no se pudo leer"; return -2; }
+    if (n < UD_FILE_MIN) { g.why = "SOMADATA.IMG es demasiado pequeno (minimo 64 MB)"; return -2; }
+    g.part_lba = lba; g.part_sectors = n; g.in_file = 1; g.part_index = v.part_index;
+    return 0;
+}
+
 int usbdisk_attach(void)
 {
     static int inited;
@@ -143,8 +163,19 @@ int usbdisk_attach(void)
     if (g.active) return 0;
     g.why = "";
     if (bootinfo_disabled("usbdisk")) { g.why = "desactivado (soma.usbdisk=off o modo seguro)"; return -1; }
-    if (virtio_blk_capacity()) { g.why = "ya hay disco virtio"; return -1; }
+    if (sysdisk_capacity()) { g.why = "ya hay disco virtio"; return -1; }
     xhci_autostart_early();                                               /* teclado, raton y disco USB, ahora y no despues */
+    /* SOMA_238_GUARDADO: algunos pendrives tardan en responder tras el reinicio del controlador. Antes, si no estaban listos en ese
+     * instante, SOMA seguia en memoria todo el arranque. Se espera hasta 8 s, reexplorando el USB cada 2 s. */
+    {
+        uint64_t t0 = timer_get_uptime_ms(), last = t0;
+        while (!xhci_msc_ready() && timer_get_uptime_ms() - t0 < 8000) {
+            if (!xhci_rescanning() && timer_get_uptime_ms() - last >= 2000) { last = timer_get_uptime_ms(); (void)xhci_rescan(); }
+            thread_sleep(50);
+        }
+        g.wait_ms = (uint32_t)(timer_get_uptime_ms() - t0);
+        if (g.wait_ms >= 100) { kprint("DISCO USB: el pendrive tardo "); kprint_dec(g.wait_ms); kprint(" ms en responder\n"); }
+    }
     if (!xhci_msc_ready()) { g.why = "no hay disco USB (almacenamiento masivo)"; return -1; }
     const struct xhci_msc_info *mi = xhci_msc_get();
     g_gen = xhci_msc_generation();
@@ -152,36 +183,58 @@ int usbdisk_attach(void)
     struct ud_part pt[4];
     int np = ud_parse_mbr(g_sec, mi->sectors, pt, &g.disk_sig);
     if (np < 0) { g.why = np == -2 ? "el pendrive usa GPT (ejecutar.py lo prepara con MBR)" : "el pendrive no tiene tabla MBR"; return -1; }
-    int found = -1, fresh = 0;
+    int found = -1, fresh = 0, loose = -1;
     for (int i = 0; i < np && found < 0; i++) {
         if (raw(0, pt[i].lba, 1, g_sec) != 0) continue;
         g.part_lba = pt[i].lba; g.part_sectors = pt[i].n;
         if (mark_ok(g_sec)) { found = pt[i].index; break; }
         if (ud_is_fat_somadata(g_sec)) { found = pt[i].index; fresh = 1; break; }
+        if (loose < 0 && ud_mark_loose(g_sec, pt[i].lba)) loose = i;
     }
-    if (found < 0) { g.part_lba = g.part_sectors = 0; g.why = "el pendrive no tiene la particion SOMADATA (ejecutar.py -t t480s-usb --formatear)"; return -1; }
-    g.part_index = found + 1;
+    if (found < 0 && loose >= 0) {                                         /* SOMA_238: nuestra, aunque la marca no cuadre */
+        g.part_lba = pt[loose].lba; g.part_sectors = pt[loose].n; found = pt[loose].index; g.remarked = 1;
+        kprint("DISCO USB: la marca de SOMADATA no coincidia con la tabla de particiones (tamano o firma): se actualiza\n");
+    }
+    if (found < 0) {                                                       /* SOMA_238: el fichero SOMADATA.IMG */
+        g.part_lba = g.part_sectors = 0;
+        int fr = find_file();
+        if (fr == -1) {
+            g.why = "el pendrive no tiene la particion SOMADATA ni el fichero SOMADATA.IMG (ejecutar.py -t t480s-usb lo crea)";
+            return -1;
+        }
+        if (fr < 0) { g.part_lba = g.part_sectors = 0; g.in_file = 0; return -1; }
+        if (raw(0, g.part_lba, 1, g_sec) != 0) { g.why = "no se pudo leer SOMADATA.IMG"; return -1; }
+        if (!mark_ok(g_sec)) {
+            if (ud_mark_loose(g_sec, ud_le32(g_sec + 16))) g.remarked = 1;   /* nuestro aunque se haya movido (copiado) */
+            else fresh = 1;                                                /* fichero nuevo: se reclama (su contenido no sirve) */
+        }
+    } else g.part_index = found + 1;
     g.grow_why = "";
-    if (fresh) grow_fresh(found, mi->sectors);                             /* SOMA_228_ARRANQUE: SOMADATA hasta el final del pendrive */
+    if (fresh && !g.in_file) grow_fresh(found, mi->sectors);              /* SOMA_228_ARRANQUE: SOMADATA hasta el final del pendrive */
     g.sectors = ud_data_sectors(g.part_sectors);
     if (fresh) {
-        kprint("DISCO USB: particion SOMADATA nueva: preparandola (8 MiB)...\n");
+        kprint(g.in_file ? "DISCO USB: fichero SOMADATA.IMG nuevo: preparandolo (8 MiB)...\n" : "DISCO USB: particion SOMADATA nueva: preparandola (8 MiB)...\n");
         for (uint32_t s = 0; s < UD_ZERO_SECT; s += 128) {
             uint32_t k = UD_ZERO_SECT - s < 128 ? UD_ZERO_SECT - s : 128;
             if (raw(1, g.part_lba + UD_DATA_OFF + s, k, g_zero) != 0) { g.why = "error al preparar la particion"; return -1; }
         }
+        g.claimed_now = 1;
+    }
+    if (fresh || g.remarked) {
         mark_build(g_sec);
         if (raw(1, g.part_lba, 1, g_sec) != 0 || xhci_msc_sync() != 0) { g.why = "error al escribir la marca"; return -1; }
         if (raw(0, g.part_lba, 1, g_sec) != 0 || !mark_ok(g_sec)) { g.why = "la marca no se leyo bien despues de escribirla"; return -1; }
-        g.claimed_now = 1;
     }
     g_ops.sectors = g.sectors;
-    if (virtio_blk_set_alt(&g_ops) != 0) { g.why = "no se pudo poner como disco del sistema"; return -1; }
+    if (sysdisk_set_device(&g_ops) != 0) { g.why = "no se pudo poner como disco del sistema"; return -1; }
     g.active = 1; g.why = "activo";
     thread_create("usbsync", syncer, 0);
-    kprint("DISCO USB: disco del sistema en la particion "); kprint_dec((uint32_t)g.part_index); kprint(" del pendrive ("); kprint(mi->vendor);
+    kprint("DISCO USB: disco del sistema en ");
+    if (g.in_file) kprint("el fichero SOMADATA.IMG");
+    else { kprint("la particion "); kprint_dec((uint32_t)g.part_index); }
+    kprint(" del pendrive ("); kprint(mi->vendor);
     kprint(" "); kprint(mi->product); kprint("): "); kprint_dec((uint32_t)(g.sectors / 2048)); kprint(" MiB");
-    kprint(g.claimed_now ? " (recien preparada)\n" : "\n");
+    kprint(g.claimed_now ? " (recien preparado)\n" : "\n");
     return 0;
 }
 
@@ -201,15 +254,15 @@ int usbdisk_bootfile_write(const char *name, const char *data, uint32_t len, con
 {
     static struct fat_vol v;
     static const char *dummy; if (!why) why = &dummy;
-    if (!g.active) { *why = "SOMA no arranco desde un pendrive"; return -1; }
+    if (!g.active && !xhci_msc_ready()) { *why = "SOMA no arranco desde un pendrive"; return -1; }   /* SOMA_238: tambien sin SOMADATA */
     kmutex_lock(&g_lock);
     int r = -1;
-    if (!still_ours()) *why = "el pendrive del sistema no responde";
+    if (g.active && !still_ours()) *why = "el pendrive del sistema no responde";
     else {
         struct fat_io io = { bf_read, 0, xhci_msc_get()->sectors };
         int e = fat_mount(&v, &io);
         if (e != 0) *why = "no se encontro la particion de arranque FAT";
-        else if (v.part_index == g.part_index) *why = "la primera particion FAT es SOMADATA";
+        else if (!g.in_file && g.active && v.part_index == g.part_index) *why = "la primera particion FAT es SOMADATA";
         else {
             struct fat_dirent d;
             e = fat_stat(&v, name, &d);

@@ -9,6 +9,9 @@ struct usbdisk_info {
     const char *why;
     uint32_t grown_from_mb, grown_to_mb;           /* SOMA_228_ARRANQUE: SOMADATA ampliada en este arranque (0 = no) */
     const char *grow_why;                          /* por que no se amplio (o "") */
+    int in_file;                                   /* SOMA_238_GUARDADO: el disco es el fichero SOMADATA.IMG de la particion de arranque */
+    int remarked;                                  /* SOMA_238: la marca no cuadraba (tamano o firma) y se rehizo */
+    uint32_t wait_ms;                              /* SOMA_238: lo que se espero a que el pendrive respondiera */
 };
 int usbdisk_attach(void);                         /* 0 = el disco del sistema es ahora el pendrive */
 const struct usbdisk_info *usbdisk_info(void);

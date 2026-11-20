@@ -18,6 +18,7 @@
 #ifdef __x86_64__
 #include "bootdiag.h"         /* SOMA_228_ARRANQUE: arranque, SOMADATA e informe en la pagina Sistema */
 #include "usbdisk.h"
+#include "sysdisk.h"
 #endif
 #if defined(__x86_64__)
 #include "netmgr.h"
@@ -719,12 +720,21 @@ static void render_fuentes(const struct sl *L)
 /* ================================================================ SOMA_225_AJUSTES: paginas Pantalla e Iconos */
 #define PAGE_PANTALLA 4
 #define PAGE_ICONOS   5
+/* SOMA_232_GEOMETRIA: cada pagina calcula su geometria UNA vez; el dibujo y el clic usan la misma */
+struct pant_lay { int y1, h1, seg1_y, y2, h2, seg2_y, reset_y; };
+static void pant_lay(const struct sl *L, struct pant_lay *P)
+{
+    P->y1 = L->y + 84; P->h1 = 150; P->seg1_y = P->y1 + 62;              /* resolucion */
+    P->y2 = P->y1 + P->h1 + 12; P->h2 = 130; P->seg2_y = P->y2 + 62;    /* velocidad del puntero */
+    P->reset_y = P->y2 + P->h2 + 14;
+}
 static void render_pantalla(const struct sl *L)
 {
     char b[140];
     tx(L->cx, L->y + 18, 30, "Pantalla y raton", 20, KC_TXT, 1);
     tx(L->cx, L->y + 46, 22, "Resolucion de trabajo y velocidad del puntero. Se aplican al momento y se guardan.", 12, KC_DIM, 0);
-    int y1 = L->y + 84, h1 = 150;
+    struct pant_lay P; pant_lay(L, &P);
+    int y1 = P.y1, h1 = P.h1;
     card(L->cx, y1, L->cw, h1);
     tx(L->cx + 20, y1 + 14, 22, "Resolucion", 14, KC_TXT, 1);
     b[0] = 0; s_cat(b, "Pantalla: ", sizeof b); s_num(b, sizeof b, (int)fb_hw_width()); s_cat(b, " x ", sizeof b); s_num(b, sizeof b, (int)fb_hw_height());
@@ -732,34 +742,34 @@ static void render_pantalla(const struct sl *L)
     tx(L->cx + 20, y1 + 34, 18, b, 11, KC_DIM, 0);
     int n = res_count(); char lab[4][24]; const char *lp[4];
     for (int k = 0; k < n; k++) { uint32_t w, h; res_of(k, &w, &h); lab[k][0] = 0; s_num(lab[k], 24, (int)w); s_cat(lab[k], "x", 24); s_num(lab[k], 24, (int)h); lp[k] = lab[k]; }
-    seg(L->cx + 20, y1 + 62, L->seg_w, n, g_res < n ? g_res : 0, lp);
+    seg(L->cx + 20, P.seg1_y, L->seg_w, n, g_res < n ? g_res : 0, lp);
     b[0] = 0; s_cat(b, "Ahora: ", sizeof b); s_num(b, sizeof b, (int)fb_get_width()); s_cat(b, " x ", sizeof b); s_num(b, sizeof b, (int)fb_get_height());
     s_cat(b, fb_scaled() ? "  (escalada con suavizado)" : "  (nativa, pixel a pixel)", sizeof b);
     tx(L->cx + 20, y1 + 104, 28, b, 12, KC_TXT, 0);
-    int y2 = y1 + h1 + 12, h2 = 130;
+    int y2 = P.y2, h2 = P.h2;
     card(L->cx, y2, L->cw, h2);
     tx(L->cx + 20, y2 + 14, 22, "Velocidad del puntero", 14, KC_TXT, 1);
     tx(L->cx + 20, y2 + 34, 18, "Raton, trackpad y raton USB. Los movimientos lentos se conservan (no se pierden fracciones).", 11, KC_DIM, 0);
     int si = 2; for (int k = 0; k < 6; k++) if (SPEEDS[k] == g_speed) si = k;
-    seg(L->cx + 20, y2 + 62, L->seg_w, 6, si, SPEED_NAME);
+    seg(L->cx + 20, P.seg2_y, L->seg_w, 6, si, SPEED_NAME);
     b[0] = 0; s_num(b, sizeof b, g_speed); s_cat(b, " % de la velocidad normal", sizeof b);
     tx(L->cx + 20, y2 + 98, 24, b, 12, KC_DIM, 0);
-    render_reset(L, y2 + h2 + 14);
+    render_reset(L, P.reset_y);
 }
 static int click_pantalla(const struct sl *L, int32_t mx, int32_t my)
 {
-    int y1 = L->y + 84, y2 = y1 + 150 + 12;
-    if (mx >= L->reset_x && mx < L->reset_x + 130 && my >= y2 + 130 + 14 && my < y2 + 130 + 46) {
+    struct pant_lay P; pant_lay(L, &P);
+    if (mx >= L->reset_x && mx < L->reset_x + 130 && my >= P.reset_y && my < P.reset_y + 32) {
         g_res = 0; g_speed = mouse_set_speed(100); res_apply(); save();
         g_msg[0] = 0; s_cat(g_msg, "Resolucion nativa y velocidad normal", sizeof g_msg); return 1;
     }
     if (mx < L->cx + 20 || mx >= L->cx + 20 + L->seg_w) return 0;
-    if (my >= y1 + 62 && my < y1 + 94) {
+    if (my >= P.seg1_y && my < P.seg1_y + 32) {
         int k = seg_index(L, mx, res_count());
         if (k != g_res) { g_res = k; res_apply(); save(); g_msg[0] = 0; s_cat(g_msg, "Resolucion cambiada", sizeof g_msg); }
         return 1;
     }
-    if (my >= y2 + 62 && my < y2 + 94) { g_speed = mouse_set_speed(SPEEDS[seg_index(L, mx, 6)]); save(); return 1; }
+    if (my >= P.seg2_y && my < P.seg2_y + 32) { g_speed = mouse_set_speed(SPEEDS[seg_index(L, mx, 6)]); save(); return 1; }
     return 0;
 }
 static const char *const SI_NAMES[SI_COUNT] = { "", "Grabar", "Detener", "Reproducir", "Pausa", "Microfono", "Mic. apagado", "Camara",
@@ -768,13 +778,14 @@ static const char *const SI_NAMES[SI_COUNT] = { "", "Grabar", "Detener", "Reprod
     "Disparador", "Reiniciar" };
 static const char *const VI_NAMES[VICON_COUNT] = { "Agente", "Agentes", "Terminal", "Navegador", "Archivos", "Imagenes", "Notas", "Paint",
     "Maquetacion", "Memoria" };
+static int icon_tabs_y(const struct sl *L) { return L->y + 76; }   /* pestanas "Del sistema" / "De las aplicaciones" */
 static void render_iconos(const struct sl *L)
 {
     char b[96];
     tx(L->cx, L->y + 18, 30, "Iconos del sistema", 20, KC_TXT, 1);
     tx(L->cx, L->y + 46, 22, "Vectoriales: se dibujan a cualquier tamano. Las aplicaciones los usan con su nombre.", 12, KC_DIM, 0);
     static const char *const tabs[2] = { "Del sistema", "De las aplicaciones" };
-    seg(L->cx, L->y + 76, L->cw, 2, g_icon_tab, tabs);
+    seg(L->cx, icon_tabs_y(L), L->cw, 2, g_icon_tab, tabs);
     int n = g_icon_tab ? VICON_COUNT : SI_COUNT - 1;
     int cols = L->cw / 84; if (cols < 3) cols = 3;
     int cw = L->cw / cols, ch = 66, y0 = L->y + 118;
@@ -796,7 +807,7 @@ static void render_iconos(const struct sl *L)
 }
 static int click_iconos(const struct sl *L, int32_t mx, int32_t my)
 {
-    if (my >= L->y + 76 && my < L->y + 108 && mx >= L->cx && mx < L->cx + L->cw) {
+    if (my >= icon_tabs_y(L) && my < icon_tabs_y(L) + 32 && mx >= L->cx && mx < L->cx + L->cw) {
         int k = (mx - L->cx) * 2 / L->cw; if (k != g_icon_tab) { g_icon_tab = k; return 1; }
     }
     return 0;
@@ -833,13 +844,28 @@ static int tx_wrap(int x, int y, int w, const char *s, int px, uint32_t col, int
     if (n) { tx(x, y, lh, line, px, col, 0); y += lh; }
     return y;
 }
+struct sis_lay { int y1, h1, y2, h2, y3, h3, btn_y, reset_w, rep_x, rep_w, msg_y; };
+static void sis_lay(const struct sl *L, struct sis_lay *S)
+{
+    S->y1 = L->y + 84; S->h1 = 4 * 30 + 50;                            /* SOMA */
+    S->y2 = S->y1 + S->h1 + 12; S->h2 = 5 * 30 + 50;                   /* Equipo */
+    S->y3 = S->h3 = 0; S->rep_x = S->rep_w = 0; S->reset_w = 170;
+    S->btn_y = S->y2 + S->h2 + 14;
+#ifdef __x86_64__
+    S->y3 = S->y2 + S->h2 + 12; S->h3 = 4 * 30 + 50;                   /* Arranque y diagnostico (SOMA_228) */
+    S->btn_y = S->y3 + S->h3 + 14;
+    S->rep_w = 170; S->rep_x = L->cx + L->cw - S->reset_w - 10 - S->rep_w;   /* "Guardar informe" */
+#endif
+    S->msg_y = S->rep_w ? S->btn_y + 40 : S->btn_y;                    /* con dos botones, el aviso va debajo */
+}
 static void render_sistema(const struct sl *L)
 {
     char v[96];
     hw_load();
     tx(L->cx, L->y + 18, 30, "Sistema", 20, KC_TXT, 1);
     tx(L->cx, L->y + 46, 22, "Version de SOMA y equipo en el que funciona. El detalle esta en el Monitor del sistema.", 12, KC_DIM, 0);
-    int y1 = L->y + 84, h1 = 4 * 30 + 50;
+    struct sis_lay S; sis_lay(L, &S);
+    int y1 = S.y1, h1 = S.h1;
     card(L->cx, y1, L->cw, h1);
     tx(L->cx + 20, y1 + 12, 24, "SOMA", 14, KC_TXT, 1);
     int kx = L->cx + 20, kw = L->cw - 40, ky = y1 + 44;
@@ -847,7 +873,7 @@ static void render_sistema(const struct sl *L)
     v[0] = 0; s_cat(v, g_hcpu.arch[0] ? g_hcpu.arch : "-", sizeof v); s_cat(v, "  (compilado el " __DATE__ ")", sizeof v); kvrow(kx, ky, kw, "Arquitectura", v); ky += 30;
     { uint64_t sec = timer_get_uptime_ms() / 1000; v[0] = 0; s_num(v, sizeof v, (int)(sec / 3600)); s_cat(v, " h ", sizeof v); s_num(v, sizeof v, (int)(sec / 60 % 60)); s_cat(v, " min", sizeof v); kvrow(kx, ky, kw, "Encendido", v); ky += 30; }
     { int p = vfs_big_persist(); kvrow(kx, ky, kw, "Almacenamiento", p > 0 ? "En disco (se conserva al apagar)" : p == 0 ? "En disco (archivos grandes en memoria)" : "Solo en memoria"); }
-    int y2 = y1 + h1 + 12, h2 = 5 * 30 + 50;
+    int y2 = S.y2, h2 = S.h2;
     card(L->cx, y2, L->cw, h2);
     tx(L->cx + 20, y2 + 12, 24, "Equipo", 14, KC_TXT, 1);
     ky = y2 + 44;
@@ -858,10 +884,10 @@ static void render_sistema(const struct sl *L)
     v[0] = 0; s_num(v, sizeof v, (int)fb_hw_width()); s_cat(v, " x ", sizeof v); s_num(v, sizeof v, (int)fb_hw_height());
     if (fb_scaled()) { s_cat(v, "  (trabajo ", sizeof v); s_num(v, sizeof v, (int)fb_get_width()); s_cat(v, " x ", sizeof v); s_num(v, sizeof v, (int)fb_get_height()); s_cat(v, ")", sizeof v); }
     kvrow(kx, ky, kw, "Pantalla", v);
-    int ry = y2 + h2 + 14, bw = 170, bw2 = 0;
+    int ry = S.btn_y, bw = S.reset_w, bw2 = S.rep_w;
 #ifdef __x86_64__
     {   /* SOMA_228_ARRANQUE: arranque, SOMADATA e informe de hardware */
-        int y3 = y2 + h2 + 12, h3 = 4 * 30 + 50;
+        int y3 = S.y3, h3 = S.h3;
         card(L->cx, y3, L->cw, h3);
         tx(L->cx + 20, y3 + 12, 24, "Arranque y diagnostico", 14, KC_TXT, 1);
         ky = y3 + 44;
@@ -873,14 +899,14 @@ static void render_sistema(const struct sl *L)
             const struct usbdisk_info *u = usbdisk_info();
             v[0] = 0;
             if (u->active) {
-                s_num(v, sizeof v, (int)(u->sectors / 2048)); s_cat(v, " MiB en el pendrive", sizeof v);
+                s_num(v, sizeof v, (int)(u->sectors / 2048)); s_cat(v, u->in_file ? " MiB en SOMADATA.IMG del pendrive" : " MiB en el pendrive", sizeof v);
                 if (u->grown_to_mb) { s_cat(v, " (ampliada desde ", sizeof v); s_num(v, sizeof v, (int)u->grown_from_mb); s_cat(v, " MiB)", sizeof v); }
-            } else s_cat(v, "sin pendrive SOMADATA", sizeof v);
+            } else if (sysdisk_capacity()) s_cat(v, "no hace falta (hay otro disco del sistema)", sizeof v);
+            else { s_cat(v, "NO SE GUARDA NADA: ", sizeof v); s_cat(v, u->why && u->why[0] ? u->why : "sin disco", sizeof v); }   /* SOMA_238 */
             kvrow(kx, ky, kw, "SOMADATA", v); ky += 30;
         }
         kvrow(kx, ky, kw, "Informe", bootdiag_report_status());
-        ry = y3 + h3 + 14; bw2 = 170;
-        int bx = L->cx + L->cw - bw - 10 - bw2;
+        int bx = S.rep_x;
         fb_fill_rounded_rect(bx, ry, bw2, 32, 16, 0x00182133);
         fb_stroke_rrect_aa(bx, ry, bw2, 32, 16, 0xFF2B6CB0u);
         tx(bx + (bw2 - tw("Guardar informe", 13, 1)) / 2, ry, 32, "Guardar informe", 13, 0x0093C5FD, 1);
@@ -889,7 +915,7 @@ static void render_sistema(const struct sl *L)
     fb_fill_rounded_rect(L->cx + L->cw - bw, ry, bw, 32, 16, 0x00182133);
     fb_stroke_rrect_aa(L->cx + L->cw - bw, ry, bw, 32, 16, 0xFF7F1D1Du);
     tx(L->cx + L->cw - bw + (bw - tw("Restablecer todo", 13, 1)) / 2, ry, 32, "Restablecer todo", 13, 0x00FCA5A5, 1);
-    int my_ = bw2 ? ry + 40 : ry;                                         /* SOMA_228: con dos botones, el aviso va debajo */
+    int my_ = S.msg_y;
     cbot(my_ + 32);
     fb_set_clip(L->cx, my_, bw2 ? L->cw : L->cw - bw - 10, 32);
     tx(bw2 ? L->cx + L->cw - tw(g_msg, 11, 0) : L->cx, my_, 32, g_msg, 11, KC_FAINT, 0);
@@ -898,13 +924,11 @@ static void render_sistema(const struct sl *L)
 void gui_desktop_layout_reset(void);
 static int click_sistema(const struct sl *L, int32_t mx, int32_t my)
 {
-    int y1 = L->y + 84, h1 = 4 * 30 + 50, y2 = y1 + h1 + 12, h2 = 5 * 30 + 50, ry = y2 + h2 + 14, bw = 170;
+    struct sis_lay S; sis_lay(L, &S);
+    int ry = S.btn_y, bw = S.reset_w;
 #ifdef __x86_64__
     {   /* SOMA_228_ARRANQUE: boton "Guardar informe" */
-        int y3 = y2 + h2 + 12, h3 = 4 * 30 + 50, bw2 = 170;
-        ry = y3 + h3 + 14;
-        int bx = L->cx + L->cw - bw - 10 - bw2;
-        if (mx >= bx && mx < bx + bw2 && my >= ry && my < ry + 32) {
+        if (mx >= S.rep_x && mx < S.rep_x + S.rep_w && my >= ry && my < ry + 32) {
             bootdiag_report_save_async();
             g_msg[0] = 0; s_cat(g_msg, "Generando el informe... (resultado en la fila Informe)", sizeof g_msg);
             return 1;

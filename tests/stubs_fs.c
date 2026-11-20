@@ -62,15 +62,15 @@ int host_disk_load(const char *path)
     return n == sizeof(g_disk) ? 0 : -1;
 }
 
-int virtio_blk_read(uint64_t sector, void *buf)
+int sysdisk_read(uint64_t sector, void *buf)
 {
     if (sector >= DISK_SECTORS) return -1;
     memcpy(buf, g_disk + sector * 512u, 512);
     return 0;
 }
-uint64_t virtio_blk_capacity(void) { return DISK_SECTORS; }   /* PARCHE 083 */
-int virtio_blk_flush(void) { return 0; }   /* PARCHE 115 */
-int virtio_blk_write(uint64_t sector, const void *buf)
+uint64_t sysdisk_capacity(void) { return DISK_SECTORS; }   /* PARCHE 083 */
+int sysdisk_flush(void) { return 0; }   /* PARCHE 115 */
+int sysdisk_write(uint64_t sector, const void *buf)
 {
     if (sector >= DISK_SECTORS) return -1;
     if (g_fail_after == 0) return -1;

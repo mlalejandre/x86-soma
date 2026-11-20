@@ -752,6 +752,12 @@ static void parse_primary(struct soma_compiler *c)
         else if (soma_sbuf_eq(func, "clear"))                       emit_u8(c, OP_SYS_CLEAR);
         else if (soma_sbuf_eq(func, "key"))                         emit_u8(c, OP_SYS_KEY);
         else if (soma_sbuf_eq(func, "millis") || soma_sbuf_eq(func, "time")) emit_u8(c, OP_SYS_MILLIS);
+        else if (soma_sbuf_eq(func, "hour") || soma_sbuf_eq(func, "minute") || soma_sbuf_eq(func, "second") ||
+                 soma_sbuf_eq(func, "day") || soma_sbuf_eq(func, "month") || soma_sbuf_eq(func, "year")) {   /* SOMA_235: reloj del equipo */
+            emit_u8(c, OP_SYS_CLOCK);
+            emit_u8(c, (uint8_t)(soma_sbuf_eq(func, "hour") ? 0 : soma_sbuf_eq(func, "minute") ? 1 : soma_sbuf_eq(func, "second") ? 2 :
+                                 soma_sbuf_eq(func, "day") ? 3 : soma_sbuf_eq(func, "month") ? 4 : 5));
+        }
         else compiler_error(c, "sys.<fn> desconocida");
     } else if (match(c, TOK_FB)) {
         consume(c, TOK_DOT, ".");

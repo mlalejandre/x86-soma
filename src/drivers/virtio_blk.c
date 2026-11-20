@@ -320,13 +320,13 @@ static int virtio_blk_opn(uint64_t sector, void *buf, uint32_t nsec, int write)
 }
 
 static const struct sysdisk_ops *g_alt;                     /* SOMA_162_T480S */
-int virtio_blk_set_alt(const struct sysdisk_ops *o) { if (blk_ready) return -1; g_alt = o; return 0; }
-const char *virtio_blk_alt_name(void) { return g_alt ? g_alt->name : 0; }
+int sysdisk_set_device(const struct sysdisk_ops *o) { if (blk_ready) return -1; g_alt = o; return 0; }
+const char *sysdisk_device_name(void) { return g_alt ? g_alt->name : 0; }
 /* SOMA_162_T480S: una linea para la portada y 'disco' (antes era un texto fijo "RamFS (16 MiB virtio-blk)") */
 const char *sysdisk_describe(void)
 {
     static char b[96]; uint32_t k = 0;
-    const char *t; uint64_t mib = virtio_blk_capacity() / 2048;
+    const char *t; uint64_t mib = sysdisk_capacity() / 2048;
     if (g_alt) t = "SOMAFS en el pendrive (SOMADATA, ";
     else if (mib) t = "SOMAFS en virtio-blk (";
     else t = "solo en RAM: se pierde al apagar";
@@ -340,7 +340,7 @@ const char *sysdisk_describe(void)
     return b;
 }
 
-int virtio_blk_flush(void)
+int sysdisk_flush(void)
 {
     if (g_alt) return g_alt->flush ? g_alt->flush() : 0;
     return (blk_ready && !blk_broken) ? 0 : -1;     /* write-through por no negociar F_FLUSH (ver virtio_blk.h) */
@@ -352,7 +352,7 @@ static int virtio_blk_op(uint64_t sector, void *buf, int write)
 }
 
 /* E/S de varios sectores (hasta BLK_MAX_SECTORS por peticion; trocea lo que pase de ahi) */
-int virtio_blk_read_n(uint64_t sector, void *buf, uint32_t nsec)
+int sysdisk_read_n(uint64_t sector, void *buf, uint32_t nsec)
 {
     if (g_alt) return g_alt->read(sector, buf, nsec);
     uint8_t *p = (uint8_t *)buf;
@@ -364,7 +364,7 @@ int virtio_blk_read_n(uint64_t sector, void *buf, uint32_t nsec)
     return 0;
 }
 
-int virtio_blk_write_n(uint64_t sector, const void *buf, uint32_t nsec)
+int sysdisk_write_n(uint64_t sector, const void *buf, uint32_t nsec)
 {
     if (g_alt) return g_alt->write(sector, buf, nsec);
     const uint8_t *p = (const uint8_t *)buf;
@@ -377,7 +377,7 @@ int virtio_blk_write_n(uint64_t sector, const void *buf, uint32_t nsec)
 }
 
 /* Capacidad del disco en sectores de 512 B (0 si no se conoce) */
-uint64_t virtio_blk_capacity(void)
+uint64_t sysdisk_capacity(void)
 {
     if (g_alt) return g_alt->sectors;
     if (!blk_ready) return 0;
@@ -388,13 +388,13 @@ uint64_t virtio_blk_capacity(void)
 #endif
 }
 
-int virtio_blk_read(uint64_t sector, void *buf)
+int sysdisk_read(uint64_t sector, void *buf)
 {
     if (g_alt) return g_alt->read(sector, buf, 1);
     return virtio_blk_op(sector, buf, 0);
 }
 
-int virtio_blk_write(uint64_t sector, const void *buf)
+int sysdisk_write(uint64_t sector, const void *buf)
 {
     if (g_alt) return g_alt->write(sector, buf, 1);
     return virtio_blk_op(sector, (void *)buf, 1);

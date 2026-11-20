@@ -15,6 +15,7 @@ void term_ui_drop(int slot);
 void term_ui_init(void);                          /* vacia el historial visible y activa los valores por defecto */
 void term_print(const char *raw_line);            /* anade una linea (admite codigos ANSI de color); las largas se parten */
 void term_clear(void);
+void term_set_prompt(int slot, const char *p);   /* SOMA_237_PYTHON: prompt propio de la sesion slot (NULL = el de siempre) */
 void term_note_input(void);                       /* el usuario ha escrito algo: vuelve al final y quita la seleccion */
 
 void term_render(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const char *cmd, uint32_t cmd_len, uint32_t cursor_pos, int focused);

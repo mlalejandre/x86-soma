@@ -117,6 +117,20 @@ En los tres casos el pendrive debe quedar así: `S:\EFI\BOOT\BOOTX64.EFI` (o `/E
 **Si algo falla:** prueba otro puerto USB, comprueba que Secure Boot está desactivado y que el PC arranca en modo UEFI
 (no «Legacy/CSM»).
 
+#### 💾 Si SOMA no guarda la configuración (WiFi, IA, escritorio...)
+
+SOMA guarda todo en la partición `SOMADATA` del pendrive. Si no la encuentra, trabaja solo en memoria: al arrancar sale un
+aviso en el escritorio y *Ajustes → Sistema → SOMADATA* dice el motivo (también la orden `disco`). Lo habitual es un pendrive
+preparado con una versión antigua, que solo tiene la unidad *SOMA*. Hay dos arreglos, sin y con borrado:
+
+- **Sin borrar nada:** crea en la unidad *SOMA* un archivo `SOMADATA.IMG` de 64 MB a 4 GB (vacío, en un pendrive con sitio
+  libre) y SOMA lo usará como disco desde el siguiente arranque. `ejecutar.py -t t480s-usb` lo ofrece solo. A mano:
+  - macOS: `mkfile 2g /Volumes/SOMA/SOMADATA.IMG`
+  - Linux: `dd if=/dev/zero of=/media/$USER/SOMA/SOMADATA.IMG bs=1M count=2048 && sync`
+  - Windows (como administrador): `fsutil file createnew E:\SOMADATA.IMG 2147483648` (cambia `E:` por la unidad SOMA)
+- **Preparando el pendrive de nuevo** con la imagen o con `ejecutar.py -t t480s-usb --formatear` (crea `SOMADATA`; borra el
+  pendrive).
+
 #### 🩺 Diagnóstico del arranque e informe de hardware
 
 SOMA está probado a fondo en el ThinkPad T480s. En otros equipos puede faltar algún driver, y para arreglarlo hace falta
@@ -321,6 +335,65 @@ La pantalla se abre en el navegador (http://localhost:6080/) y la consola serie 
     └── docs/               # ESTABILIDAD.md (historial de parches), navegador, diseño
 
 ---
+
+## 🐍 Python en SOMA
+
+SOMA trae **Python 3** (MicroPython 1.30, en `third_party/micropython`, licencia MIT) como un programa más de ring 3: un error
+o un bucle infinito en un script nunca tumba el sistema. Solo en x86_64 (en aarch64 aún no hay procesos de usuario).
+
+```
+python                      # modo interactivo (>>>); exit() para salir
+python hola.py uno dos      # ejecuta /workspace/hola.py con sys.argv = ['hola.py', 'uno', 'dos']
+python -c "print(2**100)"   # una línea de código
+```
+
+En el **Terminal** del escritorio la salida aparece al momento, lo que escribes va a `input()` y **Esc** detiene el script.
+
+**Ventanas, ratón y teclado** con `soma.win`, la misma ventana que usan los programas SOMA-LANG:
+
+```python
+from soma import win
+import time
+
+win.create("Hola", 320, 200)
+n = 0
+while win.active():                      # False cuando se cierra (también con Esc)
+    m = win.mouse()                      # m.x, m.y, m.clicked, m.button, m.inside
+    if m.clicked: n += 1
+    if win.key() == win.UP: n += 10      # win.UP/DOWN/LEFT/RIGHT, 10 Intro, 32 espacio, ord('a')...
+    win.clear(0x101828)
+    win.text(20, 30, "Clics: " + str(n), 0xFFFFFF)
+    win.rect(20, 80, 120, 40, 0x2563EB); win.circle(220, 100, 30, win.rgb(220, 38, 38))
+    win.present()
+    time.sleep_ms(16)
+```
+
+También `win.line`, `win.pixel`, `win.size()` y `win.close()`. **SOMA Studio → Crear con IA** puede escribir el programa
+en Python (botón *Python* junto a *Lenguaje*, o «en Python» en la descripción): el programador lo comprueba con el
+intérprete de verdad antes de guardarlo y *Probar* lo lanza en el Terminal. Lo mismo con la orden `programa archivo.py ...`.
+
+Qué hay: enteros de precisión ilimitada, `float` doble, cadenas, listas, diccionarios, clases, excepciones, generadores,
+`import` de tus `.py` de `/workspace`, `open()` (texto; lee el VFS y escribe solo en `/workspace`), `input()`, y los módulos
+`math`, `cmath`, `random`, `json`, `re`, `time`, `struct`, `collections`, `heapq`, `binascii`, `array`, `io`, `sys`, `gc`,
+`errno` y `soma` (`leer`, `escribir`, `existe`, `reloj`, `ms`, `dormir`, `win`). No hay `os`, red ni hilos; las rutas privadas
+(`/etc`, `/agent`, `/mem`...) no se pueden leer. Memoria del intérprete: 6 MiB. Plazo: 10 minutos por script (8 horas en modo
+interactivo). La prueba automática está en `tests/prueba_python_237.py`.
+
+## 🧾 Exportar el proyecto en texto
+
+`exportar_txt.py` genera archivos `.txt` con el código del proyecto, listos para pegarlos en una conversación con un asistente de IA
+(cada archivo entre marcas con su ruta, sus líneas y su huella; nunca binarios ni claves de API, que se sustituyen por `[CLAVE OCULTA]`).
+El proyecto completo son unos 6 MB de código, así que lo práctico es ir por partes:
+
+```
+python3 exportar_txt.py --indice              # mapa del proyecto (~30 000 tokens): qué hay en cada archivo
+python3 exportar_txt.py --tema escritorio     # un tema completo (python3 exportar_txt.py --temas los lista)
+python3 exportar_txt.py src/ui/gui.c src/apps/settings.c     # archivos o carpetas concretos
+python3 exportar_txt.py                       # todo el código propio, en partes de ~400 KB
+python3 exportar_txt.py --cambiados           # solo lo que cambió desde la última exportación completa
+```
+
+Los archivos quedan en `exportacion/` (no se sube al repositorio).
 
 ## 📄 Licencia
 

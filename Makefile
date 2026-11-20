@@ -216,6 +216,23 @@ OBJS_ARCH += $(BUILD)/web_r3.o
 $(BUILD)/sbxprogs.o: $(BUILD)/user/imgdec.elf $(BUILD)/user/sbxevil.elf $(BUILD)/user/zdec.elf $(BUILD)/user/pdfsvc.elf $(BUILD)/user/netsvc.elf $(BUILD)/user/websvc.elf
 	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../sbxprogs.o imgdec.elf sbxevil.elf zdec.elf pdfsvc.elf netsvc.elf websvc.elf
 $(BUILD)/sandbox_test.o: src/arch/x86_64/sbx_testimg.h
+# SOMA_237_PYTHON: interprete de Python (MicroPython, third_party/micropython, MIT) como programa de ring 3 con SSE (como ssetest).
+# Va dentro del nucleo (orden "python"), no en /bin. Sin -Isrc/core: ulib.h debe ver el errno.h de la biblioteca del sistema.
+PY_DIR = third_party/micropython
+PY_SRCS = $(wildcard $(PY_DIR)/py/*.c) $(wildcard $(PY_DIR)/extmod/*.c) $(PY_DIR)/shared/runtime/gchelper_generic.c $(PY_DIR)/libc/string0.c
+PY_LIBM = $(wildcard $(PY_DIR)/libm_dbl/*.c)
+PY_CFLAGS = $(filter-out -mgeneral-regs-only -Isrc/core,$(USER_CFLAGS)) -msse2 -mfpmath=sse -fno-tree-vectorize -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+	-DNDEBUG -Isrc/user -isystem src/user/python -isystem $(PY_DIR)
+$(BUILD)/user/python.elf: $(PY_SRCS) $(PY_LIBM) src/user/python.c src/user/python/mpconfigport.h src/user/ulib.h src/user/user.ld \
+		$(wildcard $(PY_DIR)/py/*.h) $(wildcard $(PY_DIR)/genhdr/*.h) $(wildcard $(PY_DIR)/lib/re1.5/*) $(wildcard $(PY_DIR)/libm_dbl/*.h) $(wildcard $(PY_DIR)/libm_dbl/include/*.h) | $(BUILD)
+	rm -rf $(BUILD)/user/python && mkdir -p $(BUILD)/user/python
+	set -e; for f in $(PY_SRCS); do $(CC) $(PY_CFLAGS) -w -c $$f -o $(BUILD)/user/python/$$(basename $$f .c).o; done
+	set -e; for f in $(PY_LIBM); do $(CC) $(PY_CFLAGS) -w -I$(PY_DIR)/libm_dbl/include -c $$f -o $(BUILD)/user/python/m_$$(basename $$f .c).o; done
+	$(CC) $(PY_CFLAGS) -c src/user/python.c -o $(BUILD)/user/python/soma_python.o
+	$(CC) $(PY_CFLAGS) -Wl,-T,src/user/user.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax $(BUILD)/user/python/*.o -lgcc -o $@
+$(BUILD)/pyprog.o: $(BUILD)/user/python.elf
+	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../pyprog.o python.elf
+OBJS_ARCH += $(BUILD)/pyprog.o
 endif
 
 OBJS_CORE += $(BUILD)/elf.o $(BUILD)/audio.o $(BUILD)/wav.o $(BUILD)/audio_sys.o $(BUILD)/micrec.o $(BUILD)/uvc.o $(BUILD)/avi_wr.o $(BUILD)/camera.o $(BUILD)/jpeg_enc.o $(BUILD)/scrcap_dsp.o $(BUILD)/scrcap.o
@@ -317,6 +334,8 @@ $(BUILD)/%.o: src/apps/%.c $(HEADERS) | $(BUILD)
 $(BUILD)/%.o: src/lang/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/gui.o: src/ui/gui_vortice.c src/ui/gui_cosmos.c src/ui/gui_iconos.c src/ui/gui_ventanas.c src/ui/gui_agente.c src/ui/gui_orbe_fx.c src/ui/gui_fotograma.c src/ui/gui_minimizar.c src/ui/gui_lang.c src/ui/gui_abrir.c src/ui/gui_orbe_frente.c   # SOMA_234_GUI_PARTIDO: gui.c los incluye
+$(BUILD)/shell.o: $(wildcard src/agent/shell_*.c)    # SOMA_233_SHELL_PARTIDO: shell.c incluye sus ordenes por temas
 $(BUILD)/%.o: src/agent/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -429,6 +448,8 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_sbuf.c -o build/tests/test_sbuf
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_lang.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_lang
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_coder_sim.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_coder_sim
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_coder_235.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_coder_235
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_coder_py_239.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_coder_py_239
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_fs.c tests/stubs_common.c tests/stubs_fs.c src/fs/fs.c -o build/tests/test_fs
 	$(HOST_CC) $(TEST_CFLAGS) -include tests/host_heap_cfg.h tests/test_heap.c tests/stubs_common.c tests/stubs_heap.c tests/stubs_vmm.c src/core/mem.c -o build/tests/test_heap
 	$(HOST_CC) $(TEST_CFLAGS) -include tests/host_sched_cfg.h tests/test_sched.c src/core/thread.c src/core/panic.c src/core/mutex.c tests/stubs_common.c tests/stubs_vmm.c tests/stubs_sched.c -o build/tests/test_sched
@@ -470,6 +491,8 @@ test:
 	./build/tests/test_sbuf
 	./build/tests/test_lang
 	./build/tests/test_coder_sim
+	./build/tests/test_coder_235
+	./build/tests/test_coder_py_239
 	./build/tests/test_fs
 	./build/tests/test_fs persist-write build/tests/disk.img
 	./build/tests/test_fs persist-check build/tests/disk.img
@@ -557,6 +580,10 @@ test:
 	python3 tests/mk_informe_228.py build/tests/informe_228.img
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_arranque_228.c src/core/fat.c -o build/tests/test_arranque_228
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_arranque_228 build/tests/informe_228.img
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_guardado_238.c src/core/fat.c -o build/tests/test_guardado_238
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_guardado_238 build/tests/informe_228.img
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_texto_229.c -o build/tests/test_texto_229
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_texto_229 200000
 	./build/tests/test_sched
 	./build/tests/test_panic
 	./build/tests/test_mutex

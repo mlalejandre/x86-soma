@@ -168,7 +168,7 @@ def arm_agent_resume() -> None:
 
 PROTECTED_FILES = {
     'boot.s', 'idt.c', 'idt.h', 'io.h', 'srcfs.c', 'srcfs.h',
-    'virtio_blk.c', 'virtio_blk.h', 'boot_gate.c', 'boot_gate.h'
+    'virtio_blk.c', 'virtio_blk.h', 'sysdisk.h', 'boot_gate.c', 'boot_gate.h'   # SOMA_231: sysdisk.h (antes en virtio_blk.h)
 }
 
 
@@ -615,6 +615,40 @@ def _sha256(p: Path) -> str:
     return h.hexdigest()
 
 
+T480S_IMG = "SOMADATA.IMG"   # SOMA_238_GUARDADO: disco de SOMA en un fichero del volumen SOMA (pendrives sin la particion SOMADATA)
+
+
+def t480s_data_file(mnt: str) -> int:
+    """SOMA_238_GUARDADO: crea SOMADATA.IMG (hasta 4 GB, contiguo) en el volumen SOMA. SOMA lo reclama en el primer arranque."""
+    img = Path(mnt) / T480S_IMG
+    if img.exists():
+        print(f"[OK] {T480S_IMG} ya existe ({img.stat().st_size / 1e9:.1f} GB): SOMA guarda ahi.")
+        return 0
+    libre = shutil.disk_usage(mnt).free
+    tam = min(4000 << 20, libre - (256 << 20)) // (1 << 20) * (1 << 20)
+    if tam < (64 << 20):
+        print(f"ERROR: no hay sitio para {T480S_IMG} en el volumen SOMA (hacen falta al menos 64 MB libres; hay {libre >> 20} MB).")
+        return 1
+    print(f"Creando {img} ({tam >> 20} MB; puede tardar unos minutos en un pendrive lento)...")
+    try:
+        with open(img, "wb") as f:
+            blk = b"\0" * (8 << 20)
+            for _ in range(tam // len(blk)):     # escribir (no truncate): asi FAT reserva los clusters de verdad y seguidos
+                f.write(blk)
+            f.flush()
+            os.fsync(f.fileno())
+        os.sync()
+    except OSError as e:
+        print(f"ERROR al crear {T480S_IMG}: {e}")
+        try:
+            img.unlink()
+        except OSError:
+            pass
+        return 1
+    print(f"[OK] {T480S_IMG} creado: desde el proximo arranque SOMA guarda la configuracion y tus archivos.")
+    return 0
+
+
 def t480s_copy(mnt: str) -> int:
     dst_dir = Path(mnt) / "EFI" / "BOOT"
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -666,11 +700,18 @@ def t480s_usb_macos(args) -> int:
     soma = _soma_volume(disk)
     data = _data_partition(disk)
     reformat = args.formatear or not soma
+    want_img = False
     if soma and not data and not args.formatear:
-        print(f"\n/dev/{dev} tiene el volumen '{T480S_LABEL}' pero no la particion {T480S_DATA}: SOMA arrancara, pero lo que guardes")
-        print("se perdera al apagar. Para anadirla hay que volver a preparar el pendrive (se borra todo lo que tenga).")
-        if not args.si and _ask("Escribe BORRAR para prepararlo ahora, o pulsa Enter para solo actualizar SOMA: ") == "BORRAR":
+        # SOMA_238_GUARDADO: sin SOMADATA nada se guardaba. Ahora basta un fichero SOMADATA.IMG en el propio volumen SOMA (no se borra
+        # nada); volver a preparar el pendrive con la particion sigue siendo posible.
+        print(f"\n/dev/{dev} tiene el volumen '{T480S_LABEL}' pero no la particion {T480S_DATA}: sin ella SOMA no guarda nada.")
+        print(f"Se puede crear el fichero {T480S_IMG} en el volumen '{T480S_LABEL}' (no se borra nada; SOMA guarda ahi la WiFi, la IA,")
+        print("el escritorio y tus archivos), o volver a preparar el pendrive con la particion (se borra todo lo que tenga).")
+        c = "" if args.si else _ask(f"Pulsa Enter para crear {T480S_IMG}, o escribe BORRAR para preparar el pendrive de nuevo: ")
+        if c == "BORRAR":
             reformat = True
+        else:
+            want_img = True
     if not reformat:
         vid, _ = soma
         print(f"\n/dev/{dev} ya tiene el volumen FAT32 '{T480S_LABEL}': solo se actualiza SOMA (no se borra nada mas"
@@ -696,6 +737,8 @@ def t480s_usb_macos(args) -> int:
         print(f"ERROR: no se pudo montar {vid}.")
         return 1
     if t480s_copy(mnt) != 0:
+        return 1
+    if want_img and t480s_data_file(mnt) != 0:
         return 1
     subprocess.run(["diskutil", "eject", f"/dev/{dev}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"[OK] /dev/{dev} expulsado. Ya puedes desconectarlo.")

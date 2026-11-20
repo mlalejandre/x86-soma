@@ -6,7 +6,7 @@
 #include "acct.h"          /* SOMA_198: ACCT_WEB */
 #include "rng.h"
 #include "mem.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "slotio.h"
 #include "ckptio.h"
 #include "sysinfo.h"
@@ -321,10 +321,10 @@ static int fs_blk_write(void *ctx, uint64_t lba, const void *buf)
     (void)ctx;
     if (fs_fault_budget == 0) return -1;
     if (fs_fault_budget > 0) fs_fault_budget--;
-    return virtio_blk_write(lba, buf);
+    return sysdisk_write(lba, buf);
 }
-static int fs_blk_read(void *ctx, uint64_t lba, void *buf) { (void)ctx; return virtio_blk_read(lba, buf); }
-static int fs_blk_flush(void *ctx) { (void)ctx; return virtio_blk_flush(); }
+static int fs_blk_read(void *ctx, uint64_t lba, void *buf) { (void)ctx; return sysdisk_read(lba, buf); }
+static int fs_blk_flush(void *ctx) { (void)ctx; return sysdisk_flush(); }
 static const struct slotdev fs_dev = { fs_blk_read, fs_blk_write, 0, fs_blk_flush };
 
 static int sync_file_to_disk(int i)
@@ -392,7 +392,7 @@ static int load_file_from_disk(int i)
     uint64_t start_lba = FS_DATA_LBA + (uint64_t)i * FS_SECTORS_PER_FILE;
 
     /* 1. Leer cabecera en sector 0 */
-    if (virtio_blk_read(start_lba, sec_buf) != 0) return -1;
+    if (sysdisk_read(start_lba, sec_buf) != 0) return -1;
     memcpy(&hdr, sec_buf, sizeof(hdr));
 
     if (hdr.used > 1) return -1;
@@ -435,7 +435,7 @@ static int load_file_from_disk(int i)
 
         uint8_t *raw = (uint8_t *)files[i].data;
         for (int s = 0; s < FS_DATA_SECTORS; ++s) {
-            if (virtio_blk_read(start_lba + 1 + s, sec_buf) != 0) return -1;
+            if (sysdisk_read(start_lba + 1 + s, sec_buf) != 0) return -1;
             uint32_t off = (uint32_t)s * 512;
             if (off < hdr.size) {
                 uint32_t take = hdr.size - off;
@@ -475,7 +475,7 @@ static int vfs_sync_unlocked(void)
 {
     /* PARCHE 083: sin disco virtio (Pi 5 real o emulada) RamFS vive solo en memoria: guardar no es un error (antes cada escritura
      * en una ruta normal devolvia fallo aunque el archivo quedaba bien en RAM; Paint decia "Error al guardar"). */
-    if (virtio_blk_capacity() == 0) {
+    if (sysdisk_capacity() == 0) {
         for (int i = 0; i < FS_MAX_FILES; ++i) files[i].dirty = 0;
         return 0;
     }
@@ -497,7 +497,7 @@ static int vfs_sync_unlocked(void)
     }
     sb.num_files = used_count;
     if (any_dirty) {
-        if (virtio_blk_write(FS_SUPER_LBA, &sb) != 0) return -1;
+        if (sysdisk_write(FS_SUPER_LBA, &sb) != 0) return -1;
     }
     return 0;
 }
@@ -551,10 +551,10 @@ static void vfs_format_unlocked(void)
 
     uint32_t fs_total_sectors = 1 + FS_DISK_SLOTS * FS_SECTORS_PER_FILE;
     for (uint32_t s = 0; s < fs_total_sectors; ++s) {
-        virtio_blk_write(FS_SUPER_LBA + s, zero_buf);
+        sysdisk_write(FS_SUPER_LBA + s, zero_buf);
     }
-    virtio_blk_write(FS_CHECKPOINT_LBA - 1, zero_buf);
-    virtio_blk_write(FS_JOURNAL_LBA, zero_buf);                /* PARCHE 112: sin diario pendiente */
+    sysdisk_write(FS_CHECKPOINT_LBA - 1, zero_buf);
+    sysdisk_write(FS_JOURNAL_LBA, zero_buf);                /* PARCHE 112: sin diario pendiente */
 
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         if (files[i].spilled) fs_spill_del(i);
@@ -684,14 +684,14 @@ void vfs_init(void)
     fs_initialized = 1;
     kmutex_init(&vfs_mutex, "vfs_lock");
 
-    if (virtio_blk_capacity() > 0) {                              /* PARCHE 120: una restauracion de checkpoint interrumpida se completa ANTES de leer nada */
+    if (sysdisk_capacity() > 0) {                              /* PARCHE 120: una restauracion de checkpoint interrumpida se completa ANTES de leer nada */
         struct ckpt_slot ca = fs_ckpt_a(), cb = fs_ckpt_b();
         int cr = ckpt_recover(&fs_dev, &ca, &cb, FS_SUPER_LBA, FS_TOTAL_SECTORS, SOMA_LBA_CKPT_INTENT, FS_JOURNAL_LBA);
         if (cr == 1) kprint("VFS: se completo una restauracion de checkpoint interrumpida\n");
         else if (cr == 2) kprint("VFS: marca de restauracion sin checkpoint valido (descartada)\n");
     }
     struct fs_superblock sb;
-    if (virtio_blk_read(FS_SUPER_LBA, &sb) == 0 &&
+    if (sysdisk_read(FS_SUPER_LBA, &sb) == 0 &&
         memcmp(sb.magic, "SOMAFS02", 8) == 0 &&
         sb.version == 2 &&
         sb.max_files == FS_DISK_SLOTS &&
@@ -1402,7 +1402,7 @@ char *vfs_read_alloc(const char *name, uint32_t *len_out)
 }
 int vfs_big_persist(void)
 {
-    if (virtio_blk_capacity() == 0) return -1;
+    if (sysdisk_capacity() == 0) return -1;
     return fs_spill_ready() ? 1 : 0;
 }
 
@@ -1414,7 +1414,7 @@ static void ct_fill(char *b, uint32_t n, uint32_t seed) { for (uint32_t k = 0; k
 int vfs_checkpoint_selftest(void)
 {
     if (!fs_initialized) vfs_init();
-    if (virtio_blk_capacity() == 0) { kprint("[CKPT] sin disco virtio: nada que probar\n"); return 1; }
+    if (sysdisk_capacity() == 0) { kprint("[CKPT] sin disco virtio: nada que probar\n"); return 1; }
     const char *path = "/workspace/_ckpt.tmp"; int bad = 0; static char rb[64];
     vfs_write(path, "version-1", 9);
     if (vfs_checkpoint_save() != 0) { kprint("[CKPT] FALLO: guardar\n"); return 0; }
@@ -1428,14 +1428,14 @@ int vfs_checkpoint_selftest(void)
     struct ckpt_slot s0a = fs_ckpt_a(), s0b = fs_ckpt_b();
     uint64_t cl = ckpt_lba(&s0a, 40), cl_b = ckpt_lba(&s0b, 40);
     static uint8_t sec_b[512] __attribute__((aligned(16)));
-    if (virtio_blk_read(cl, sec) == 0 && virtio_blk_read(cl_b, sec_b) == 0) {
+    if (sysdisk_read(cl, sec) == 0 && sysdisk_read(cl_b, sec_b) == 0) {
         uint8_t keep = sec[7], keep_b = sec_b[7]; sec[7] ^= 0x55; sec_b[7] ^= 0x55;
-        virtio_blk_write(cl, sec); virtio_blk_write(cl_b, sec_b); virtio_blk_flush();
+        sysdisk_write(cl, sec); sysdisk_write(cl_b, sec_b); sysdisk_flush();
         int r = vfs_checkpoint_restore();
         memset(rb, 0, sizeof rb); n = vfs_read(path, rb, sizeof rb - 1);
         if (r == 0) { kprint("[CKPT] FALLO: restauro un checkpoint corrupto\n"); bad++; }
         if (n != 9 || memcmp(rb, "version-3", 9) != 0) { kprint("[CKPT] FALLO: un checkpoint corrupto altero el VFS vivo\n"); bad++; }
-        sec[7] = keep; sec_b[7] = keep_b; virtio_blk_write(cl, sec); virtio_blk_write(cl_b, sec_b); virtio_blk_flush();
+        sec[7] = keep; sec_b[7] = keep_b; sysdisk_write(cl, sec); sysdisk_write(cl_b, sec_b); sysdisk_flush();
         if (vfs_checkpoint_restore() != 0) { kprint("[CKPT] FALLO: con la copia reparada no restaura\n"); bad++; }
     } else bad++;
     {   /* PARCHE 130: dos generaciones. Se guardan "gen-A" y "gen-B" (van a ranuras distintas); si la mas reciente se corrompe, se restaura la anterior */
@@ -1447,13 +1447,13 @@ int vfs_checkpoint_selftest(void)
         else {
             const struct ckpt_slot *nuevo = (int32_t)(qa - qb) > 0 ? &sa : &sb;
             uint64_t cl2 = ckpt_lba(nuevo, 100);
-            if (virtio_blk_read(cl2, sec) == 0) {
-                uint8_t keep = sec[3]; sec[3] ^= 0x7F; virtio_blk_write(cl2, sec); virtio_blk_flush();
+            if (sysdisk_read(cl2, sec) == 0) {
+                uint8_t keep = sec[3]; sec[3] ^= 0x7F; sysdisk_write(cl2, sec); sysdisk_flush();
                 vfs_write(path, "gen-C", 5);
                 if (vfs_checkpoint_restore() != 0) { kprint("[CKPT] FALLO: con la ranura nueva corrupta no cayo a la anterior\n"); bad++; }
                 memset(rb, 0, sizeof rb); n = vfs_read(path, rb, sizeof rb - 1);
                 if (n != 5 || memcmp(rb, "gen-A", 5) != 0) { kprint("[CKPT] FALLO: la ranura anterior no devolvio gen-A\n"); bad++; }
-                sec[3] = keep; virtio_blk_write(cl2, sec); virtio_blk_flush();
+                sec[3] = keep; sysdisk_write(cl2, sec); sysdisk_flush();
             } else bad++;
         }
     }
@@ -1465,7 +1465,7 @@ int vfs_checkpoint_selftest(void)
 int vfs_crash_selftest(void)
 {
     if (!fs_initialized) vfs_init();
-    if (virtio_blk_capacity() == 0) { kprint("[FSCRASH] sin disco virtio: nada que probar\n"); return 1; }
+    if (sysdisk_capacity() == 0) { kprint("[FSCRASH] sin disco virtio: nada que probar\n"); return 1; }
     static const uint32_t cases[][2] = { {700, 3000}, {3000, 700}, {15000, 4000}, {1, 15000}, {512, 512}, {0, 900} };
     static char oldb[16384], newb[16384];
     const char *path = "/workspace/_fscrash.tmp";
@@ -1509,21 +1509,21 @@ int vfs_crash_selftest(void)
 int vfs_fscheck(void)
 {
     if (!fs_initialized) vfs_init();
-    if (virtio_blk_capacity() == 0) { kprint("[FSCHECK] sin disco virtio\n"); return 0; }
+    if (sysdisk_capacity() == 0) { kprint("[FSCHECK] sin disco virtio\n"); return 0; }
     static uint8_t sec[512] __attribute__((aligned(16)));
     static uint8_t buf[FS_DATA_SECTORS * 512];
     int used = 0, crc_ok = 0, sin_crc = 0, bad = 0;
     kmutex_lock(&vfs_mutex);
     for (int i = 0; i < FS_DISK_SLOTS; ++i) {
         struct fs_disk_header h; uint64_t b = FS_DATA_LBA + (uint64_t)i * FS_SECTORS_PER_FILE;
-        if (virtio_blk_read(b, sec) != 0) { bad++; continue; }
+        if (sysdisk_read(b, sec) != 0) { bad++; continue; }
         memcpy(&h, sec, sizeof h);
         if (h.used == 0) continue;
         if (h.used > 1 || h.name[0] == 0 || (h.spilled != 'B' && h.size >= FS_DATA_MAX)) { bad++; kprint("[FSCHECK] inodo "); kprint_dec((uint32_t)i); kprint(": cabecera incoherente\n"); continue; }
         used++;
         if (h.spilled == 'B') continue;
         uint32_t nd = slotio_nd(h.size); int io = 0;
-        for (uint32_t s = 0; s < nd; ++s) if (virtio_blk_read(b + 1 + s, buf + s * 512) != 0) io = 1;
+        for (uint32_t s = 0; s < nd; ++s) if (sysdisk_read(b + 1 + s, buf + s * 512) != 0) io = 1;
         if (io) { bad++; continue; }
         if (h.pad[4] != 'C') { sin_crc++; continue; }
         uint32_t want; memcpy(&want, h.pad, 4);
@@ -1559,7 +1559,7 @@ static int kt_check(const char *path)           /* -1 no existe, 0 danado, 1 cor
 void vfs_killtest_boot(void)
 {
     static uint8_t sec[512] __attribute__((aligned(16)));
-    if (virtio_blk_capacity() <= SOMA_LBA_KILLTEST + 1 || virtio_blk_read(SOMA_LBA_KILLTEST, sec) != 0 || memcmp(sec, "SOMA_KILLTEST", 13) != 0) return;
+    if (sysdisk_capacity() <= SOMA_LBA_KILLTEST + 1 || sysdisk_read(SOMA_LBA_KILLTEST, sec) != 0 || memcmp(sec, "SOMA_KILLTEST", 13) != 0) return;
     if (!fs_initialized) vfs_init();
     const char *names[3] = { "/workspace/k0.bin", "/workspace/k1.bin", "/workspace/k2.bin" };
     int bad = 0, present = 0;

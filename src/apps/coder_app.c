@@ -199,6 +199,14 @@ static const char *cdr_find(const char *hay, const char *needle)
 
 
 
+/* SOMA_239_PYTHON_GRAFICO: el programador escribe SOMA-LANG (.soma) o Python (.py). cdr_lang es la eleccion de la pestana Nuevo;
+ * para modificar manda la extension del archivo, y una tarea que dice "en Python" elige Python. */
+static int cdr_lang;                                   /* CC_LANG_SOMA o CC_LANG_PYTHON */
+static int cdr_is_py(const char *p) { return cdr_ends_with(p, ".py"); }
+static int cdr_is_prog(const char *p) { return cdr_ends_with(p, ".soma") || cdr_ends_with(p, ".py"); }
+static const char *cdr_ext_for(const char *mission) { return (cdr_lang == CC_LANG_PYTHON || cc_mission_wants_python(mission)) ? ".py" : ".soma"; }
+static void cdr_strip_ext(char *p) { uint32_t n = cdr_len(p); if (cdr_ends_with(p, ".soma")) p[n - 5] = 0; else if (cdr_ends_with(p, ".py")) p[n - 3] = 0; }
+
 static void cdr_clean_text(char *dst, uint32_t cap, const char *src)
 {
     uint32_t n = 0;
@@ -286,7 +294,7 @@ static struct cdr_job g_job = {
     .log_n = 0,
     .started_ms = 0,
     .ended_ms = 0,
-    .phase_desc = "Listo para crear o modificar aplicaciones .soma",
+    .phase_desc = "Listo para crear o modificar aplicaciones (.soma o .py)",
     .live_thought = "",
     .target_file = "",
     .mission = "",
@@ -460,6 +468,16 @@ static int cdr_verify(const char *path)
     r = vfs_read(path, cdr_src, CDR_SRC_MAX - 1);
     if (r <= 0) return -1;
     cdr_src[r] = '\0';
+    if (cdr_is_py(path)) {                                   /* SOMA_239: Python se compila de verdad en su proceso (python -s) */
+        static char o[1024];
+        int pr = shell_python_source(1, cdr_src, (uint32_t)r, "", o, sizeof o, 8000);
+        if (pr == 0) { cdr_bc_len = (uint32_t)r; return 1; }
+        uint32_t ln = 0; char m[96];
+        cc_py_error(o, &ln, m, sizeof m);
+        cdr_diag.line = ln; cdr_copy(cdr_diag.msg, sizeof cdr_diag.msg, m[0] ? m : "no se pudo comprobar con Python");
+        cdr_diag_valid = 1;
+        return 0;
+    }
     lang_lint(cdr_src, (uint32_t)r, &cdr_rep);
     if (lang_compile(cdr_src, (uint32_t)r, cdr_bc, sizeof(cdr_bc), &bl) != 0) {
         lang_get_diagnostic(&cdr_diag);
@@ -623,11 +641,12 @@ static int cdr_normalize_target(const char *in, char *out, uint32_t cap)
     }
     out[n] = '\0';
     while (n > 0 && out[n - 1] == '_') out[--n] = '\0';
-    if (!cdr_ends_with(out, ".soma")) {
-        if (cdr_len(out) + 5u >= cap) return -2;
-        cdr_cat(out, cap, ".soma");
+    if (!cdr_is_prog(out)) {
+        const char *x = cdr_ext_for("");
+        if (cdr_len(out) + cdr_len(x) >= cap) return -2;
+        cdr_cat(out, cap, x);
     }
-    if (!cdr_ends_with(out, ".soma")) return -2;
+    if (!cdr_is_prog(out)) return -2;
     if (cdr_len(out) >= (uint32_t)FS_NAME_MAX) return -2;
     if (!cdr_path_allowed(out)) return -3;
     return 1;
@@ -663,7 +682,7 @@ static void cdr_scan_projects(void)
 
         int dup = 0;                                     /* PARCHE 094: el listado puede repetir archivos (RamFS + disco) */
         for (int q = 0; q < project_count; q++) if (cdr_eq(projects[q].path, path)) dup = 1;
-        if (!dup && cdr_ends_with(path, ".soma")) {
+        if (!dup && cdr_is_prog(path)) {                     /* SOMA_239: tambien .py */
             struct cdr_proj *it = &projects[project_count];
             const char *last = path;
             const char *q = path;
@@ -775,6 +794,15 @@ static int cdr_env_read(const char *path, char *buf, uint32_t max) { return vfs_
 static int cdr_env_write(const char *path, const char *buf, uint32_t len) { return vfs_write(path, buf, len); }
 static void cdr_env_status(int phase, const char *desc, const char *thought) { cdr_set_state(CODER_JOB_WORKING, phase, desc, thought); }
 
+/* SOMA_239_PYTHON_GRAFICO: Python se comprueba y se prueba en un proceso de ring 3 (python -s / -x), sin escribir el archivo */
+static int cdr_env_py_check(const char *src, uint32_t n, char *out, uint32_t max) { return shell_python_source(1, src, n, "", out, max, 8000); }
+static int cdr_env_py_run(const char *src, uint32_t n, const char *input, char *out, uint32_t max) { return shell_python_source(0, src, n, input, out, max, 5000); }
+static void cdr_env_python(struct cc_env *env, const char *target)
+{
+    if (!cdr_is_py(target)) return;
+    env->lang = CC_LANG_PYTHON; env->check_src = cdr_env_py_check; env->run_src = cdr_env_py_run;
+}
+
 static void coder_worker_thread(void *arg)
 {
     int ok = 0, cancelled = 0, vr = -1, attempt = 0, backup_state;
@@ -818,6 +846,7 @@ static void coder_worker_thread(void *arg)
         env.force_new = cdr_force_new;
         env.llm = cdr_env_llm; env.read = cdr_env_read; env.write = cdr_env_write;
         env.log = cdr_log; env.status = cdr_env_status; env.cancelled = cdr_cancelled; env.max_llm_calls = 7;
+        cdr_env_python(&env, cdr_w_target);                                    /* SOMA_239 */
         cc_run(&env, cdr_w_target, cdr_w_mission, &cr);
         attempt = cr.repairs + cr.regenerations;
         cdr_lock(&g_job.lock);
@@ -868,9 +897,12 @@ done:
         cdr_write_report(cdr_w_target, 0, attempt, "Cancelado.");
     } else if (ok) {
         desc[0] = '\0';
+        if (cdr_is_py(cdr_w_target)) cdr_copy(desc, sizeof(desc), "Fase 6/6: Programa Python verificado con exito (compila en SOMA, 0 errores).");
+        else {
         cdr_copy(desc, sizeof(desc), "Fase 6/6: Programa verificado con exito (");
         cdr_cat_u32(desc, sizeof(desc), cdr_bc_len);
         cdr_cat(desc, sizeof(desc), " B bytecode, 0 errores).");
+        }
         cdr_set_state(CODER_JOB_SUCCESS, 6, desc,
                       "Codigo valido en Ring 0. Listo para ejecutar con '> PROBAR AHORA'.");
         cdr_log("Programa compilado y listo para produccion.");
@@ -893,6 +925,11 @@ done:
 static void cdr_run_app(const char *path)
 {
     static char out[512]; char cmd[160];
+    if (cdr_is_py(path)) {                                    /* SOMA_239: en el Terminal (salida, input() y Esc) */
+        cdr_copy(cmd, sizeof cmd, "python "); cdr_cat(cmd, sizeof cmd, path);
+        gui_terminal_run(cmd);
+        return;
+    }
     cdr_copy(cmd, sizeof cmd, "app "); cdr_cat(cmd, sizeof cmd, path);
     out[0] = 0;
     dispatch_command(cmd, out, sizeof out);
@@ -940,15 +977,15 @@ static void coder_start_creation(void)
     {
         int deflt = !input_create_file[0] || (cdr_eq(input_create_file, "/workspace/calc.soma") && !cdr_has_ci(input_create_prompt, "calc"));
         if (input_create_file[0] && input_create_file[0] != '/') { char t[96]; cdr_copy(t, sizeof t, "/workspace/"); cdr_cat(t, sizeof t, input_create_file); cdr_copy(input_create_file, sizeof input_create_file, t); }
-        if (!deflt && !cdr_ends_with(input_create_file, ".soma")) cdr_cat(input_create_file, sizeof input_create_file, ".soma");
+        if (!deflt && !cdr_is_prog(input_create_file)) cdr_cat(input_create_file, sizeof input_create_file, cdr_ext_for(input_create_prompt));
         if (deflt || vfs_size(input_create_file) > 0) {
             char t[96], base[96];
             if (deflt) coder_pick_target(input_create_prompt, base, sizeof base); else cdr_copy(base, sizeof base, input_create_file);
             cdr_copy(t, sizeof t, base);
             for (uint32_t k = 2; vfs_size(t) > 0 && k < 100; k++) {
-                uint32_t L = cdr_len(base); cdr_copy(t, sizeof t, base);
-                if (L > 5) t[L - 5] = 0;
-                cdr_cat(t, sizeof t, "_"); cdr_cat_u32(t, sizeof t, k); cdr_cat(t, sizeof t, ".soma");
+                const char *x = cdr_is_py(base) ? ".py" : ".soma";
+                cdr_copy(t, sizeof t, base); cdr_strip_ext(t);
+                cdr_cat(t, sizeof t, "_"); cdr_cat_u32(t, sizeof t, k); cdr_cat(t, sizeof t, x);
             }
             cdr_copy(input_create_file, sizeof input_create_file, t);
             input_create_file_len = cdr_len(input_create_file);
@@ -1093,6 +1130,20 @@ static int ide_verify(void)
 {
     uint32_t len = 0; const char *t = ce_text(&len);
     struct cdr_snap sn; cdr_snapshot(&sn);
+    if (cdr_is_py(ce_path())) {                               /* SOMA_239: Python se comprueba con el interprete de verdad */
+        static char o[1024];
+        ide_prob_n = 0; ce_set_error(0, 0);
+        int pr = shell_python_source(1, t, len, "", o, sizeof o, 8000);
+        ide_prob_ok = pr == 0;
+        if (ide_prob_ok) { ide_say("Python: compila sin errores.", CDR_C_GREEN); return 1; }
+        uint32_t ln = 0; char m[96]; cc_py_error(o, &ln, m, sizeof m);
+        char mm[112]; cdr_copy(mm, sizeof mm, "Linea "); cdr_cat_u32(mm, sizeof mm, ln); cdr_cat(mm, sizeof mm, ": "); cdr_cat(mm, sizeof mm, m[0] ? m : "no se pudo comprobar");
+        cdr_copy(ide_prob[0], sizeof ide_prob[0], mm); ide_prob_line[0] = (int)ln; ide_prob_n = 1;
+        ce_set_error((int)ln, m);
+        if (ln) ce_goto_line((int)ln);
+        ide_say(pr < 0 ? "No se pudo ejecutar Python ahora (otra orden en marcha); prueba de nuevo." : "Error de Python: revisa la linea marcada.", CDR_C_RED);
+        return 0;
+    }
     if (sn.state == CODER_JOB_WORKING) { ide_say("El compilador esta ocupado con la tarea de SOMA; espera a que termine.", CDR_C_AMBER); return -1; }
     uint8_t *bc = (uint8_t *)kmalloc(65536); uint32_t bl = 0;
     if (!bc) { ide_say("Sin memoria para compilar.", CDR_C_RED); return -1; }
@@ -1327,7 +1378,7 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
         cdr_cat(st, sizeof st, ", Col "); cdr_cat_u32(st, sizeof st, (uint32_t)col);
         if (sc) { cdr_cat(st, sizeof st, "  ("); cdr_cat_u32(st, sizeof st, (uint32_t)sc); cdr_cat(st, sizeof st, " sel.)"); }
         cdr_cat(st, sizeof st, "   \xC2\xB7   "); cdr_cat_u32(st, sizeof st, (uint32_t)lines);
-        cdr_cat(st, sizeof st, " lineas   \xC2\xB7   UTF-8   \xC2\xB7   SOMA-LANG");
+        cdr_cat(st, sizeof st, cdr_is_py(ce_path()) ? " lineas   \xC2\xB7   UTF-8   \xC2\xB7   Python" : " lineas   \xC2\xB7   UTF-8   \xC2\xB7   SOMA-LANG");
         int sw = cdr_tw(st);
         font_draw_string((uint32_t)(x0 + w - sw - 14), (uint32_t)(status_y + 7), st, 0x008391A7u, 1);
         uint32_t dot = ide_prob_ok == 1 ? CDR_C_GREEN : ide_prob_ok == 0 ? CDR_C_RED : 0x00475569u;
@@ -1424,7 +1475,7 @@ static void ide_key(char c)
  * - Campos de texto de verdad (textfield.c): cursor, seleccion con raton y teclado, doble clic, Ctrl+A, portapapeles.
  * - Registro de zonas pulsables: cada boton se registra al pintarlo, asi el clic cae SIEMPRE donde se ve.
  * ======================================================================== */
-enum { UB_GEN = 1, UB_CANCEL, UB_RUN, UB_EDIT, UB_TPL0, UB_TPL_END = UB_TPL0 + 8, UB_AUTO,
+enum { UB_GEN = 1, UB_CANCEL, UB_RUN, UB_EDIT, UB_TPL0, UB_TPL_END = UB_TPL0 + 8, UB_AUTO, UB_LSOMA, UB_LPY,
        UB_PRUN, UB_PEDIT, UB_PNOTES, UB_PDUP, UB_PREN, UB_PDEL, UB_PDELOK, UB_PROW0 = 100, UB_PROW_END = 400,
        UB_LCOPY = 500, UB_LTRACE, UB_LCLEAR };
 struct ui_hit { int x, y, w, h, id; };
@@ -1507,7 +1558,7 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
     int wide = w >= 980;
     int lw = wide ? (w * 52) / 100 : w;
     /* tarjeta de la orden */
-    int ch = 300;
+    int ch = 336;                                       /* SOMA_239: +36 por la fila del lenguaje */
     ui_card(x0, y0, lw, ch, "DESCRIBE LA APLICACION");
     tf_render(&tf_cprompt, x0 + 16, y0 + 36, lw - 32, 104, ui_focus == &tf_cprompt,
               "Ejemplo: un juego de Snake con puntuacion que se maneja con W A S D...", CDR_C_WHITE);
@@ -1524,6 +1575,14 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
         cx += tw + 6;
     }
     int fy = cy + 34;
+    {   /* SOMA_239_PYTHON_GRAFICO: lenguaje del programa nuevo */
+        font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 8), "Lenguaje", CDR_C_DIM, 1);
+        int lx = x0 + 86, sp = cdr_lang == CC_LANG_PYTHON;
+        lx += ui_btn(lx, fy, "SOMA-LANG", UB_LSOMA, sp ? CDR_C_PANEL : 0x00173A7Au, sp ? CDR_C_BORDER2 : 0x0060A5FAu, sp ? CDR_C_SOFT : CDR_C_WHITE) + 8;
+        lx += ui_btn(lx, fy, "Python", UB_LPY, sp ? 0x00173A7Au : CDR_C_PANEL, sp ? 0x0060A5FAu : CDR_C_BORDER2, sp ? CDR_C_WHITE : CDR_C_SOFT) + 10;
+        font_draw_string((uint32_t)lx, (uint32_t)(fy + 8), sp ? ".py: ventanas con soma.win" : ".soma: el lenguaje de SOMA", 0x00475569u, 1);
+        fy += 36;
+    }
     font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 8), "Archivo", CDR_C_DIM, 1);
     tf_render(&tf_cfile, x0 + 86, fy, lw - 102 - 70, 30, ui_focus == &tf_cfile, "automatico (se deduce de la descripcion)", CDR_C_AMBER);
     { int bw = 64; cdr_draw_btn((uint32_t)(x0 + lw - 16 - bw), (uint32_t)fy, (uint32_t)bw, 30, "Auto", CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); ui_reg(x0 + lw - 16 - bw, fy, bw, 30, UB_AUTO); }
@@ -1605,7 +1664,7 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
     int x0 = (int)wx + 12, w = (int)ww - 24, y0 = (int)wy + 54, y1 = (int)(wy + wh) - 10;
     ui_tf_init(); ui_nh = 0;
     int lw = w >= 760 ? 360 : w;
-    ui_card(x0, y0, lw, y1 - y0, "PROGRAMAS SOMA-LANG");
+    ui_card(x0, y0, lw, y1 - y0, "PROGRAMAS (SOMA-LANG Y PYTHON)");
     { char n[12]; n[0] = 0; cdr_cat_u32(n, sizeof n, (uint32_t)project_count); int nw = cdr_tw(n) + 14;
       fb_fill_rounded_rect(x0 + lw - nw - 14, y0 + 10, nw, 18, 9, 0x001A2335u); font_draw_string((uint32_t)(x0 + lw - nw - 7), (uint32_t)(y0 + 14), n, CDR_C_GRAY, 1); }
     tf_render(&tf_search, x0 + 12, y0 + 38, lw - 24, 30, ui_focus == &tf_search, "Buscar por nombre o carpeta...", CDR_C_WHITE);
@@ -1722,8 +1781,8 @@ static void ui_do_rename(void)
     if (project_selected < 0 || project_selected >= project_count) return;
     char np[96]; cdr_copy(np, sizeof np, ui_renbuf);
     if (np[0] != '/') { char t[96]; cdr_copy(t, sizeof t, "/workspace/"); cdr_cat(t, sizeof t, np); cdr_copy(np, sizeof np, t); }
-    if (!cdr_ends_with(np, ".soma")) cdr_cat(np, sizeof np, ".soma");
     const char *op = projects[project_selected].path;
+    if (!cdr_is_prog(np)) cdr_cat(np, sizeof np, cdr_is_py(op) ? ".py" : ".soma");
     if (cdr_eq(np, op)) { cdr_copy(ui_pmsg, sizeof ui_pmsg, "Es la misma ruta."); ui_pmsg_col = CDR_C_AMBER; return; }
     if (vfs_size(np) > 0) { cdr_copy(ui_pmsg, sizeof ui_pmsg, "Ya existe un archivo con esa ruta; elige otro nombre."); ui_pmsg_col = 0x00FB7185u; return; }
     uint32_t len = 0; char *d = vfs_read_alloc(op, &len);
@@ -1756,13 +1815,21 @@ static int ui_click(int mx, int my, const struct cdr_snap *sn)
         case UB_CANCEL: coder_cancel_job(); return 1;
         case UB_RUN: cdr_run_app(sn->target_file); return 1;
         case UB_EDIT: cdr_open_in_editor(sn->target_file); return 1;
+        case UB_LSOMA: case UB_LPY: {                                         /* SOMA_239: cambia el lenguaje (y la extension) */
+            cdr_lang = id == UB_LPY ? CC_LANG_PYTHON : CC_LANG_SOMA;
+            cdr_sync_inputs();
+            if (input_create_file[0] && cdr_is_prog(input_create_file)) {
+                char t[96]; cdr_copy(t, sizeof t, input_create_file); cdr_strip_ext(t); cdr_cat(t, sizeof t, cdr_lang ? ".py" : ".soma"); tf_set(&tf_cfile, t); cdr_sync_inputs();
+            }
+            return 1;
+        }
         case UB_AUTO: { char t[96]; cdr_sync_inputs(); coder_pick_target(input_create_prompt[0] ? input_create_prompt : "app", t, sizeof t); tf_set(&tf_cfile, t); ui_focus = &tf_cfile; return 1; }
         case UB_PRUN: if (pp) cdr_run_app(pp); return 1;
         case UB_PEDIT: if (pp) cdr_open_in_editor(pp); return 1;
         case UB_PNOTES: if (pp) gui_open_notepad(pp); return 1;
         case UB_PDUP: if (pp) {
-            char dup[96]; uint32_t len = 0; cdr_copy(dup, sizeof dup, pp); if (cdr_ends_with(dup, ".soma")) dup[cdr_len(dup) - 5] = 0;
-            cdr_cat(dup, sizeof dup, "_copia.soma");
+            char dup[96]; uint32_t len = 0; cdr_copy(dup, sizeof dup, pp); cdr_strip_ext(dup);
+            cdr_cat(dup, sizeof dup, cdr_is_py(pp) ? "_copia.py" : "_copia.soma");
             char *d = vfs_read_alloc(pp, &len); if (d) { vfs_write(dup, d, len); kfree(d); }
             cdr_scan_projects(); for (int k = 0; k < project_count; k++) if (cdr_eq(projects[k].path, dup)) ui_select_project(k);
             cdr_copy(ui_pmsg, sizeof ui_pmsg, "Copia creada: "); cdr_cat(ui_pmsg, sizeof ui_pmsg, dup); ui_pmsg_col = 0x0086EFACu; }
@@ -1836,7 +1903,7 @@ void coder_app_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uin
     }
 
     if (win_w > 720) {
-        { fb_fill_rounded_rect((int32_t)(win_x + win_w - 170), (int32_t)(tab_bar_y + 9), 150, 22, 11, 0x00102A22u); fb_fill_rounded_rect((int32_t)(win_x + win_w - 160), (int32_t)(tab_bar_y + 17), 6, 6, 3, CDR_C_GREEN); font_draw_string(win_x + win_w - 148, tab_bar_y + 15, "SOMA-LANG v0.2", 0x00A7F3D0u, 1); }
+        { fb_fill_rounded_rect((int32_t)(win_x + win_w - 170), (int32_t)(tab_bar_y + 9), 150, 22, 11, 0x00102A22u); fb_fill_rounded_rect((int32_t)(win_x + win_w - 160), (int32_t)(tab_bar_y + 17), 6, 6, 3, CDR_C_GREEN); font_draw_string(win_x + win_w - 148, tab_bar_y + 15, "SOMA-LANG + Python", 0x00A7F3D0u, 1); }
     }
 
     content_y = tab_bar_y + 42;
@@ -1992,7 +2059,10 @@ void coder_pick_target(const char *mission, char *out, uint32_t cap)
     /* 3) nombre a partir de la mision: primera palabra significativa tras el verbo */
     static const char *const skip[] = { "crea", "creame", "haz", "hazme", "programa", "programame", "escribe", "genera", "desarrolla", "construye",
         "un", "una", "el", "la", "los", "las", "de", "del", "con", "que", "app", "aplicacion", "aplicación", "programa", "juego", "sencillo", "sencilla",
-        "simple", "pequeno", "pequeño", "nuevo", "nueva", "en", "soma", "soma-lang", "para", "me", "por", "favor", 0 };
+        "simple", "pequeno", "pequeño", "nuevo", "nueva", "en", "soma", "soma-lang", "para", "me", "por", "favor", "python", "usando", "lenguaje",
+        /* SOMA_235_PROGRAMADOR: verbos con los que se suele empezar ("muestra los primos" -> primos.soma, no muestra.soma) */
+        "muestra", "muestre", "mostrar", "lee", "leer", "lea", "dibuja", "calcula", "calcule", "cuenta", "di", "dime", "imprime",
+        "pinta", "pide", "pida", "quiero", "necesito", "dame", "hace", "hacer", "convierte", "ordena", "busca", "juega", "numeros", "números", 0 };
     char name[40]; name[0] = 0;
     const char *p = mission;
     while (*p && !name[0]) {
@@ -2002,13 +2072,14 @@ void coder_pick_target(const char *mission, char *out, uint32_t cap)
         char w[32]; uint32_t k = 0;
         for (uint32_t i = 0; i < n; i++) { char c = b[i]; if (c >= 'A' && c <= 'Z') c += 32; if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') w[k++] = c; }
         w[k] = 0;
-        int sk = k < 3; for (int i = 0; skip[i] && !sk; i++) if (cdr_eq(w, skip[i])) sk = 1;
+        int sk = k < 3 || b[0] == '/'; for (int i = 0; skip[i] && !sk; i++) if (cdr_eq(w, skip[i])) sk = 1;   /* SOMA_235: rutas fuera */
         if (!sk) cdr_copy(name, sizeof name, w);
     }
     if (!name[0]) cdr_copy(name, sizeof name, "app");
-    cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, name); cdr_cat(out, cap, ".soma");
+    const char *x = cdr_ext_for(mission);                            /* SOMA_239: .py si se programa en Python */
+    cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, name); cdr_cat(out, cap, x);
     for (uint32_t k = 2; vfs_size(out) > 0 && k < 100; k++) {          /* PARCHE 098: crear nunca pisa otro programa */
-        cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, name); cdr_cat(out, cap, "_"); cdr_cat_u32(out, cap, k); cdr_cat(out, cap, ".soma");
+        cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, name); cdr_cat(out, cap, "_"); cdr_cat_u32(out, cap, k); cdr_cat(out, cap, x);
     }
 }
 
@@ -2027,6 +2098,7 @@ int coder_run_mission(const char *target_in, const char *mission, char *out, uin
     for (uint32_t zi = 0; zi < sizeof env; zi++) ((uint8_t *)&env)[zi] = 0;
     env.llm = cdr_env_llm; env.read = cdr_env_read; env.write = cdr_env_write; env.log = cm_log; env.status = cm_status;
     env.cancelled = cm_never; env.max_llm_calls = 7; env.trace = cm_trace_cb;
+    cdr_env_python(&env, target);                                            /* SOMA_239 */
     env.force_new = (vfs_size(target) > 0 && !cdr_has_ci(mission, "modific") && !cdr_has_ci(mission, "mejora") && !cdr_has_ci(mission, "corrige")
                      && !cdr_has_ci(mission, "arregla") && !cdr_has_ci(mission, "cambia") && !cdr_has_ci(mission, "anade") && !cdr_has_ci(mission, "añade")) ? 1 : 0;
     cc_run(&env, target, mission, &cr);
@@ -2037,9 +2109,14 @@ int coder_run_mission(const char *target_in, const char *mission, char *out, uin
         out[0] = 0;
         if (cr.ok) {
             cm_puts(out, max, &p, "Programa listo: "); cm_puts(out, max, &p, target);
+            if (cdr_is_py(target)) {
+                cm_puts(out, max, &p, "\nPython: compila y pasa las comprobaciones.");
+                cm_puts(out, max, &p, "\nEjecutalo con:  python "); cm_puts(out, max, &p, target);
+            } else {
             cm_puts(out, max, &p, "\nCompila y pasa las comprobaciones (");
             char n[12]; n[0] = 0; cdr_cat_u32(n, sizeof n, cr.bc_len); cm_puts(out, max, &p, n); cm_puts(out, max, &p, " bytes de bytecode).");
             cm_puts(out, max, &p, "\nEjecutalo con:  app "); cm_puts(out, max, &p, target);
+            }
             cm_puts(out, max, &p, "\nO abrelo en SOMA Studio con:  studio "); cm_puts(out, max, &p, target);
         } else {
             cm_puts(out, max, &p, "No he conseguido un programa correcto. "); cm_puts(out, max, &p, cr.summary);

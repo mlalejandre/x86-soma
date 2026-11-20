@@ -88,7 +88,8 @@ enum soma_opcode {
     OP_SQRT,
     OP_STR_FIND,
     OP_CHR,
-    OP_ORD
+    OP_ORD,
+    OP_SYS_CLOCK      /* SOMA_235_PROGRAMADOR: + 1 byte (0 hora, 1 minuto, 2 segundo, 3 dia, 4 mes, 5 ano) del reloj del equipo */
 };
 
 /* Capacidades escaladas para aplicaciones complejas */

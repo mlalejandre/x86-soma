@@ -76,6 +76,10 @@
 #define USER_SYS_NET_MASK ((1u << SYS_NET_DNS) | (1u << SYS_TCP_OPEN) | (1u << SYS_TCP_POLL) | (1u << SYS_TCP_SEND) | (1u << SYS_TCP_RECV) | (1u << SYS_TCP_CLOSE))
 #define USER_SYS_DEFAULT  0x000FFFFFu      /* syscalls 0..19: lo de siempre; red y canal del navegador, solo por capacidad. SOMA_192: sin la 20
                                             * (SYS_SVC_NEXT es solo de los servicios aislados, que la llevan en su propio filtro; a un programa normal le devolvia 1) */
+/* SOMA_237_PYTHON: solo para el interprete de Python (orden "python"); ver sys_soma_con / sys_soma_vfs en usermode.c */
+#define SYS_SOMA_CON     30
+#define SYS_SOMA_VFS     31
+#define USER_SYS_PYTHON  (USER_SYS_DEFAULT | (1u << SYS_SOMA_CON) | (1u << SYS_SOMA_VFS))
 #define USER_MAX_SOCKETS  4
 #define USER_MAX_FDS 8
 #define USER_ARGS_MAX 128
@@ -110,6 +114,7 @@ int usermode_demand_fault(uint64_t cr2, uint64_t error_code);   /* 1 = pagina se
 /* PARCHE 139: para la capa de servicios (sandbox.c) */
 int      usermode_cur_index(void);                    /* indice del proceso actual o -1 */
 void     usermode_set_deadline_cur(uint64_t abs_ms);  /* plazo absoluto del proceso actual */
+void     usermode_stop(int idx);                      /* SOMA_237_PYTHON: lo para (como si se le acabara el tiempo) */
 int      usermode_proc_alive(int idx);                /* 1 si sigue vivo (no terminado) */
 uint64_t usermode_proc_as(int idx);                   /* su espacio de direcciones (0 si no hay) */
 uint32_t usermode_proc_tid(int idx);                  /* tid de su hilo (0 si no hay) */
@@ -128,6 +133,10 @@ int64_t usermode_wait(int idx);
 /* SOMA_PARCHE_016_EXEC: carga un ejecutable ELF64 estatico (validado por elf_parse) como proceso nuevo.
  * Devuelve el indice o <0; *err recibe el codigo ELF_E_* si el archivo no es valido. */
 int usermode_exec(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, int *err);
+void usermode_redirect(int idx, char *out, uint32_t cap, const char *input);   /* SOMA_239: salida a un bufer y entrada fija */
+int  usermode_python_window_take(void);                            /* SOMA_239: 1 si Python abrio la ventana (y lo olvida) */
+void usermode_python_set_source(const char *src, uint32_t len);   /* SOMA_239: codigo para python -s / -x (0 = ninguno) */
+int usermode_exec_caps(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, uint32_t sysmask, int *err);   /* SOMA_237 */
 int usermode_format_table(char *out, uint32_t max, int reap);   /* lista de procesos; reap=1 libera los terminados */
 void usermode_install_programs(void);                            /* copia los ELF del kernel a /bin/ */                                                             /* espera y libera */
 

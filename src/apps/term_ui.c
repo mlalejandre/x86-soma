@@ -85,6 +85,19 @@ void term_set_debug(int on) { g_debug = on; G.valid = 0; }
 
 static void ensure_init(void) { if (!g_inited) { tc_init(TC, 80); g_inited = 1; term_slot_inited[term_active_slot] = 1; } }
 
+/* SOMA_237_PYTHON: mientras una orden pide lineas (python), el prompt es lo que ella ha escrito sin salto (">>> ", "nombre? ")
+ * y solo en la sesion de terminal donde corre. NULL = el de siempre. */
+static char g_prompt[96]; static int g_prompt_vis = -1, g_prompt_slot = -1;
+void term_set_prompt(int slot, const char *p)
+{
+    if (!p) { g_prompt_vis = -1; g_prompt_slot = -1; return; }
+    int n = 0, v = 0;
+    for (; p[n] && n < (int)sizeof g_prompt - 1; ++n) { g_prompt[n] = p[n]; if (((uint8_t)p[n] & 0xC0) != 0x80) v++; }
+    g_prompt[n] = 0; g_prompt_vis = v; g_prompt_slot = slot;
+}
+static const char *cur_prompt(void) { return g_prompt_vis >= 0 && g_prompt_slot == term_active_slot ? g_prompt : PROMPT; }
+static int cur_prompt_vis(void) { return g_prompt_vis >= 0 && g_prompt_slot == term_active_slot ? g_prompt_vis : PROMPT_VIS; }
+
 void term_ui_init(void) { ensure_init(); tc_clear(TC); live_on = 0; popup = 0; drag = 0; }
 
 void term_clear(void) { ensure_init(); tc_clear(TC); live_on = 0; }
@@ -253,7 +266,7 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
     /* la linea del prompt es la ultima linea del nucleo */
     {
         char live[TC_RAW]; int p = 0;
-        for (const char *s = PROMPT; *s && p < TC_RAW - 1; ++s) live[p++] = *s;
+        for (const char *s = cur_prompt(); *s && p < TC_RAW - 1; ++s) live[p++] = *s;
         for (uint32_t i = 0; i < cmd_len && p < TC_RAW - 1; ++i) live[p++] = cmd[i];
         live[p] = 0;
         if (live_on) tc_replace_last(TC, live); else { tc_add(TC, live); live_on = 1; }
@@ -282,7 +295,7 @@ void term_render(uint32_t ux, uint32_t uy, uint32_t uw, uint32_t uh, const char 
     {
         int live_idx = TC->count - 1;
         /* columna visual del cursor: caracteres (no bytes) desde el inicio de la orden */
-        int vc = PROMPT_VIS;
+        int vc = cur_prompt_vis();
         for (uint32_t i = 0; i < cursor_pos && i < cmd_len; ++i) { uint8_t b = (uint8_t)cmd[i]; if ((b & 0xC0) != 0x80) vc++; }
         for (int r = 0; r < G.rows; ++r) {
             int idx, sub;

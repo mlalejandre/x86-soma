@@ -22,6 +22,9 @@
 #include "tcp.h"        /* PARCHE 142 */
 #include "dns.h"
 #include "net.h"
+#include "rtc.h"        /* SOMA_237_PYTHON */
+int gui_is_running(void);
+#include "gui.h"                /* SOMA_239: gui_soma_win_* */
 
 #define MSR_EFER   0xC0000080u
 #define MSR_STAR   0xC0000081u
@@ -67,6 +70,9 @@ struct uproc {
     int      fb;                            /* SOMA_PARCHE_021_FPU: este proceso tiene la pantalla */
     uint8_t  fpu[512] __attribute__((aligned(16)));   /* SOMA_PARCHE_021_FPU: estado x87/MMX/SSE (FXSAVE) del proceso */
     uint8_t  io[16384];                     /* bufer de rebote por proceso para SYS_READ (una lectura puede ceder la CPU) */
+    char    *rd_out;                        /* SOMA_239: salida redirigida a un bufer del nucleo (0 = a la consola) */
+    uint32_t rd_cap, rd_len;
+    const char *rd_in;                      /* SOMA_239: entrada fija (lineas con \n); agotada = fin de entrada */
 };
 
 static struct uproc procs[USER_MAX_PROCS];
@@ -433,6 +439,192 @@ static int64_t sys_getargs(uint64_t ubuf, uint64_t len)
     return (int64_t)n;
 }
 
+/* SOMA_237_PYTHON: las dos llamadas propias del interprete de Python (solo las tiene el proceso que lanza la orden "python").
+ * SYS_SOMA_CON: op 0 = leer una linea de la consola (o de la entrada simulada si la orden se ejecuta capturada; -1 = no hay mas),
+ *               op 1 = reloj del equipo en out[6] = anio, mes, dia, hora, minuto, segundo. */
+#define SOMA_LINE_MAX 1024
+static uint64_t path_len(const char *p) { uint64_t n = 0; while (p[n]) n++; return n; }
+/* SOMA_239_PYTHON_GRAFICO: la ventana de las aplicaciones (la misma que usa SOMA-LANG: gui_soma_win_*) para el proceso de Python.
+ *   op 2: crear(req = { titulo, largo, ancho, alto })   -> 1 abierta | 0 sin escritorio
+ *   op 3: cerrar
+ *   op 4: dibujar(lote, bytes): palabras de 32 bits [orden, args...] (ver PYG_* abajo); como mucho PYG_MAX bytes por llamada
+ *   op 5: presentar (el escritorio compone el fotograma)
+ *   op 6: estado(out[8], consumir) = { activa, ancho, alto, raton x, raton y, boton, dentro, clic }; el clic solo se borra con consumir=1
+ *   op 7: tecla -> codigo (0 = ninguna; flechas 16/14/2/6 como en SOMA-LANG)
+ *   op 8: codigo fuente inyectado por el nucleo (programador: comprobar o probar sin escribir el archivo): out, max -> bytes */
+#define PYG_CLEAR 1
+#define PYG_PIXEL 2
+#define PYG_RECT  3
+#define PYG_LINE  4
+#define PYG_CIRC  5
+#define PYG_TEXT  6
+#define PYG_MAX   (64u * 1024u)
+static volatile int g_py_win;                                      /* el proceso de Python abrio la ventana (se cierra al terminar) */
+static int g_py_click;                                             /* clic pendiente de leer con win.mouse() */
+static const char *volatile g_py_src; static volatile uint32_t g_py_src_len;
+void usermode_redirect(int idx, char *out, uint32_t cap, const char *input)   /* SOMA_239: llamar justo despues de lanzarlo */
+{
+    if (idx < 0 || idx >= USER_MAX_PROCS || !out || cap < 2) return;
+    struct uproc *u = &procs[idx];
+    out[0] = 0; u->rd_len = 0; u->rd_cap = cap; u->rd_in = input ? input : ""; u->rd_out = out;
+}
+int  usermode_python_window_take(void) { int w = g_py_win; g_py_win = 0; return w; }
+void usermode_python_set_source(const char *src, uint32_t len) { g_py_src = src; g_py_src_len = src ? len : 0; }
+static int32_t *g_pyg;
+static int64_t pyg_draw(uint64_t ubuf, uint64_t len)
+{
+    if (len == 0) return 0;
+    if (len > PYG_MAX || (len & 3) || !user_range(ubuf, len, 0)) return E_FAULT;
+    if (!g_pyg) { g_pyg = (int32_t *)kmalloc(PYG_MAX + 4); if (!g_pyg) return SOMA_ENOMEM; }
+    copy_from_user(g_pyg, ubuf, len);
+    uint32_t n = (uint32_t)(len / 4), i = 0;
+    arch_interrupts_enable();
+    while (i < n) {
+        int32_t o = g_pyg[i]; const int32_t *a = g_pyg + i + 1; uint32_t left = n - i - 1;
+        if (o == PYG_CLEAR && left >= 1) { gui_soma_win_clear((uint32_t)a[0]); i += 2; }
+        else if (o == PYG_PIXEL && left >= 3) { gui_soma_win_pixel(a[0], a[1], (uint32_t)a[2]); i += 4; }
+        else if (o == PYG_RECT && left >= 5) { gui_soma_win_rect(a[0], a[1], a[2], a[3], (uint32_t)a[4]); i += 6; }
+        else if (o == PYG_LINE && left >= 5) {
+            int32_t x0 = a[0], y0 = a[1], x1 = a[2], y1 = a[3];                     /* acotada: una linea de 2^31 px no cuelga el nucleo */
+            if (x0 > -4096 && x0 < 8192 && x1 > -4096 && x1 < 8192 && y0 > -4096 && y0 < 8192 && y1 > -4096 && y1 < 8192)
+                gui_soma_win_line(x0, y0, x1, y1, (uint32_t)a[4]);
+            i += 6;
+        }
+        else if (o == PYG_CIRC && left >= 4) { if (a[2] > 0 && a[2] < 4096) gui_soma_win_circle(a[0], a[1], a[2], (uint32_t)a[3]); i += 5; }
+        else if (o == PYG_TEXT && left >= 4) {
+            uint32_t tl = (uint32_t)a[3], words = (tl + 3) / 4;
+            if (tl > 1024 || words > left - 4) break;
+            char t[1025]; const char *src = (const char *)(a + 4);
+            for (uint32_t k = 0; k < tl; ++k) t[k] = src[k] ? src[k] : ' ';
+            t[tl] = 0;
+            gui_soma_win_text(a[0], a[1], t, (uint32_t)a[2]);
+            i += 5 + words;
+        }
+        else break;                                                             /* lote mal formado: se ignora el resto */
+    }
+    arch_interrupts_disable();
+    return 0;
+}
+static int64_t sys_soma_con(uint64_t op, uint64_t ubuf, uint64_t len)
+{
+    if (op == 2) {
+        uint64_t q[4];
+        if (!user_range(ubuf, sizeof q, 0)) return E_FAULT;
+        copy_from_user(q, ubuf, sizeof q);
+        char t[64]; uint64_t tl = q[1] < sizeof t - 1 ? q[1] : sizeof t - 1;
+        if (tl && !user_range(q[0], tl, 0)) return E_FAULT;
+        if (tl) copy_from_user(t, q[0], tl);
+        t[tl] = 0;
+        int w = (int)(q[2] > 2000 ? 2000 : q[2]), h = (int)(q[3] > 2000 ? 2000 : q[3]);
+        arch_interrupts_enable();
+        int ok = gui_is_running() && gui_soma_win_open(t, w, h);
+        arch_interrupts_disable();
+        if (ok) { g_py_win = 1; g_py_click = 0; }
+        return ok ? 1 : 0;
+    }
+    if (op == 3) { arch_interrupts_enable(); gui_soma_win_close(); arch_interrupts_disable(); g_py_win = 0; return 0; }
+    if (op == 4) return pyg_draw(ubuf, len);
+    if (op == 5) { arch_interrupts_enable(); gui_soma_win_present(); arch_interrupts_disable(); return 0; }
+    if (op == 6) {
+        if (!user_range(ubuf, 8 * sizeof(int64_t), 1)) return E_FAULT;
+        int st[8] = { 0 };
+        arch_interrupts_enable();
+        st[0] = gui_soma_win_is_active();
+        gui_soma_win_get_size(&st[1], &st[2]);
+        gui_soma_win_get_mouse(&st[3], &st[4], &st[5], &st[6], &st[7]);
+        arch_interrupts_disable();
+        g_py_click |= st[7]; st[7] = g_py_click;                   /* el clic se guarda hasta que lo lea win.mouse() (len = 1): */
+        if (len) g_py_click = 0;                                   /* win.active() o win.size() no se lo comen */
+        int64_t v[8]; for (int i = 0; i < 8; ++i) v[i] = st[i];
+        copy_to_user(ubuf, v, sizeof v);
+        usermode_cur->nsys = 0;                                    /* un juego pregunta el estado sin parar: no es un bucle desbocado */
+        return 0;
+    }
+    if (op == 7) { arch_interrupts_enable(); int k = gui_soma_win_get_key(); arch_interrupts_disable(); return k; }
+    if (op == 8) {
+        if (!g_py_src) return SOMA_ENOENT;
+        if (ubuf == 0) return g_py_src_len;
+        uint64_t m = len < g_py_src_len ? len : g_py_src_len;
+        if (m && !user_range(ubuf, m, 1)) return E_FAULT;
+        if (m) copy_to_user(ubuf, g_py_src, m);
+        return (int64_t)m;
+    }
+    if (op == 1) {
+        if (!user_range(ubuf, 6 * sizeof(int64_t), 1)) return E_FAULT;
+        struct rtc_time t; rtc_get_datetime(&t);
+        int64_t v[6] = { t.year, t.month, t.day, t.hour, t.min, t.sec };
+        copy_to_user(ubuf, v, sizeof v);
+        return 0;
+    }
+    if (op != 0) return E_INVAL;
+    if (len == 0) return 0;
+    if (len > SOMA_LINE_MAX) len = SOMA_LINE_MAX;
+    if (!user_range(ubuf, len, 1)) return E_FAULT;
+    if (usermode_cur->rd_out) {                                     /* SOMA_239: entrada fija del que lo lanzo */
+        const char *p = usermode_cur->rd_in;
+        if (!p || !*p) return -1;
+        char line[SOMA_LINE_MAX]; uint64_t n = 0;
+        while (*p && *p != '\n') { if (n < len) line[n++] = *p; p++; }
+        if (*p == '\n') p++;
+        usermode_cur->rd_in = p;
+        if (n) copy_to_user(ubuf, line, n);
+        return (int64_t)n;
+    }
+    if (console_capture_input_eof()) return -1;                    /* ejecucion capturada (terminal de la GUI): entrada agotada */
+    if (!console_capture_mine() && gui_is_running()) return -1;    /* sin captura y con el escritorio: el teclado es de la GUI */
+    char line[SOMA_LINE_MAX + 1];
+    arch_interrupts_enable();
+    int n = kgetline(line, (uint32_t)len + 1);
+    arch_interrupts_disable();
+    if (n < 0) return -1;
+    usermode_cur->nsys = 0;                                        /* esperar al teclado no cuenta como bucle desbocado */
+    if (n) copy_to_user(ubuf, line, (uint64_t)n);
+    return n;
+}
+/* SYS_SOMA_VFS(op, &req): archivos del VFS de SOMA. op 0 = leer (hasta req.len bytes), 1 = escribir (crea o sustituye; SOLO bajo
+ * /workspace/), 2 = tamano. La ruta se normaliza y pasa el mismo filtro que SYS_OPEN: nada de /etc, /agent, /mem, /.ramfs... */
+struct soma_vfs_req { uint64_t path, plen, buf, len; };
+#define SOMA_VFS_WMAX (4u << 20)                                   /* escritura maxima: 4 MiB */
+static int64_t sys_soma_vfs(uint64_t op, uint64_t ureq)
+{
+    struct soma_vfs_req r;
+    if (!user_range(ureq, sizeof r, 0)) return E_FAULT;
+    copy_from_user(&r, ureq, sizeof r);
+    if (r.plen == 0 || r.plen >= FS_NAME_MAX) return SOMA_ENAMETOOLONG;
+    if (!user_range(r.path, r.plen, 0)) return E_FAULT;
+    char raw[FS_NAME_MAX], path[AGENT_POLICY_PATH_MAX + 1];
+    copy_from_user(raw, r.path, r.plen); raw[r.plen] = 0;
+    if (!user_path_allowed(raw, (unsigned)r.plen)) return E_ACCES;
+    if (!agent_path_canon(raw, path, sizeof path) || path_len(path) >= FS_NAME_MAX) return E_INVAL;
+    if (op == 2) {
+        arch_interrupts_enable(); int sz = vfs_size(path); arch_interrupts_disable();
+        return sz < 0 ? SOMA_ENOENT : sz;
+    }
+    if (op == 0) {
+        if (r.len && !user_range(r.buf, r.len, 1)) return E_FAULT;
+        uint32_t n = 0;
+        arch_interrupts_enable(); char *d = vfs_read_alloc(path, &n); arch_interrupts_disable();
+        if (!d) return SOMA_ENOENT;
+        uint64_t m = n < r.len ? n : r.len;
+        if (m) copy_to_user(r.buf, d, m);
+        kfree(d);
+        return (int64_t)m;
+    }
+    if (op != 1) return E_INVAL;
+    static const char ws[] = "/workspace/";
+    for (unsigned i = 0; i < sizeof ws - 1; ++i) if (path[i] != ws[i]) return E_ACCES;
+    if (!path[sizeof ws - 1]) return E_INVAL;
+    if (r.len > SOMA_VFS_WMAX) return SOMA_EFBIG;
+    if (r.len && !user_range(r.buf, r.len, 0)) return E_FAULT;
+    char *k = (char *)kmalloc(r.len + 1);
+    if (!k) return SOMA_ENOMEM;
+    if (r.len) copy_from_user(k, r.buf, r.len);
+    k[r.len] = 0;
+    arch_interrupts_enable(); int w = vfs_write(path, k, (uint32_t)r.len); arch_interrupts_disable();
+    kfree(k);
+    return w < 0 ? SOMA_EIO : (int64_t)r.len;
+}
+
 int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
 {
     (void)a2;
@@ -459,6 +651,13 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
         if (a1 > USER_WRITE_MAX) a1 = USER_WRITE_MAX;            /* PARCHE 126: escritura corta */
         if (!user_range_ok(a0, a1)) return E_FAULT;
         usermode_cur->wbytes += a1;
+        if (usermode_cur->rd_out) {                                 /* SOMA_239: salida a un bufer del nucleo (el que lo lanzo la lee) */
+            struct uproc *u = usermode_cur;
+            uint64_t room = u->rd_cap > u->rd_len + 1 ? u->rd_cap - u->rd_len - 1 : 0, n = a1 < room ? a1 : room;
+            if (n) { copy_from_user(u->rd_out + u->rd_len, a0, n); u->rd_len += (uint32_t)n; }
+            u->rd_out[u->rd_len] = 0;
+            return (int64_t)a1;
+        }
         {   /* se copia a un buffer del kernel con SMAP abierto el minimo tiempo, y se imprime ya cerrado */
             char buf[256];
             const char *s = (const char *)a0;
@@ -500,6 +699,8 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
     case SYS_CLOSE:   { struct ufd *f = get_fd((int64_t)a0); if (!f) return E_BADF; f->used = 0; return 0; }
     case SYS_FSIZE:   return sys_fsize(a0);
     case SYS_GETARGS: return sys_getargs(a0, a1);
+    case SYS_SOMA_CON: return sys_soma_con(a0, a1, a2);       /* SOMA_237_PYTHON */
+    case SYS_SOMA_VFS: return sys_soma_vfs(a0, a1);
     case SYS_AUDIO_OPEN: {
         int r = audio_sys_open((uint32_t)a0, usermode_cur->tid);
         if (r == 0) usermode_cur->audio = 1;
@@ -547,6 +748,7 @@ int usermode_active(void) { return usermode_cur != 0; }
 /* PARCHE 139 */
 int usermode_cur_index(void) { return usermode_cur ? (int)(usermode_cur - procs) : -1; }
 void usermode_set_deadline_cur(uint64_t abs_ms) { if (usermode_cur) usermode_cur->deadline_ms = abs_ms; }
+void usermode_stop(int idx) { if (idx >= 0 && idx < USER_MAX_PROCS && procs[idx].state == 1) procs[idx].deadline_ms = 0; }   /* SOMA_237: muere en su proximo tick en ring 3 */
 int usermode_proc_alive(int idx) { return idx >= 0 && idx < USER_MAX_PROCS && (procs[idx].state == 1 || procs[idx].state == 3); }
 uint32_t usermode_proc_tid(int idx) { return (idx >= 0 && idx < USER_MAX_PROCS && procs[idx].state == 1) ? procs[idx].tid : 0; }
 uint64_t usermode_proc_as(int idx) { return (idx >= 0 && idx < USER_MAX_PROCS && procs[idx].state == 1) ? procs[idx].as : 0; }
@@ -670,6 +872,7 @@ static struct uproc *slot_begin(void)
             for (int k = 0; k < USER_MAX_FDS; ++k) up->fds[k].used = 0;
             up->args[0] = 0; up->name[0] = 0; up->audio = 0; up->fb = 0;
             up->sysmask = USER_SYS_DEFAULT; up->reserve_frames = 0; up->nregions = 0;   /* PARCHE 138 */
+            up->rd_out = 0; up->rd_cap = up->rd_len = 0; up->rd_in = 0;                 /* SOMA_239 */
             for (int k = 0; k < USER_MAX_REGIONS; ++k) up->regions[k] = 0;
             /* estado inicial de la FPU: FCW=0x037F (todas las excepciones enmascaradas, doble extendida), MXCSR=0x1F80
              * (idem SSE, redondeo al mas cercano), registros vacios: igual que tras FNINIT */
@@ -760,6 +963,14 @@ static int exec_common(const char *name, const void *img, size_t len, uint32_t m
 int usermode_exec(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, int *err)
 {
     return exec_common(name, img, len, max_ms, args, 0, err);
+}
+/* SOMA_237_PYTHON: con argumentos Y con un filtro de llamadas propio (el interprete de Python: lo de siempre + SYS_SOMA_CON/VFS) */
+int usermode_exec_caps(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, uint32_t sysmask, int *err)
+{
+    struct uexec_spec sp;
+    uint8_t *z = (uint8_t *)&sp; for (size_t i = 0; i < sizeof sp; ++i) z[i] = 0;
+    sp.sysmask = sysmask;
+    return exec_common(name, img, len, max_ms, args, &sp, err);
 }
 
 /* PARCHE 138: igual que usermode_exec, con filtro de syscalls y regiones prestadas. Las regiones deben estar fuera del

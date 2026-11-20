@@ -11,6 +11,7 @@
 #include "netif.h"
 #include "mutex.h"
 #include "rng.h"
+#include "soma_str.h"
 
 #define ETH_HLEN        14
 #define ETHERTYPE_ARP   0x0806
@@ -128,68 +129,37 @@ static int arp_lookup(const uint8_t *ip, uint8_t *mac_out)
     return 0;
 }
 
-static void append_ch(char *dst, uint32_t max, uint32_t *pos, char c)
-{
-    if (*pos + 1 < max) { dst[(*pos)++] = c; dst[*pos] = '\0'; }
-}
-
-static void append_str_arp(char *dst, uint32_t max, uint32_t *pos, const char *s)
-{
-    while (*s && *pos + 1 < max) dst[(*pos)++] = *s++;
-    dst[*pos] = '\0';
-}
-
-static void append_dec_u8(char *dst, uint32_t max, uint32_t *pos, uint8_t v)
-{
-    char tmp[4]; int n = 0;
-    if (v == 0) { append_ch(dst, max, pos, '0'); return; }
-    while (v) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
-    while (n) append_ch(dst, max, pos, tmp[--n]);
-}
-
-static void append_hex_nibble(char *dst, uint32_t max, uint32_t *pos, uint8_t n)
-{
-    n &= 0x0F;
-    append_ch(dst, max, pos, n < 10 ? (char)('0' + n) : (char)('A' + n - 10));
-}
-
-static void append_hex_u8(char *dst, uint32_t max, uint32_t *pos, uint8_t v)
-{
-    append_hex_nibble(dst, max, pos, v >> 4);
-    append_hex_nibble(dst, max, pos, v);
-}
-
 int arp_format_cache(char *out, uint32_t max)
 {
     uint32_t pos = 0;
-    append_str_arp(out, max, &pos, "Cache ARP en vivo:\n");
+    soma_str_put(out, max, &pos, "Cache ARP en vivo:\n");
     int count = 0;
     for (int i = 0; i < ARP_CACHE_SIZE; ++i) {
         if (!arp_cache[i].valid) continue;
         count++;
-        append_str_arp(out, max, &pos, "  ");
+        soma_str_put(out, max, &pos, "  ");
         for (int k = 0; k < 4; ++k) {
-            append_dec_u8(out, max, &pos, arp_cache[i].ip[k]);
-            if (k != 3) append_ch(out, max, &pos, '.');
+            soma_str_put_dec(out, max, &pos, arp_cache[i].ip[k]);
+            if (k != 3) soma_str_putc(out, max, &pos, '.');
         }
-        append_str_arp(out, max, &pos, " -> ");
+        soma_str_put(out, max, &pos, " -> ");
         for (int k = 0; k < 6; ++k) {
-            append_hex_u8(out, max, &pos, arp_cache[i].mac[k]);
-            if (k != 5) append_ch(out, max, &pos, ':');
+            soma_str_put_hex(out, max, &pos, arp_cache[i].mac[k], 2, 1);
+            if (k != 5) soma_str_putc(out, max, &pos, ':');
         }
-        append_ch(out, max, &pos, '\n');
+        soma_str_putc(out, max, &pos, '\n');
     }
-    if (count == 0) append_str_arp(out, max, &pos, "  (vacia)\n");
+    if (count == 0) soma_str_put(out, max, &pos, "  (vacia)\n");
     {   /* SOMA_191: contadores de la defensa */
         static const char *const lbl[4] = { "  ARP no pedido ignorado: ", ", conflictos: ", ", suplantaciones rechazadas: ", ", cambios aceptados: " };
         const uint32_t val[4] = { arp_stat_ignored, arp_stat_conflicts, arp_stat_rejected, arp_stat_changed };
         for (int i = 0; i < 4; ++i) {
             char d[12]; int n = 0; uint32_t v = val[i];
             do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v);
-            append_str_arp(out, max, &pos, lbl[i]);
-            while (n) append_ch(out, max, &pos, d[--n]);
+            soma_str_put(out, max, &pos, lbl[i]);
+            while (n) soma_str_putc(out, max, &pos, d[--n]);
         }
-        append_ch(out, max, &pos, '\n');
+        soma_str_putc(out, max, &pos, '\n');
     }
     return (int)pos;
 }

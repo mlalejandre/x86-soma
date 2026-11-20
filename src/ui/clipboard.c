@@ -17,7 +17,7 @@ struct clip_ent {
 
 static struct clip_ent hist[CLIP_HIST_MAX];     /* hist[0] = el mas reciente */
 static uint32_t g_seq = 1;
-static char     g_toast[96];
+static char     g_toast[128];
 static uint64_t g_toast_until;
 static int      g_ov_open, g_ov_sel;
 static int      g_ov_dirty;                      /* hay que borrar pantalla al cerrar */
@@ -179,6 +179,7 @@ void clip_toast(const char *msg)
     g_toast[k] = 0;
     g_toast_until = timer_get_uptime_ms() + 1800;
 }
+void clip_toast_ms(const char *msg, uint32_t ms) { clip_toast(msg); g_toast_until = timer_get_uptime_ms() + ms; }   /* SOMA_238 */
 
 /* ------------------------------ panel de historial ------------------------------ */
 int clip_overlay_active(void) { return g_ov_open; }

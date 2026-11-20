@@ -59,6 +59,16 @@ static inline int ud_mark_ok(const uint8_t *s, uint64_t part_lba, uint64_t part_
     return ud_eq(s, UD_MARK, 16) && ud_le32(s + 16) == (uint32_t)part_lba && ud_le32(s + 20) == (uint32_t)part_n && ud_le32(s + 24) == sig;
 }
 
+/* SOMA_238_GUARDADO: la marca es nuestra y del mismo sitio aunque el tamano o la firma del disco ya no coincidan (MBR reescrito por
+ * otra herramienta, ampliacion a medias...). Se acepta y se rehace la marca con los valores de ahora: antes se ignoraba la particion
+ * y SOMA trabajaba en memoria sin avisar. */
+static inline int ud_mark_loose(const uint8_t *s, uint64_t part_lba)
+{
+    return ud_eq(s, UD_MARK, 16) && ud_le32(s + 16) == (uint32_t)part_lba;
+}
+#define UD_FILE_NAME "SOMADATA.IMG"                         /* disco en un fichero de la particion de arranque (sin SOMADATA) */
+#define UD_FILE_MIN  131072u                                /* 64 MiB */
+
 static inline uint64_t ud_data_sectors(uint64_t part_n)
 {
     if (part_n <= UD_DATA_OFF) return 0;

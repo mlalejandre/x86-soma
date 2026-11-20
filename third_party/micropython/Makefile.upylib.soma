@@ -1,0 +1,9 @@
+# SOMA = raiz del proyecto; MICROPYTHON_TOP = clon de MicroPython en el commit de LEEME_SOMA.md
+SOMA ?= ..
+MICROPYTHON_TOP ?= ../micropython
+# SOMA: se escanean (qstr y MP_REGISTER_MODULE) python.c (copia) y los modulos de extmod que compila SOMA.
+# Va antes del include: las dependencias se expanden al leer.
+SOMA_EXTMOD = $(addprefix $(MICROPYTHON_TOP)/extmod/,modrandom.c modjson.c modre.c modheapq.c modbinascii.c)
+SRC_QSTR = python_scan.c $(SOMA_EXTMOD)
+CFLAGS = -I$(SOMA)/src/user
+include $(MICROPYTHON_TOP)/ports/embed/embed.mk

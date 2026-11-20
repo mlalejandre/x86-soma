@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "rp1_proto.h"
 #include "console.h"
+#include "soma_str.h"
 /* PARCHE 067: busca el RP1 en PCIe2, toma su BAR1 (perifericos) y lee SYSINFO. */
 static int st;                                      /* 0 = sin intentar, 1 = encontrado, -1 = no hay */
 static uint64_t bar1_cpu, bar1_size;
@@ -40,21 +41,14 @@ uint64_t rp1_xhci_base(int n)
     return rp1_periph_cpu(bar1_cpu, bar1_size, n ? RP1_USB1 : RP1_USB0);
 }
 
-static void put(char *o, uint32_t max, uint32_t *p, const char *s) { while (*s && *p + 1 < max) o[(*p)++] = *s++; if (max) o[*p < max ? *p : max - 1] = 0; }
-static void puthex(char *o, uint32_t max, uint32_t *p, uint64_t v, int digits)
-{
-    for (int i = digits - 1; i >= 0; i--) { char c = "0123456789abcdef"[(v >> (4 * i)) & 15]; if (*p + 1 < max) o[(*p)++] = c; }
-    if (max) o[*p < max ? *p : max - 1] = 0;
-}
-
 void rp1_format(char *out, uint32_t max)
 {
     uint32_t p = 0;
     if (max) out[0] = 0;
-    if (rp1_init() != 0) { put(out, max, &p, "RP1: no detectado en PCIe2 (QEMU raspi5b no lo emula)\n"); return; }
-    put(out, max, &p, "RP1: BAR1 en 0x"); puthex(out, max, &p, bar1_cpu, 10); put(out, max, &p, ", SYSINFO 0x"); puthex(out, max, &p, chip_id, 8); put(out, max, &p, "\n");
+    if (rp1_init() != 0) { soma_str_put(out, max, &p, "RP1: no detectado en PCIe2 (QEMU raspi5b no lo emula)\n"); return; }
+    soma_str_put(out, max, &p, "RP1: BAR1 en 0x"); soma_str_put_hex(out, max, &p, bar1_cpu, 10, 0); soma_str_put(out, max, &p, ", SYSINFO 0x"); soma_str_put_hex(out, max, &p, chip_id, 8, 0); soma_str_put(out, max, &p, "\n");
     for (int i = RP1_USB0; i <= RP1_USB1; i++) {
-        put(out, max, &p, "  "); put(out, max, &p, rp1_periph_name(i)); put(out, max, &p, " en 0x");
-        puthex(out, max, &p, rp1_periph_cpu(bar1_cpu, bar1_size, i), 10); put(out, max, &p, "\n");
+        soma_str_put(out, max, &p, "  "); soma_str_put(out, max, &p, rp1_periph_name(i)); soma_str_put(out, max, &p, " en 0x");
+        soma_str_put_hex(out, max, &p, rp1_periph_cpu(bar1_cpu, bar1_size, i), 10, 0); soma_str_put(out, max, &p, "\n");
     }
 }

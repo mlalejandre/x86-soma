@@ -76,6 +76,51 @@ static inline void soma_sbuf_append_u32(soma_sbuf_t *sb, uint32_t val)
     }
 }
 
+/* SOMA_229_TEXTO: el resto de piezas para componer texto, para que cada archivo no tenga su propia copia.
+ * Mismo contrato que todo lo de arriba: nunca se escribe fuera del buffer, siempre queda NUL y lo que no cabe se corta
+ * (de un numero sale el principio, como si se escribiera cifra a cifra). */
+static inline void soma_sbuf_append_u64(soma_sbuf_t *sb, uint64_t val)
+{
+    char tmp[20];
+    int p = 0;
+    do { tmp[p++] = (char)('0' + (val % 10)); val /= 10; } while (val);
+    while (p > 0) soma_sbuf_append_char(sb, tmp[--p]);
+}
+
+/* digits cifras hexadecimales (con ceros a la izquierda); upper: 'A'..'F' o 'a'..'f' */
+static inline void soma_sbuf_append_hex(soma_sbuf_t *sb, uint64_t val, int digits, int upper)
+{
+    const char *h = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    for (int i = digits - 1; i >= 0; i--) soma_sbuf_append_char(sb, h[(val >> (i * 4)) & 15]);
+}
+
+/* La misma escritura sobre la forma (buffer, tamano, &posicion) que usan muchas funciones del nucleo. */
+static inline void soma_str_putc(char *out, uint32_t max, uint32_t *pos, char c)
+{
+    soma_sbuf_t sb = { out, max, *pos };
+    soma_sbuf_append_char(&sb, c);
+    *pos = sb.len;
+}
+static inline void soma_str_put(char *out, uint32_t max, uint32_t *pos, const char *s)
+{
+    if (!out || max == 0 || *pos >= max) return;
+    soma_sbuf_t sb = { out, max, *pos };
+    soma_sbuf_append_str(&sb, s);
+    *pos = sb.len;
+}
+static inline void soma_str_put_dec(char *out, uint32_t max, uint32_t *pos, uint64_t v)
+{
+    soma_sbuf_t sb = { out, max, *pos };
+    soma_sbuf_append_u64(&sb, v);
+    *pos = sb.len;
+}
+static inline void soma_str_put_hex(char *out, uint32_t max, uint32_t *pos, uint64_t v, int digits, int upper)
+{
+    soma_sbuf_t sb = { out, max, *pos };
+    soma_sbuf_append_hex(&sb, v, digits, upper);
+    *pos = sb.len;
+}
+
 static inline int soma_sbuf_eq(const char *a, const char *b)
 {
     if (!a || !b) return 0;

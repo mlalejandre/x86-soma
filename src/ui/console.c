@@ -197,13 +197,59 @@ void console_clear(void)
 
 /* PARCHE 116: captura por hilo */
 static char *volatile cap_buf; static uint32_t cap_cap, cap_len; static struct tcb *volatile cap_owner; static const char *cap_in;
+static volatile uint32_t cap_guest;            /* SOMA_237_PYTHON */
+static char cap_feed[2048]; static volatile uint32_t cap_feed_len; static volatile int cap_live, cap_feed_eof;
 void console_capture_begin(char *buf, uint32_t cap, const char *input)
 {
     if (!buf || cap == 0) return;
     buf[0] = 0; cap_cap = cap; cap_len = 0; cap_in = input ? input : ""; cap_owner = thread_current(); cap_buf = buf;
 }
-uint32_t console_capture_end(void) { uint32_t n = cap_len; cap_buf = 0; cap_owner = 0; cap_in = 0; return n; }
-void console_capture_abort(void) { cap_buf = 0; cap_owner = 0; cap_in = 0; }
+uint32_t console_capture_end(void) { uint32_t n = cap_len; cap_buf = 0; cap_owner = 0; cap_in = 0; cap_guest = 0; cap_live = 0; return n; }
+void console_capture_abort(void) { cap_buf = 0; cap_owner = 0; cap_in = 0; cap_guest = 0; cap_live = 0; }
+/* SOMA_237_PYTHON: un hilo "invitado" (el proceso de ring 3 que lanza la orden capturada) comparte la captura de su dueno: su salida
+ * y su entrada simulada. Asi `python` en el terminal de la GUI muestra lo que imprime el script. Se quita al terminar la captura. */
+static int cap_mine(void)
+{
+    if (!cap_buf) return 0;
+    struct tcb *t = thread_current();
+    return t == cap_owner || (t && cap_guest && t->tid == cap_guest);
+}
+int console_capture_guest(uint32_t tid)
+{
+    if (!cap_buf || thread_current() != cap_owner) return 0;
+    cap_guest = tid;
+    return 1;
+}
+/* SOMA_237_PYTHON: entrada VIVA. En lugar de un texto fijo, el dueno de la captura (el terminal de la GUI) va dando lineas segun
+ * las escribe el usuario; kgetline del hilo capturado espera a la siguiente. feed_eof() cierra la entrada (Esc en el terminal). */
+void console_capture_live(int on) { cap_feed_len = 0; cap_feed_eof = 0; cap_live = on; }
+int console_capture_feed(const char *line)
+{
+    if (!cap_live || !cap_buf) return -1;
+    uint32_t n = 0; while (line[n]) n++;
+    if (cap_feed_len + n + 1 > sizeof cap_feed) return -1;
+    for (uint32_t i = 0; i < n; ++i) cap_feed[cap_feed_len + i] = line[i] == '\n' ? ' ' : line[i];
+    cap_feed[cap_feed_len + n] = '\n';
+    cap_feed_len += n + 1;
+    return 0;
+}
+void console_capture_feed_eof(void) { cap_feed_eof = 1; }
+uint32_t console_capture_len(void) { return cap_buf ? cap_len : 0; }
+void console_capture_consume(uint32_t n)       /* quita los n primeros bytes ya mostrados (la captura viva no se llena nunca) */
+{
+    if (!cap_buf) return;
+    if (n > cap_len) n = cap_len;
+    for (uint32_t i = n; i < cap_len; ++i) cap_buf[i - n] = cap_buf[i];
+    cap_len -= n; cap_buf[cap_len] = 0;
+}
+static int feed_has_line(void) { for (uint32_t i = 0; i < cap_feed_len; ++i) if (cap_feed[i] == '\n') return 1; return 0; }
+int console_capture_mine(void) { return cap_mine(); }
+int console_capture_input_eof(void)
+{
+    if (!cap_mine()) return 0;
+    if (cap_live) return cap_feed_eof && !feed_has_line();
+    return !cap_in || !*cap_in;
+}
 int console_capture_active(void) { return cap_buf != 0; }   /* SOMA_156B: la captura no se anida */
 
 /* PARCHE 132: la espera del transmisor es ACOTADA. Antes, un UART que nunca declara "vacio" (modulo desconectado, control de flujo, hardware raro)
@@ -266,7 +312,7 @@ void klog_pause(int on) { klog_paused = on; }
 
 void kputc(char c)
 {
-    if (cap_buf && thread_current() == cap_owner) {
+    if (cap_mine()) {                                            /* SOMA_237: el dueno o su invitado */
         if (cap_len + 1 < cap_cap) { cap_buf[cap_len++] = c; cap_buf[cap_len] = 0; }
         return;
     }
@@ -937,7 +983,18 @@ static void redraw_prompt_line(const char *line, uint32_t len, uint32_t cursor, 
 int kgetline(char *buf, uint32_t max)
 {
     if (!buf || max == 0) return 0;
-    if (cap_buf && thread_current() == cap_owner) {          /* PARCHE 116: entrada simulada; sin mas lineas, linea vacia (nunca bloquea) */
+    if (cap_mine() && cap_live) {                            /* SOMA_237: entrada viva: espera la linea que de el terminal */
+        while (cap_buf && !cap_feed_eof && !feed_has_line()) thread_sleep(10);
+        uint32_t n = 0, k = 0;
+        if (cap_buf && feed_has_line()) {
+            while (cap_feed[k] != '\n') { if (n + 1 < max) buf[n++] = cap_feed[k]; k++; }
+            k++;
+            for (uint32_t i = k; i < cap_feed_len; ++i) cap_feed[i - k] = cap_feed[i];
+            cap_feed_len -= k;
+        }
+        buf[n] = 0; return (int)n;
+    }
+    if (cap_mine()) {                                        /* PARCHE 116: entrada simulada; sin mas lineas, linea vacia (nunca bloquea) */
         uint32_t n = 0;
         while (cap_in && *cap_in && *cap_in != '\n' && n + 1 < max) buf[n++] = *cap_in++;
         if (cap_in && *cap_in == '\n') cap_in++;

@@ -25,6 +25,7 @@
 #include "thread.h"
 #include "bootfb.h"
 #include "sysinfo.h"
+#include "soma_str.h"
 
 #define REG_GCAP     0x00
 #define REG_GCTL     0x08
@@ -569,17 +570,16 @@ static void put_hex8(char *o, uint32_t max, uint32_t *p, uint32_t v)
     if (*p + 5 >= max) return;
     o[(*p)++] = '0'; o[(*p)++] = 'x'; o[(*p)++] = H[(v >> 4) & 15]; o[(*p)++] = H[v & 15]; o[*p] = 0;
 }
-static void put_s(char *o, uint32_t max, uint32_t *p, const char *s) { while (*s && *p + 1 < max) o[(*p)++] = *s++; o[*p] = 0; }
 void hda_mic_describe(int idx, char *out, uint32_t max)
 {
     uint32_t p = 0; if (max) out[0] = 0;
-    if (idx < 0 || idx >= ncand) { put_s(out, max, &p, "(sin fuente)"); return; }
+    if (idx < 0 || idx >= ncand) { soma_str_put(out, max, &p, "(sin fuente)"); return; }
     const struct in_path *c = &cand[idx];
     uint32_t dev = (c->pincfg >> 20) & 0xF, gross = (c->pincfg >> 28) & 3;
-    put_s(out, max, &p, dev == 10 ? "microfono" : dev == 8 ? "entrada de linea" : dev == 9 ? "AUX" : "entrada");
-    put_s(out, max, &p, gross == 1 ? " interno" : " del conector");
-    put_s(out, max, &p, " (pin "); put_hex8(out, max, &p, c->pin);
-    put_s(out, max, &p, ", ADC "); put_hex8(out, max, &p, c->adc); put_s(out, max, &p, ")");
+    soma_str_put(out, max, &p, dev == 10 ? "microfono" : dev == 8 ? "entrada de linea" : dev == 9 ? "AUX" : "entrada");
+    soma_str_put(out, max, &p, gross == 1 ? " interno" : " del conector");
+    soma_str_put(out, max, &p, " (pin "); put_hex8(out, max, &p, c->pin);
+    soma_str_put(out, max, &p, ", ADC "); put_hex8(out, max, &p, c->adc); soma_str_put(out, max, &p, ")");
 }
 
 /* --- flujo de entrada --- */

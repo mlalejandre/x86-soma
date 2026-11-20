@@ -56,6 +56,7 @@ void        gui_soma_win_push_key(int key);
 void        gui_soma_win_record_click(void);
 void        gui_soma_win_get_size(int *out_w, int *out_h);
 const char *gui_soma_win_get_title(void);
+void        gui_terminal_run(const char *cmd);   /* SOMA_239: ejecuta una orden en el Terminal del escritorio (lo abre si hace falta) */
 void        gui_soma_win_render_body(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh);
 
 #endif

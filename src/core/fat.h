@@ -47,4 +47,6 @@ const char *fat_err_str(int e);
 /* SOMA_228_ARRANQUE: reescribe en su sitio un fichero existente (sin cambiar tamano, FAT ni directorios; ver fat.c) */
 int  fat_overwrite(struct fat_vol *v, const char *path, const void *data, uint32_t len, uint8_t pad,
                    int (*wr)(void *ctx, uint64_t lba, uint32_t n, const void *buf));
+/* SOMA_238_GUARDADO: primer sector y sectores de un fichero contiguo (para usarlo como disco); FAT_E_UNSUP si esta fragmentado */
+int  fat_contiguous(struct fat_vol *v, const char *path, uint64_t *lba_out, uint64_t *sectors_out);
 #endif

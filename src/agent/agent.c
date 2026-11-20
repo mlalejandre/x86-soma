@@ -7,7 +7,7 @@
 #include "console.h"
 #include "llm.h"
 #include "fs.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "shell.h"
 #include "mem.h"
 #include "io.h"
@@ -490,7 +490,7 @@ static int is_patch_target_protected(const char *name)
 {
     static const char *const protected_list[] = {
         "boot.s", "idt.c", "idt.h", "io.h", "srcfs.c", "srcfs.h",
-        "virtio_blk.c", "virtio_blk.h", "boot_gate.c", "boot_gate.h",
+        "virtio_blk.c", "virtio_blk.h", "sysdisk.h", "boot_gate.c", "boot_gate.h",   /* SOMA_231: sysdisk.h, lo que antes declaraba virtio_blk.h */
         "pmm.c", "pmm.h", "vmm.c", "vmm.h", "mem.c", "mem.h",
         "thread.c", "thread.h", "switch.s", "mutex.c", "mutex.h", "arch.h", 0
     };
@@ -525,7 +525,7 @@ static void host_submit_patch(const char *text)
     memcpy(mailbox_buf + MAILBOX_HDR, text, n);
 
     for (int s = 0; s < MAILBOX_SIZE / 512; ++s) {
-        if (virtio_blk_write(MAILBOX_LBA + s, mailbox_buf + s * 512) != 0) {
+        if (sysdisk_write(MAILBOX_LBA + s, mailbox_buf + s * 512) != 0) {
             kprint("\n[PARCHE] Error de I/O escribiendo el buzon.\n");
             return;
         }
@@ -561,7 +561,7 @@ static void agent_state_save(const char *agent_name, const char *mission, const 
     fb_puts(agent_state_buf, sizeof(agent_state_buf), &pos, history + start);
 
     vfs_write(AGENT_STATE_FILE, agent_state_buf, pos);
-    virtio_blk_write(RESULT_LBA, zero_sec);
+    sysdisk_write(RESULT_LBA, zero_sec);
 }
 
 void agent_state_load(void)
@@ -569,12 +569,12 @@ void agent_state_load(void)
     static uint8_t sec[512];
     static uint8_t res[512];
 
-    if (virtio_blk_read(RESUME_FLAG_LBA, sec) != 0 || memcmp(sec, "RESUME_REQ", 10) != 0) {
+    if (sysdisk_read(RESUME_FLAG_LBA, sec) != 0 || memcmp(sec, "RESUME_REQ", 10) != 0) {
         return;
     }
 
     memset(sec, 0, sizeof(sec));
-    virtio_blk_write(RESUME_FLAG_LBA, sec);
+    sysdisk_write(RESUME_FLAG_LBA, sec);
 
     if (vfs_read(AGENT_STATE_FILE, agent_state_buf, sizeof(agent_state_buf)) <= 0) {
         return;
@@ -619,7 +619,7 @@ void agent_state_load(void)
     fb_puts(resume_history_stash, sizeof(resume_history_stash), &pos, hm + (sizeof(AGENT_HIST_MARK) - 1));
     if (pos > 0 && resume_history_stash[pos - 1] != '\n') fb_putc(resume_history_stash, sizeof(resume_history_stash), &pos, '\n');
 
-    if (virtio_blk_read(RESULT_LBA, res) == 0 && res[0] != 0) {
+    if (sysdisk_read(RESULT_LBA, res) == 0 && res[0] != 0) {
         res[511] = 0;
         for (int i = 0; res[i]; ++i) if (res[i] < 32 || res[i] > 126) res[i] = ' ';
     } else {

@@ -106,7 +106,7 @@ int coder_demo_run(int use_real_llm)
         kprint("\n[DEMO-IA] Escenario "); kprint_dec((uint32_t)(s + 1)); kprint("/"); kprint_dec((uint32_t)total); kprint(": "); kprint(c->titulo); kprint("\n");
         kprint("  Encargo: "); kprint(c->mision); kprint("\n  Pruebas: ");
         for (int i = 0; i < c->n; i++) { kprint(c->tests[i].name); kprint(i + 1 < c->n ? ", " : "\n"); }
-        struct cc_env env = { use_real_llm ? llm_chat : demo_llm, demo_read, demo_write, demo_log, 0, demo_never, 7, 0, 1, demo_run, c->tests, c->n };
+        struct cc_env env = { use_real_llm ? llm_chat : demo_llm, demo_read, demo_write, demo_log, 0, demo_never, 7, 0, 1, demo_run, c->tests, c->n, CC_LANG_SOMA, 0, 0 };
         cc_run(&env, c->archivo, c->mision, &r);
         hmix(r.summary);
         kprint("  Resultado: "); kprint(r.ok ? "ENTREGADO" : "NO ENTREGADO"); kprint(" | pruebas "); kprint_dec((uint32_t)r.tests_pass); kprint("/"); kprint_dec((uint32_t)r.tests_total);

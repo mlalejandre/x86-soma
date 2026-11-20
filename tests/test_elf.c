@@ -189,7 +189,7 @@ static void test_real(const char *path)
     CHECK(fread(b, 1, (size_t)n, f) == (size_t)n);
     fclose(f);
     struct elf_image o;
-    static const struct elf_limits REAL = { 0x8000000000ULL, 0x400000ULL, 1024 };   /* region de usuario real (usermode.h) */
+    static const struct elf_limits REAL = { 0x8000000000ULL, 0xC00000ULL, 3072 };   /* region de usuario real (usermode.h; 12 MiB desde SOMA_202, python.elf ocupa 6.4 MiB: SOMA_237) */
     int r = elf_parse(b, (size_t)n, &REAL, &o);
     if (r != ELF_OK && n >= 32) {
         /* un .elf compilado con otra direccion base (antes de un cambio de user.ld) no es un fallo del validador:

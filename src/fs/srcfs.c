@@ -3,7 +3,7 @@
 #include "console.h"
 #include "mem.h"
 #include "srcfs.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "web_inflate.h"   /* PARCHE 140: SRCFS v02 comprimido (en x86_64 se descomprime en el servicio aislado zdec) */
 
 /*
@@ -51,7 +51,7 @@ static int srcfs_file(const uint8_t *e, const uint8_t **data, uint32_t *size)
     uint8_t *raw = (uint8_t *)kmalloc(csize ? csize : 1);
     if (!raw) return -1;
     for (uint32_t p = 0; p < csize; p += 512) {
-        if (virtio_blk_read((uint64_t)(lba + p / 512), srcfs_sec) != 0) { kfree(raw); return -1; }
+        if (sysdisk_read((uint64_t)(lba + p / 512), srcfs_sec) != 0) { kfree(raw); return -1; }
         uint32_t take = csize - p < 512 ? csize - p : 512;
         memcpy(raw + p, srcfs_sec, take);
     }
@@ -162,7 +162,7 @@ static int word_is(const char *s, const char *w)
 static int srcfs_load_index(void)
 {
     for (int i = 0; i < SRCFS_INDEX_SECTORS; ++i) {
-        if (virtio_blk_read((uint64_t)(SRCFS_LBA + i), srcfs_index + i * 512) != 0) {
+        if (sysdisk_read((uint64_t)(SRCFS_LBA + i), srcfs_index + i * 512) != 0) {
             return -1;
         }
     }

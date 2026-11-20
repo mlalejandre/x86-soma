@@ -75,3 +75,9 @@ int vfs_search_bm25(const char *q, const char *p, char *out, uint32_t max)
 
 /* PARCHE 098: la VM cede la CPU periodicamente */
 void thread_preempt_point(void) { }
+
+
+
+/* SOMA_235_PROGRAMADOR: reloj fijo para sys.hour() ... sys.year() en las pruebas: 20/11/2026 13:45:07 */
+#include "rtc.h"
+void rtc_get_datetime(struct rtc_time *t) { t->year = 2026; t->month = 11; t->day = 20; t->hour = 13; t->min = 45; t->sec = 7; }

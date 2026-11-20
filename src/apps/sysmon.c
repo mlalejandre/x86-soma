@@ -15,7 +15,7 @@
 #include "netif.h"
 #include "bigfs.h"
 #include "bigfs_glue.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "idt.h"
 #include "web_font.h"
 #include "gui_font.h"
@@ -494,18 +494,18 @@ static void sec_disk(int x, int y, int w, int h)
     t[0] = 0; s_bytes(t, sizeof t, bytes); s_cat(t, " de datos  -  ", sizeof t); s_bytes(t, sizeof t, own_mem[ACCT_RAMFS]); s_cat(t, " en memoria", sizeof t); tx(x + 20, ty + 96, 22, t, 11, KC_DIM, 0);
     int p = vfs_big_persist(); tx(x + 20, ty + 122, 22, p > 0 ? "Se guarda en disco (los grandes en BIGFS)" : p == 0 ? "Disco sin BIGFS: los archivos grandes solo en memoria" : "Sin disco: todo vive en memoria", 11, p > 0 ? 0x0034D399 : 0x00FBBF24, 0);
     card(x + cw + 12, ty, cw, ch); sec_icon(S_DISK, x + cw + 40, ty + 24, C_RAM); tx(x + cw + 58, ty + 10, 28, "BIGFS (archivos grandes)", 14, KC_TXT, 1);
-    int e = 0; struct bigfs *bf = virtio_blk_capacity() ? bigfs_sys(&e) : 0;
+    int e = 0; struct bigfs *bf = sysdisk_capacity() ? bigfs_sys(&e) : 0;
     if (bf) {
         struct bigfs_info bi; bigfs_info(bf, &bi);
         uint64_t tb = bi.total_clusters * bi.cluster_bytes, fb2 = bi.free_clusters * bi.cluster_bytes;
         t[0] = 0; s_bytes(t, sizeof t, tb - fb2); s_cat(t, " usados de ", sizeof t); s_bytes(t, sizeof t, tb); tx(x + cw + 32, ty + 48, 24, t, 12, KC_TXT, 0);
         bar(x + cw + 32, ty + 76, cw - 40, 10, tb ? (int)((tb - fb2) * 1000 / tb) : 0, C_RAM);
         t[0] = 0; s_num(t, sizeof t, bi.used_inodes); s_cat(t, " de ", sizeof t); s_num(t, sizeof t, bi.total_inodes); s_cat(t, " entradas", sizeof t); tx(x + cw + 32, ty + 96, 22, t, 11, KC_DIM, 0);
-    } else tx(x + cw + 32, ty + 48, 24, virtio_blk_capacity() ? "Sin formatear (se formatea solo al guardar algo grande)" : "No hay disco virtio", 12, KC_DIM, 0);
+    } else tx(x + cw + 32, ty + 48, 24, sysdisk_capacity() ? "Sin formatear (se formatea solo al guardar algo grande)" : "No hay disco virtio", 12, KC_DIM, 0);
     int dy = ty + ch + 12, dh = y + h - dy; if (dh < 80) return;
     card(x, dy, w, dh); tx(x + 16, dy + 8, 26, "Discos", 13, KC_TXT, 1);
     int ky = dy + 42;
-    uint64_t cap = virtio_blk_capacity();
+    uint64_t cap = sysdisk_capacity();
     if (cap) { t[0] = 0; s_bytes(t, sizeof t, cap * 512); s_cat(t, "  -  SOMAFS02 + fuentes + BIGFS", sizeof t); kv(x + 20, ky, w - 40, "virtio-blk (disco del sistema)", t); ky += 30; }
     for (int i = 0; i < g_ndev && ky + 28 < dy + dh; i++) { uint32_t c = g_dev[i].cls >> 16; if (cap && g_dev[i].vendor == 0x1af4) continue; if (c == 0x01 || (g_dev[i].bus[0] == 'S' && g_dev[i].bus[1] == 'D')) { kv(x + 20, ky, w - 40, g_dev[i].name, g_dev[i].extra); ky += 30; } }
     if (!cap) tx(x + 20, ky, 24, "Sin disco del sistema: los archivos viven en memoria y en la tarjeta SD (orden 'fat').", 12, KC_DIM, 0);

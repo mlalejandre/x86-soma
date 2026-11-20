@@ -3,6 +3,7 @@
 #include "pcie_proto.h"
 #include "console.h"
 #include "idt.h"
+#include "soma_str.h"
 
 /* PARCHE 062. Registros del root complex (Broadcom STB, como en el controlador pcie-brcmstb de Linux). Valores de la BCM2712 tomados del
  * emulador raspi5b y del driver de Linux; NO verificados en una placa real (no hay datasheet publico). */
@@ -196,37 +197,30 @@ int pcie_init_rc(int rc) { struct pcie_rc *o = s; s = &rcs[rc == 1 ? 1 : 0]; int
 int pcie_dev_count(void) { return ndev; }
 const struct pcie_dev *pcie_dev_get(int i) { return i >= 0 && i < ndev ? &devs[i] : 0; }
 
-static void put(char *o, uint32_t max, uint32_t *p, const char *s) { while (*s && *p + 1 < max) o[(*p)++] = *s++; o[*p < max ? *p : max - 1] = 0; }
-static void puthex(char *o, uint32_t max, uint32_t *p, uint64_t v, int digits)
-{
-    for (int i = digits - 1; i >= 0; i--) { char c = "0123456789abcdef"[(v >> (4 * i)) & 15]; if (*p + 1 < max) o[(*p)++] = c; }
-    if (*p < max) o[*p] = 0;
-}
-
 void pcie_format(char *out, uint32_t max)
 {
     uint32_t p = 0;
     if (max) out[0] = 0;
-    if (!pcie_present()) { put(out, max, &p, "PCIe: esta plataforma no tiene root complex (usa el comando de x86 o ECAM de QEMU virt)\n"); return; }
+    if (!pcie_present()) { soma_str_put(out, max, &p, "PCIe: esta plataforma no tiene root complex (usa el comando de x86 o ECAM de QEMU virt)\n"); return; }
     struct pcie_rc *saved = s;
     for (int r = 0; r < 2; r++) {
     s = &rcs[r];
     if (!s->base) continue;
-    if (!g_rc) { if (r == 0) put(out, max, &p, "PCIe1: sin enlace (nada conectado)\n"); continue; }
-    put(out, max, &p, r == 0 ? "PCIe1 (BCM2712): enlace activo\n" : "PCIe2 (BCM2712, enlace del RP1): enlace activo\n");
+    if (!g_rc) { if (r == 0) soma_str_put(out, max, &p, "PCIe1: sin enlace (nada conectado)\n"); continue; }
+    soma_str_put(out, max, &p, r == 0 ? "PCIe1 (BCM2712): enlace activo\n" : "PCIe2 (BCM2712, enlace del RP1): enlace activo\n");
     for (int i = 0; i < ndev; i++) {
         const struct pcie_dev *d = &devs[i];
-        put(out, max, &p, "  "); puthex(out, max, &p, d->bus, 2); put(out, max, &p, ":"); puthex(out, max, &p, d->devfn >> 3, 2);
-        put(out, max, &p, "."); puthex(out, max, &p, d->devfn & 7, 1); put(out, max, &p, "  ");
-        puthex(out, max, &p, d->vid, 4); put(out, max, &p, ":"); puthex(out, max, &p, d->did, 4); put(out, max, &p, "  ");
-        put(out, max, &p, pcie_class_name(d->cls)); put(out, max, &p, "\n");
+        soma_str_put(out, max, &p, "  "); soma_str_put_hex(out, max, &p, d->bus, 2, 0); soma_str_put(out, max, &p, ":"); soma_str_put_hex(out, max, &p, d->devfn >> 3, 2, 0);
+        soma_str_put(out, max, &p, "."); soma_str_put_hex(out, max, &p, d->devfn & 7, 1, 0); soma_str_put(out, max, &p, "  ");
+        soma_str_put_hex(out, max, &p, d->vid, 4, 0); soma_str_put(out, max, &p, ":"); soma_str_put_hex(out, max, &p, d->did, 4, 0); soma_str_put(out, max, &p, "  ");
+        soma_str_put(out, max, &p, pcie_class_name(d->cls)); soma_str_put(out, max, &p, "\n");
         for (int b = 0; b < 6; b++) if (d->bar[b].size) {
-            put(out, max, &p, "        BAR"); char n[2] = { (char)('0' + b), 0 }; put(out, max, &p, n);
-            put(out, max, &p, " 0x"); puthex(out, max, &p, d->bar[b].addr, 8); put(out, max, &p, " (");
+            soma_str_put(out, max, &p, "        BAR"); char n[2] = { (char)('0' + b), 0 }; soma_str_put(out, max, &p, n);
+            soma_str_put(out, max, &p, " 0x"); soma_str_put_hex(out, max, &p, d->bar[b].addr, 8, 0); soma_str_put(out, max, &p, " (");
             uint64_t sz = d->bar[b].size; char u = 'B'; if (sz >= 1024) { sz >>= 10; u = 'K'; } if (sz >= 1024) { sz >>= 10; u = 'M'; }
             char num[12]; int k = 0; if (!sz) num[k++] = '0'; while (sz && k < 10) { num[k++] = (char)('0' + sz % 10); sz /= 10; }
-            while (k) { char c[2] = { num[--k], 0 }; put(out, max, &p, c); }
-            char us[3] = { u, u == 'B' ? 0 : 'i', 0 }; put(out, max, &p, us); if (u != 'B') put(out, max, &p, "B"); put(out, max, &p, ")\n");
+            while (k) { char c[2] = { num[--k], 0 }; soma_str_put(out, max, &p, c); }
+            char us[3] = { u, u == 'B' ? 0 : 'i', 0 }; soma_str_put(out, max, &p, us); if (u != 'B') soma_str_put(out, max, &p, "B"); soma_str_put(out, max, &p, ")\n");
         }
     }
     }

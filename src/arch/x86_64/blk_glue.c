@@ -1,11 +1,11 @@
 /* PARCHE 045: registra en la capa de bloque los discos que hay en el sistema (virtio-blk, AHCI, NVMe). Solo x86_64. */
 #include "blk.h"
-#include "virtio_blk.h"
+#include "sysdisk.h"
 #include "ahci.h"
 #include "nvme.h"
 #include "xhci.h"
 
-static int v_read(uint64_t lba, uint32_t n, void *b) { return virtio_blk_read_n(lba, b, n); }
+static int v_read(uint64_t lba, uint32_t n, void *b) { return sysdisk_read_n(lba, b, n); }
 static int a_read(uint64_t lba, uint32_t n, void *b) { return ahci_read(lba, n, b); }
 static int a_write(uint64_t lba, uint32_t n, const void *b) { return ahci_write(lba, n, b); }
 static int n_read(uint64_t lba, uint32_t n, void *b) { return nvme_read(lba, n, b); }
@@ -25,7 +25,7 @@ int blk_scan(void)
 {
     static struct ahci_info ai; static struct nvme_info ni;
     blk_reset();
-    uint64_t cap = virtio_blk_capacity();
+    uint64_t cap = sysdisk_capacity();
     if (cap) { struct blkdev d = { "vda", "virtio-blk", cap, v_read, 0, 0 }; blk_register(&d); }   /* disco del sistema: solo lectura aqui */
     if (ahci_probe(&ai) == 0) { struct blkdev d = { "sda", "ahci", ai.sectors, a_read, a_write, sig_ok(ai.sector0, ai.model, "SOMASATA") }; blk_register(&d); }
     if (nvme_probe(&ni) == 0) { struct blkdev d = { "nvme0", "nvme", ni.sectors, n_read, n_write, sig_ok(ni.sector0, ni.model, "SOMANVME") }; blk_register(&d); }
