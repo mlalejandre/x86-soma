@@ -457,7 +457,7 @@ static int mouse_take_injected(int32_t *out_dx, int32_t *out_dy, int *out_left_c
 }
 #endif
 
-int mouse_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
+static int mouse_poll_raw(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
 {
     *out_dx = 0; *out_dy = 0; *out_left_click = 0;
 #if defined(__x86_64__) || defined(__aarch64__)
@@ -511,4 +511,23 @@ int point_in_rect(int32_t px, int32_t py, uint32_t rx, uint32_t ry, uint32_t rw,
 {
     return (px >= (int32_t)rx && px < (int32_t)(rx + rw) &&
             py >= (int32_t)ry && py < (int32_t)(ry + rh));
+}
+
+
+
+/* SOMA_225_AJUSTES: velocidad del puntero (Ajustes > Pantalla). Multiplica el movimiento de cualquier raton o trackpad (PS/2, Synaptics,
+ * USB) y guarda la fraccion que sobra para que los movimientos lentos no se pierdan. 100 = sin cambio. */
+static int g_mouse_speed = 100;
+static int32_t g_mouse_rx, g_mouse_ry;
+int mouse_set_speed(int pct) { if (pct < 25) pct = 25; if (pct > 300) pct = 300; g_mouse_speed = pct; g_mouse_rx = g_mouse_ry = 0; return pct; }
+int mouse_get_speed(void) { return g_mouse_speed; }
+int mouse_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
+{
+    int r = mouse_poll_raw(out_dx, out_dy, out_left_click);
+    if (r && g_mouse_speed != 100) {
+        int32_t ax = *out_dx * g_mouse_speed + g_mouse_rx, ay = *out_dy * g_mouse_speed + g_mouse_ry;
+        *out_dx = ax / 100; *out_dy = ay / 100;
+        g_mouse_rx = ax - *out_dx * 100; g_mouse_ry = ay - *out_dy * 100;
+    }
+    return r;
 }

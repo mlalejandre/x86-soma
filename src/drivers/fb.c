@@ -79,7 +79,7 @@ static void fb_hw_put_span(int32_t x, int32_t y, const uint32_t *src, int32_t n)
 static uint32_t *fb_backbuffer = 0;
 static size_t fb_bb_bytes = 0;            /* SOMA_PARCHE_021_FPU: tamano reservado del backbuffer */
 static volatile int fb_user_owned = 0;    /* un proceso de usuario tiene la pantalla en exclusiva */
-static int fb_prev_active; static uint32_t fb_prev_w, fb_prev_h;   /* modo que habia antes de fb_user_begin */
+static int fb_prev_active; static uint32_t fb_prev_w, fb_prev_h, fb_prev_lw, fb_prev_lh;   /* modo que habia antes de fb_user_begin */
 static uint32_t fb_phys_base = 0;
 static int fb_mapped = 0;
 static int fb_active = 0;
@@ -112,6 +112,15 @@ static int     cursor_visible = 0;
 static int32_t cursor_drawn_x = -1;
 static int32_t cursor_drawn_y = -1;
 static int     cursor_drawn_visible = 0;
+
+/* SOMA_225_AJUSTES: resolucion de trabajo (Ajustes > Pantalla). La interfaz dibuja a una resolucion logica (fb_cur_w x fb_cur_h) y al
+ * volcar se escala con filtro bilineal a la de la pantalla (fb_hw_w x fb_hw_h). Funciona igual con la pantalla del firmware (T480s, sin
+ * controlador de GPU para cambiar de modo) que en el emulador. El backbuffer sigue siendo el de la resolucion nativa (cabe la logica).
+ * Solo x86_64; en la Pi 5 la resolucion se elige al arrancar. */
+static int fb_sc_on;
+static uint32_t fb_hw_w = FB_RES_FHD_W, fb_hw_h = FB_RES_FHD_H;
+static uint32_t *fb_sc_xt __attribute__((unused)), *fb_sc_yt __attribute__((unused));   /* por columna/fila de la pantalla: (origen << 8) | peso 0..255 */
+static int32_t cursor_hot_x, cursor_hot_y;           /* PARCHE 085: punto activo del puntero */
 
 uint32_t fb_get_width(void)  { return fb_cur_w; }
 uint32_t fb_get_height(void) { return fb_cur_h; }
@@ -560,6 +569,145 @@ void fb_get_info(struct fb_info *o)
 }
 
 uint64_t fb_dirty_px; uint32_t fb_dirty_n;
+#if defined(__x86_64__)
+/* ---- SOMA_225_AJUSTES: volcado escalado ---- */
+static inline uint32_t sc_lerp(uint32_t a, uint32_t b, uint32_t w)       /* w 0..256 */
+{
+    uint32_t iw = 256u - w;
+    uint32_t rb = (((a & 0xFF00FFu) * iw + (b & 0xFF00FFu) * w) >> 8) & 0xFF00FFu;
+    uint32_t g  = (((a & 0x00FF00u) * iw + (b & 0x00FF00u) * w) >> 8) & 0x00FF00u;
+    return rb | g;
+}
+static inline uint32_t sc_px(int32_t hx, int32_t hy)
+{
+    uint32_t xt = fb_sc_xt[hx], yt = fb_sc_yt[hy];
+    uint32_t sx = xt >> 8, wx = xt & 255u, sy = yt >> 8, wy = yt & 255u;
+    uint32_t sx1 = sx + 1 < fb_cur_w ? sx + 1 : sx, sy1 = sy + 1 < fb_cur_h ? sy + 1 : sy;
+    const uint32_t *r0 = fb_backbuffer + sy * fb_cur_w, *r1 = fb_backbuffer + sy1 * fb_cur_w;
+    uint32_t top = wx ? sc_lerp(r0[sx], r0[sx1], wx) : r0[sx];
+    if (!wy) return top;
+    uint32_t bot = wx ? sc_lerp(r1[sx], r1[sx1], wx) : r1[sx];
+    return sc_lerp(top, bot, wy);
+}
+static void sc_row(int32_t hy, int32_t hx0, int32_t hx1)
+{
+    uint32_t buf[256];
+    int native = fb_hw_bpp == 32 && !fb_swap_rb();
+    for (int32_t x = hx0; x < hx1; ) {
+        int32_t n = hx1 - x; if (n > 256) n = 256;
+        for (int32_t i = 0; i < n; i++) buf[i] = sc_px(x + i, hy);
+        if (native) {
+            volatile uint32_t *d = (volatile uint32_t *)((volatile uint8_t *)fb_vram + (uint64_t)hy * fb_hw_pitch) + x;
+            fast_copy_span(d, buf, n);
+        } else fb_hw_put_span(x, hy, buf, n);
+        x += n;
+    }
+}
+struct sc_job { int32_t x0, y0, x1, y1; };
+static void sc_rows_part(int idx, int n, void *arg)
+{
+    struct sc_job *j = (struct sc_job *)arg;
+    int32_t h = j->y1 - j->y0, a = j->y0 + (int32_t)((int64_t)h * idx / n), b = j->y0 + (int32_t)((int64_t)h * (idx + 1) / n);
+    for (int32_t y = a; y < b; y++) sc_row(y, j->x0, j->x1);
+}
+static void sc_rect(int32_t x0, int32_t y0, int32_t x1, int32_t y1)   /* rectangulo logico -> pantalla */
+{
+    int32_t hx0 = (int32_t)((int64_t)x0 * fb_hw_w / fb_cur_w) - 1, hy0 = (int32_t)((int64_t)y0 * fb_hw_h / fb_cur_h) - 1;
+    int32_t hx1 = (int32_t)(((int64_t)x1 * fb_hw_w + fb_cur_w - 1) / fb_cur_w) + 1, hy1 = (int32_t)(((int64_t)y1 * fb_hw_h + fb_cur_h - 1) / fb_cur_h) + 1;
+    if (hx0 < 0) hx0 = 0;
+    if (hy0 < 0) hy0 = 0;
+    if (hx1 > (int32_t)fb_hw_w) hx1 = (int32_t)fb_hw_w;
+    if (hy1 > (int32_t)fb_hw_h) hy1 = (int32_t)fb_hw_h;
+    if (hx1 <= hx0 || hy1 <= hy0) return;
+    fb_dirty_px += (uint64_t)((int64_t)(hx1 - hx0) * (hy1 - hy0));
+    if ((int64_t)(hx1 - hx0) * (hy1 - hy0) >= 32768 && smp_cpus() > 1) {
+        struct sc_job j = { hx0, hy0, hx1, hy1 };
+        smp_parallel(sc_rows_part, &j);
+        fb_par_rects++;
+        return;
+    }
+    for (int32_t y = hy0; y < hy1; y++) sc_row(y, hx0, hx1);
+}
+static int32_t sc_cur_hx, sc_cur_hy;
+static void fb_present_scaled(void)
+{
+    int32_t hx = (int32_t)((int64_t)(cursor_pos_x + cursor_hot_x) * fb_hw_w / fb_cur_w) - cursor_hot_x;
+    int32_t hy = (int32_t)((int64_t)(cursor_pos_y + cursor_hot_y) * fb_hw_h / fb_cur_h) - cursor_hot_y;
+    if (cursor_drawn_visible && (cursor_drawn_x != hx || cursor_drawn_y != hy || !cursor_visible)) {
+        int32_t lx = (int32_t)((int64_t)cursor_drawn_x * fb_cur_w / fb_hw_w) - 2, ly = (int32_t)((int64_t)cursor_drawn_y * fb_cur_h / fb_hw_h) - 2;
+        fb_damage(lx, ly, cursor_overlay_w * (int32_t)fb_cur_w / (int32_t)fb_hw_w + 5, cursor_overlay_h * (int32_t)fb_cur_h / (int32_t)fb_hw_h + 5);
+    }
+    if (dirty_count > 0) {
+        fb_dirty_n++;
+        for (int i = 0; i < dirty_count; ++i) sc_rect(dirty_rects[i].x0, dirty_rects[i].y0, dirty_rects[i].x1, dirty_rects[i].y1);
+        dirty_count = 0;
+    }
+    if (cursor_visible && cursor_overlay_img && cursor_overlay_w > 0 && cursor_overlay_h > 0) {
+        int native = fb_hw_bpp == 32 && !fb_swap_rb();
+        for (int32_t r = 0; r < cursor_overlay_h; ++r) {
+            int32_t vy = hy + r;
+            if (vy < 0 || vy >= (int32_t)fb_hw_h) continue;
+            for (int32_t c = 0; c < cursor_overlay_w; ++c) {
+                int32_t vx = hx + c;
+                if (vx < 0 || vx >= (int32_t)fb_hw_w) continue;
+                uint32_t fg = cursor_overlay_img[r * cursor_overlay_w + c];
+                if ((fg >> 24) == 0) continue;
+                uint32_t px = fb_blend_color(sc_px(vx, vy), fg);
+                if (native) ((volatile uint32_t *)((volatile uint8_t *)fb_vram + (uint64_t)vy * fb_hw_pitch))[vx] = px;
+                else fb_hw_put_span(vx, vy, &px, 1);
+            }
+        }
+        cursor_drawn_x = hx; cursor_drawn_y = hy; cursor_drawn_visible = 1;
+    } else cursor_drawn_visible = 0;
+    (void)sc_cur_hx; (void)sc_cur_hy;
+}
+#endif
+uint32_t fb_hw_width(void)  { return fb_sc_on ? fb_hw_w : fb_cur_w; }
+uint32_t fb_hw_height(void) { return fb_sc_on ? fb_hw_h : fb_cur_h; }
+int fb_scaled(void) { return fb_sc_on; }
+/* SOMA_225_AJUSTES: resolucion logica; 0 o la nativa = sin escalar. Devuelve 0 si se aplico. */
+int fb_set_logical(uint32_t lw, uint32_t lh)
+{
+#if defined(__x86_64__)
+    if (!fb_mapped || !fb_backbuffer || fb_user_owned) return -1;
+    uint32_t hw = fb_sc_on ? fb_hw_w : fb_cur_w, hh = fb_sc_on ? fb_hw_h : fb_cur_h;
+    if (!lw || !lh || lw >= hw || lh >= hh) { lw = hw; lh = hh; }
+    if (lw < 640u) lw = 640u;
+    if (lh < 400u) lh = 400u;
+    if (lw == hw && lh == hh) {
+        if (!fb_sc_on) return 0;
+        fb_sc_on = 0; fb_cur_w = hw; fb_cur_h = hh;
+    } else {
+        uint32_t *xt = (uint32_t *)kmalloc((size_t)(hw + hh) * 4u);
+        if (!xt) return -2;
+        for (uint32_t x = 0; x < hw; x++) {
+            int32_t f = (int32_t)(((int64_t)(2 * x + 1) * lw * 256) / (2 * (int64_t)hw)) - 128; if (f < 0) f = 0;
+            uint32_t sx = (uint32_t)f >> 8, w = (uint32_t)f & 255u; if (sx >= lw - 1) { sx = lw - 1; w = 0; }
+            xt[x] = (sx << 8) | w;
+        }
+        uint32_t *yt = xt + hw;
+        for (uint32_t y = 0; y < hh; y++) {
+            int32_t f = (int32_t)(((int64_t)(2 * y + 1) * lh * 256) / (2 * (int64_t)hh)) - 128; if (f < 0) f = 0;
+            uint32_t sy = (uint32_t)f >> 8, w = (uint32_t)f & 255u; if (sy >= lh - 1) { sy = lh - 1; w = 0; }
+            yt[y] = (sy << 8) | w;
+        }
+        uint32_t *old = fb_sc_xt;
+        fb_sc_on = 0;                                   /* sin volcados a medias mientras cambian las tablas */
+        fb_sc_xt = xt; fb_sc_yt = yt;
+        if (old) kfree(old);
+        fb_hw_w = hw; fb_hw_h = hh; fb_cur_w = lw; fb_cur_h = lh;
+        fb_sc_on = 1;
+    }
+    fb_reset_clip();
+    dirty_count = 0; cursor_drawn_visible = 0;
+    fb_clear(COLOR_DEEP_NAVY);
+    fb_present_full();
+    return 0;
+#else
+    (void)lw; (void)lh; return -1;
+#endif
+}
+
 void fb_present(void)
 {
     if (!fb_mapped) return;
@@ -568,6 +716,9 @@ void fb_present(void)
     if (!fb_user_exclusive()) fb_cguard_present();   /* SOMA_PARCHE_028_UI: esquinas redondeadas de la ventana activa */
     if (!fb_user_exclusive()) clip_overlay_draw();   /* SOMA_PARCHE_PORTAPAPELES: avisos y panel del portapapeles */
 
+#if defined(__x86_64__)
+    if (fb_backbuffer && fb_sc_on) { fb_present_scaled(); return; }   /* SOMA_225_AJUSTES */
+#endif
     if (fb_backbuffer) {
         /* Si el cursor cambió de posición o visibilidad, restaurar el fondo viejo en VRAM */
         if (cursor_drawn_visible && (cursor_drawn_x != cursor_pos_x || cursor_drawn_y != cursor_pos_y || !cursor_visible)) {
@@ -642,7 +793,6 @@ void fb_cursor_set_image(const uint32_t *argb, int32_t w, int32_t h)
     cursor_overlay_h = h;
 }
 
-static int32_t cursor_hot_x, cursor_hot_y;           /* PARCHE 085: punto activo del puntero */
 void fb_cursor_set_hotspot(int32_t hx, int32_t hy) { cursor_hot_x = hx; cursor_hot_y = hy; }
 void fb_cursor_show(int32_t x, int32_t y)
 {
@@ -694,6 +844,8 @@ int fb_set_mode(uint32_t width, uint32_t height)
     }
 #endif
 
+    fb_sc_on = 0;                                    /* SOMA_225_AJUSTES: un modo nuevo vuelve a la resolucion nativa */
+    fb_hw_w = width; fb_hw_h = height;
     fb_cur_w = width;
     fb_cur_h = height;
     fb_reset_clip();
@@ -732,7 +884,8 @@ int fb_user_begin(uint32_t w, uint32_t h)
 #ifdef __x86_64__
     if (bootfb_use_firmware() && (w != bootfb_get()->width || h != bootfb_get()->height)) return -19;   /* SOMA_154: sin cambio de modo */
 #endif
-    fb_prev_active = fb_active; fb_prev_w = fb_cur_w; fb_prev_h = fb_cur_h;
+    fb_prev_active = fb_active; fb_prev_w = fb_sc_on ? fb_hw_w : fb_cur_w; fb_prev_h = fb_sc_on ? fb_hw_h : fb_cur_h;
+    fb_prev_lw = fb_sc_on ? fb_cur_w : 0; fb_prev_lh = fb_sc_on ? fb_cur_h : 0;   /* SOMA_225_AJUSTES */
     if (fb_set_mode(w, h) != 0) return -19;
     fb_clear(0);
     fb_present_full();
@@ -743,7 +896,7 @@ void fb_user_end(void)
 {
     if (!fb_user_owned) return;
     fb_user_owned = 0;
-    if (fb_prev_active) fb_set_mode(fb_prev_w, fb_prev_h);      /* la GUI sigue creyendo que esta resolucion es la suya */
+    if (fb_prev_active) { fb_set_mode(fb_prev_w, fb_prev_h); if (fb_prev_lw) fb_set_logical(fb_prev_lw, fb_prev_lh); }   /* la GUI sigue creyendo que esta resolucion es la suya */
     else fb_restore_text_mode();                                 /* sin GUI: se vuelve a la consola de texto */
 }
 int fb_user_exclusive(void) { return fb_user_owned; }
@@ -908,7 +1061,7 @@ uint32_t fb_debug_verify(uint32_t bg)
  * comprobar el volcado por zonas; leer la VRAM es lento. */
 uint32_t fb_debug_vram_diff(void)
 {
-    if (!fb_mapped || !fb_backbuffer || !FB_HW_NATIVE()) return 0;
+    if (!fb_mapped || !fb_backbuffer || !FB_HW_NATIVE() || fb_sc_on) return 0;
     uint32_t bad = 0;
     for (uint32_t y = 0; y < fb_cur_h; ++y) for (uint32_t x = 0; x < fb_cur_w; ++x) {
         if (cursor_drawn_visible && (int32_t)x >= cursor_drawn_x && (int32_t)x < cursor_drawn_x + cursor_overlay_w &&

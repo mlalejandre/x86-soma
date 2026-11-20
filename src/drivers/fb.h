@@ -28,6 +28,10 @@
 /* Inicialización y control de resolución */
 int  fb_init(void);
 int  fb_set_mode(uint32_t width, uint32_t height);
+int  fb_set_logical(uint32_t w, uint32_t h);   /* SOMA_225_AJUSTES: resolucion de trabajo escalada a la pantalla (0 = nativa) */
+uint32_t fb_hw_width(void);                    /* resolucion real de la pantalla */
+uint32_t fb_hw_height(void);
+int  fb_scaled(void);
 int  fb_set_mode_hd(void);
 void fb_restore_text_mode(void);
 int  fb_is_active(void);

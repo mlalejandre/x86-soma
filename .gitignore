@@ -49,3 +49,5 @@ backups/
 .parche_backup/
 *.whl
 subir_github.py
+imagen/*.img
+.soma_parches/

@@ -48,7 +48,10 @@ int main(void)
 {
     /* ---------------- catalogo ---------------- */
     g_sysfont_off = 0;
-    CHECK(font_get_count() == FONT_COUNT && FONT_COUNT == 36, "catalogo: %d fuentes", font_get_count());
+    CHECK(font_get_count() == FONT_COUNT && FONT_COUNT == 38, "catalogo: %d fuentes", font_get_count());   /* SOMA_225: + soma-orbital, soma-tecnica */
+    CHECK(!strcmp(font_get_name(FONT_SOMA_ORBITAL), "soma-orbital") && !strcmp(font_get_name(FONT_SOMA_TECNICA), "soma-tecnica"), "nombres de las fuentes propias");
+    CHECK(font_set(FONT_SOMA_TECNICA) == 1 && font_face_of(font_get_current()) == FFACE_TECNICA, "font_set soma-tecnica");
+    CHECK(wf_width("Hola", 4, 16, WF_ORB | WF_RAW) > 20 && wf_width("Hola", 4, 16, WF_TEC | WF_RAW) > 20, "las fuentes propias miden texto");
     CHECK(!strcmp(font_get_name(FONT_DEJAVU_SANS), "dejavu-sans"), "nombre 33: %s", font_get_name(33));
     CHECK(!strcmp(font_get_name(FONT_LIBERATION), "liberation-sans"), "nombre 34: %s", font_get_name(34));
     CHECK(!strcmp(font_get_name(FONT_LIBERATION_BOLD), "liberation-sans-bold"), "nombre 35: %s", font_get_name(35));
@@ -58,7 +61,7 @@ int main(void)
       int prev = -1; for (int o = 0; o < FONT_COUNT; o++) { int i = font_get_sorted_id(o); if (prev >= 0) CHECK(strcmp(font_get_name(prev), font_get_name(i)) <= 0, "orden roto en %d", o); prev = i; } }
     CHECK(font_set_by_name("Liberation-Sans") == 1 && font_get_current() == FONT_LIBERATION, "font_set_by_name (sin distinguir mayusculas)");
     CHECK(font_set(FONT_LIBERATION_BOLD) == 1 && font_face_of(font_get_current()) == FFACE_LIBERATION_BOLD, "font_set 35");
-    CHECK(font_set(36) == 0 && font_set(-1) == 0, "ids fuera de rango");
+    CHECK(font_set(38) == 0 && font_set(-1) == 0, "ids fuera de rango");
     CHECK(font_set(FONT_CLASSIC) == 1 && font_face_of(font_get_current()) == -1, "las de mapa de bits no tienen cara");
     for (int f = 0; f < FFACE_COUNT; f++) CHECK(font_face_of(font_face_catalog_id(f)) == f && font_face_name(f)[0], "cara %d: ida y vuelta con el catalogo", f);
 
@@ -144,6 +147,6 @@ int main(void)
     CHECK(web_a == wf_width64(txt, (uint32_t)n, 16, WF_RAW | WF_WEB), "la familia de la interfaz altera el contenido web");
 
     if (fails) { printf("test_font_184: %d fallos de %d comprobaciones\n", fails, checks); return 1; }
-    printf("test_font_184: catalogo (36 fuentes), caras, terminal, respaldo y familia de la interfaz correctos (%d comprobaciones)\n", checks);
+    printf("test_font_184: catalogo (38 fuentes), caras, terminal, respaldo y familia de la interfaz correctos (%d comprobaciones)\n", checks);
     return 0;
 }

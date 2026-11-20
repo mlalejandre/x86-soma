@@ -19,6 +19,8 @@ enum soma_cursor_id {
 void mouse_init(void);
 void mouse_shutdown(void);
 int  mouse_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click);
+int  mouse_set_speed(int pct);   /* SOMA_225_AJUSTES: velocidad del puntero en % (25..300); devuelve la aplicada */
+int  mouse_get_speed(void);
 int  mouse_left_held(void);
 /* SOMA_PARCHE_024_TERM: rueda y boton derecho */
 void mouse_inject(int32_t dx, int32_t dy, uint8_t buttons, int wheel);   /* PARCHE 047: raton USB (x86_64) */

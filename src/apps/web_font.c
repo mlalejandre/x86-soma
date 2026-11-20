@@ -10,7 +10,7 @@ static int wf_state = 0; /* 0 sin iniciar, 1 lista, -1 sin fuente */
 
 /* SOMA_182: caras de la web. 0 = DejaVu Sans (la de siempre, tambien respaldo de glifos), 1 = Liberation Sans (anchos de Arial),
  * 2 = Liberation Sans negrita. Cada cara guarda su copia del estado del lector (vf, vf_ascii); wf_use() la activa. */
-#define WF_NFACE 3
+#define WF_NFACE 5                                   /* SOMA_225: + 3 SOMA Orbital, 4 SOMA Tecnica */
 static struct { struct vf_font f; uint16_t ascii[256]; int ok; } wf_faces[WF_NFACE];
 static int wf_cur = -1;
 static int wf_face_state = 0;   /* 0 sin iniciar, 1 listas las caras Liberation, -1 no hay */
@@ -46,6 +46,19 @@ static int wf_arial_ready(void)
     }
     return wf_face_state == 1;
 }
+/* SOMA_225: caras propias (se cargan la primera vez que se piden) */
+extern const unsigned char soma_ttf_orbital[], soma_ttf_tecnica[];
+extern const unsigned int soma_ttf_orbital_len, soma_ttf_tecnica_len;
+static int wf_own_state[2];                                     /* 0 sin intentar, 1 lista, -1 fallo */
+static int wf_own_ready(int k)
+{
+    if (wf_own_state[k] == 0) {
+        if (k == 0) wf_face_load(3, soma_ttf_orbital, soma_ttf_orbital_len);
+        else        wf_face_load(4, soma_ttf_tecnica, soma_ttf_tecnica_len);
+        wf_own_state[k] = wf_faces[3 + k].ok ? 1 : -1;
+    }
+    return wf_own_state[k] == 1;
+}
 static inline int wf_web_arial(int fl) { return (((fl & WF_WEB) && g_wf182_on) || (fl & WF_LIB)) && !(fl & WF_MONO) && wf_arial_ready(); }   /* SOMA_184: WF_LIB = familia Liberation de la interfaz */
 
 /* PARCHE 085: ajustes de fuente de la interfaz */
@@ -55,16 +68,16 @@ void wf_ui_set_family(int fam, int scale)
 {
     if (scale < 80) scale = 80;
     if (scale > 130) scale = 130;
-    if (fam < 0 || fam > 2) fam = 0;
+    if (fam < 0 || fam > WF_FAM_TECNICA) fam = 0;
     if (fam != g_ui_fam || scale != g_ui_scale) { g_ui_fam = fam; g_ui_mono = fam == WF_FAM_MONO; g_ui_scale = scale; g_ui_gen++; }
 }
-void wf_ui_set(int mono, int scale) { wf_ui_set_family(mono ? WF_FAM_MONO : (g_ui_fam == WF_FAM_LIBERATION ? WF_FAM_LIBERATION : WF_FAM_SANS), scale); }
+void wf_ui_set(int mono, int scale) { wf_ui_set_family(mono ? WF_FAM_MONO : (g_ui_fam == WF_FAM_MONO ? WF_FAM_SANS : g_ui_fam), scale); }
 int wf_ui_family(void) { return g_ui_fam; }
 int wf_ui_mono(void) { return g_ui_mono; }
 int wf_ui_scale(void) { return g_ui_scale; }
 uint32_t wf_ui_gen(void) { return g_ui_gen; }
 int wf_ui_px(int px) { return g_ui_scale == 100 ? px : (px * g_ui_scale + 50) / 100; }
-static void ui_adj(int *px, int *fl) { if (*fl & WF_RAW) { *fl &= ~WF_RAW; return; } if (g_ui_scale != 100) *px = (*px * g_ui_scale + 50) / 100; if (g_ui_mono) *fl |= WF_MONO; else if (g_ui_fam == WF_FAM_LIBERATION) *fl |= WF_LIB; }
+static void ui_adj(int *px, int *fl) { if (*fl & WF_RAW) { *fl &= ~WF_RAW; return; } if (g_ui_scale != 100) *px = (*px * g_ui_scale + 50) / 100; if (g_ui_mono) *fl |= WF_MONO; else if (g_ui_fam == WF_FAM_LIBERATION) *fl |= WF_LIB; else if (g_ui_fam == WF_FAM_ORBITAL) *fl |= WF_ORB; else if (g_ui_fam == WF_FAM_TECNICA) *fl |= WF_TEC; }
 
 static int clamp_px(int px) { return px < 5 ? 5 : (px > VF_MAX_EM ? VF_MAX_EM : px); }
 
@@ -78,12 +91,21 @@ static uint32_t glyph_of(uint32_t cp)
  * que Liberation no cubre) salen de DejaVu. Deja activa la cara elegida y devuelve el glifo (0 = ninguno). */
 static uint32_t wf_pick(uint32_t cp, int fl, int *face)
 {
+    if ((fl & (WF_ORB | WF_TEC)) && !(fl & WF_MONO)) {          /* SOMA_225: fuente propia; lo que no tenga sale de DejaVu */
+        int k = (fl & WF_ORB) ? 0 : 1;
+        if (wf_own_ready(k)) {
+            wf_use(3 + k);
+            uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp);
+            if (g) { *face = 3 + k; return g; }
+        }
+    }
     if (wf_web_arial(fl)) {
         int want = (fl & WF_BOLD) ? 2 : 1;
         wf_use(want);
         uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp);
         if (g) { *face = want; return g; }
     }
+    if (!wf_init()) { *face = 0; return 0; }                   /* SOMA_225: sin DejaVu no hay respaldo */
     wf_use(0); *face = 0;
     return glyph_of(cp);
 }
@@ -94,7 +116,7 @@ int wf_cp_adv64(uint32_t cp, int px, int fl)
     if (fl & WF_MONO) return ((px * 1233 + 1024) / 2048) * 64;
     if (cp == 0xAD || (cp >= 0x200B && cp <= 0x200F) || cp == 0xFEFF) return 0;
     if (cp == 0xA0) cp = ' ';
-    if (!wf_init()) return px * 32;
+    if (!wf_init() && !(fl & (WF_ORB | WF_TEC))) return px * 32;
     int face; uint32_t g = wf_pick(cp, fl, &face);
     if (!g) return px * 32;
     int w = (int)(((uint64_t)vf_adv(g) * (uint64_t)px * 64u + vf.upem / 2) / vf.upem);
@@ -147,7 +169,7 @@ void wf_draw(int32_t x, int32_t baseline_y, const char *s, uint32_t n, int px, u
         if (cp > 32 && cp != 0xA0 && a64) {
             if (mono_ok) {
                 font_vec_draw(gx, baseline_y, cp, rgb | (uint32_t)(alpha & 255) << 24, px, a64 >> 6, 0);
-            } else if (wf_init()) {
+            } else if (wf_init() || (fl & (WF_ORB | WF_TEC))) {
                 int face; uint32_t g = wf_pick(cp, fl, &face);
                 if (g) {
                     struct vf_ce *ce = vf_get(g, px);

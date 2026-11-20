@@ -6803,8 +6803,8 @@ static void sum_draw(uint32_t cur_w, uint32_t cur_h, const uint32_t *snap, uint3
     her_draw_vortex_particles();
     if (!closing && k > 128u) {
         const char *hint = "Elige una aplicacion  -  Esc o la tecla Windows para volver";
-        uint32_t n = 0; while (hint[n]) n++;
-        font_draw_string(cur_w / 2u - n * 4u, cur_h - 34u, hint, her_mix256(0x00030714u, 0x0094A3B8u, (k - 128u) * 2u), 1);
+        uint32_t n = (uint32_t)font_text_width(hint, 1);           /* SOMA_226_SISTEMA: centrado con la fuente del escritorio */
+        font_draw_string(cur_w / 2u - n / 2u, cur_h - 34u, hint, her_mix256(0x00030714u, 0x0094A3B8u, (k - 128u) * 2u), 1);
     }
     hst_dibujar(cur_w, cur_h);
 }
@@ -6963,6 +6963,22 @@ static void her_stress_run(int n, uint32_t cw, uint32_t ch)
     her_lay_fresh_req = 1;
 }
 static int gui_desktop_live;
+/* SOMA_225_AJUSTES: cambio de resolucion de trabajo pedido por Ajustes; se aplica al principio de una vuelta del bucle del escritorio */
+static volatile int gui_res_req; static volatile uint32_t gui_res_w, gui_res_h;
+void gui_request_resolution(uint32_t w, uint32_t h) { gui_res_w = w; gui_res_h = h; gui_res_req = 1; }
+static void her_after_resize(uint32_t cw, uint32_t ch)
+{
+    for (int i = 0; i < her_num_windows; i++) {                  /* las ventanas siguen dentro de la pantalla */
+        struct her_win_node *v = &her_windows[i];
+        if (v->w > cw - 40u) v->w = cw * 3u / 4u;
+        if (v->h > ch - 60u) v->h = ch * 3u / 4u;
+        if (v->x + v->w > cw) v->x = cw - v->w;
+        if (v->y + v->h > ch) v->y = ch - v->h;
+    }
+    if (g_mouse_x_s >= (int32_t)cw) g_mouse_x_s = (int32_t)cw - 1;
+    if (g_mouse_y_s >= (int32_t)ch) g_mouse_y_s = (int32_t)ch - 1;
+    her_lay_fresh_req = 1;
+}
 int gui_stress_request(int n, char *out, uint32_t max)
 {
     if (!gui_desktop_live || !out || max < 64) return -1;
@@ -7287,6 +7303,15 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         }
 
         gui_desktop_live = 1;
+        if (gui_res_req) {                                      /* SOMA_225_AJUSTES */
+            gui_res_req = 0;
+            if (fb_set_logical(gui_res_w, gui_res_h) == 0) {
+                cur_w = fb_get_width(); cur_h = fb_get_height();
+                her_after_resize(cur_w, cur_h);
+            }
+            HER_SYNC_WIN(); her_refresh_all(); fb_present();
+            continue;
+        }
         if (gui_stress_n) {                                     /* SOMA_220_PRUEBA */
             her_stress_run(gui_stress_n, cur_w, cur_h);
             gui_stress_n = 0; gui_stress_done = 1;
@@ -7599,6 +7624,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 }
                 if (current_app == APP_SETTINGS && !her_dragging && !her_resizing) {  /* PARCHE 085: deslizador de opacidad */
                     if (settings_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, mouse_left_held())) { her_refresh_all(); fb_present(); }
+                    if (wheel && settings_wheel(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel)) { her_refresh_all(); fb_present(); }   /* SOMA_227_IMAGEN */
                 }
                 if (current_app == APP_LAYOUT && !her_dragging && !her_resizing) {   /* PARCHE 084: rueda y barra del maquetador */
                     if (layout_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held()))

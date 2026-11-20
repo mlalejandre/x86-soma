@@ -12,6 +12,9 @@
 #include "llm.h"           /* SOMA_195: pagina IA */
 #include "llm_proto.h"
 #include "thread.h"
+#include "mouse.h"          /* SOMA_225_AJUSTES: velocidad del puntero */
+#include "sysicon.h"         /* SOMA_225_AJUSTES: pagina Iconos */
+#include "hwmon.h"           /* SOMA_226_SISTEMA: pagina Sistema */
 #if defined(__x86_64__)
 #include "netmgr.h"
 #include "iwl.h"
@@ -37,6 +40,25 @@ static int g_drag;
 static char g_msg[96] = "Los cambios se aplican al momento y se guardan en /etc/ui.conf";
 static const int SCALES[4] = { 90, 100, 110, 120 };
 static const char *const SCALE_NAME[4] = { "Pequena", "Normal", "Grande", "Muy grande" };
+/* SOMA_225_AJUSTES: pagina Pantalla (resolucion de trabajo y velocidad del puntero) */
+static int g_res;                                  /* 0 nativa, 1 = 5/6, 2 = 2/3, 3 = 1/2 de la pantalla */
+static int g_speed = 100;                          /* % */
+static const int SPEEDS[6] = { 50, 75, 100, 140, 180, 240 };
+static const char *const SPEED_NAME[6] = { "Muy lenta", "Lenta", "Normal", "Rapida", "Muy rapida", "Maxima" };
+static int g_icon_tab;                             /* pagina Iconos: 0 del sistema, 1 de las aplicaciones */
+void gui_request_resolution(uint32_t w, uint32_t h);   /* gui.c: se aplica en el bucle del escritorio */
+static void res_of(int k, uint32_t *w, uint32_t *h)
+{
+    uint32_t hw = fb_hw_width(), hh = fb_hw_height();
+    static const int NUM[4] = { 6, 5, 4, 3 }, DEN = 6;
+    *w = hw * (uint32_t)NUM[k] / DEN & ~1u; *h = hh * (uint32_t)NUM[k] / DEN & ~1u;
+}
+static int res_count(void)
+{
+    int n = 1; for (int k = 1; k < 4; k++) { uint32_t w, h; res_of(k, &w, &h); if (w >= 640u && h >= 400u) n = k + 1; }
+    return n;
+}
+static void res_apply(void) { uint32_t w, h; if (g_res >= res_count()) g_res = 0; res_of(g_res, &w, &h); gui_request_resolution(g_res ? w : 0, g_res ? h : 0); }
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void s_cat(char *d, const char *s, int max) { int i = s_len(d), j = 0; while (s && s[j] && i + 1 < max) d[i++] = s[j++]; d[i] = 0; }
@@ -56,13 +78,15 @@ int settings_active_opaque(void) { return g_active_opaque; }
 
 static void save(void)
 {
-    char b[224] = "opacidad="; s_num(b, sizeof b, g_opacity);
+    char b[320] = "opacidad="; s_num(b, sizeof b, g_opacity);
     s_cat(b, "\nactiva_opaca=", sizeof b); s_num(b, sizeof b, g_active_opaque);
     s_cat(b, "\nfuente=", sizeof b); s_cat(b, wf_ui_mono() ? "mono" : "sans", sizeof b);      /* compatible con versiones anteriores */
     s_cat(b, "\nfamilia=", sizeof b); s_num(b, sizeof b, wf_ui_family());                       /* SOMA_184 */
     s_cat(b, "\nescala=", sizeof b); s_num(b, sizeof b, wf_ui_scale());
     s_cat(b, "\neditor=", sizeof b); s_num(b, sizeof b, g_editor_face);
     if (g_desk[0]) { s_cat(b, "\nescritorio=", sizeof b); s_cat(b, g_desk, sizeof b); }
+    s_cat(b, "\nresolucion=", sizeof b); s_num(b, sizeof b, g_res);          /* SOMA_225_AJUSTES */
+    s_cat(b, "\nraton=", sizeof b); s_num(b, sizeof b, g_speed);
     s_cat(b, "\n", sizeof b);
     (void)vfs_write("/etc/ui.conf", b, (uint32_t)s_len(b));
 }
@@ -94,7 +118,7 @@ void settings_load(void)
 {
     if (g_loaded) return;
     g_loaded = 1;
-    char b[224]; int n = vfs_read("/etc/ui.conf", b, sizeof b - 1);
+    char b[320]; int n = vfs_read("/etc/ui.conf", b, sizeof b - 1);
     if (n <= 0) return;
     b[n] = 0;
     g_opacity = val_of(b, "opacidad", 100); if (g_opacity < 40) g_opacity = 40;
@@ -103,13 +127,36 @@ void settings_load(void)
     int fam = val_of(b, "familia", -1);                                    /* SOMA_184: 0 DejaVu Sans, 1 Mono, 2 Liberation; antes solo "fuente=" */
     if (fam < 0) fam = val_of(b, "fuente", 0);
     int off = font_sysfont_off();                                           /* soma.sysfont=off: solo las fuentes de siempre */
-    if (off && fam == WF_FAM_LIBERATION) fam = WF_FAM_SANS;
+    if (off && fam != WF_FAM_MONO) fam = WF_FAM_SANS;
     wf_ui_set_family(fam, val_of(b, "escala", 100));
-    g_editor_face = val_of(b, "editor", 0); if (g_editor_face < 0 || g_editor_face > FFACE_LIBERATION) g_editor_face = FFACE_MONO;
+    g_editor_face = val_of(b, "editor", 0); if (g_editor_face < 0 || g_editor_face >= FFACE_COUNT || g_editor_face == FFACE_LIBERATION_BOLD || (off && g_editor_face)) g_editor_face = FFACE_MONO;
     if (!off && str_of(b, "escritorio", g_desk, sizeof g_desk) && !font_set_by_name(g_desk)) g_desk[0] = 0;
+    g_speed = mouse_set_speed(val_of(b, "raton", 100));                  /* SOMA_225_AJUSTES */
+    g_res = val_of(b, "resolucion", 0); if (g_res < 0 || g_res > 3) g_res = 0;
+    if (g_res) res_apply();
 }
 
 /* ---------------------------------------------------------------- disposicion */
+/* SOMA_227_IMAGEN: desplazamiento vertical de las paginas. El contenido se dibuja desplazado y recortado al area de la pagina;
+ * los recortes internos de cada pagina se cruzan con ese area (antes un fb_reset_clip interno lo deshacia). */
+static int g_clon, g_clx, g_cly, g_clw, g_clh, g_cbot;
+static void sclip_set(int x, int y, int w, int h)
+{
+    if (g_clon) {
+        int x1 = x + w, y1 = y + h, bx1 = g_clx + g_clw, by1 = g_cly + g_clh;
+        if (x < g_clx) x = g_clx;
+        if (y < g_cly) y = g_cly;
+        if (x1 > bx1) x1 = bx1;
+        if (y1 > by1) y1 = by1;
+        w = x1 > x ? x1 - x : 0; h = y1 > y ? y1 - y : 0;
+        if (!w || !h) { (fb_set_clip)(0, 0, 1, 1); return; }
+    }
+    (fb_set_clip)(x, y, w, h);
+}
+static void sclip_reset(void) { if (g_clon) (fb_set_clip)(g_clx, g_cly, g_clw, g_clh); else (fb_reset_clip)(); }
+#define fb_set_clip(x, y, w, h) sclip_set((x), (y), (w), (h))
+#define fb_reset_clip() sclip_reset()
+static void cbot(int y) { if (y > g_cbot) g_cbot = y; }
 struct sl { int x, y, w, h, side_w, cx, cw, c1_y, c1_h, sl_x, sl_w, sl_y, tg_x, tg_y, prev_y, seg_w, reset_x, reset_y;
             int f1_y, f1_h, f1_seg, f1_demo, f2_y, f2_h, fam_y, sz_y, demo_y, f3_y, f3_h, ed_y, reset2_y; };   /* SOMA_184: pagina Fuentes */
 static void lay(struct sl *L, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
@@ -130,7 +177,7 @@ static void lay(struct sl *L, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
     L->f3_y = L->f2_y + L->f2_h + 12; L->f3_h = 100; L->ed_y = L->f3_y + 56;                  /* editor de texto */
     L->reset2_y = L->f3_y + L->f3_h + 14;
 }
-static void card(int x, int y, int w, int h) { fb_fill_rrect_aa(x, y, w, h, 12, 0xFF000000u | KC_CARD); fb_stroke_rrect_aa(x, y, w, h, 12, 0xFF1E293Bu); }
+static void card(int x, int y, int w, int h) { cbot(y + h); fb_fill_rrect_aa(x, y, w, h, 12, 0xFF000000u | KC_CARD); fb_stroke_rrect_aa(x, y, w, h, 12, 0xFF1E293Bu); }
 static void seg(int x, int y, int w, int n, int sel, const char *const *lab)
 {
     fb_fill_rounded_rect(x, y, w, 32, 10, 0x000C1119);
@@ -583,33 +630,40 @@ static int key_ia(char c)
     return 0;
 }
 
+/* SOMA_227_IMAGEN: la barra lateral se compacta si la ventana es baja (8 apartados) */
+static int sb_step(const struct sl *L) { int st = (L->h - 64) / 8; return st >= 40 ? 40 : (st < 28 ? 28 : st); }
+static int sb_y(const struct sl *L, int i) { return L->y + (sb_step(L) < 40 ? 52 : 60) + i * sb_step(L); }
 static void render_sidebar(const struct sl *L)
 {
     tx(L->x + 18, L->y + 14, 30, "Ajustes", 18, KC_TXT, 1);
-    static const char *const items[6] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Sistema" };   /* SOMA_195: IA */
-    for (int i = 0; i < 6; i++) {
-        int iy = L->y + 60 + i * 40, on = i == g_page;
-        if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, 34, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + 8, 3, 18, 1, KC_ACC); }
-        int ix = L->x + 30, icy = iy + 17; uint32_t ic = on ? 0xFFFFFFFFu : (i < 4 ? 0xFF8592A8u : 0xFF566379u);
+    static const char *const items[8] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Sistema", "Acerca de" };   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de */
+    for (int i = 0; i < 8; i++) {
+        int st = sb_step(L), ih = st - 6, iy = sb_y(L, i), on = i == g_page;
+        if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, ih, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + ih / 2 - 9, 3, 18, 1, KC_ACC); }
+        int ix = L->x + 30, icy = iy + ih / 2; uint32_t ic = on ? 0xFFFFFFFFu : 0xFF8592A8u;
         if (i == 0) { fb_stroke_rrect_aa(ix - 7, icy - 7, 14, 14, 7, ic); fb_fill_rrect_aa(ix - 3, icy - 3, 4, 4, 2, ic); }
         else if (i == 1) { for (int k = 0; k < 3; k++) fb_fill_rect((uint32_t)(ix - 6 + k * 5), (uint32_t)(icy + 4 - k * 4), 3, (uint32_t)(4 + k * 4), ic & 0xFFFFFF); }
         else if (i == 2) { tx(ix - 10, iy, 34, "Aa", 13, ic & 0xFFFFFF, 1); }                                              /* SOMA_184: Fuentes */
         else if (i == 3) { fb_stroke_rrect_aa(ix - 8, icy - 7, 16, 12, 4, ic); fb_fill_rrect_aa(ix - 4, icy - 2, 2, 2, 1, ic); fb_fill_rrect_aa(ix + 2, icy - 2, 2, 2, 1, ic); fb_fill_rect((uint32_t)(ix - 5), (uint32_t)(icy + 5), 3, 3, ic & 0xFFFFFF); }   /* IA */
         else if (i == 4) { fb_stroke_rrect_aa(ix - 8, icy - 6, 16, 11, 2, ic); fb_fill_rect((uint32_t)(ix - 3), (uint32_t)(icy + 6), 6, 2, ic & 0xFFFFFF); }
-        else { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 6, ic); fb_fill_rrect_aa(ix - 2, icy - 2, 4, 4, 2, ic); }
-        tx(L->x + 46, iy, 34, items[i], 13, on ? 0x00FFFFFF : (i < 4 ? KC_DIM : KC_FAINT), on);
-        if (i >= 4) tx(L->x + 46 + tw(items[i], 13, 0) + 8, iy, 34, "pronto", 10, 0x00475569, 0);
+        else if (i == 5) { for (int k = 0; k < 4; k++) fb_stroke_rrect_aa(ix - 8 + (k & 1) * 9, icy - 8 + (k >> 1) * 9, 7, 7, 2, ic); }
+        else if (i == 6) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
+        else { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 1, 2, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 5, 2, 2, ic & 0xFFFFFF); }
+        tx(L->x + 46, iy, ih, items[i], 13, on ? 0x00FFFFFF : KC_DIM, on);
     }
 }
 
 /* ================================================================ SOMA_184: pagina Fuentes */
-static const int UIFAM[3] = { WF_FAM_SANS, WF_FAM_LIBERATION, WF_FAM_MONO };        /* orden en pantalla -> familia de la interfaz */
-static int fam_sel(int fam) { for (int i = 0; i < 3; i++) if (UIFAM[i] == fam) return i; return 0; }
+static const int UIFAM[5] = { WF_FAM_SANS, WF_FAM_LIBERATION, WF_FAM_MONO, WF_FAM_ORBITAL, WF_FAM_TECNICA };   /* orden en pantalla -> familia de la interfaz (SOMA_225: + propias) */
+static int fam_sel(int fam) { for (int i = 0; i < 5; i++) if (UIFAM[i] == fam) return i; return 0; }
+static const int EDF[5] = { FFACE_MONO, FFACE_DEJAVU, FFACE_LIBERATION, FFACE_ORBITAL, FFACE_TECNICA };   /* editor */
+static int ed_sel(int f) { for (int i = 0; i < 5; i++) if (EDF[i] == f) return i; return 0; }
 static void render_reset(const struct sl *L, int ry)
 {
     fb_fill_rounded_rect(L->reset_x, ry, 130, 32, 16, 0x00182133);
     fb_stroke_rrect_aa(L->reset_x, ry, 130, 32, 16, 0xFF263142u);
     tx(L->reset_x + (130 - tw("Restablecer", 13, 1)) / 2, ry, 32, "Restablecer", 13, KC_TXT, 1);
+    cbot(ry + 32);
     fb_set_clip(L->cx, ry, L->reset_x - L->cx - 10, 32);
     tx(L->cx, ry, 32, g_msg, 11, KC_FAINT, 0);
     fb_reset_clip();
@@ -626,22 +680,22 @@ static void render_fuentes(const struct sl *L)
         return;
     }
     /* escritorio */
-    static const char *const dsk[4] = { "DejaVu Mono", "DejaVu Sans", "Liberation", "Lib. negrita" };
+    static const char *const dsk[6] = { "DejaVu Mono", "DejaVu Sans", "Liberation", "Lib. negr.", "Orbital", "Tecnica" };
     card(L->cx, L->f1_y, L->cw, L->f1_h);
     tx(L->cx + 20, L->f1_y + 14, 22, "Fuente del escritorio", 14, KC_TXT, 1);
     b[0] = 0; s_cat(b, "Rotulos, iconos y ventanas. El catalogo completo (", sizeof b); s_num(b, sizeof b, font_get_count()); s_cat(b, " fuentes) esta en el comando font.", sizeof b);
     tx(L->cx + 20, L->f1_y + 34, 18, b, 11, KC_DIM, 0);
-    seg(L->cx + 20, L->f1_seg, L->seg_w, 4, font_face_of(font_get_current()), dsk);
+    seg(L->cx + 20, L->f1_seg, L->seg_w, 6, font_face_of(font_get_current()), dsk);
     fb_fill_rounded_rect(L->cx + 20, L->f1_demo, L->seg_w, 26, 8, 0x00090D15);
     fb_set_clip(L->cx + 20, L->f1_demo, L->seg_w, 26);
     font_draw_string((uint32_t)(L->cx + 32), (uint32_t)(L->f1_demo + 8), "El veloz murcielago hindu comia kiwi. 0123", KC_TXT, 1);
     fb_reset_clip();
     /* interfaz y documentos */
-    static const char *const fam[3] = { "DejaVu Sans", "Liberation Sans", "DejaVu Sans Mono" };
+    static const char *const fam[5] = { "DejaVu Sans", "Liberation", "DejaVu Mono", "SOMA Orbital", "SOMA Tecnica" };
     card(L->cx, L->f2_y, L->cw, L->f2_h);
     tx(L->cx + 20, L->f2_y + 14, 22, "Interfaz y documentos", 14, KC_TXT, 1);
     tx(L->cx + 20, L->f2_y + 34, 18, "Texto de las aplicaciones y del visor de documentos (no afecta a las paginas web).", 11, KC_DIM, 0);
-    seg(L->cx + 20, L->fam_y, L->seg_w, 3, fam_sel(wf_ui_family()), fam);
+    seg(L->cx + 20, L->fam_y, L->seg_w, 5, fam_sel(wf_ui_family()), fam);
     int si = 1; for (int i = 0; i < 4; i++) if (SCALES[i] == wf_ui_scale()) si = i;
     seg(L->cx + 20, L->sz_y, L->seg_w, 4, si, SCALE_NAME);
     fb_fill_rounded_rect(L->cx + 20, L->demo_y, L->seg_w, 40, 10, 0x00090D15);
@@ -649,75 +703,259 @@ static void render_fuentes(const struct sl *L)
     tx(L->cx + 34, L->demo_y, 40, "El veloz murcielago hindu comia kiwi. 0123", 14, KC_TXT, 0);
     fb_reset_clip();
     /* editor de texto */
-    static const char *const ed[3] = { "DejaVu Sans Mono", "DejaVu Sans", "Liberation Sans" };
+    static const char *const ed[5] = { "DejaVu Mono", "DejaVu Sans", "Liberation", "SOMA Orbital", "SOMA Tecnica" };
     card(L->cx, L->f3_y, L->cw, L->f3_h);
     tx(L->cx + 20, L->f3_y + 14, 22, "Editor de texto (Notas)", 14, KC_TXT, 1);
     tx(L->cx + 20, L->f3_y + 34, 18, "Letra del texto que escribes; el terminal sigue usando DejaVu Sans Mono.", 11, KC_DIM, 0);
-    seg(L->cx + 20, L->ed_y, L->seg_w, 3, g_editor_face, ed);
+    seg(L->cx + 20, L->ed_y, L->seg_w, 5, ed_sel(g_editor_face), ed);
     render_reset(L, L->reset2_y);
 }
 
-void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int focus)
+
+/* ================================================================ SOMA_225_AJUSTES: paginas Pantalla e Iconos */
+#define PAGE_PANTALLA 4
+#define PAGE_ICONOS   5
+static void render_pantalla(const struct sl *L)
 {
-    (void)focus;
-    settings_load();
-    struct sl L; lay(&L, x, y, w, h);
-    if (g_page == 1) {
-        fb_fill_rect(x, y, w, h, KC_WIN);
-        fb_fill_rect(x, y, (uint32_t)L.side_w, h, KC_SIDE);
-        fb_fill_rect(x + (uint32_t)L.side_w - 1, y, 1, h, KC_LINE);
-        render_sidebar(&L);
-        render_redes(&L);
-        return;
+    char b[140];
+    tx(L->cx, L->y + 18, 30, "Pantalla y raton", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "Resolucion de trabajo y velocidad del puntero. Se aplican al momento y se guardan.", 12, KC_DIM, 0);
+    int y1 = L->y + 84, h1 = 150;
+    card(L->cx, y1, L->cw, h1);
+    tx(L->cx + 20, y1 + 14, 22, "Resolucion", 14, KC_TXT, 1);
+    b[0] = 0; s_cat(b, "Pantalla: ", sizeof b); s_num(b, sizeof b, (int)fb_hw_width()); s_cat(b, " x ", sizeof b); s_num(b, sizeof b, (int)fb_hw_height());
+    s_cat(b, ". Menos resolucion = todo mas grande y menos trabajo para el procesador.", sizeof b);
+    tx(L->cx + 20, y1 + 34, 18, b, 11, KC_DIM, 0);
+    int n = res_count(); char lab[4][24]; const char *lp[4];
+    for (int k = 0; k < n; k++) { uint32_t w, h; res_of(k, &w, &h); lab[k][0] = 0; s_num(lab[k], 24, (int)w); s_cat(lab[k], "x", 24); s_num(lab[k], 24, (int)h); lp[k] = lab[k]; }
+    seg(L->cx + 20, y1 + 62, L->seg_w, n, g_res < n ? g_res : 0, lp);
+    b[0] = 0; s_cat(b, "Ahora: ", sizeof b); s_num(b, sizeof b, (int)fb_get_width()); s_cat(b, " x ", sizeof b); s_num(b, sizeof b, (int)fb_get_height());
+    s_cat(b, fb_scaled() ? "  (escalada con suavizado)" : "  (nativa, pixel a pixel)", sizeof b);
+    tx(L->cx + 20, y1 + 104, 28, b, 12, KC_TXT, 0);
+    int y2 = y1 + h1 + 12, h2 = 130;
+    card(L->cx, y2, L->cw, h2);
+    tx(L->cx + 20, y2 + 14, 22, "Velocidad del puntero", 14, KC_TXT, 1);
+    tx(L->cx + 20, y2 + 34, 18, "Raton, trackpad y raton USB. Los movimientos lentos se conservan (no se pierden fracciones).", 11, KC_DIM, 0);
+    int si = 2; for (int k = 0; k < 6; k++) if (SPEEDS[k] == g_speed) si = k;
+    seg(L->cx + 20, y2 + 62, L->seg_w, 6, si, SPEED_NAME);
+    b[0] = 0; s_num(b, sizeof b, g_speed); s_cat(b, " % de la velocidad normal", sizeof b);
+    tx(L->cx + 20, y2 + 98, 24, b, 12, KC_DIM, 0);
+    render_reset(L, y2 + h2 + 14);
+}
+static int click_pantalla(const struct sl *L, int32_t mx, int32_t my)
+{
+    int y1 = L->y + 84, y2 = y1 + 150 + 12;
+    if (mx >= L->reset_x && mx < L->reset_x + 130 && my >= y2 + 130 + 14 && my < y2 + 130 + 46) {
+        g_res = 0; g_speed = mouse_set_speed(100); res_apply(); save();
+        g_msg[0] = 0; s_cat(g_msg, "Resolucion nativa y velocidad normal", sizeof g_msg); return 1;
     }
-    if (g_page == PAGE_IA) {                                             /* SOMA_195: IA */
-        fb_fill_rect(x, y, w, h, KC_WIN);
-        fb_fill_rect(x, y, (uint32_t)L.side_w, h, KC_SIDE);
-        fb_fill_rect(x + (uint32_t)L.side_w - 1, y, 1, h, KC_LINE);
-        render_sidebar(&L);
-        render_ia(&L);
-        return;
+    if (mx < L->cx + 20 || mx >= L->cx + 20 + L->seg_w) return 0;
+    if (my >= y1 + 62 && my < y1 + 94) {
+        int k = seg_index(L, mx, res_count());
+        if (k != g_res) { g_res = k; res_apply(); save(); g_msg[0] = 0; s_cat(g_msg, "Resolucion cambiada", sizeof g_msg); }
+        return 1;
     }
-    if (g_page == 2) {                                                   /* SOMA_184: Fuentes */
-        fb_fill_rect(x, y, w, h, KC_WIN);
-        fb_fill_rect(x, y, (uint32_t)L.side_w, h, KC_SIDE);
-        fb_fill_rect(x + (uint32_t)L.side_w - 1, y, 1, h, KC_LINE);
-        render_sidebar(&L);
-        render_fuentes(&L);
-        return;
-    }
+    if (my >= y2 + 62 && my < y2 + 94) { g_speed = mouse_set_speed(SPEEDS[seg_index(L, mx, 6)]); save(); return 1; }
+    return 0;
+}
+static const char *const SI_NAMES[SI_COUNT] = { "", "Grabar", "Detener", "Reproducir", "Pausa", "Microfono", "Mic. apagado", "Camara",
+    "Cam. apagada", "Video", "Guardar", "Nuevo", "Papelera", "Nivel", "Pantalla", "Altavoz", "Pantalla y audio", "Temporizador",
+    "Escala", "Indicador", "Carpeta", "Anterior", "Siguiente", "Automatico", "Apagar", "Menos", "Mas", "Imagen", "Onda", "Aceptar",
+    "Disparador", "Reiniciar" };
+static const char *const VI_NAMES[VICON_COUNT] = { "Agente", "Agentes", "Terminal", "Navegador", "Archivos", "Imagenes", "Notas", "Paint",
+    "Maquetacion", "Memoria" };
+static void render_iconos(const struct sl *L)
+{
     char b[96];
-    fb_fill_rect(x, y, w, h, KC_WIN);
-    /* barra lateral */
-    fb_fill_rect(x, y, (uint32_t)L.side_w, h, KC_SIDE);
-    fb_fill_rect(x + (uint32_t)L.side_w - 1, y, 1, h, KC_LINE);
-    render_sidebar(&L);
+    tx(L->cx, L->y + 18, 30, "Iconos del sistema", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "Vectoriales: se dibujan a cualquier tamano. Las aplicaciones los usan con su nombre.", 12, KC_DIM, 0);
+    static const char *const tabs[2] = { "Del sistema", "De las aplicaciones" };
+    seg(L->cx, L->y + 76, L->cw, 2, g_icon_tab, tabs);
+    int n = g_icon_tab ? VICON_COUNT : SI_COUNT - 1;
+    int cols = L->cw / 84; if (cols < 3) cols = 3;
+    int cw = L->cw / cols, ch = 66, y0 = L->y + 118;
+    for (int i = 0; i < n; i++) {                       /* SOMA_227_IMAGEN: todas las filas (la pagina se desplaza) */
+        int r = i / cols, c = i % cols;
+        cbot(y0 + (r + 1) * ch + 30);
+        int x = L->cx + c * cw, y = y0 + r * ch;
+        fb_fill_rrect_aa(x + 4, y + 4, cw - 8, ch - 8, 10, 0xFF000000u | KC_CARD);
+        if (g_icon_tab) vicon_draw(i, x + cw / 2 - 12, y + 10, 24, 0x00E5EAF2u);
+        else si_icon(i + 1, x + cw / 2, y + 24, 26, i + 1 == SI_POWER || i + 1 == SI_REC ? 0x00FB7185u : 0x00E5EAF2u);
+        const char *nm = g_icon_tab ? VI_NAMES[i] : SI_NAMES[i + 1];
+        int w = tw(nm, 10, 0); if (w > cw - 12) w = cw - 12;
+        fb_set_clip(x + 6, y + 40, cw - 12, 20);
+        tx(x + (cw - w) / 2, y + 40, 20, nm, 10, KC_DIM, 0);
+        fb_reset_clip();
+    }
+    b[0] = 0; s_num(b, sizeof b, n); s_cat(b, g_icon_tab ? " iconos de aplicaciones (vicon_draw)" : " iconos del sistema (si_icon, sysicon.h)", sizeof b);
+    tx(L->cx, y0 + ((n + cols - 1) / cols) * ch + 4, 24, b, 11, KC_FAINT, 0);
+}
+static int click_iconos(const struct sl *L, int32_t mx, int32_t my)
+{
+    if (my >= L->y + 76 && my < L->y + 108 && mx >= L->cx && mx < L->cx + L->cw) {
+        int k = (mx - L->cx) * 2 / L->cw; if (k != g_icon_tab) { g_icon_tab = k; return 1; }
+    }
+    return 0;
+}
+
+/* ================================================================ SOMA_226_SISTEMA: paginas Sistema y Acerca de */
+#define PAGE_SISTEMA 6
+#define PAGE_ACERCA  7
+static struct hw_cpu g_hcpu; static struct hw_gpu g_hgpu; static struct hw_board g_hbrd; static int g_hw_ok;
+static void hw_load(void) { if (!g_hw_ok) { hwmon_cpu(&g_hcpu); hwmon_gpu(&g_hgpu); hwmon_board(&g_hbrd); g_hw_ok = 1; } }
+static void kvrow(int x, int y, int w, const char *k, const char *v)
+{
+    tx(x, y, 26, k, 12, KC_DIM, 0);
+    int vw = tw(v, 12, 0), vx = x + w - vw; if (vx < x + 150) vx = x + 150;
+    fb_set_clip(x + 150, y, w - 150, 26); tx(vx, y, 26, v, 12, KC_TXT, 0); fb_reset_clip();
+    fb_fill_rect((uint32_t)x, (uint32_t)(y + 27), (uint32_t)w, 1, 0x001A2333);
+}
+/* texto en varias lineas dentro de un ancho; devuelve la y siguiente */
+static int tx_wrap(int x, int y, int w, const char *s, int px, uint32_t col, int lh)
+{
+    char line[160]; int n = 0, last_sp = -1; const char *p = s;
+    line[0] = 0;
+    while (*p) {
+        if (n < (int)sizeof line - 1) { line[n++] = *p; line[n] = 0; }
+        if (*p == ' ') last_sp = n - 1;
+        if (tw(line, px, 0) > w && last_sp > 0) {
+            char rest[160]; int rn = 0; for (int i = last_sp + 1; i < n; i++) rest[rn++] = line[i]; rest[rn] = 0;
+            line[last_sp] = 0; tx(x, y, lh, line, px, col, 0); y += lh;
+            for (int i = 0; i <= rn; i++) line[i] = rest[i];
+            n = rn; last_sp = -1;
+        }
+        p++;
+    }
+    if (n) { tx(x, y, lh, line, px, col, 0); y += lh; }
+    return y;
+}
+static void render_sistema(const struct sl *L)
+{
+    char v[96];
+    hw_load();
+    tx(L->cx, L->y + 18, 30, "Sistema", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "Version de SOMA y equipo en el que funciona. El detalle esta en el Monitor del sistema.", 12, KC_DIM, 0);
+    int y1 = L->y + 84, h1 = 4 * 30 + 50;
+    card(L->cx, y1, L->cw, h1);
+    tx(L->cx + 20, y1 + 12, 24, "SOMA", 14, KC_TXT, 1);
+    int kx = L->cx + 20, kw = L->cw - 40, ky = y1 + 44;
+    kvrow(kx, ky, kw, "Version", "0.3 pre-beta"); ky += 30;
+    v[0] = 0; s_cat(v, g_hcpu.arch[0] ? g_hcpu.arch : "-", sizeof v); s_cat(v, "  (compilado el " __DATE__ ")", sizeof v); kvrow(kx, ky, kw, "Arquitectura", v); ky += 30;
+    { uint64_t sec = timer_get_uptime_ms() / 1000; v[0] = 0; s_num(v, sizeof v, (int)(sec / 3600)); s_cat(v, " h ", sizeof v); s_num(v, sizeof v, (int)(sec / 60 % 60)); s_cat(v, " min", sizeof v); kvrow(kx, ky, kw, "Encendido", v); ky += 30; }
+    { int p = vfs_big_persist(); kvrow(kx, ky, kw, "Almacenamiento", p > 0 ? "En disco (se conserva al apagar)" : p == 0 ? "En disco (archivos grandes en memoria)" : "Solo en memoria"); }
+    int y2 = y1 + h1 + 12, h2 = 5 * 30 + 50;
+    card(L->cx, y2, L->cw, h2);
+    tx(L->cx + 20, y2 + 12, 24, "Equipo", 14, KC_TXT, 1);
+    ky = y2 + 44;
+    kvrow(kx, ky, kw, "Modelo", g_hbrd.model[0] ? g_hbrd.model : "-"); ky += 30;
+    kvrow(kx, ky, kw, "Procesador", g_hcpu.brand[0] ? g_hcpu.brand : "-"); ky += 30;
+    kvrow(kx, ky, kw, "Graficos", g_hgpu.name[0] ? g_hgpu.name : "-"); ky += 30;
+    v[0] = 0; s_num(v, sizeof v, (int)g_hbrd.ram_mb); s_cat(v, " MiB", sizeof v); kvrow(kx, ky, kw, "Memoria", v); ky += 30;
+    v[0] = 0; s_num(v, sizeof v, (int)fb_hw_width()); s_cat(v, " x ", sizeof v); s_num(v, sizeof v, (int)fb_hw_height());
+    if (fb_scaled()) { s_cat(v, "  (trabajo ", sizeof v); s_num(v, sizeof v, (int)fb_get_width()); s_cat(v, " x ", sizeof v); s_num(v, sizeof v, (int)fb_get_height()); s_cat(v, ")", sizeof v); }
+    kvrow(kx, ky, kw, "Pantalla", v);
+    int ry = y2 + h2 + 14, bw = 170;
+    fb_fill_rounded_rect(L->cx + L->cw - bw, ry, bw, 32, 16, 0x00182133);
+    fb_stroke_rrect_aa(L->cx + L->cw - bw, ry, bw, 32, 16, 0xFF7F1D1Du);
+    tx(L->cx + L->cw - bw + (bw - tw("Restablecer todo", 13, 1)) / 2, ry, 32, "Restablecer todo", 13, 0x00FCA5A5, 1);
+    cbot(ry + 32);
+    fb_set_clip(L->cx, ry, L->cw - bw - 10, 32);
+    tx(L->cx, ry, 32, g_msg, 11, KC_FAINT, 0);
+    fb_reset_clip();
+}
+void gui_desktop_layout_reset(void);
+static int click_sistema(const struct sl *L, int32_t mx, int32_t my)
+{
+    int y1 = L->y + 84, h1 = 4 * 30 + 50, y2 = y1 + h1 + 12, h2 = 5 * 30 + 50, ry = y2 + h2 + 14, bw = 170;
+    if (mx < L->cx + L->cw - bw || mx >= L->cx + L->cw || my < ry || my >= ry + 32) return 0;
+    g_opacity = 100; g_active_opaque = 0; wf_ui_set_family(WF_FAM_SANS, 100);
+    g_editor_face = FFACE_MONO; g_desk[0] = 0; (void)font_set(FONT_VECTOR);
+    g_res = 0; res_apply(); g_speed = mouse_set_speed(100);
+    gui_desktop_layout_reset();
+    save();
+    g_msg[0] = 0; s_cat(g_msg, "Todo restablecido: apariencia, fuentes, pantalla, raton y escritorio", sizeof g_msg);
+    return 1;
+}
+static int32_t her_sin1024(int a)                         /* seno * 1024, a en 1/1024 de vuelta (aproximacion de Bhaskara) */
+{
+    a &= 1023; int neg = a >= 512; int64_t u = a & 511;
+    int64_t num = 16 * u * (512 - u) * 1024, den = 5LL * 512 * 512 - 4 * u * (512 - u);
+    int32_t v = (int32_t)(num / den);
+    return neg ? -v : v;
+}
+static int32_t her_cos1024(int a) { return her_sin1024(a + 256); }
+static void about_logo(int cx, int cy, int r)
+{
+    fb_fill_rrect_aa(cx - r - 10, cy - r - 10, 2 * r + 20, 2 * r + 20, r + 10, 0x30388BFDu);
+    for (int ring = 0; ring < 3; ring++) {                              /* tres orbitas inclinadas, punto a punto */
+        static const int TILT[3] = { 0, 60, -50 }; static const uint32_t COL[3] = { 0x0067E8F9u, 0x00A78BFAu, 0x00E5EAF2u };
+        int ry = r * (ring == 2 ? 45 : 32) / 100;
+        for (int k = 0; k < 220; k++) {
+            int a = k * 1024 / 220;
+            int32_t ex = her_cos1024(a) * r / 1024, ey = her_sin1024(a) * ry / 1024;
+            int t = TILT[ring] * 1024 / 360;
+            int32_t x = (ex * her_cos1024(t) - ey * her_sin1024(t)) / 1024, y = (ex * her_sin1024(t) + ey * her_cos1024(t)) / 1024;
+            fb_fill_rrect_aa(cx + x - 1, cy + y - 1, 3, 3, 1, 0xC0000000u | COL[ring]);
+        }
+    }
+    fb_fill_rrect_aa(cx - r / 4, cy - r / 4, r / 2, r / 2, r / 4, 0xFF000000u);
+    fb_stroke_rrect_aa(cx - r / 4, cy - r / 4, r / 2, r / 2, r / 4, 0xFFE5EAF2u);
+}
+static void render_acerca(const struct sl *L)
+{
+    int lx = L->cx + 70;
+    about_logo(L->cx + 34, L->y + 52, 32);
+    tx(lx + 20, L->y + 22, 34, "SOMA", 26, KC_TXT, 1);
+    tx(lx + 20, L->y + 58, 22, "Sistema operativo para agentes de IA  -  version 0.3 pre-beta", 12, KC_DIM, 0);
+    int y1 = L->y + 100, h1 = 4 * 30 + 78;
+    card(L->cx, y1, L->cw, h1);
+    tx(L->cx + 20, y1 + 12, 22, "Dise\xC3\xB1o y desarrollo", 11, KC_ACC, 1);
+    tx(L->cx + 20, y1 + 32, 28, "Marcos Luis \xC3\x81lvarez Alejandre", 16, KC_TXT, 1);
+    int kx = L->cx + 20, kw = L->cw - 40, ky = y1 + 68;
+    kvrow(kx, ky, kw, "Correo", "mlalejandre@gmail.com"); ky += 30;
+    kvrow(kx, ky, kw, "YouTube", "youtube.com/@mentedevonneumann"); ky += 30;
+    kvrow(kx, ky, kw, "GitHub", "github.com/mlalejandre/x86-soma"); ky += 30;
+    kvrow(kx, ky, kw, "Licencia", "MIT");
+    int y2 = y1 + h1 + 12, h2 = 112;
+    card(L->cx, y2, L->cw, h2);
+    tx(L->cx + 20, y2 + 12, 22, "Licencia MIT", 13, KC_TXT, 1);
+    tx_wrap(L->cx + 20, y2 + 38, L->cw - 40, "Software libre: puedes usarlo, copiarlo, modificarlo, fusionarlo, publicarlo, distribuirlo y venderlo, siempre que conserves el aviso de copyright y el texto de la licencia (archivo LICENSE). Se ofrece tal cual, sin garantias.", 11, KC_DIM, 18);
+    int y3 = y2 + h2 + 12, h3 = 96;
+    {
+        card(L->cx, y3, L->cw, h3);
+        tx(L->cx + 20, y3 + 12, 22, "Componentes de terceros", 13, KC_TXT, 1);
+        tx_wrap(L->cx + 20, y3 + 38, L->cw - 40, "uACPI (MIT), fuentes DejaVu (licencia libre Bitstream Vera) y Liberation Sans (SIL OFL 1.1), firmware WiFi de Intel (licencia de redistribucion de Intel). SOMA Orbital y SOMA Tecnica son propias (MIT).", 11, KC_DIM, 18);
+    }
+}
+static void render_apariencia(const struct sl *L)
+{
+    char b[96];
     /* cabecera */
-    tx(L.cx, L.y + 18, 30, "Apariencia", 20, KC_TXT, 1);
-    tx(L.cx, L.y + 46, 22, "Transparencia de las ventanas (las fuentes estan en la pagina Fuentes)", 12, KC_DIM, 0);
+    tx(L->cx, L->y + 18, 30, "Apariencia", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "Transparencia de las ventanas (las fuentes estan en la pagina Fuentes)", 12, KC_DIM, 0);
 
     /* tarjeta 1: transparencia */
-    card(L.cx, L.c1_y, L.cw, L.c1_h);
-    tx(L.cx + 20, L.c1_y + 14, 22, "Transparencia de las ventanas", 14, KC_TXT, 1);
-    tx(L.cx + 20, L.c1_y + 34, 18, "100 % = opacas. Se ve el escritorio a traves de las ventanas.", 11, KC_DIM, 0);
+    card(L->cx, L->c1_y, L->cw, L->c1_h);
+    tx(L->cx + 20, L->c1_y + 14, 22, "Transparencia de las ventanas", 14, KC_TXT, 1);
+    tx(L->cx + 20, L->c1_y + 34, 18, "100 % = opacas. Se ve el escritorio a traves de las ventanas.", 11, KC_DIM, 0);
     {
-        int ty = L.sl_y + 10, kx = L.sl_x + (g_opacity - 40) * (L.sl_w - 1) / 60;
-        fb_fill_rounded_rect(L.sl_x, ty - 3, L.sl_w, 6, 3, 0x00263142);
-        fb_fill_rounded_rect(L.sl_x, ty - 3, kx - L.sl_x + 1, 6, 3, KC_PRIMARY);
+        int ty = L->sl_y + 10, kx = L->sl_x + (g_opacity - 40) * (L->sl_w - 1) / 60;
+        fb_fill_rounded_rect(L->sl_x, ty - 3, L->sl_w, 6, 3, 0x00263142);
+        fb_fill_rounded_rect(L->sl_x, ty - 3, kx - L->sl_x + 1, 6, 3, KC_PRIMARY);
         fb_fill_rrect_aa(kx - 10, ty - 10, 20, 20, 10, 0xFFFFFFFFu);
         fb_stroke_rrect_aa(kx - 10, ty - 10, 20, 20, 10, 0x40000000u);
         b[0] = 0; s_num(b, sizeof b, g_opacity); s_cat(b, " %", sizeof b);
-        tx(L.sl_x + L.sl_w + 18, L.sl_y, 20, b, 15, KC_TXT, 1);
+        tx(L->sl_x + L->sl_w + 18, L->sl_y, 20, b, 15, KC_TXT, 1);
     }
-    tx(L.cx + 20, L.tg_y, 24, "Mantener opaca la ventana activa", 13, KC_TXT, 0);
+    tx(L->cx + 20, L->tg_y, 24, "Mantener opaca la ventana activa", 13, KC_TXT, 0);
     {
         int on = g_active_opaque;
-        fb_fill_rrect_aa(L.tg_x, L.tg_y, 44, 24, 12, on ? (0xFF000000u | KC_PRIMARY) : 0xFF334155u);
-        fb_fill_rrect_aa(L.tg_x + (on ? 22 : 2), L.tg_y + 2, 20, 20, 10, 0xFFFFFFFFu);
+        fb_fill_rrect_aa(L->tg_x, L->tg_y, 44, 24, 12, on ? (0xFF000000u | KC_PRIMARY) : 0xFF334155u);
+        fb_fill_rrect_aa(L->tg_x + (on ? 22 : 2), L->tg_y + 2, 20, 20, 10, 0xFFFFFFFFu);
     }
     /* vista previa: "escritorio" con una ventana translucida encima */
     {
-        int px = L.cx + 20, pw = L.cw - 40, ph = 38, py = L.prev_y;
+        int px = L->cx + 20, pw = L->cw - 40, ph = 38, py = L->prev_y;
         for (int i = 0; i < pw; i += 2) { uint32_t c = 0x001E3A8Au + (uint32_t)(i * 60 / pw) * 0x00010100u; fb_fill_rect((uint32_t)(px + i), (uint32_t)py, 2, (uint32_t)ph, c); }
         for (int k = 0; k < 6; k++) fb_fill_rrect_aa(px + 12 + k * (pw / 6), py + 8, 22, 22, 11, 0xFF000000u | (0x00F59E0Bu + (uint32_t)k * 0x00101030u));
         uint32_t a = (uint32_t)(g_opacity * 255 / 100);
@@ -726,7 +964,46 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     }
 
     /* pie */
-    render_reset(&L, L.reset_y);
+    render_reset(L, L->reset_y);
+}
+#define NPAGES 8
+static int g_sc[NPAGES], g_sc_max[NPAGES], g_sdrag;           /* SOMA_227_IMAGEN: desplazamiento por pagina */
+static int sc_page(void) { return g_page >= 0 && g_page < NPAGES ? g_page : 0; }
+void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int focus)
+{
+    (void)focus;
+    settings_load();
+    struct sl L; lay(&L, x, y, w, h);
+    int pg = sc_page();
+    fb_fill_rect(x, y, w, h, KC_WIN);
+    fb_fill_rect(x, y, (uint32_t)L.side_w, h, KC_SIDE);
+    fb_fill_rect(x + (uint32_t)L.side_w - 1, y, 1, h, KC_LINE);
+    render_sidebar(&L);
+    struct sl C; lay(&C, x, (uint32_t)((int)y - g_sc[pg]), w, h);   /* la pagina, desplazada */
+    g_clon = 1; g_clx = L.x + L.side_w; g_cly = L.y; g_clw = L.w - L.side_w; g_clh = L.h;
+    sclip_reset();
+    g_cbot = C.y;
+    switch (g_page) {
+    case 1:             render_redes(&C); break;
+    case 2:             render_fuentes(&C); break;
+    case PAGE_IA:       render_ia(&C); break;
+    case PAGE_PANTALLA: render_pantalla(&C); break;
+    case PAGE_ICONOS:   render_iconos(&C); break;
+    case PAGE_SISTEMA:  render_sistema(&C); break;
+    case PAGE_ACERCA:   render_acerca(&C); break;
+    default:            render_apariencia(&C); break;
+    }
+    g_clon = 0; (fb_reset_clip)();
+    int total = g_cbot - C.y + 20, mx = total - L.h; if (mx < 0) mx = 0;
+    g_sc_max[pg] = mx;
+    if (g_sc[pg] > mx) g_sc[pg] = mx;
+    if (mx > 0) {                                                  /* barra de desplazamiento */
+        int tx0 = L.x + L.w - 10, ty0 = L.y + 6, th = L.h - 12;
+        int kh = th * L.h / total; if (kh < 30) kh = 30;
+        int ky = ty0 + (th - kh) * g_sc[pg] / mx;
+        fb_fill_rrect_aa(tx0, ty0, 5, th, 2, 0x22FFFFFFu);
+        fb_fill_rrect_aa(tx0 - 1, ky, 7, kh, 3, g_sdrag ? 0xE0FFFFFFu : 0x90A5B4CBu);
+    }
 }
 
 static int set_opacity_from(const struct sl *L, int mx)
@@ -754,13 +1031,13 @@ static int click_fuentes(const struct sl *L, int32_t mx, int32_t my)
     if (click_reset(L, mx, my, L->reset2_y)) return 1;
     if (font_sysfont_off() || mx < L->cx + 20 || mx >= L->cx + 20 + L->seg_w) return 0;
     if (my >= L->f1_seg && my < L->f1_seg + 32) {                                   /* escritorio */
-        int id = font_face_catalog_id(seg_index(L, mx, 4));
+        int id = font_face_catalog_id(seg_index(L, mx, 6));
         if (!font_set(id)) return 0;
         g_desk[0] = 0; s_cat(g_desk, font_get_name(id), sizeof g_desk); save(); return 1;
     }
-    if (my >= L->fam_y && my < L->fam_y + 32) { wf_ui_set_family(UIFAM[seg_index(L, mx, 3)], wf_ui_scale()); save(); return 1; }
+    if (my >= L->fam_y && my < L->fam_y + 32) { wf_ui_set_family(UIFAM[seg_index(L, mx, 5)], wf_ui_scale()); save(); return 1; }
     if (my >= L->sz_y && my < L->sz_y + 32) { wf_ui_set_family(wf_ui_family(), SCALES[seg_index(L, mx, 4)]); save(); return 1; }
-    if (my >= L->ed_y && my < L->ed_y + 32) { g_editor_face = seg_index(L, mx, 3); save(); return 1; }
+    if (my >= L->ed_y && my < L->ed_y + 32) { g_editor_face = EDF[seg_index(L, mx, 5)]; save(); return 1; }
     return 0;
 }
 int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
@@ -768,11 +1045,20 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     struct sl L; lay(&L, x, y, w, h);
     g_drag = 0;
     if (mx >= L.x + 10 && mx < L.x + L.side_w - 10) {                   /* SOMA_175C: barra lateral */
-        for (int i = 0; i < 4; i++) { int iy = L.y + 60 + i * 40; if (my >= iy && my < iy + 34) { g_page = i; g_pw_focus = 0; g_ia_focus = -1; if (i == PAGE_IA && !g_ia_busy) g_ia_loaded = 0; return i == PAGE_IA; } }
+        for (int i = 0; i < 8; i++) { int iy = sb_y(&L, i); if (my >= iy && my < iy + sb_step(&L) - 6) { g_page = i; g_pw_focus = 0; g_ia_focus = -1; if (i == PAGE_IA && !g_ia_busy) g_ia_loaded = 0; return i == PAGE_IA; } }
     }
+    int pg = sc_page();
+    if (g_sc_max[pg] > 0 && mx >= L.x + L.w - 16 && mx < L.x + L.w && my >= L.y && my < L.y + L.h) {   /* SOMA_227_IMAGEN: barra */
+        g_sdrag = 1; return settings_mouse(mx, my, x, y, w, h, 1) | 1;
+    }
+    if (my < L.y || my >= L.y + L.h) return 0;
+    lay(&L, x, (uint32_t)((int)y - g_sc[pg]), w, h);                    /* el contenido esta desplazado */
     if (g_page == PAGE_IA) return click_ia(&L, mx, my);                 /* SOMA_195 */
     if (g_page == 1) return click_redes(&L, mx, my);
     if (g_page == 2) return click_fuentes(&L, mx, my);
+    if (g_page == PAGE_PANTALLA) return click_pantalla(&L, mx, my);     /* SOMA_225_AJUSTES */
+    if (g_page == PAGE_ICONOS) return click_iconos(&L, mx, my);
+    if (g_page == PAGE_SISTEMA) return click_sistema(&L, mx, my);      /* SOMA_226_SISTEMA */
     if (my >= L.sl_y - 6 && my < L.sl_y + 26 && mx >= L.sl_x - 12 && mx < L.sl_x + L.sl_w + 12) { g_drag = 1; int c = set_opacity_from(&L, mx); if (c) save(); return c; }
     if (mx >= L.tg_x && mx < L.tg_x + 44 && my >= L.tg_y && my < L.tg_y + 24) { g_active_opaque = !g_active_opaque; save(); return 1; }
     if (click_reset(&L, mx, my, L.reset_y)) return 1;
@@ -780,11 +1066,30 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
 }
 int settings_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h, int held)
 {
-    (void)my;
+    int pg = sc_page();
+    if (g_sdrag) {                                                      /* SOMA_227_IMAGEN: arrastre de la barra */
+        if (!held) { g_sdrag = 0; return 1; }
+        int th = (int)h - 12, v = (my - (int)y - 6) * (g_sc_max[pg] + 1) / (th > 1 ? th : 1);
+        if (v < 0) v = 0;
+        if (v > g_sc_max[pg]) v = g_sc_max[pg];
+        if (v == g_sc[pg]) return 0;
+        g_sc[pg] = v; return 1;
+    }
     if (!g_drag || g_page != 0) return 0;
     if (!held) { g_drag = 0; save(); return 1; }
-    struct sl L; lay(&L, x, y, w, h);
+    struct sl L; lay(&L, x, (uint32_t)((int)y - g_sc[0]), w, h);
     return set_opacity_from(&L, mx);
+}
+int settings_wheel(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h, int wheel)   /* SOMA_227_IMAGEN */
+{
+    int pg = sc_page();
+    if (!wheel || g_sc_max[pg] <= 0) return 0;
+    if (mx < (int32_t)x || mx >= (int32_t)(x + w) || my < (int32_t)y || my >= (int32_t)(y + h)) return 0;
+    int v = g_sc[pg] + (wheel > 0 ? 48 : -48);
+    if (v < 0) v = 0;
+    if (v > g_sc_max[pg]) v = g_sc_max[pg];
+    if (v == g_sc[pg]) return 0;
+    g_sc[pg] = v; return 1;
 }
 int settings_handle_key(char c)
 {

@@ -40,7 +40,9 @@ enum soma_font_id {
     FONT_DEJAVU_SANS         = 33,     /* SOMA_184: TrueType proporcional (la de la web y la interfaz) */
     FONT_LIBERATION          = 34,     /* SOMA_184: Liberation Sans (anchos de Arial) */
     FONT_LIBERATION_BOLD     = 35,     /* SOMA_184: Liberation Sans Negrita */
-    FONT_COUNT               = 36
+    FONT_SOMA_ORBITAL        = 36,     /* SOMA_225: fuente propia, sans geometrica */
+    FONT_SOMA_TECNICA        = 37,     /* SOMA_225: fuente propia, sans tecnica */
+    FONT_COUNT               = 38
 };
 
 /* SOMA_184: caras TrueType del catalogo. Son las mismas que usa el navegador (una sola copia de cada fuente en el kernel). */
@@ -49,7 +51,9 @@ enum soma_font_face {
     FFACE_DEJAVU     = 1,   /* DejaVu Sans */
     FFACE_LIBERATION = 2,   /* Liberation Sans */
     FFACE_LIBERATION_BOLD = 3,
-    FFACE_COUNT      = 4
+    FFACE_ORBITAL    = 4,   /* SOMA_225: SOMA Orbital (propia) */
+    FFACE_TECNICA    = 5,   /* SOMA_225: SOMA Tecnica (propia) */
+    FFACE_COUNT      = 6
 };
 int         font_face_of(int font_id);            /* cara TrueType de una entrada del catalogo (-1 = fuente de mapa de bits) */
 int         font_face_catalog_id(int face);       /* entrada del catalogo que corresponde a una cara */
@@ -71,6 +75,7 @@ int         font_get_sorted_id(int order); /* posición alfabética -> ID real *
 const uint8_t *font_get_glyph(char c);
 void font_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, int scale);
 void font_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, int scale);
+int  font_text_width(const char *str, int scale);   /* SOMA_226_SISTEMA: ancho en px con la fuente del escritorio */
 void font_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_t def_color);
 
 

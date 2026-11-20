@@ -8,6 +8,8 @@
 #define WF_RAW    0x40   /* PARCHE 085: sin los ajustes de fuente de la interfaz (contenido web) */
 #define WF_WEB    0x80   /* SOMA_182: contenido de paginas web: usa Liberation Sans (anchos de Arial) si g_wf182_on */
 #define WF_LIB    0x100  /* SOMA_184: texto con Liberation Sans aunque no sea contenido web (familia de la interfaz = Liberation) */
+#define WF_ORB    0x200  /* SOMA_225: SOMA Orbital (fuente propia) */
+#define WF_TEC    0x400  /* SOMA_225: SOMA Tecnica (fuente propia) */
 extern int g_wf182_on;   /* SOMA_182: definido en web_css.c; lo fija web_page.c segun soma.webfont=off */
 int  wf_init(void);                                             /* 1 si hay fuente */
 int  wf_width64(const char *s, uint32_t n, int px, int fl);     /* ancho en 1/64 px (UTF-8) */
@@ -24,6 +26,8 @@ void wf_ui_set(int mono, int scale);
 #define WF_FAM_SANS 0
 #define WF_FAM_MONO 1
 #define WF_FAM_LIBERATION 2
+#define WF_FAM_ORBITAL 3      /* SOMA_225: fuentes propias */
+#define WF_FAM_TECNICA 4
 void wf_ui_set_family(int fam, int scale);
 int  wf_ui_family(void);
 int  wf_ui_mono(void);

@@ -54,7 +54,9 @@ static const struct soma_font_entry SOMA_FONTS[FONT_COUNT] = {
     [FONT_VECTOR] = { "vector", "Vectorial TrueType: DejaVu Sans Mono, suavizada y escalable", font_glyph_classic },
     [FONT_DEJAVU_SANS] = { "dejavu-sans", "Vectorial TrueType proporcional: DejaVu Sans (la de la interfaz y la web)", font_glyph_classic },
     [FONT_LIBERATION] = { "liberation-sans", "Vectorial TrueType: Liberation Sans, anchos de Arial (la de la web)", font_glyph_classic },
-    [FONT_LIBERATION_BOLD] = { "liberation-sans-bold", "Vectorial TrueType: Liberation Sans Negrita", font_glyph_classic }
+    [FONT_LIBERATION_BOLD] = { "liberation-sans-bold", "Vectorial TrueType: Liberation Sans Negrita", font_glyph_classic },
+    [FONT_SOMA_ORBITAL] = { "soma-orbital", "Vectorial propia de SOMA: Orbital, geometrica de trazo uniforme", font_glyph_classic },   /* SOMA_225 */
+    [FONT_SOMA_TECNICA] = { "soma-tecnica", "Vectorial propia de SOMA: Tecnica, curvas cuadradas y remates rectos", font_glyph_classic }
 };
 
 static int current_font_id = FONT_VECTOR;
@@ -358,9 +360,11 @@ static void font_draw_string_ansi_bitmap(uint32_t x, uint32_t y, const char *str
 extern const uint8_t web_ttf_blob[], web_ttf_blob_end[], web_ttf_sans[], web_ttf_sans_end[], web_ttf_sansb[], web_ttf_sansb_end[];
 static struct { struct vf_font f; uint16_t ascii[256]; int8_t state; } ff_tab[FFACE_COUNT];   /* state: 0 sin intentar, 1 lista, -1 fallo */
 static int ff_cur = -1;
-static const int8_t FF_EMK[FFACE_COUNT] = { 12, 11, 12, 12 };       /* em por unidad de escala: las proporcionales (mas anchas que la mono en m, w) apenas desbordan la celda de 8 px */
-static const char *const FF_NAME[FFACE_COUNT] = { "DejaVu Sans Mono", "DejaVu Sans", "Liberation Sans", "Liberation Sans Negrita" };
-static const int FF_CAT[FFACE_COUNT] = { FONT_VECTOR, FONT_DEJAVU_SANS, FONT_LIBERATION, FONT_LIBERATION_BOLD };
+static const int8_t FF_EMK[FFACE_COUNT] = { 12, 11, 12, 12, 11, 12 };       /* em por unidad de escala: las proporcionales (mas anchas que la mono en m, w) apenas desbordan la celda de 8 px */
+static const char *const FF_NAME[FFACE_COUNT] = { "DejaVu Sans Mono", "DejaVu Sans", "Liberation Sans", "Liberation Sans Negrita", "SOMA Orbital", "SOMA Tecnica" };
+static const int FF_CAT[FFACE_COUNT] = { FONT_VECTOR, FONT_DEJAVU_SANS, FONT_LIBERATION, FONT_LIBERATION_BOLD, FONT_SOMA_ORBITAL, FONT_SOMA_TECNICA };
+extern const unsigned char soma_ttf_orbital[], soma_ttf_tecnica[];      /* SOMA_225: soma_fonts.c */
+extern const unsigned int soma_ttf_orbital_len, soma_ttf_tecnica_len;
 
 int font_face_of(int font_id)
 {
@@ -369,6 +373,8 @@ int font_face_of(int font_id)
     case FONT_DEJAVU_SANS:     return FFACE_DEJAVU;
     case FONT_LIBERATION:      return FFACE_LIBERATION;
     case FONT_LIBERATION_BOLD: return FFACE_LIBERATION_BOLD;
+    case FONT_SOMA_ORBITAL:    return FFACE_ORBITAL;
+    case FONT_SOMA_TECNICA:    return FFACE_TECNICA;
     default:                   return -1;
     }
 }
@@ -385,6 +391,8 @@ static int ff_ready(int face)
         case FFACE_MONO:   d = vfont_ttf_data;  n = vfont_ttf_len; break;
         case FFACE_DEJAVU: d = web_ttf_blob;    n = (uint32_t)(web_ttf_blob_end - web_ttf_blob); break;
         case FFACE_LIBERATION: d = web_ttf_sans; n = (uint32_t)(web_ttf_sans_end - web_ttf_sans); break;
+        case FFACE_ORBITAL: d = soma_ttf_orbital; n = soma_ttf_orbital_len; break;      /* SOMA_225 */
+        case FFACE_TECNICA: d = soma_ttf_tecnica; n = soma_ttf_tecnica_len; break;
         default:           d = web_ttf_sansb;   n = (uint32_t)(web_ttf_sansb_end - web_ttf_sansb); break;
         }
         vf_face = (uint32_t)face;
@@ -439,6 +447,28 @@ static int vf_face_now(void)
     return ff_ready(FFACE_MONO) ? FFACE_MONO : -1;
 }
 static int vf_active(void) { return vf_face_now() >= 0; }
+/* SOMA_226_SISTEMA: avance natural de un codepoint en una cara proporcional (px), con el mismo tamano que vfont_draw_cp */
+static int ff_adv(int face, uint32_t cp, int scale)
+{
+    int u = ff_pick(face, cp);
+    if (u < 0) return 8 * scale;
+    ff_use(u);
+    uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp);
+    if (!g) g = vf_ascii[(uint8_t)'?'];
+    if (!g || !vf.upem) return 8 * scale;
+    int em = (vf_emk * scale * vf_pct + 50) / 100;
+    if (em < 4) em = 4;
+    if (em > VF_MAX_EM) em = VF_MAX_EM;
+    int a = (int)((vf_adv(g) * (uint32_t)em + vf.upem / 2) / vf.upem);
+    return a > 0 ? a : 1;
+}
+/* dibuja cp con su avance natural a partir de cx (vfont_draw_cp lo centra en una celda de 8*scale) y devuelve el avance */
+static int ff_draw_prop(int face, int32_t cx, int32_t cy, uint32_t cp, uint32_t fg, int scale)
+{
+    int adv = ff_adv(face, cp, scale);
+    if (cp > 32) ff_draw_cp(face, cx - (8 * scale - adv) / 2, cy, cp, fg, scale);
+    return adv;
+}
 
 /* Decodificador UTF-8 -> codepoint */
 static uint32_t vf_utf8(const char *s, int *n)
@@ -473,8 +503,8 @@ static void vf_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg,
         if (*p == '\n') { cx = x; cy += (uint32_t)(10 * scale); p++; continue; }
         int n = 1;
         uint32_t cp = vf_utf8(p, &n);
-        ff_draw_cp(face, (int32_t)cx, (int32_t)cy, cp, fg, scale);
-        cx += (uint32_t)(8 * scale);
+        if (face != FFACE_MONO) cx += (uint32_t)ff_draw_prop(face, (int32_t)cx, (int32_t)cy, cp, fg, scale);   /* SOMA_226: espaciado natural */
+        else { ff_draw_cp(face, (int32_t)cx, (int32_t)cy, cp, fg, scale); cx += (uint32_t)(8 * scale); }
         p += n;
     }
 }
@@ -510,8 +540,8 @@ static void vf_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_
         }
         int n = 1;
         uint32_t cp = vf_utf8(str, &n);
-        ff_draw_cp(face, (int32_t)cx, (int32_t)y, cp, col, 1);
-        cx += 8;
+        if (face != FFACE_MONO) cx += (uint32_t)ff_draw_prop(face, (int32_t)cx, (int32_t)y, cp, col, 1);   /* SOMA_226 */
+        else { ff_draw_cp(face, (int32_t)cx, (int32_t)y, cp, col, 1); cx += 8; }
         str += n;
     }
 }
@@ -525,6 +555,16 @@ void font_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, int scale)
         return;
     }
     font_draw_char_bitmap(x, y, c, fg, scale);
+}
+
+/* SOMA_226_SISTEMA: ancho en px de un texto con la fuente del escritorio (proporcional si la cara lo es) */
+int font_text_width(const char *str, int scale)
+{
+    if (!str || scale <= 0) return 0;
+    int face = vf_face_now(), w = 0;
+    if (face < 0 || face == FFACE_MONO) { int n = 0; const char *p = str; while (*p) { int k = 1; if (face >= 0) (void)vf_utf8(p, &k); p += k; n++; } return n * 8 * scale; }
+    for (const char *p = str; *p; ) { int k = 1; uint32_t cp = vf_utf8(p, &k); w += ff_adv(face, cp, scale); p += k; }
+    return w;
 }
 
 void font_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, int scale)

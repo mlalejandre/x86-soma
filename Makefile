@@ -141,7 +141,7 @@ OBJS_CORE = \
 	$(BUILD)/shell.o \
 	$(BUILD)/httpd.o \
 	$(BUILD)/fb.o \
-	$(BUILD)/gui_font.o \
+	$(BUILD)/gui_font.o $(BUILD)/soma_fonts.o \
 	$(BUILD)/mouse.o \
 	$(BUILD)/gui.o \
 	$(BUILD)/browser.o \
@@ -205,7 +205,7 @@ $(BUILD)/user/netsvc.elf: $(NETSVC_SRCS) src/user/sbxrt.h src/core/sbx_abi.h src
 # SOMA_202: el NAVEGADOR AISLADO: el motor web entero como proceso de ring 3 (src/user/websvc.c, src/core/web_r3_abi.h).
 WEBSVC_SRCS = src/user/websvc.c src/user/unet.c src/apps/web_page.c src/apps/web_html.c src/apps/web_css.c src/apps/web_layout.c $(wildcard src/apps/web_js_*.c) \
 	src/apps/web_f64.c src/apps/web_regex.c src/apps/web_font.c src/apps/web_net.c src/apps/web_inflate.c src/apps/web_img.c src/apps/web_jpeg.c src/core/jpeg.c \
-	src/apps/bmp_dec.c src/drivers/fb.c src/ui/gui_font.c src/core/tls13.c src/core/tlscrypto.c src/core/crypto.c src/core/x509.c src/core/tls_roots.c
+	src/apps/bmp_dec.c src/drivers/fb.c src/ui/gui_font.c src/ui/soma_fonts.c src/core/tls13.c src/core/tlscrypto.c src/core/crypto.c src/core/x509.c src/core/tls_roots.c
 WEBSVC_INC = -Isrc/apps -Isrc/net -Isrc/arch/x86_64 -Isrc/drivers -Isrc/ui -Isrc/fs -Isrc/fonts -Isrc/icons -Isrc/lang -Isrc/agent -Isrc
 $(BUILD)/user/websvc.elf: $(WEBSVC_SRCS) $(HEADERS) src/user/user.ld $(wildcard src/apps/*.ttf) $(wildcard src/apps/*.inc) | $(BUILD)
 	mkdir -p $(BUILD)/user/websvc
@@ -519,9 +519,9 @@ test:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_scrcap_179
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Itests tests/test_web_img_180.c src/apps/web_img.c src/apps/bmp_dec.c src/apps/web_jpeg.c src/apps/web_inflate.c src/core/jpeg.c -o build/tests/test_web_img_180
 	./build/tests/test_web_img_180
-	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_layout_181.c tests/layhost/fbhost.c src/apps/web_layout.c src/apps/web_css.c src/apps/web_html.c src/apps/web_font.c -o build/tests/test_web_layout_181
+	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_layout_181.c tests/layhost/fbhost.c src/apps/web_layout.c src/apps/web_css.c src/apps/web_html.c src/apps/web_font.c src/ui/soma_fonts.c -o build/tests/test_web_layout_181
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_web_layout_181
-	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_font_182.c tests/layhost/fbhost.c src/apps/web_font.c src/apps/web_css.c src/apps/web_html.c -o build/tests/test_web_font_182
+	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_font_182.c tests/layhost/fbhost.c src/apps/web_font.c src/ui/soma_fonts.c src/apps/web_css.c src/apps/web_html.c -o build/tests/test_web_font_182
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_web_font_182
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_js_183.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o build/tests/test_web_js_183
 	ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 ./build/tests/test_web_js_183 2>/dev/null
@@ -535,7 +535,7 @@ test:
 	ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=1 ./build/tests/test_web_js_187a 2>/dev/null
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_js_188.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o build/tests/test_web_js_188
 	JSCO_OFF=1 ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=1 ./build/tests/test_web_js_188 2>/dev/null
-	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -DSOMA_FONT_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_font_184.c src/ui/gui_font.c src/apps/web_font.c -o build/tests/test_font_184
+	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -DSOMA_FONT_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_font_184.c src/ui/gui_font.c src/apps/web_font.c src/ui/soma_fonts.c -o build/tests/test_font_184
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_font_184
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_brcm.c src/core/brcm_proto.c src/net/dhcp_proto.c -o build/tests/test_brcm
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_brcm
@@ -603,7 +603,7 @@ audit:
 # Si un caso falla queda en /tmp/fuzz_web_ultimo.html o /tmp/fuzz_js_ultimo.js; se reproduce con el archivo como tercer argumento.
 fuzz-web:
 	@mkdir -p build/fuzz
-	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -fwrapv -fno-sanitize=signed-integer-overflow,shift,nonnull-attribute -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/fuzz_web_200.c tests/layhost/fbhost.c src/apps/web_layout.c src/apps/web_css.c src/apps/web_html.c src/apps/web_font.c -o build/fuzz/fuzz_web_200
+	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -fwrapv -fno-sanitize=signed-integer-overflow,shift,nonnull-attribute -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/fuzz_web_200.c tests/layhost/fbhost.c src/apps/web_layout.c src/apps/web_css.c src/apps/web_html.c src/apps/web_font.c src/ui/soma_fonts.c -o build/fuzz/fuzz_web_200
 	ASAN_OPTIONS=detect_leaks=0 ./build/fuzz/fuzz_web_200 $(or $(FUZZ_ITERS),3000) $(or $(FUZZ_SEED),1)
 
 fuzz-js:

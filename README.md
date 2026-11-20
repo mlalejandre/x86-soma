@@ -30,6 +30,14 @@ El pendrive lleva dos particiones en una tabla **MBR**:
 | 1 | FAT32 | `SOMA` | 1 GB | El arranque: `EFI/BOOT/BOOTX64.EFI` (GRUB + núcleo + firmware WiFi en un solo archivo) |
 | 2 | FAT32 | `SOMADATA` | 4 GB | El disco de SOMA. Al primer arranque SOMA la reclama y la formatea con su propio sistema de archivos |
 
+### ⚡ Opción rápida: imagen ya compilada
+
+En la carpeta [`imagen/`](imagen/LEEME.md) del repositorio hay una imagen de SOMA lista para grabar en el pendrive con
+**balenaEtcher** o **Rufus**, sin compilar nada; sus instrucciones para Windows, macOS y Linux están en `imagen/LEEME.md`.
+
+Si prefieres compilarla tú, usa `python3 construyeimagen.py`: compila y **graba la imagen en el pendrive** (Linux y macOS)
+o **genera la carpeta `imagen/`** (imagen comprimida + instrucciones) para publicarla. También puedes seguir los pasos de abajo.
+
 > ⚠️ Los pasos de abajo **borran el pendrive entero**. Comprueba dos veces que eliges el pendrive y no el disco del ordenador.
 
 ### Paso 1 · Compilar el archivo de arranque (igual en los tres sistemas)
@@ -298,3 +306,13 @@ La pantalla se abre en el navegador (http://localhost:6080/) y la consola serie 
 ## 📄 Licencia
 
 Distribuido bajo licencia MIT. Consulta el archivo LICENSE para más detalles.
+
+## 👤 Autor
+
+SOMA está diseñado y desarrollado por **Marcos Luis Álvarez Alejandre**.
+
+- Correo: mlalejandre@gmail.com
+- YouTube: [Mente de Von Neumann](https://youtube.com/@mentedevonneumann)
+- GitHub: [mlalejandre/x86-soma](https://github.com/mlalejandre/x86-soma)
+
+Estos datos también aparecen dentro del sistema, en **Ajustes → Acerca de**.
