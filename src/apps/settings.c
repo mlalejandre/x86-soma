@@ -15,6 +15,8 @@
 #include "mouse.h"          /* SOMA_225_AJUSTES: velocidad del puntero */
 #include "sysicon.h"         /* SOMA_225_AJUSTES: pagina Iconos */
 #include "hwmon.h"           /* SOMA_226_SISTEMA: pagina Sistema */
+#include "audio_sys.h"        /* SOMA_250_TTS: pagina Sonido */
+#include "hda.h"
 #ifdef __x86_64__
 #include "voz_sys.h"          /* SOMA_246_VOZ_MODELOS: pagina Voz */
 #include "usermode.h"
@@ -121,8 +123,10 @@ static int str_of(const char *t, const char *key, char *out, int max)       /* S
     return 0;
 }
 int settings_editor_face(void) { return font_sysfont_off() ? FFACE_MONO : g_editor_face; }
+static void settings_load_sound(void);
 void settings_load(void)
 {
+    settings_load_sound();                                              /* SOMA_250_TTS: volumen y microfono guardados */
     if (g_loaded) return;
     g_loaded = 1;
     char b[320]; int n = vfs_read("/etc/ui.conf", b, sizeof b - 1);
@@ -142,6 +146,8 @@ void settings_load(void)
     g_res = val_of(b, "resolucion", 0); if (g_res < 0 || g_res > 3) g_res = 0;
     if (g_res) res_apply();
 }
+static void snd_load(void);
+static void settings_load_sound(void) { static int done; if (!done) { done = 1; snd_load(); } }   /* SOMA_250_TTS */
 
 /* ---------------------------------------------------------------- disposicion */
 /* SOMA_227_IMAGEN: desplazamiento vertical de las paginas. El contenido se dibuja desplazado y recortado al area de la pagina;
@@ -195,6 +201,70 @@ static void seg(int x, int y, int w, int n, int sel, const char *const *lab)
     }
 }
 
+/* ================================================================ SOMA_250_TTS: listas desplegables
+ * Una caja con el valor elegido; al pulsarla se abre la lista ENCIMA de todo (se dibuja al final), con rueda y barra si son muchas.
+ * Las cajas se registran al dibujar (en coordenadas de pantalla, ya desplazadas): el clic usa exactamente lo que se ve. */
+typedef const char *(*dd_label_fn)(int i, char *buf, int max);
+struct ddbox { int id, x, y, w, n, sel; dd_label_fn lab; };
+#define DD_MAX 8
+#define DD_H 32
+#define DD_ROW 28
+#define DD_ROWS 9
+enum { DD_NONE = -1, DD_DESK = 1, DD_UIFAM, DD_EDITOR, DD_VOICE, DD_MIC };
+static struct ddbox g_dd[DD_MAX]; static int g_ndd;
+static int g_dd_open = DD_NONE, g_dd_first;
+static int g_ddl_x, g_ddl_y, g_ddl_w, g_ddl_h, g_ddl_rows;           /* lista abierta (la ultima vez que se dibujo) */
+static void cbot(int y);
+static void dd(int id, int x, int y, int w, int n, int sel, dd_label_fn lab)
+{
+    if (g_ndd < DD_MAX) { struct ddbox *b = &g_dd[g_ndd++]; b->id = id; b->x = x; b->y = y; b->w = w; b->n = n; b->sel = sel; b->lab = lab; }
+    int open = g_dd_open == id;
+    fb_fill_rounded_rect(x, y, w, DD_H, 10, 0x000C1119);
+    fb_stroke_rrect_aa(x, y, w, DD_H, 10, open ? (0xFF000000u | KC_ACC) : 0xFF263142u);
+    char b[96]; const char *t = (n > 0 && sel >= 0 && sel < n) ? lab(sel, b, sizeof b) : (n > 0 ? "(elige una)" : "(ninguna)");
+    fb_set_clip(x + 10, y, w - 44, DD_H);
+    tx(x + 14, y, DD_H, t, 13, n > 0 ? KC_TXT : KC_FAINT, 0);
+    fb_reset_clip();
+    int cx = x + w - 20, cy = y + DD_H / 2;
+    if (open) { fb_line_aa((cx - 5) * 16, (cy + 2) * 16, cx * 16, (cy - 3) * 16, 22, 0xFF38BDF8u); fb_line_aa(cx * 16, (cy - 3) * 16, (cx + 5) * 16, (cy + 2) * 16, 22, 0xFF38BDF8u); }
+    else { fb_line_aa((cx - 5) * 16, (cy - 2) * 16, cx * 16, (cy + 3) * 16, 22, 0xFF8592A8u); fb_line_aa(cx * 16, (cy + 3) * 16, (cx + 5) * 16, (cy - 2) * 16, 22, 0xFF8592A8u); }
+    cbot(y + DD_H);
+}
+static struct ddbox *dd_find(int id) { for (int i = 0; i < g_ndd; i++) if (g_dd[i].id == id) return &g_dd[i]; return 0; }
+static void dd_draw_open(int wx, int wy, int ww, int wh)
+{
+    struct ddbox *b = g_dd_open != DD_NONE ? dd_find(g_dd_open) : 0;
+    if (!b || b->n <= 0) { g_ddl_h = 0; return; }
+    int rows = b->n < DD_ROWS ? b->n : DD_ROWS;
+    if (g_dd_first > b->n - rows) g_dd_first = b->n - rows;
+    if (g_dd_first < 0) g_dd_first = 0;
+    int lh = rows * DD_ROW + 8, ly = b->y + DD_H + 4;
+    if (ly + lh > wy + wh - 4 && b->y - 4 - lh >= wy + 4) ly = b->y - 4 - lh;      /* no cabe debajo: hacia arriba */
+    if (ly + lh > wy + wh - 4) ly = wy + wh - 4 - lh;
+    if (ly < wy + 4) ly = wy + 4;
+    g_ddl_x = b->x; g_ddl_y = ly; g_ddl_w = b->w; g_ddl_h = lh; g_ddl_rows = rows;
+    (fb_set_clip)(wx, wy, ww, wh);
+    fb_draw_shadow(b->x, ly, b->w, lh, 10, 18, 6, 0xA0000000u);
+    fb_fill_rrect_aa(b->x, ly, b->w, lh, 10, 0xFF0F1726u);
+    fb_stroke_rrect_aa(b->x, ly, b->w, lh, 10, 0xFF38BDF8u);
+    for (int r = 0; r < rows; r++) {
+        int i = g_dd_first + r, ry = ly + 4 + r * DD_ROW;
+        if (i == b->sel) fb_fill_rounded_rect(b->x + 4, ry, b->w - 8, DD_ROW - 2, 7, KC_SELBG);
+        char t[96]; const char *l = b->lab(i, t, sizeof t);
+        (fb_set_clip)(b->x + 8, ry, b->w - (b->n > rows ? 26 : 16), DD_ROW);
+        tx(b->x + 14, ry, DD_ROW - 2, l, 13, i == b->sel ? 0x00FFFFFF : KC_TXT, i == b->sel);
+        (fb_set_clip)(wx, wy, ww, wh);
+        if (i == b->sel) { int cx = b->x + b->w - 24, cy = ry + DD_ROW / 2 - 1; fb_line_aa((cx - 4) * 16, cy * 16, (cx - 1) * 16, (cy + 3) * 16, 22, 0xFF38BDF8u); fb_line_aa((cx - 1) * 16, (cy + 3) * 16, (cx + 5) * 16, (cy - 4) * 16, 22, 0xFF38BDF8u); }
+    }
+    if (b->n > rows) {                                                  /* barra */
+        int th = lh - 12, kh = th * rows / b->n; if (kh < 20) kh = 20;
+        int ky = ly + 6 + (th - kh) * g_dd_first / (b->n - rows);
+        fb_fill_rrect_aa(b->x + b->w - 9, ly + 6, 4, th, 2, 0x22FFFFFFu);
+        fb_fill_rrect_aa(b->x + b->w - 10, ky, 6, kh, 3, 0x90A5B4CBu);
+    }
+    (fb_reset_clip)();
+}
+
 /* ================================================================ SOMA_175C: pagina Redes (cable, movil por USB y WiFi) */
 static int g_page;                                    /* 0 Apariencia, 1 Redes */
 __attribute__((unused)) static char g_sel[33], g_pw[65];
@@ -222,9 +292,10 @@ __attribute__((unused)) static void button(int x, int y, int w, const char *t, i
 /* ================================================================ SOMA_195: pagina IA (con que modelo de lenguaje habla SOMA) */
 #define PAGE_IA 3
 #define PAGE_VOZ     6     /* SOMA_246_VOZ_MODELOS */
-#define PAGE_SISTEMA 7
-#define PAGE_ACERCA  8
-#define NITEMS 9
+#define PAGE_SONIDO  7     /* SOMA_250_TTS */
+#define PAGE_SISTEMA 8
+#define PAGE_ACERCA  9
+#define NITEMS 10
 static struct llm_conf g_ia;                          /* copia de trabajo; se guarda con "Guardar y probar" */
 static char g_ia_f[4][LLM_KEY_MAX];                   /* lo que se esta escribiendo: servidor, modelo, clave y (SOMA_196) clave del lanzador */
 static const int IA_FMAX[4] = { LLM_BASE_MAX - 1, LLM_MODEL_MAX - 1, LLM_KEY_MAX - 1, LLM_KEY_MAX - 1 };
@@ -649,7 +720,7 @@ static int sb_y(const struct sl *L, int i) { return L->y + (sb_step(L) < 40 ? 52
 static void render_sidebar(const struct sl *L)
 {
     tx(L->x + 18, L->y + 14, 30, "Ajustes", 18, KC_TXT, 1);
-    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sistema", "Acerca de" };   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
+    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de" };   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
     for (int i = 0; i < NITEMS; i++) {
         int st = sb_step(L), ih = st - 6, iy = sb_y(L, i), on = i == g_page;
         if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, ih, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + ih / 2 - 9, 3, 18, 1, KC_ACC); }
@@ -661,6 +732,7 @@ static void render_sidebar(const struct sl *L)
         else if (i == 4) { fb_stroke_rrect_aa(ix - 8, icy - 6, 16, 11, 2, ic); fb_fill_rect((uint32_t)(ix - 3), (uint32_t)(icy + 6), 6, 2, ic & 0xFFFFFF); }
         else if (i == 5) { for (int k = 0; k < 4; k++) fb_stroke_rrect_aa(ix - 8 + (k & 1) * 9, icy - 8 + (k >> 1) * 9, 7, 7, 2, ic); }
         else if (i == PAGE_VOZ) { fb_stroke_rrect_aa(ix - 3, icy - 9, 7, 12, 3, ic); fb_stroke_rrect_aa(ix - 7, icy - 3, 15, 9, 4, ic); fb_fill_rect((uint32_t)ix, (uint32_t)(icy + 6), 1, 4, ic & 0xFFFFFF); }   /* microfono */
+        else if (i == PAGE_SONIDO) { fb_fill_rect((uint32_t)(ix - 8), (uint32_t)(icy - 3), 4, 6, ic & 0xFFFFFF); fb_line_aa((ix - 4) * 16, (icy - 3) * 16, (ix + 1) * 16, (icy - 8) * 16, 22, ic); fb_line_aa((ix + 1) * 16, (icy - 8) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_line_aa((ix - 4) * 16, (icy + 3) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_stroke_rrect_aa(ix + 3, icy - 4, 6, 8, 4, ic); }   /* altavoz */
         else if (i == PAGE_SISTEMA) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
         else { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 1, 2, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 5, 2, 2, ic & 0xFFFFFF); }
         tx(L->x + 46, iy, ih, items[i], 13, on ? 0x00FFFFFF : KC_DIM, on);
@@ -682,11 +754,26 @@ static void render_reset(const struct sl *L, int ry)
     tx(L->cx, ry, 32, g_msg, 11, KC_FAINT, 0);
     fb_reset_clip();
 }
+/* SOMA_250_TTS: las tres fuentes se eligen en listas desplegables (el catalogo del escritorio tiene decenas) */
+static const char *const FAM_NAME[5] = { "DejaVu Sans", "Liberation Sans", "DejaVu Sans Mono", "SOMA Orbital", "SOMA T\xC3\xA9" "cnica" };
+static const char *const ED_NAME[5] = { "DejaVu Sans Mono", "DejaVu Sans", "Liberation Sans", "SOMA Orbital", "SOMA T\xC3\xA9" "cnica" };
+static const char *lab_desk(int i, char *b, int max)
+{
+    int id = font_get_sorted_id(i); const char *n = font_get_name(id), *d = font_get_desc(id);
+    b[0] = 0; s_cat(b, n ? n : "?", max);
+    if (d && d[0]) { s_cat(b, "  \xC2\xB7  ", max); s_cat(b, d, max); }
+    return b;
+}
+static const char *lab_fam(int i, char *b, int max) { (void)b; (void)max; return FAM_NAME[i]; }
+static const char *lab_ed(int i, char *b, int max) { (void)b; (void)max; return ED_NAME[i]; }
+static int desk_sel(void) { int cur = font_get_current(); for (int i = 0; i < font_get_count(); i++) if (font_get_sorted_id(i) == cur) return i; return -1; }
 static void render_fuentes(const struct sl *L)
 {
     char b[120];
     tx(L->cx, L->y + 18, 30, "Fuentes", 20, KC_TXT, 1);
-    tx(L->cx, L->y + 46, 22, "Escritorio, aplicaciones, documentos y editor (las mismas del navegador).", 12, KC_DIM, 0);
+    fb_set_clip(L->cx, L->y + 46, L->cw, 22);
+    tx(L->cx, L->y + 46, 22, "Escritorio, aplicaciones, documentos y editor.", 12, KC_DIM, 0);
+    fb_reset_clip();
     if (font_sysfont_off()) {
         card(L->cx, L->f1_y, L->cw, 70);
         tx(L->cx + 20, L->f1_y + 14, 22, "Catalogo ampliado desactivado", 14, KC_TXT, 1);
@@ -697,9 +784,12 @@ static void render_fuentes(const struct sl *L)
     static const char *const dsk[6] = { "DejaVu Mono", "DejaVu Sans", "Liberation", "Lib. negr.", "Orbital", "Tecnica" };
     card(L->cx, L->f1_y, L->cw, L->f1_h);
     tx(L->cx + 20, L->f1_y + 14, 22, "Fuente del escritorio", 14, KC_TXT, 1);
-    b[0] = 0; s_cat(b, "Rotulos, iconos y ventanas. El catalogo completo (", sizeof b); s_num(b, sizeof b, font_get_count()); s_cat(b, " fuentes) esta en el comando font.", sizeof b);
+    b[0] = 0; s_cat(b, "R\xC3\xB3tulos, iconos y ventanas: ", sizeof b); s_num(b, sizeof b, font_get_count()); s_cat(b, " fuentes.", sizeof b);
+    fb_set_clip(L->cx + 20, L->f1_y + 34, L->cw - 40, 18);
     tx(L->cx + 20, L->f1_y + 34, 18, b, 11, KC_DIM, 0);
-    seg(L->cx + 20, L->f1_seg, L->seg_w, 6, font_face_of(font_get_current()), dsk);
+    fb_reset_clip();
+    (void)dsk;
+    dd(DD_DESK, L->cx + 20, L->f1_seg, L->seg_w, font_get_count(), desk_sel(), lab_desk);
     fb_fill_rounded_rect(L->cx + 20, L->f1_demo, L->seg_w, 26, 8, 0x00090D15);
     fb_set_clip(L->cx + 20, L->f1_demo, L->seg_w, 26);
     font_draw_string((uint32_t)(L->cx + 32), (uint32_t)(L->f1_demo + 8), "El veloz murcielago hindu comia kiwi. 0123", KC_TXT, 1);
@@ -708,8 +798,11 @@ static void render_fuentes(const struct sl *L)
     static const char *const fam[5] = { "DejaVu Sans", "Liberation", "DejaVu Mono", "SOMA Orbital", "SOMA Tecnica" };
     card(L->cx, L->f2_y, L->cw, L->f2_h);
     tx(L->cx + 20, L->f2_y + 14, 22, "Interfaz y documentos", 14, KC_TXT, 1);
-    tx(L->cx + 20, L->f2_y + 34, 18, "Texto de las aplicaciones y del visor de documentos (no afecta a las paginas web).", 11, KC_DIM, 0);
-    seg(L->cx + 20, L->fam_y, L->seg_w, 5, fam_sel(wf_ui_family()), fam);
+    fb_set_clip(L->cx + 20, L->f2_y + 34, L->cw - 40, 18);
+    tx(L->cx + 20, L->f2_y + 34, 18, "Texto de las aplicaciones y de los documentos (no de las p\xC3\xA1ginas web).", 11, KC_DIM, 0);
+    fb_reset_clip();
+    (void)fam;
+    dd(DD_UIFAM, L->cx + 20, L->fam_y, L->seg_w, 5, fam_sel(wf_ui_family()), lab_fam);
     int si = 1; for (int i = 0; i < 4; i++) if (SCALES[i] == wf_ui_scale()) si = i;
     seg(L->cx + 20, L->sz_y, L->seg_w, 4, si, SCALE_NAME);
     fb_fill_rounded_rect(L->cx + 20, L->demo_y, L->seg_w, 40, 10, 0x00090D15);
@@ -720,8 +813,11 @@ static void render_fuentes(const struct sl *L)
     static const char *const ed[5] = { "DejaVu Mono", "DejaVu Sans", "Liberation", "SOMA Orbital", "SOMA Tecnica" };
     card(L->cx, L->f3_y, L->cw, L->f3_h);
     tx(L->cx + 20, L->f3_y + 14, 22, "Editor de texto (Notas)", 14, KC_TXT, 1);
-    tx(L->cx + 20, L->f3_y + 34, 18, "Letra del texto que escribes; el terminal sigue usando DejaVu Sans Mono.", 11, KC_DIM, 0);
-    seg(L->cx + 20, L->ed_y, L->seg_w, 5, ed_sel(g_editor_face), ed);
+    fb_set_clip(L->cx + 20, L->f3_y + 34, L->cw - 40, 18);
+    tx(L->cx + 20, L->f3_y + 34, 18, "Letra de lo que escribes (el terminal usa DejaVu Sans Mono).", 11, KC_DIM, 0);
+    fb_reset_clip();
+    (void)ed;
+    dd(DD_EDITOR, L->cx + 20, L->ed_y, L->seg_w, 5, ed_sel(g_editor_face), lab_ed);
     render_reset(L, L->reset2_y);
 }
 
@@ -1052,8 +1148,24 @@ static volatile int g_vz_inst[VOZ_TIERS], g_vz_stick[VOZ_TIERS], g_vz_ver, g_vz_
 static uint32_t g_vz_stick_mb[VOZ_TIERS];
 static char g_vz_used[96], g_vz_msg[200]; static volatile int g_vz_msg_ok;
 static int g_vz_seen = -1, g_vz_last_prog = -2;
+/* SOMA_250_TTS: voces instaladas (las lee el hilo de la pagina) */
+static char g_vc_path[VOZ_VOICES_MAX][96], g_vc_label[VOZ_VOICES_MAX][80]; static int g_vc_spk[VOZ_VOICES_MAX]; static volatile int g_vc_n;
+static char g_vc_msg[220]; static volatile int g_vc_msg_ok = -1;
+static uint32_t g_vc_speak_seen;
+static void vc_scan(void)
+{
+    static char paths[VOZ_VOICES_MAX][96];
+    int n = voz_voice_list(paths, 0, VOZ_VOICES_MAX);
+    for (int i = 0; i < n; i++) {
+        g_vc_path[i][0] = 0; s_cat(g_vc_path[i], paths[i], 96);
+        voz_voice_label(paths[i], g_vc_label[i], 80);
+        g_vc_spk[i] = voz_voice_speakers(paths[i]);
+    }
+    g_vc_n = n;
+}
 static void vz_scan(void)
 {
+    vc_scan();
     for (int t = 0; t < VOZ_TIERS; t++) {
         char m[96]; uint32_t sz = 0;
         g_vz_inst[t] = voz_installed(t, m, sizeof m, 0) == 0;
@@ -1066,7 +1178,11 @@ static void vz_scan(void)
 static void vz_worker(void *arg)
 {
     (void)arg;
-    if (g_vz_job > 0) {
+    if (g_vz_job == 100) {                                             /* SOMA_250_TTS: instalar las voces del pendrive */
+        static char msg[256];
+        int r = voz_voice_install(msg, sizeof msg);
+        g_vc_msg[0] = 0; s_cat(g_vc_msg, r == 0 ? "Listo: " : "No se pudo: ", sizeof g_vc_msg); s_cat(g_vc_msg, msg, sizeof g_vc_msg); g_vc_msg_ok = r == 0;
+    } else if (g_vz_job > 0) {
         int t = g_vz_job - 1; static char msg[256];
         int r = voz_install_tier(t, msg, sizeof msg);
         g_vz_msg[0] = 0; s_cat(g_vz_msg, r == 0 ? "Listo: " : "No se pudo instalar: ", sizeof g_vz_msg); s_cat(g_vz_msg, msg, sizeof g_vz_msg); g_vz_msg_ok = r == 0;
@@ -1087,15 +1203,117 @@ static int voz_page_tick(void)
     if (g_vz_seen != g_vz_ver) { g_vz_seen = g_vz_ver; ch = 1; }
     int pr = voz_install_progress();
     if (pr != g_vz_last_prog) { g_vz_last_prog = pr; ch = 1; }
+    if (voz_speak_ver() != g_vc_speak_seen) { g_vc_speak_seen = voz_speak_ver(); ch = 1; }   /* SOMA_250_TTS: Probar / Parar */
     return ch;
 }
-struct vz_lay { int y1, row_y, row_h, h1, btn_y, btn_w, y2, h2; };
+struct vz_lay { int y1, row_y, row_h, h1, btn_y, btn_w, y2, h2, t_y, t_tg_x, t_tg_y, t_dd_y, t_sp_y, t_spk_y, t_btn_y, t_msg_y, t_h, lab_w; };
+static int tts_cur(void)                                                /* indice de la voz en uso en la lista */
+{
+    struct voz_tts_conf c; voz_tts_get(&c);
+    for (int i = 0; i < g_vc_n; i++) { const char *a = g_vc_path[i], *b = c.voz; int k = 0; while (a[k] && a[k] == b[k]) k++; if (a[k] == b[k]) return i; }
+    return g_vc_n > 0 ? 0 : -1;
+}
 static void vz_lay(const struct sl *L, struct vz_lay *V)
 {
     V->y1 = L->y + 84; V->row_y = V->y1 + 66; V->row_h = 80;
     V->btn_y = V->row_y + VOZ_TIERS * (V->row_h + 8) + 6; V->btn_w = 220;
     V->h1 = V->btn_y + 32 + 50 - V->y1;
-    V->y2 = V->y1 + V->h1 + 12; V->h2 = 150;
+    /* SOMA_250_TTS: tarjeta de la lectura en voz alta */
+    V->t_y = V->y1 + V->h1 + 12; V->lab_w = 130;
+    V->t_tg_x = L->cx + L->cw - 20 - 44; V->t_tg_y = V->t_y + 66;
+    V->t_dd_y = V->t_y + 112; V->t_sp_y = V->t_dd_y + 44;
+    int cur = tts_cur(), spk = cur >= 0 ? g_vc_spk[cur] : 1;
+    V->t_spk_y = spk > 1 ? V->t_sp_y + 44 : -1000;
+    V->t_btn_y = (spk > 1 ? V->t_spk_y : V->t_sp_y) + 48;
+    V->t_msg_y = V->t_btn_y + 38; V->t_h = V->t_msg_y + 40 - V->t_y;
+    V->y2 = V->t_y + V->t_h + 12; V->h2 = 150;
+}
+static const char *lab_voice(int i, char *b, int max) { (void)b; (void)max; return i >= 0 && i < g_vc_n ? g_vc_label[i] : ""; }
+static const char *const SPD_NAME[4] = { "Lenta", "Normal", "R\xC3\xA1pida", "Muy r\xC3\xA1pida" };
+static const int SPD[4] = { 85, 100, 115, 130 };
+static void tts_pick_voice(int i)
+{
+    if (i < 0 || i >= g_vc_n) return;
+    struct voz_tts_conf c; voz_tts_get(&c);
+    c.voz[0] = 0; s_cat(c.voz, g_vc_path[i], sizeof c.voz); c.hablante = 0;
+    voz_tts_set(&c);
+    g_vc_msg[0] = 0; s_cat(g_vc_msg, "Voz elegida: ", sizeof g_vc_msg); s_cat(g_vc_msg, g_vc_label[i], sizeof g_vc_msg); g_vc_msg_ok = -1;
+}
+static void render_tts(const struct sl *L, const struct vz_lay *V)
+{
+    struct voz_tts_conf c; voz_tts_get(&c);
+    card(L->cx, V->t_y, L->cw, V->t_h);
+    tx(L->cx + 20, V->t_y + 12, 24, "Lectura en voz alta", 14, KC_TXT, 1);
+    fb_set_clip(L->cx + 20, V->t_y + 30, L->cw - 40, V->t_tg_y + 40 - V->t_y - 30);
+    tx(L->cx + 20, V->t_y + 34, 18, "Voces de Piper, sin conexi\xC3\xB3n. Notas usa la misma voz.", 11, KC_DIM, 0);
+    fb_set_clip(L->cx + 20, V->t_tg_y - 8, V->t_tg_x - 12 - L->cx - 20, 50);
+    tx(L->cx + 20, V->t_tg_y - 4, 20, "Leer las respuestas del orbe", 13, KC_TXT, 0);
+    tx(L->cx + 20, V->t_tg_y + 16, 18, "Alt o una pregunta nueva la cortan.", 11, KC_FAINT, 0);
+    fb_reset_clip();
+    fb_fill_rrect_aa(V->t_tg_x, V->t_tg_y, 44, 24, 12, c.leer_orbe ? (0xFF000000u | KC_PRIMARY) : 0xFF334155u);
+    fb_fill_rrect_aa(V->t_tg_x + (c.leer_orbe ? 22 : 2), V->t_tg_y + 2, 20, 20, 10, 0xFFFFFFFFu);
+    int x1 = L->cx + 20 + V->lab_w, w1 = L->cw - 40 - V->lab_w;
+    tx(L->cx + 20, V->t_dd_y, 32, "Voz", 13, KC_TXT, 0);
+    dd(DD_VOICE, x1, V->t_dd_y, w1, g_vc_n, tts_cur(), lab_voice);
+    tx(L->cx + 20, V->t_sp_y, 32, "Velocidad", 13, KC_TXT, 0);
+    int si = 1; for (int i = 0; i < 4; i++) if (SPD[i] == c.velocidad) si = i;
+    seg(x1, V->t_sp_y, w1, 4, si, SPD_NAME);
+    int cur = tts_cur();
+    if (cur >= 0 && g_vc_spk[cur] > 1) {
+        static const char *const SPK[4] = { "1", "2", "3", "4" };
+        int n = g_vc_spk[cur] < 4 ? g_vc_spk[cur] : 4;
+        tx(L->cx + 20, V->t_spk_y, 32, "Hablante", 13, KC_TXT, 0);
+        seg(x1, V->t_spk_y, w1, n, c.hablante < n ? c.hablante : 0, SPK);
+    }
+    int speaking = voz_speak_state();
+    button(L->cx + 20, V->t_btn_y, 150, speaking ? "Parar" : "Probar voz", 1);
+    button(L->cx + 182, V->t_btn_y, 230, g_vz_busy && g_vz_job == 100 ? "Instalando..." : "Instalar del pendrive", 0);
+    const char *m = g_vc_msg; char hint[200];
+    if (!m[0]) {
+        hint[0] = 0;
+        if (!usermode_avx2_ok()) s_cat(hint, "Este procesador no tiene AVX2: la lectura en voz alta no funciona en este equipo.", sizeof hint);
+        else if (voz_speak_msg()[0]) s_cat(hint, voz_speak_msg(), sizeof hint);
+        else if (!g_vc_n) s_cat(hint, "No hay voces instaladas: copia una voz de Piper (.onnx y .onnx.json) en la carpeta MODELOS del pendrive y pulsa Instalar.", sizeof hint);
+        else { s_num(hint, sizeof hint, g_vc_n); s_cat(hint, g_vc_n == 1 ? " voz instalada en /voces." : " voces instaladas en /voces.", sizeof hint); }
+        m = hint;
+    }
+    fb_set_clip(L->cx + 20, V->t_msg_y - 2, L->cw - 40, 40);
+    tx_wrap(L->cx + 20, V->t_msg_y, L->cw - 40, m, 11, g_vc_msg[0] ? (g_vc_msg_ok == 0 ? 0x00FCA5A5 : g_vc_msg_ok == 1 ? 0x0034D399 : KC_DIM) : KC_FAINT, 17);
+    fb_reset_clip();
+}
+static int click_tts(const struct sl *L, const struct vz_lay *V, int32_t mx, int32_t my)
+{
+    struct voz_tts_conf c; voz_tts_get(&c);
+    int x1 = L->cx + 20 + V->lab_w, w1 = L->cw - 40 - V->lab_w;
+    if (mx >= V->t_tg_x && mx < V->t_tg_x + 44 && my >= V->t_tg_y && my < V->t_tg_y + 24) {
+        c.leer_orbe = !c.leer_orbe; voz_tts_set(&c);
+        if (!c.leer_orbe && voz_speak_state()) voz_speak_stop();
+        g_vc_msg[0] = 0; s_cat(g_vc_msg, c.leer_orbe ? "El orbe leer\xC3\xA1 sus respuestas en voz alta." : "El orbe ya no lee sus respuestas.", sizeof g_vc_msg); g_vc_msg_ok = -1;
+        return 1;
+    }
+    if (mx >= x1 && mx < x1 + w1 && my >= V->t_sp_y && my < V->t_sp_y + 32) {
+        int i = (mx - x1 - 2) * 4 / (w1 - 4); if (i < 0) i = 0; if (i > 3) i = 3;
+        c.velocidad = SPD[i]; voz_tts_set(&c); return 1;
+    }
+    int cur = tts_cur();
+    if (cur >= 0 && g_vc_spk[cur] > 1 && mx >= x1 && mx < x1 + w1 && my >= V->t_spk_y && my < V->t_spk_y + 32) {
+        int n = g_vc_spk[cur] < 4 ? g_vc_spk[cur] : 4;
+        int i = (mx - x1 - 2) * n / (w1 - 4); if (i < 0) i = 0; if (i >= n) i = n - 1;
+        c.hablante = i; voz_tts_set(&c); return 1;
+    }
+    if (my >= V->t_btn_y && my < V->t_btn_y + 30) {
+        if (mx >= L->cx + 20 && mx < L->cx + 170) {
+            if (voz_speak_state()) voz_speak_stop();
+            else {
+                static const char demo[] = "Hola, soy SOMA. As\xC3\xAD sonar\xC3\xA1n mis respuestas. Puedes cambiar la voz y la velocidad en esta p\xC3\xA1gina.";
+                int r = voz_speak_start(demo, (uint32_t)(sizeof demo - 1));
+                g_vc_msg[0] = 0; if (r != 0) { s_cat(g_vc_msg, "No se pudo empezar a leer", sizeof g_vc_msg); g_vc_msg_ok = 0; }
+            }
+            return 1;
+        }
+        if (mx >= L->cx + 182 && mx < L->cx + 412 && !g_vz_busy) { g_vc_msg[0] = 0; s_cat(g_vc_msg, "Buscando voces en la carpeta MODELOS del pendrive...", sizeof g_vc_msg); g_vc_msg_ok = -1; vz_start(100); return 1; }
+    }
+    return 0;
 }
 static void render_voz(const struct sl *L)
 {
@@ -1103,8 +1321,10 @@ static void render_voz(const struct sl *L)
         "El m\xC3\xA1s r\xC3\xA1pido; falla m\xC3\xA1s con nombres y con ruido.",
         "M\xC3\xA1s preciso, ~3 veces m\xC3\xA1s lento. Recomendado.",
         "El m\xC3\xA1s preciso, ~8-10 veces m\xC3\xA1s lento." };
-    tx(L->cx, L->y + 18, 30, "Voz y dictado", 20, KC_TXT, 1);
-    tx(L->cx, L->y + 46, 22, "Mant\xC3\xA9n Alt para dictar en cualquier sitio (sin conexi\xC3\xB3n).", 12, KC_DIM, 0);
+    tx(L->cx, L->y + 18, 30, "Voz", 20, KC_TXT, 1);
+    fb_set_clip(L->cx, L->y + 46, L->cw, 22);
+    tx(L->cx, L->y + 46, 22, "Dictado (mant\xC3\xA9n Alt) y lectura en voz alta, sin conexi\xC3\xB3n.", 12, KC_DIM, 0);
+    fb_reset_clip();
     struct vz_lay V; vz_lay(L, &V);
     card(L->cx, V.y1, L->cw, V.h1);
     tx(L->cx + 20, V.y1 + 12, 24, "Modelo de transcripci\xC3\xB3n", 14, KC_TXT, 1);
@@ -1159,6 +1379,7 @@ static void render_voz(const struct sl *L)
     fb_set_clip(L->cx + 20, V.btn_y + 38, L->cw - 40, 40);
     tx_wrap(L->cx + 20, V.btn_y + 42, L->cw - 40, msg, 11, g_vz_msg[0] ? (g_vz_msg_ok ? 0x0034D399 : 0x00FCA5A5) : KC_FAINT, 17);
     fb_reset_clip();
+    render_tts(L, &V);                                               /* SOMA_250_TTS */
     card(L->cx, V.y2, L->cw, V.h2);
     tx(L->cx + 20, V.y2 + 12, 22, "C\xC3\xB3mo a\xC3\xB1" "adir un modelo", 13, KC_TXT, 1);
     tx_wrap(L->cx + 20, V.y2 + 38, L->cw - 40, "Descarga el archivo de huggingface.co/ggerganov/whisper.cpp (carpeta \"Files\") y c\xC3\xB3pialo en la carpeta MODELOS de la unidad SOMA del pendrive, junto a ggml-base-q5_1.bin. Despu\xC3\xA9s elige aqu\xC3\xAD el modelo y pulsa Instalar (o dicta: se instala solo). Sirven tambi\xC3\xA9n otras variantes del mismo tama\xC3\xB1o (q5_0, q8_0); el nivel se deduce del nombre: base, small, large/turbo.", 11, KC_DIM, 18);
@@ -1166,6 +1387,7 @@ static void render_voz(const struct sl *L)
 static int click_voz(const struct sl *L, int32_t mx, int32_t my)
 {
     struct vz_lay V; vz_lay(L, &V);
+    if (my >= V.t_y && my < V.t_y + V.t_h) return click_tts(L, &V, mx, my);   /* SOMA_250_TTS */
     for (int t = 0; t < VOZ_TIERS; t++) {
         int ry = V.row_y + t * (V.row_h + 8);
         if (mx >= L->cx + 16 && mx < L->cx + L->cw - 16 && my >= ry && my < ry + V.row_h) {
@@ -1190,12 +1412,191 @@ static void render_voz(const struct sl *L)
     tx(L->cx, L->y + 46, 22, "El reconocimiento de voz (whisper.cpp) de momento solo funciona en x86_64 (necesita AVX2).", 12, KC_DIM, 0);
 }
 static int click_voz(const struct sl *L, int32_t mx, int32_t my) { (void)L; (void)mx; (void)my; return 0; }
+static void tts_pick_voice(int i) { (void)i; }
 #endif
+
+/* ================================================================ SOMA_250_TTS: pagina Sonido
+ * Salida: volumen (el mismo que las teclas del portatil), silencio y prueba. Microfono: entrada y ganancia (dictado y Grabadora).
+ * Se guarda en /etc/sonido.conf y se aplica al arrancar el escritorio. */
+static int g_snd_vol = -1, g_snd_mute, g_snd_vol_before = 80, g_snd_mic = -1, g_snd_gain = -1;
+static char g_snd_msg[160];
+static void snd_save(void)
+{
+    char b[120] = "volumen="; s_num(b, sizeof b, g_snd_vol < 0 ? 100 : g_snd_vol);
+    s_cat(b, "\nsilencio=", sizeof b); s_num(b, sizeof b, g_snd_mute);
+    s_cat(b, "\nmicrofono=", sizeof b); s_num(b, sizeof b, g_snd_mic < 0 ? 0 : g_snd_mic);
+    s_cat(b, "\nganancia=", sizeof b); s_num(b, sizeof b, g_snd_gain < 0 ? 66 : g_snd_gain);
+    s_cat(b, "\n", sizeof b);
+    (void)vfs_write("/etc/sonido.conf", b, (uint32_t)s_len(b));
+}
+static void snd_load(void)
+{
+    char b[160]; int n = vfs_read("/etc/sonido.conf", b, sizeof b - 1);
+    if (n > 0) {
+        b[n] = 0;
+        g_snd_vol = val_of(b, "volumen", 100); if (g_snd_vol < 0 || g_snd_vol > 100) g_snd_vol = 100;
+        g_snd_mute = val_of(b, "silencio", 0) ? 1 : 0;
+        g_snd_mic = val_of(b, "microfono", 0);
+        g_snd_gain = val_of(b, "ganancia", 66); if (g_snd_gain < 0 || g_snd_gain > 100) g_snd_gain = 66;
+#ifdef __x86_64__
+        if (hda_ready()) {
+            hda_set_volume(g_snd_mute ? 0 : g_snd_vol);
+            if (hda_mic_ready()) { if (g_snd_mic >= 0 && g_snd_mic < hda_mic_count() && g_snd_mic != hda_mic_selected()) (void)hda_mic_select(g_snd_mic); (void)hda_mic_set_gain(g_snd_gain); }
+        }
+#endif
+    }
+}
+static void snd_sync(void)                                              /* lo que diga el hardware (las teclas cambian el volumen) */
+{
+#ifdef __x86_64__
+    if (hda_ready()) { int v = hda_get_volume(); if (v > 0) { g_snd_vol = v; g_snd_mute = 0; } else if (!g_snd_mute) { g_snd_mute = 1; } if (g_snd_vol < 0) g_snd_vol = 80; }
+    if (hda_mic_ready()) { g_snd_mic = hda_mic_selected(); g_snd_gain = hda_mic_get_gain(); }
+#endif
+    if (g_snd_vol < 0) g_snd_vol = 100;
+    if (g_snd_gain < 0) g_snd_gain = 66;
+}
+struct snd_lay { int y1, h1, vol_y, mute_y, sl_x, sl_w, y2, h2, mic_y, gain_y, y3, h3, lab_w; };
+static void snd_lay(const struct sl *L, struct snd_lay *S)
+{
+    S->lab_w = 130; S->sl_x = L->cx + 20 + S->lab_w; S->sl_w = L->cw - 40 - S->lab_w - 64;
+    S->y1 = L->y + 84; S->vol_y = S->y1 + 72; S->mute_y = S->y1 + 118; S->h1 = 168;
+    S->y2 = S->y1 + S->h1 + 12; S->mic_y = S->y2 + 52; S->gain_y = S->y2 + 104; S->h2 = 190;
+    S->y3 = S->y2 + S->h2 + 12; S->h3 = 96;
+}
+static void slider(int x, int y, int w, int v, int on)
+{
+    fb_fill_rrect_aa(x, y + 10, w, 6, 3, 0xFF1E293Bu);
+    int f = w * v / 100;
+    if (f > 0) fb_fill_rrect_aa(x, y + 10, f, 6, 3, on ? 0xFF38BDF8u : 0xFF475569u);
+    fb_fill_rrect_aa(x + f - 9, y + 4, 18, 18, 9, 0xFFFFFFFFu);
+    fb_stroke_rrect_aa(x + f - 9, y + 4, 18, 18, 9, 0xFF0B6BCBu);
+}
+static const char *lab_mic(int i, char *b, int max)
+{
+    b[0] = 0;
+#ifdef __x86_64__
+    hda_mic_describe(i, b, (uint32_t)max);
+#else
+    (void)i; (void)max;
+#endif
+    if (!b[0]) { s_cat(b, "Entrada ", max); s_num(b, max, i + 1); }
+    return b;
+}
+static void snd_pick_mic(int i)
+{
+#ifdef __x86_64__
+    if (hda_mic_select(i) == 0) { g_snd_mic = i; snd_save(); g_snd_msg[0] = 0; s_cat(g_snd_msg, "Micr\xC3\xB3" "fono elegido.", sizeof g_snd_msg); }
+    else { g_snd_msg[0] = 0; s_cat(g_snd_msg, "No se pudo usar esa entrada.", sizeof g_snd_msg); }
+#else
+    (void)i;
+#endif
+}
+static void render_sonido(const struct sl *L)
+{
+    struct snd_lay S; snd_lay(L, &S);
+    tx(L->cx, L->y + 18, 30, "Sonido", 20, KC_TXT, 1);
+    fb_set_clip(L->cx, L->y + 46, L->cw, 22);
+    tx(L->cx, L->y + 46, 22, "Altavoces, auriculares y micr\xC3\xB3" "fono.", 12, KC_DIM, 0);
+    fb_reset_clip();
+    int out_ok = 0, mic_ok = 0;
+#ifdef __x86_64__
+    out_ok = hda_ready(); mic_ok = hda_mic_ready();
+#endif
+    char b[160];
+    /* salida */
+    card(L->cx, S.y1, L->cw, S.h1);
+    tx(L->cx + 20, S.y1 + 12, 24, "Salida", 14, KC_TXT, 1);
+    dot(L->cx + 22, S.y1 + 42, out_ok ? 0x0022C55E : 0x00F87171);
+    fb_set_clip(L->cx + 40, S.y1 + 36, L->cw - 60, 22);
+    tx(L->cx + 40, S.y1 + 36, 22, out_ok ? "Tarjeta de sonido HD Audio lista" : "No hay salida de audio en este equipo", 12, out_ok ? KC_TXT : KC_DIM, 0);
+    fb_reset_clip();
+    tx(L->cx + 20, S.vol_y, 26, "Volumen", 13, KC_TXT, 0);
+    slider(S.sl_x, S.vol_y, S.sl_w, g_snd_mute ? 0 : g_snd_vol, out_ok && !g_snd_mute);
+    b[0] = 0; if (g_snd_mute) s_cat(b, "silencio", sizeof b); else { s_num(b, sizeof b, g_snd_vol); s_cat(b, " %", sizeof b); }
+    tx(S.sl_x + S.sl_w + 18, S.vol_y, 26, b, 12, KC_DIM, 0);
+    int tgx = L->cx + 20 + S.lab_w;
+    tx(L->cx + 20, S.mute_y, 26, "Silenciar", 13, KC_TXT, 0);
+    fb_fill_rrect_aa(tgx, S.mute_y + 1, 44, 24, 12, g_snd_mute ? (0xFF000000u | KC_PRIMARY) : 0xFF334155u);
+    fb_fill_rrect_aa(tgx + (g_snd_mute ? 22 : 2), S.mute_y + 3, 20, 20, 10, 0xFFFFFFFFu);
+    button(L->cx + L->cw - 20 - 160, S.mute_y - 2, 160, "Probar sonido", 0);
+    /* microfono */
+    card(L->cx, S.y2, L->cw, S.h2);
+    tx(L->cx + 20, S.y2 + 12, 24, "Micr\xC3\xB3" "fono", 14, KC_TXT, 1);
+    fb_set_clip(L->cx + 20, S.y2 + 32, L->cw - 40, 18);
+    tx(L->cx + 20, S.y2 + 32, 18, "Para el dictado (mant\xC3\xA9n Alt) y la Grabadora.", 11, KC_DIM, 0);
+    fb_reset_clip();
+    int nmic = 0;
+#ifdef __x86_64__
+    nmic = mic_ok ? hda_mic_count() : 0;
+#endif
+    tx(L->cx + 20, S.mic_y, 32, "Entrada", 13, KC_TXT, 0);
+    dd(DD_MIC, L->cx + 20 + S.lab_w, S.mic_y, L->cw - 40 - S.lab_w, nmic, mic_ok ? g_snd_mic : -1, lab_mic);
+    tx(L->cx + 20, S.gain_y, 26, "Ganancia", 13, KC_TXT, 0);
+    slider(S.sl_x, S.gain_y, S.sl_w, g_snd_gain, mic_ok);
+    b[0] = 0; s_num(b, sizeof b, g_snd_gain); s_cat(b, " %", sizeof b);
+    tx(S.sl_x + S.sl_w + 18, S.gain_y, 26, b, 12, KC_DIM, 0);
+    fb_set_clip(L->cx + 20, S.gain_y + 32, L->cw - 40, 38);
+    tx_wrap(L->cx + 20, S.gain_y + 36, L->cw - 40, g_snd_msg[0] ? g_snd_msg : (mic_ok ? "Si el dictado no te entiende, sube la ganancia; si satura o capta ruido, b\xC3\xA1jala." : "No se encontr\xC3\xB3 ninguna entrada de micr\xC3\xB3" "fono."), 11, KC_FAINT, 16);
+    fb_reset_clip();
+    /* lectura en voz alta */
+    card(L->cx, S.y3, L->cw, S.h3);
+    tx(L->cx + 20, S.y3 + 12, 24, "Voz del sistema", 14, KC_TXT, 1);
+    fb_set_clip(L->cx + 20, S.y3 + 36, L->cw - 40, 20);
+    tx(L->cx + 20, S.y3 + 36, 20, "Voz, velocidad y lectura del orbe: p\xC3\xA1gina Voz.", 11, KC_DIM, 0);
+    fb_reset_clip();
+    button(L->cx + L->cw - 20 - 120, S.y3 + 54, 120, "Ir a Voz", 0);
+    cbot(S.y3 + S.h3);
+}
+static int snd_set_from(const struct snd_lay *S, int mx, int which)    /* 1 volumen, 2 ganancia */
+{
+    int v = (mx - S->sl_x) * 100 / (S->sl_w > 1 ? S->sl_w : 1); if (v < 0) v = 0; if (v > 100) v = 100;
+    v = (v + 2) / 5 * 5;
+    if (which == 1) {
+        if (v == g_snd_vol && !g_snd_mute) return 0;
+        g_snd_vol = v; g_snd_mute = v == 0;
+#ifdef __x86_64__
+        hda_set_volume(v);
+#endif
+    } else {
+        if (v == g_snd_gain) return 0;
+        g_snd_gain = v;
+#ifdef __x86_64__
+        if (hda_mic_ready()) (void)hda_mic_set_gain(v);
+#endif
+    }
+    return 1;
+}
+static int g_snd_drag;
+static int click_sonido(const struct sl *L, int32_t mx, int32_t my)
+{
+    struct snd_lay S; snd_lay(L, &S);
+    if (mx >= S.sl_x - 12 && mx < S.sl_x + S.sl_w + 12) {
+        if (my >= S.vol_y && my < S.vol_y + 26) { g_snd_drag = 1; return snd_set_from(&S, mx, 1) | 1; }
+        if (my >= S.gain_y && my < S.gain_y + 26) { g_snd_drag = 2; return snd_set_from(&S, mx, 2) | 1; }
+    }
+    int tgx = L->cx + 20 + S.lab_w;
+    if (mx >= tgx && mx < tgx + 44 && my >= S.mute_y && my < S.mute_y + 26) {
+        if (!g_snd_mute) { g_snd_vol_before = g_snd_vol > 0 ? g_snd_vol : 80; g_snd_mute = 1; }
+        else { g_snd_mute = 0; if (g_snd_vol <= 0) g_snd_vol = g_snd_vol_before; }
+#ifdef __x86_64__
+        hda_set_volume(g_snd_mute ? 0 : g_snd_vol);
+#endif
+        snd_save(); return 1;
+    }
+    if (mx >= L->cx + L->cw - 180 && mx < L->cx + L->cw - 20 && my >= S.mute_y - 2 && my < S.mute_y + 28) {
+        static char o[160]; (void)audio_sys_command("test", o, sizeof o);
+        g_snd_msg[0] = 0; s_cat(g_snd_msg, o, sizeof g_snd_msg);
+        return 1;
+    }
+    if (mx >= L->cx + L->cw - 140 && mx < L->cx + L->cw - 20 && my >= S.y3 + 54 && my < S.y3 + 84) { g_page = PAGE_VOZ; voz_page_open(); return 1; }
+    return 0;
+}
 
 #define NPAGES NITEMS
 static int g_sc[NPAGES], g_sc_max[NPAGES], g_sdrag;           /* SOMA_227_IMAGEN: desplazamiento por pagina */
 static int sc_page(void) { return g_page >= 0 && g_page < NPAGES ? g_page : 0; }
 void settings_goto_voz(void) { g_page = PAGE_VOZ; voz_page_open(); }
+void settings_goto_sonido(void) { g_page = PAGE_SONIDO; snd_sync(); }   /* SOMA_250_TTS: "ajustes sonido" */
 void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int focus)
 {
     (void)focus;
@@ -1210,6 +1611,7 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     g_clon = 1; g_clx = L.x + L.side_w; g_cly = L.y; g_clw = L.w - L.side_w; g_clh = L.h;
     sclip_reset();
     g_cbot = C.y;
+    g_ndd = 0;                                                     /* SOMA_250_TTS: las listas se registran al dibujarse */
     switch (g_page) {
     case 1:             render_redes(&C); break;
     case 2:             render_fuentes(&C); break;
@@ -1217,6 +1619,7 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     case PAGE_PANTALLA: render_pantalla(&C); break;
     case PAGE_ICONOS:   render_iconos(&C); break;
     case PAGE_VOZ:      render_voz(&C); break;          /* SOMA_246_VOZ_MODELOS */
+    case PAGE_SONIDO:   render_sonido(&C); break;       /* SOMA_250_TTS */
     case PAGE_SISTEMA:  render_sistema(&C); break;
     case PAGE_ACERCA:   render_acerca(&C); break;
     default:            render_apariencia(&C); break;
@@ -1232,6 +1635,8 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
         fb_fill_rrect_aa(tx0, ty0, 5, th, 2, 0x22FFFFFFu);
         fb_fill_rrect_aa(tx0 - 1, ky, 7, kh, 3, g_sdrag ? 0xE0FFFFFFu : 0x90A5B4CBu);
     }
+    if (g_dd_open != DD_NONE && !dd_find(g_dd_open)) g_dd_open = DD_NONE;   /* su pagina ya no se ve */
+    dd_draw_open((int)x, (int)y, (int)w, (int)h);                  /* encima de todo */
 }
 
 static int set_opacity_from(const struct sl *L, int mx)
@@ -1258,22 +1663,50 @@ static int click_fuentes(const struct sl *L, int32_t mx, int32_t my)
 {
     if (click_reset(L, mx, my, L->reset2_y)) return 1;
     if (font_sysfont_off() || mx < L->cx + 20 || mx >= L->cx + 20 + L->seg_w) return 0;
-    if (my >= L->f1_seg && my < L->f1_seg + 32) {                                   /* escritorio */
-        int id = font_face_catalog_id(seg_index(L, mx, 6));
-        if (!font_set(id)) return 0;
-        g_desk[0] = 0; s_cat(g_desk, font_get_name(id), sizeof g_desk); save(); return 1;
-    }
-    if (my >= L->fam_y && my < L->fam_y + 32) { wf_ui_set_family(UIFAM[seg_index(L, mx, 5)], wf_ui_scale()); save(); return 1; }
     if (my >= L->sz_y && my < L->sz_y + 32) { wf_ui_set_family(wf_ui_family(), SCALES[seg_index(L, mx, 4)]); save(); return 1; }
-    if (my >= L->ed_y && my < L->ed_y + 32) { g_editor_face = EDF[seg_index(L, mx, 5)]; save(); return 1; }
+    return 0;
+}
+static void tts_pick_voice(int i);
+static void snd_pick_mic(int i);
+static int dd_pick(int id, int i)                                       /* SOMA_250_TTS: se eligio i en una lista */
+{
+    switch (id) {
+    case DD_DESK: { int fid = font_get_sorted_id(i); if (!font_set(fid)) return 0; g_desk[0] = 0; s_cat(g_desk, font_get_name(fid), sizeof g_desk); save(); return 1; }
+    case DD_UIFAM: wf_ui_set_family(UIFAM[i], wf_ui_scale()); save(); return 1;
+    case DD_EDITOR: g_editor_face = EDF[i]; save(); return 1;
+    case DD_VOICE: tts_pick_voice(i); return 1;
+    case DD_MIC: snd_pick_mic(i); return 1;
+    }
+    return 0;
+}
+static int dd_click(int32_t mx, int32_t my)                             /* 1 = el clic era de una lista */
+{
+    if (g_dd_open != DD_NONE) {
+        struct ddbox *b = dd_find(g_dd_open); int id = g_dd_open;
+        g_dd_open = DD_NONE;
+        if (b && g_ddl_h > 0 && mx >= g_ddl_x && mx < g_ddl_x + g_ddl_w && my >= g_ddl_y && my < g_ddl_y + g_ddl_h) {
+            int r = (my - g_ddl_y - 4) / DD_ROW, i = g_dd_first + r;
+            if (r >= 0 && r < g_ddl_rows && i < b->n) dd_pick(id, i);
+        }
+        return 1;                                                       /* fuera: solo se cierra */
+    }
+    for (int k = 0; k < g_ndd; k++) {
+        struct ddbox *b = &g_dd[k];
+        if (mx >= b->x && mx < b->x + b->w && my >= b->y && my < b->y + DD_H) {
+            if (b->n <= 0) return 1;
+            g_dd_open = b->id; g_dd_first = b->sel - DD_ROWS / 2; if (g_dd_first < 0) g_dd_first = 0;
+            return 1;
+        }
+    }
     return 0;
 }
 int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     struct sl L; lay(&L, x, y, w, h);
     g_drag = 0;
+    if (dd_click(mx, my)) return 1;                                     /* SOMA_250_TTS: listas desplegables */
     if (mx >= L.x + 10 && mx < L.x + L.side_w - 10) {                   /* SOMA_175C: barra lateral */
-        for (int i = 0; i < NITEMS; i++) { int iy = sb_y(&L, i); if (my >= iy && my < iy + sb_step(&L) - 6) { g_page = i; g_pw_focus = 0; g_ia_focus = -1; if (i == PAGE_IA && !g_ia_busy) g_ia_loaded = 0; if (i == PAGE_VOZ) voz_page_open(); return i == PAGE_IA || i == PAGE_VOZ; } }
+        for (int i = 0; i < NITEMS; i++) { int iy = sb_y(&L, i); if (my >= iy && my < iy + sb_step(&L) - 6) { g_page = i; g_pw_focus = 0; g_ia_focus = -1; if (i == PAGE_IA && !g_ia_busy) g_ia_loaded = 0; if (i == PAGE_VOZ) voz_page_open(); if (i == PAGE_SONIDO) snd_sync(); return i == PAGE_IA || i == PAGE_VOZ || i == PAGE_SONIDO; } }
     }
     int pg = sc_page();
     if (g_sc_max[pg] > 0 && mx >= L.x + L.w - 16 && mx < L.x + L.w && my >= L.y && my < L.y + L.h) {   /* SOMA_227_IMAGEN: barra */
@@ -1288,6 +1721,7 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     if (g_page == PAGE_ICONOS) return click_iconos(&L, mx, my);
     if (g_page == PAGE_SISTEMA) return click_sistema(&L, mx, my);      /* SOMA_226_SISTEMA */
     if (g_page == PAGE_VOZ) return click_voz(&L, mx, my);              /* SOMA_246_VOZ_MODELOS */
+    if (g_page == PAGE_SONIDO) return click_sonido(&L, mx, my);        /* SOMA_250_TTS */
     if (my >= L.sl_y - 6 && my < L.sl_y + 26 && mx >= L.sl_x - 12 && mx < L.sl_x + L.sl_w + 12) { g_drag = 1; int c = set_opacity_from(&L, mx); if (c) save(); return c; }
     if (mx >= L.tg_x && mx < L.tg_x + 44 && my >= L.tg_y && my < L.tg_y + 24) { g_active_opaque = !g_active_opaque; save(); return 1; }
     if (click_reset(&L, mx, my, L.reset_y)) return 1;
@@ -1304,6 +1738,11 @@ int settings_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, u
         if (v == g_sc[pg]) return 0;
         g_sc[pg] = v; return 1;
     }
+    if (g_snd_drag) {                                                   /* SOMA_250_TTS: deslizadores de Sonido */
+        struct sl L; lay(&L, x, (uint32_t)((int)y - g_sc[PAGE_SONIDO]), w, h); struct snd_lay S; snd_lay(&L, &S);
+        if (!held) { g_snd_drag = 0; snd_save(); return 1; }
+        return snd_set_from(&S, mx, g_snd_drag);
+    }
     if (!g_drag || g_page != 0) return 0;
     if (!held) { g_drag = 0; save(); return 1; }
     struct sl L; lay(&L, x, (uint32_t)((int)y - g_sc[0]), w, h);
@@ -1311,6 +1750,11 @@ int settings_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, u
 }
 int settings_wheel(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h, int wheel)   /* SOMA_227_IMAGEN */
 {
+    if (g_dd_open != DD_NONE) {                                         /* SOMA_250_TTS: la rueda mueve la lista abierta */
+        struct ddbox *b = dd_find(g_dd_open);
+        if (b && wheel) { int v = g_dd_first + (wheel > 0 ? 3 : -3), mxf = b->n - g_ddl_rows; if (v > mxf) v = mxf; if (v < 0) v = 0; if (v != g_dd_first) { g_dd_first = v; return 1; } }
+        return 0;
+    }
     int pg = sc_page();
     if (!wheel || g_sc_max[pg] <= 0) return 0;
     if (mx < (int32_t)x || mx >= (int32_t)(x + w) || my < (int32_t)y || my >= (int32_t)(y + h)) return 0;
@@ -1322,6 +1766,7 @@ int settings_wheel(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, u
 }
 int settings_handle_key(char c)
 {
+    if (g_dd_open != DD_NONE) { if (c == 27) { g_dd_open = DD_NONE; return 1; } return 0; }   /* SOMA_250_TTS */
     if (g_page == PAGE_IA) return key_ia(c);                            /* SOMA_195 */
     if (g_page == 1) {                                                  /* SOMA_175C: contrasena de la WiFi */
         if (!g_pw_focus) return 0;

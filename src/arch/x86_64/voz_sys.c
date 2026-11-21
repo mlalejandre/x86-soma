@@ -23,6 +23,7 @@
 #include "usbdisk.h"
 #include "fat.h"
 #include "fs.h"        /* SOMA_246: /etc/voz.conf */
+#include "habla_texto.h"   /* SOMA_250_TTS */
 
 extern const uint8_t _binary_voz_elf_start[], _binary_voz_elf_end[];
 
@@ -363,11 +364,20 @@ static char *g_sp_text; static uint32_t g_sp_len;
 
 static int is_onnx(const char *n) { return n[0] != '.' && ends_with(n, ".onnx"); }
 
+static void tts_load(void);
+static struct voz_tts_conf g_tts; static int g_tts_loaded;
 int voz_voice(char *path, uint32_t cap, uint64_t *size)
 {
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) return -1;
     uint32_t dir; struct bigfs_stat st;
+    tts_load();
+    if (g_tts.voz[0]) {                                        /* SOMA_250_TTS: la elegida en Ajustes, si sigue instalada */
+        uint32_t vi;
+        if (bigfs_lookup(fs, g_tts.voz, &vi) == (int)BIGFS_T_FILE && bigfs_stat(fs, vi, &st) == 0 && st.size >= (1u << 20)) {
+            uint32_t p = 0; sput(path, cap, &p, g_tts.voz); if (size) *size = st.size; return 0;
+        }
+    }
     if (bigfs_lookup(fs, VOCES_DIR, &dir) != (int)BIGFS_T_DIR) return -1;
     uint32_t cur = 0;
     while (bigfs_readdir(fs, dir, &cur, &st) == 1) {
@@ -406,12 +416,16 @@ int voz_voice_install(char *msg, uint32_t cap)
         struct fat_dirent *d = (struct fat_dirent *)kmalloc(32 * sizeof *d);
         const char *why = "sin memoria";
         int n = d ? usbdisk_bootdir("MODELOS", d, 32, &why) : -1;
-        int pick = -1;
-        for (int i = 0; i < n; ++i) if (!d[i].is_dir && is_onnx(d[i].name) && d[i].size > (1u << 20)) { pick = i; break; }
-        if (pick < 0) {
-            sput(msg, cap, &p, n < 0 ? why : "la carpeta MODELOS del pendrive no tiene ninguna voz (.onnx)");
-            sput(msg, cap, &p, ". Copia una voz de Piper (el .onnx y su .onnx.json) en la carpeta MODELOS de la unidad SOMA del pendrive.");
-        } else {
+        int found = 0, copied = 0, have = 0;
+        for (int pick = 0; pick < n; ++pick) {                 /* SOMA_250_TTS: todas las voces del pendrive (antes solo la primera) */
+        if (d[pick].is_dir || !is_onnx(d[pick].name) || d[pick].size <= (1u << 20)) continue;
+        found++;
+        {
+            char chk[FAT_NAME_MAX + 16]; uint32_t ci; struct bigfs_stat cst;
+            lower_into(chk, sizeof chk, VOCES_DIR "/", d[pick].name);
+            if (bigfs_lookup(fs, chk, &ci) == (int)BIGFS_T_FILE && bigfs_stat(fs, ci, &cst) == 0 && cst.size == d[pick].size) { have++; continue; }   /* ya esta */
+        }
+        {
             char src[FAT_NAME_MAX + 16], dst[FAT_NAME_MAX + 16]; uint32_t q = 0;
             sput(src, sizeof src, &q, "MODELOS/"); sput(src, sizeof src, &q, d[pick].name);
             lower_into(dst, sizeof dst, VOCES_DIR "/", d[pick].name);
@@ -429,14 +443,21 @@ int voz_voice_install(char *msg, uint32_t cap)
                     (void)copy_into(fs, jd, d[i].size, 0, js, m2, sizeof m2);
                     break;
                 }
-            }
+                copied++;
+            } else break;
         }
+        }
+        if (!found) {
+            sput(msg, cap, &p, n < 0 ? why : "la carpeta MODELOS del pendrive no tiene ninguna voz (.onnx)");
+            sput(msg, cap, &p, ". Copia una voz de Piper (el .onnx y su .onnx.json) en la carpeta MODELOS de la unidad SOMA del pendrive.");
+        } else if (r == 0 || (copied == 0 && have > 0)) { r = 0; }
+        if (r == 0) { p = 0; msg[0] = 0; sput(msg, cap, &p, copied ? "voces instaladas en " VOCES_DIR ": " : "las voces del pendrive ya estaban instaladas ("); sdec(msg, cap, &p, (uint64_t)(copied ? copied : have)); if (!copied) sput(msg, cap, &p, ")"); }
         if (d) kfree(d);
     }
     g_copy_ggml = 1;
     g_prog = -1;
     kmutex_unlock(&lk);
-    if (r == 0) { p = 0; msg[0] = 0; sput(msg, cap, &p, "voz instalada en " VOCES_DIR); }
+    if (r == 0 && sz) { p = 0; msg[0] = 0; sput(msg, cap, &p, "voz instalada en " VOCES_DIR); }
     return r;
 }
 
@@ -469,7 +490,11 @@ int voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap)
     if (heap_mib > 3072) heap_mib = 3072;
     char args[USER_ARGS_MAX]; uint32_t q = 0;
     sput(args, sizeof args, &q, "--habla -H "); sdec(args, sizeof args, &q, heap_mib);
-    sput(args, sizeof args, &q, " -m "); sput(args, sizeof args, &q, voice); sput(args, sizeof args, &q, " /voz/leer.txt");
+    sput(args, sizeof args, &q, " -m "); sput(args, sizeof args, &q, voice);
+    tts_load();                                                /* SOMA_250_TTS: velocidad y hablante elegidos */
+    if (g_tts.velocidad != 100) { sput(args, sizeof args, &q, " -s "); sdec(args, sizeof args, &q, (uint64_t)(g_tts.velocidad / 100)); sput(args, sizeof args, &q, "."); { uint32_t f = (uint32_t)(g_tts.velocidad % 100); if (f < 10) sput(args, sizeof args, &q, "0"); sdec(args, sizeof args, &q, f); } }
+    if (g_tts.hablante > 0 && g_tts.hablante < voz_voice_speakers(voice)) { sput(args, sizeof args, &q, " -S "); sdec(args, sizeof args, &q, (uint64_t)g_tts.hablante); }
+    sput(args, sizeof args, &q, " /voz/leer.txt");
     if (q + 2 >= sizeof args) { if (out) sput(out, cap, &p, "[habla] el nombre de la voz es demasiado largo\n"); return -3; }
     int64_t code = 0;
     return run_proc(args, heap_mib, out, cap, &code);
@@ -514,3 +539,148 @@ void voz_speak_stop(void) { if (g_sp_state) voz_stop(); }
 int voz_speak_state(void) { return g_sp_state; }
 uint32_t voz_speak_ver(void) { return g_sp_ver; }
 const char *voz_speak_msg(void) { return g_sp_msg; }
+
+/* ===================================================================== SOMA_250_TTS: preferencias, varias voces y el orbe que habla */
+static int conf_int(const char *b, const char *key, int def)
+{
+    uint32_t kl = slen(key);
+    for (const char *l = b; *l; ) {
+        uint32_t k = 0; while (k < kl && l[k] == key[k]) k++;
+        if (k == kl && l[k] == '=') { const char *v = l + k + 1; int neg = *v == '-'; if (neg) v++; int n = 0, any = 0; while (*v >= '0' && *v <= '9') { n = n * 10 + (*v++ - '0'); any = 1; } return any ? (neg ? -n : n) : def; }
+        while (*l && *l != '\n') l++;
+        if (*l) l++;
+    }
+    return def;
+}
+static void conf_str(const char *b, const char *key, char *out, uint32_t cap)
+{
+    uint32_t kl = slen(key); out[0] = 0;
+    for (const char *l = b; *l; ) {
+        uint32_t k = 0; while (k < kl && l[k] == key[k]) k++;
+        if (k == kl && l[k] == '=') { const char *v = l + k + 1; uint32_t n = 0; while (v[n] && v[n] != '\n' && v[n] != '\r' && n + 1 < cap) { out[n] = v[n]; n++; } out[n] = 0; return; }
+        while (*l && *l != '\n') l++;
+        if (*l) l++;
+    }
+}
+static void tts_load(void)
+{
+    if (g_tts_loaded) return;
+    g_tts_loaded = 1;
+    g_tts.leer_orbe = 1; g_tts.velocidad = 100; g_tts.hablante = 0; g_tts.voz[0] = 0;   /* por defecto: el orbe habla */
+    char b[256]; int n = vfs_read("/etc/habla.conf", b, sizeof b - 1);
+    if (n <= 0) return;
+    b[n] = 0;
+    g_tts.leer_orbe = conf_int(b, "leer_orbe", 1) ? 1 : 0;
+    g_tts.velocidad = conf_int(b, "velocidad", 100);
+    if (g_tts.velocidad < 70 || g_tts.velocidad > 160) g_tts.velocidad = 100;
+    g_tts.hablante = conf_int(b, "hablante", 0); if (g_tts.hablante < 0 || g_tts.hablante > 255) g_tts.hablante = 0;
+    conf_str(b, "voz", g_tts.voz, sizeof g_tts.voz);
+}
+void voz_tts_get(struct voz_tts_conf *c) { tts_load(); *c = g_tts; }
+void voz_tts_set(const struct voz_tts_conf *c)
+{
+    tts_load(); g_tts = *c;
+    if (g_tts.velocidad < 70 || g_tts.velocidad > 160) g_tts.velocidad = 100;
+    char b[256]; uint32_t p = 0;
+    sput(b, sizeof b, &p, "leer_orbe="); sdec(b, sizeof b, &p, (uint64_t)(g_tts.leer_orbe ? 1 : 0));
+    sput(b, sizeof b, &p, "\nvelocidad="); sdec(b, sizeof b, &p, (uint64_t)g_tts.velocidad);
+    sput(b, sizeof b, &p, "\nhablante="); sdec(b, sizeof b, &p, (uint64_t)g_tts.hablante);
+    sput(b, sizeof b, &p, "\nvoz="); sput(b, sizeof b, &p, g_tts.voz); sput(b, sizeof b, &p, "\n");
+    (void)vfs_write("/etc/habla.conf", b, p);
+}
+int voz_voice_list(char (*paths)[96], uint64_t *sizes, int max)
+{
+    int e = 0; struct bigfs *fs = bigfs_sys(&e);
+    if (!fs) return 0;
+    uint32_t dir; struct bigfs_stat st;
+    if (bigfs_lookup(fs, VOCES_DIR, &dir) != (int)BIGFS_T_DIR) return 0;
+    uint32_t cur = 0; int n = 0;
+    while (n < max && bigfs_readdir(fs, dir, &cur, &st) == 1) {
+        if (st.type != BIGFS_T_FILE || !is_onnx(st.name) || st.size < (1u << 20)) continue;
+        uint32_t p = 0; paths[n][0] = 0; sput(paths[n], 96, &p, VOCES_DIR "/"); sput(paths[n], 96, &p, st.name);
+        if (sizes) sizes[n] = st.size;
+        n++;
+    }
+    return n;
+}
+int voz_voice_speakers(const char *path)
+{
+    int e = 0; struct bigfs *fs = bigfs_sys(&e);
+    if (!fs || !path) return 1;
+    char jp[112]; uint32_t q = 0; sput(jp, sizeof jp, &q, path); sput(jp, sizeof jp, &q, ".json");
+    uint32_t ino; struct bigfs_stat st;
+    if (bigfs_lookup(fs, jp, &ino) != (int)BIGFS_T_FILE || bigfs_stat(fs, ino, &st) != 0) return 1;
+    static char b[8192]; uint64_t n = st.size < sizeof b - 1 ? st.size : sizeof b - 1;
+    int64_t r = bigfs_read(fs, ino, 0, b, n);
+    if (r <= 0) return 1;
+    b[r] = 0;
+    for (int64_t i = 0; i + 14 < r; i++) {
+        if (b[i] == 'n' && b[i + 1] == 'u' && b[i + 2] == 'm' && b[i + 3] == '_' && b[i + 4] == 's' && b[i + 5] == 'p' && b[i + 6] == 'e' && b[i + 7] == 'a' && b[i + 8] == 'k') {
+            const char *v = b + i + 9; while (*v && (*v < '0' || *v > '9')) { if (*v == ',' || *v == '}') return 1; v++; }
+            int k = 0; while (*v >= '0' && *v <= '9') k = k * 10 + (*v++ - '0');
+            return k > 0 ? k : 1;
+        }
+    }
+    return 1;
+}
+void voz_voice_label(const char *path, char *out, uint32_t cap)
+{
+    const char *b = path; for (const char *t = path; *t; t++) if (*t == '/') b = t + 1;
+    char nm[64]; uint32_t k = 0; while (b[k] && k + 1 < sizeof nm) { nm[k] = b[k]; k++; } nm[k] = 0;
+    if (k > 5 && ends_with(nm, ".onnx")) nm[k - 5] = 0;
+    /* idioma-nombre-calidad (es_es-davefx-medium) */
+    char part[3][32]; int np = 0; uint32_t j = 0; part[0][0] = part[1][0] = part[2][0] = 0;
+    for (const char *t = nm; ; t++) {
+        if (*t == '-' || !*t) { if (np < 3) part[np][j < 32 ? j : 31] = 0; np++; j = 0; if (!*t) break; continue; }
+        if (np < 3 && j + 1 < 32) part[np][j++] = *t;
+    }
+    uint32_t p = 0; if (cap) out[0] = 0;
+    if (np < 3) { sput(out, cap, &p, nm); return; }
+    char who[32]; uint32_t w = 0;
+    for (const char *t = part[1]; *t && w + 1 < sizeof who; t++) { char ch = *t == '_' ? ' ' : *t; if (w == 0 && ch >= 'a' && ch <= 'z') ch = (char)(ch - 32); who[w] = ch; w++; }
+    who[w] = 0;
+    sput(out, cap, &p, who); sput(out, cap, &p, " (");
+    static const char *const L[][2] = { { "es_es", "Espa\xC3\xB1" "a" }, { "es_mx", "M\xC3\xA9xico" }, { "es_ar", "Argentina" }, { "es_419", "Latinoam\xC3\xA9rica" },
+                                        { "en_us", "ingl\xC3\xA9s, EE. UU." }, { "en_gb", "ingl\xC3\xA9s, Reino Unido" }, { "ca_es", "catal\xC3\xA1n" }, { "fr_fr", "franc\xC3\xA9s" },
+                                        { "de_de", "alem\xC3\xA1n" }, { "it_it", "italiano" }, { "pt_pt", "portugu\xC3\xA9s" }, { "pt_br", "portugu\xC3\xA9s, Brasil" } };
+    const char *lang = part[0];
+    for (uint32_t i = 0; i < sizeof L / sizeof L[0]; i++) { const char *a = L[i][0], *c = part[0]; while (*a && (*c | 32) == *a) { a++; c++; } if (!*a && !*c) { lang = L[i][1]; break; } }
+    sput(out, cap, &p, lang);
+    const char *ql = part[2][0] == 'x' ? "muy baja" : part[2][0] == 'l' ? "baja" : part[2][0] == 'm' ? "media" : part[2][0] == 'h' ? "alta" : part[2];
+    sput(out, cap, &p, ", calidad "); sput(out, cap, &p, ql); sput(out, cap, &p, ")");
+}
+/* El orbe lee su respuesta: si esta activado y hay voz (o se puede instalar UNA vez desde el pendrive). Corta la lectura anterior.
+ * Todo en un hilo: buscar o instalar la voz lee el almacen o el pendrive y el escritorio no debe esperar. */
+static int g_reply_noinst;
+static volatile uint32_t g_reply_seq;
+struct reply_job { char *text; uint32_t len, seq; };
+static void reply_thread(void *arg)
+{
+    struct reply_job *j = (struct reply_job *)arg;
+    if (g_sp_state) voz_speak_stop();
+    for (int i = 0; i < 3000 && g_sp_state; i++) thread_sleep(1);     /* la lectura anterior termina de pararse */
+    char vp[96]; uint64_t vs = 0;
+    int ok = j->seq == g_reply_seq;                                    /* si llego otra respuesta mientras, gana la nueva */
+    if (ok && voz_voice(vp, sizeof vp, &vs) != 0) {
+        static char m[200];
+        if (g_reply_noinst || voz_voice_install(m, sizeof m) != 0 || voz_voice(vp, sizeof vp, &vs) != 0) {
+            if (!g_reply_noinst) { kprint("habla: el orbe no puede leer en voz alta: "); kprint(m); kprint("\n"); }
+            g_reply_noinst = 1; ok = 0;
+        }
+    }
+    if (ok && j->seq == g_reply_seq && !g_sp_state) (void)voz_speak_start(j->text, j->len);
+    kfree(j->text); kfree(j);
+}
+int voz_speak_reply(const char *text)
+{
+    tts_load();
+    if (!g_tts.leer_orbe || !text || !*text || !usermode_avx2_ok()) return -1;
+    struct reply_job *j = (struct reply_job *)kmalloc(sizeof *j);
+    char *c = (char *)kmalloc(2048);
+    if (!j || !c) { if (j) kfree(j); if (c) kfree(c); return -12; }
+    j->len = habla_limpia(text, c, 2048, 1500);
+    if (!j->len) { kfree(c); kfree(j); return -22; }
+    j->text = c; j->seq = ++g_reply_seq;
+    if (!thread_create("habla_orbe", reply_thread, j)) { kfree(c); kfree(j); return -11; }
+    return 0;
+}

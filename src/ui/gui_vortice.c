@@ -376,6 +376,9 @@ static void her_begin_turn(const char *q)
     her_ans_len = 0; her_ans_reveal = 0;
     her_thk_len = 0; her_thk_reveal = 0;
     her_energy = 0;
+#if defined(__x86_64__)
+    if (voz_speak_state()) voz_speak_stop();           /* SOMA_250_TTS: pregunta nueva: se deja de leer la respuesta anterior */
+#endif
     her_text_suppressed_by_dock = 0;
 }
 
@@ -401,6 +404,9 @@ static void her_finish_turn(const char *resp)
         her_ans_len = her_text_cells(*ans ? ans : "Mision ejecutada en hardware.",
                                      her_ans, HER_ANS_MAX);
     }
+#if defined(__x86_64__)
+    if (*ans) (void)voz_speak_reply(ans);              /* SOMA_250_TTS: el orbe lee su respuesta (Ajustes > Voz) */
+#endif
 }
 
 void gui_thought_update(const char *txt)
@@ -430,4 +436,3 @@ void gui_stream_push(const char *chunk)
             her_ans[her_ans_len++] = cell;
     }
 }
-

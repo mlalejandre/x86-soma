@@ -466,6 +466,16 @@ Cómo funciona:
   América (`es-419`, `es-mx`...) aplica seseo y yeísmo.
 - Con una voz de otro idioma lee igualmente, pero con la pronunciación española.
 
+**El orbe habla** (por defecto): las respuestas del orbe se leen en voz alta con la voz elegida. Pulsar **Alt** (para dictar) o
+hacer otra pregunta corta la lectura. Al leer se quitan los adornos de markdown, el código, las rutas largas (de
+`/workspace/docs/informe.pdf` se lee «informe») y los enlaces («el enlace»). Todo se ajusta en **Ajustes → Voz → Lectura en voz
+alta**: activar o desactivar, **voz** (lista desplegable con todas las de `/voces`: copia más en `MODELOS` del pendrive y pulsa
+**Instalar del pendrive**; se instalan todas las que falten), **velocidad** y, en voces con varios hablantes, cuál. **Probar voz**
+lee una frase de ejemplo. Se guarda en `/etc/habla.conf`.
+
+**Ajustes → Sonido**: volumen de la salida (el mismo que las teclas del portátil), silencio y **Probar sonido**; micrófono
+(entrada en una lista desplegable y ganancia). Se guarda en `/etc/sonido.conf` y se aplica al arrancar. También `ajustes sonido`.
+
 
 ## 📰 Documentos con acabado profesional (Maquetador)
 

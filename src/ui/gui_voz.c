@@ -123,6 +123,7 @@ static int her_voz_tick(void)
         her_voz_seq_seen = seq;
         her_voz_press_live = 1; her_voz_press_at = now;
         her_voz_block = her_voz_why_not();
+        if (voz_speak_state()) voz_speak_stop();       /* SOMA_250_TTS: Alt calla al orbe (y el microfono no se oye a si mismo) */
         if (!her_voz_block) {
             if (micrec_record(16000) == 0) { her_voz_state = 1; her_voz_t0 = now; her_voz_msg[0] = 0; }
             else her_voz_block = "No se pudo empezar a grabar";

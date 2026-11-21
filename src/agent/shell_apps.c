@@ -772,6 +772,7 @@ static int cmd_ajustes(const char *args, char *out_buf, uint32_t max_out)
     uint32_t p = 0;
     while (args && *args == ' ') args++;
     if (args && args[0] == 'v' && args[1] == 'o' && args[2] == 'z') { void settings_goto_voz(void); settings_goto_voz(); }   /* SOMA_246: "ajustes voz" */
+    if (args && args[0] == 's' && args[1] == 'o' && args[2] == 'n') { void settings_goto_sonido(void); settings_goto_sonido(); }   /* SOMA_250: "ajustes sonido" */
     gui_open_settings();
     soma_str_put(out_buf, max_out, &p, "Ajustes abiertos.");
     return 1;

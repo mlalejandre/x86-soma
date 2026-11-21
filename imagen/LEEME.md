@@ -8,7 +8,7 @@ Si prefieres compilarlo tú mismo, sigue las instrucciones del [README principal
 | `soma-0.3-prebeta-x86_64-usb.img.xz` | La imagen comprimida (6.4 MB; ocupa 5 GiB al grabarla) |
 | `soma-0.3-prebeta-x86_64-usb.img.xz.sha256` | Su huella SHA-256, para comprobar que se descargó bien |
 
-Generada el 21/11/2026 16:41 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
+Generada el 21/11/2026 18:17 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
 
 **Qué necesitas:** un pendrive de **8 GB o más** (se borra entero) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
 

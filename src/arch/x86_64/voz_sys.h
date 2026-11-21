@@ -37,4 +37,18 @@ void voz_speak_stop(void);
 int  voz_speak_state(void);                                /* 1 = preparando o leyendo */
 uint32_t voz_speak_ver(void);                              /* cambia al empezar y al terminar (para repintar) */
 const char *voz_speak_msg(void);                           /* motivo del ultimo fallo ("" si fue bien) */
+/* SOMA_250_TTS: preferencias de la lectura en voz alta (/etc/habla.conf), varias voces y lectura de las respuestas del orbe */
+struct voz_tts_conf {
+    int  leer_orbe;                                        /* 1 = el orbe lee sus respuestas (por defecto) */
+    int  velocidad;                                        /* % (70..160; 100 = la de la voz) */
+    int  hablante;                                         /* voces con varios hablantes: cual (0 = el primero) */
+    char voz[96];                                          /* ruta de la voz elegida en /voces ("" = la primera) */
+};
+void voz_tts_get(struct voz_tts_conf *c);
+void voz_tts_set(const struct voz_tts_conf *c);
+#define VOZ_VOICES_MAX 12
+int  voz_voice_list(char (*paths)[96], uint64_t *sizes, int max);   /* voces instaladas (.onnx de /voces) */
+int  voz_voice_speakers(const char *path);                 /* hablantes de una voz (num_speakers de su .json; 1 si no dice) */
+void voz_voice_label(const char *path, char *out, uint32_t cap);   /* "Davefx (Espana, calidad media)" */
+int  voz_speak_reply(const char *text);                    /* el orbe lee su respuesta si esta activado (0 = empezo) */
 #endif

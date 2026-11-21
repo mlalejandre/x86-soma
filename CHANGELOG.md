@@ -6,6 +6,19 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+### El orbe lee sus respuestas, elección de voz, página Sonido y fuentes en listas desplegables (250)
+- **El orbe habla** (activado por defecto): cada respuesta se lee con la voz de Piper elegida, en un hilo (buscar o instalar la
+  voz no frena el escritorio). Alt o una pregunta nueva cortan la lectura. Texto preparado para leer (`src/core/habla_texto.h`):
+  sin markdown, código, colores de consola ni enlaces («el enlace»); las rutas se leen por su nombre; hasta ~1500 caracteres.
+- **Ajustes → Voz → Lectura en voz alta**: activar/desactivar, voz (todas las de `/voces`, con nombre, país y calidad), velocidad
+  (lenta, normal, rápida, muy rápida), hablante en voces con varios, **Probar voz** / **Parar** e **Instalar del pendrive** (ahora
+  instala todas las voces de `MODELOS`, no solo la primera). `/etc/habla.conf`; Notas y `habla` usan la misma voz y velocidad.
+- **Ajustes → Sonido** (página nueva): volumen, silencio y prueba de la salida; entrada y ganancia del micrófono. `/etc/sonido.conf`,
+  aplicado al arrancar; `ajustes sonido`.
+- **Fuentes**: la fuente del escritorio (todo el catálogo, con su descripción), la de la interfaz y la del editor se eligen en
+  **listas desplegables** (con rueda y barra) en vez de botones que no cabían. Widget reutilizable en Ajustes.
+- Prueba nueva: `tests/test_tts_250.c` (limpieza del texto que se lee).
+
 ### Dictado: sin copias repetidas del mismo texto (249)
 - **Fallo**: al dictar con Alt, whisper a veces entraba en un bucle y escribía la frase tres o cuatro veces (y la última a
   medias). El filtro de 245 solo quitaba bloques de hasta 8 palabras repetidos 3 veces, y tramo a tramo.

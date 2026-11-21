@@ -634,6 +634,8 @@ test:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_voz_241
 	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined tests/test_voz_245.cpp -o build/tests/test_voz_245
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_voz_245
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isrc/core tests/test_tts_250.c -o build/tests/test_tts_250   # SOMA_250_TTS
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_tts_250
 	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined tests/test_habla_247.cpp -o build/tests/test_habla_247
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_habla_247
 	./build/tests/test_sched
