@@ -23,7 +23,7 @@ static int cmd_dns(const char *args, char *out_buf, uint32_t max_out)
 }
 
 
-/* PARCHE_SEARCH_V5: busqueda web multifuente conectada a 10.0.2.2:8095 */
+/* PARCHE_SEARCH_V5: busqueda web multifuente (SOMA_251_RUTAS: Wikipedia y DuckDuckGo por HTTPS; el proxy 10.0.2.2:8095 solo en QEMU) */
 static void search_url_encode(const char *in, char *out, uint32_t max)
 {
     uint32_t o = 0;
@@ -78,43 +78,58 @@ static int cmd_search(const char *args, char *out_buf, uint32_t max_out)
     for (uint32_t i = 0; enc[i] && pp + 1 < sizeof(path); ++i) path[pp++] = enc[i];
     path[pp] = '\0';
 
-    /* Host Mac en QEMU NAT = net_gateway (10.0.2.2) */
-    uint8_t tip[4];
-    tip[0] = net_gateway[0];
-    tip[1] = net_gateway[1];
-    tip[2] = net_gateway[2];
-    tip[3] = net_gateway[3];
-    const char *host = "10.0.2.2";
-    uint16_t proxy_port = 8095;
-
-    static char http_buf[8192];
-    struct http_response resp;
-    int code = http_get_host(tip, proxy_port, host, path, http_buf, sizeof(http_buf), &resp, 45000);
-
+    /* SOMA_251_RUTAS: busqueda de verdad. Antes SOLO el proxy del anfitrion de QEMU (puerto 8095 de la puerta de enlace): en el
+     * portatil la puerta de enlace es el router y cada busqueda esperaba hasta 30-45 s para fallar. Ahora:
+     *   1) en QEMU (puerta de enlace 10.0.2.2), el proxy si esta (3 s como mucho);
+     *   2) Wikipedia en espanol (API) y DuckDuckGo ligero, por HTTPS, 8 s como mucho cada una;
+     *   3) sin red, se dice al momento. */
     uint32_t pos = 0;
     if (out_buf && max_out) out_buf[0] = '\0';
-
-    if (code < 0) {
-        kprint("search: error HTTP/red (proxy 10.0.2.2:8095 no responde)\n");
-        soma_str_put(out_buf, max_out, &pos,
-                "search: error de red o timeout (inicia 'python3 search_proxy.py' en el host)");
+    if (!netif_active() || (!net_ip[0] && !net_ip[1] && !net_ip[2] && !net_ip[3])) {
+        kprint("search: sin conexion de red\n");
+        soma_str_put(out_buf, max_out, &pos, "search: no hay conexion a internet ahora mismo (responde con lo que sabes)");
         return 1;
     }
-    if (code < 200 || code >= 400) {
-        kprint("search: HTTP error "); kprint_dec((uint32_t)code); kprint("\n");
-        soma_str_put(out_buf, max_out, &pos, "search: error devuelto por el proxy");
+    static char res[6144]; uint32_t rq_ = 0; res[0] = 0; int hits = 0;
+    if (net_gateway[0] == 10 && net_gateway[1] == 0 && net_gateway[2] == 2 && net_gateway[3] == 2) {
+        static char http_buf[8192];
+        struct http_response resp;
+        int code = http_get_host(net_gateway, 8095, "10.0.2.2", path, http_buf, sizeof(http_buf), &resp, 3000);
+        if (code >= 200 && code < 400) {
+            const char *body = (resp.body && resp.body[0]) ? resp.body : http_buf;
+            if (body[0]) { soma_str_put(res, sizeof res, &rq_, body); hits = 1; }
+        }
+    }
+    if (!hits) {
+        static struct wn_resp rs; struct wn_req rq; char url[400]; uint32_t u;
+        /* Wikipedia */
+        memset(&rq, 0, sizeof rq); u = 0; url[0] = 0;
+        soma_str_put(url, sizeof url, &u, "https://es.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=5&srsearch=");
+        soma_str_put(url, sizeof url, &u, enc);
+        rq.url = url; rq.accept = "application/json"; rq.timeout_ms = 8000; rq.max_body = 65536; rq.direct = 1;
+        if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+            static char w[3072]; int k = bw_parse_wikipedia(rs.body, "es", w, sizeof w, 5);
+            if (k > 0) { soma_str_put(res, sizeof res, &rq_, "Wikipedia:\n"); soma_str_put(res, sizeof res, &rq_, w); hits += k; }
+        }
+        wn_free(&rs);
+        /* DuckDuckGo (version ligera, sin JavaScript) */
+        memset(&rq, 0, sizeof rq); u = 0; url[0] = 0;
+        soma_str_put(url, sizeof url, &u, "https://lite.duckduckgo.com/lite/?kl=es-es&q=");
+        soma_str_put(url, sizeof url, &u, enc);
+        rq.url = url; rq.accept = "text/html"; rq.timeout_ms = 8000; rq.max_body = 262144; rq.direct = 1;
+        if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+            static char d[3072]; int k = bw_parse_ddg_lite(rs.body, d, sizeof d, 6);
+            if (k > 0) { soma_str_put(res, sizeof res, &rq_, "Web:\n"); soma_str_put(res, sizeof res, &rq_, d); hits += k; }
+        }
+        wn_free(&rs);
+    }
+    if (!hits) {
+        kprint("search: sin resultados (o sin acceso a internet)\n");
+        soma_str_put(out_buf, max_out, &pos, "search: sin resultados o sin acceso a internet (responde con lo que sabes)");
         return 1;
     }
-
-    const char *body = (resp.body && resp.body[0]) ? resp.body : http_buf;
-    kprint("\n--- Resultados Web ["); kprint_dec((uint32_t)code); kprint("] ---\n");
-    kprint(body);
-    kprint("\n------------------------------------\n");
-    if (!body[0]) {
-        soma_str_put(out_buf, max_out, &pos, "search: respuesta vacia");
-        return 1;
-    }
-    soma_str_put(out_buf, max_out, &pos, body);
+    kprint("\n--- Resultados Web ---\n"); kprint(res); kprint("\n------------------------------------\n");
+    soma_str_put(out_buf, max_out, &pos, res);
     return 1;
 }
 
@@ -208,4 +223,3 @@ static int cmd_curl(const char *args, char *out_buf, uint32_t max_out)
     }
     return 1;
 }
-

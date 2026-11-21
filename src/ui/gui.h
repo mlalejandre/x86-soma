@@ -33,6 +33,7 @@ void gui_open_paint(const char *path);
 void gui_open_imgview(const char *path);   /* SOMA_PARCHE_ARCHIVOS */
 void gui_open_terminal(int debug);         /* SOMA_PARCHE_024_TERM: abre la ventana del terminal (debug = traza por serie de la geometria y del portapapeles) */
 void gui_open_media(const char *path);     /* SOMA_PARCHE_023_MEDIA: abre la ventana del reproductor (y reproduce path si se da) */
+void gui_open_youtube(const char *query);  /* SOMA_250_YOUTUBE: abre la ventana de YouTube (y busca query si se da) */
 void gui_open_coder_app(void);
 
 /* HER-AURA v4: razonamiento en vivo y streaming de la respuesta */

@@ -140,6 +140,7 @@ OBJS_CORE = \
 	$(BUILD)/agent_net.o \
 	$(BUILD)/llm_proto.o \
 	$(BUILD)/docagent.o $(BUILD)/docgen.o $(BUILD)/pdfw.o \
+	$(BUILD)/agent_ruta.o $(BUILD)/busca_web.o \
 	$(BUILD)/shell.o \
 	$(BUILD)/httpd.o \
 	$(BUILD)/fb.o \
@@ -278,6 +279,7 @@ endif
 OBJS_CORE += $(BUILD)/elf.o $(BUILD)/audio.o $(BUILD)/wav.o $(BUILD)/audio_sys.o $(BUILD)/micrec.o $(BUILD)/uvc.o $(BUILD)/avi_wr.o $(BUILD)/camera.o $(BUILD)/jpeg_enc.o $(BUILD)/scrcap_dsp.o $(BUILD)/scrcap.o
 # SOMA_PARCHE_023_MEDIA: reproductor multimedia de la GUI
 OBJS_CORE += $(BUILD)/avi.o $(BUILD)/media.o      # PARCHE 139: jpeg.o solo en aarch64 (en x86_64 vive en imgdec.elf)
+OBJS_CORE += $(BUILD)/youtube.o                   # SOMA_250_YOUTUBE: aplicacion YouTube (el video lo convierte tools/yt_service.py)
 # SOMA_PARCHE_024_TERM: emulador de terminal de la GUI
 OBJS_CORE += $(BUILD)/term_core.o $(BUILD)/term_ui.o
 # SOMA_PARCHE_PORTAPAPELES: portapapeles global del sistema
@@ -529,6 +531,7 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_jpeg.c src/core/jpeg.c -o build/tests/test_jpeg
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_avi.c src/core/avi.c -o build/tests/test_avi
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_termcore.c src/apps/term_core.c -o build/tests/test_termcore
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_youtube_250.c -o build/tests/test_youtube_250   # SOMA_250_YOUTUBE
 	./build/tests/test_lexer
 	./build/tests/test_sbuf
 	./build/tests/test_lang
@@ -655,6 +658,10 @@ test:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_x509_194
 	./build/tests/test_llm_proto_195
 	./build/tests/test_llm_vision_248
+	$(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_rutas_251.c src/agent/agent_ruta.c -o build/tests/test_rutas_251   # SOMA_251_RUTAS
+	./build/tests/test_rutas_251
+	$(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_busca_251.c src/agent/busca_web.c -o build/tests/test_busca_251
+	./build/tests/test_busca_251
 	./build/tests/test_memfn_199
 	./build/tests/test_f64_200
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/fuzz_http_201 3000 1
@@ -673,6 +680,9 @@ test:
 	./build/tests/test_wav
 	python3 tests/test_video.py
 	./build/tests/test_termcore
+	./build/tests/test_youtube_250
+	$(HOST_CC) -O2 -Wall -Wextra -Isrc/core tests/avicheck_250.c src/core/avi.c src/core/jpeg.c -o build/tests/avicheck_250
+	python3 tests/test_yt_service_250.py build/tests/avicheck_250
 	python3 tests/test_wavcheck.py
 	python3 tests/test_fpcheck.py
 	python3 tests/test_srcfs_pack.py

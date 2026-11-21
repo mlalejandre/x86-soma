@@ -27,6 +27,7 @@
 #include "camera.h"
 #include "scrcap.h"                                  /* SOMA_179_T480S */                                   /* SOMA_178_T480S */
 #include "media.h"
+#include "youtube.h"   /* SOMA_250_YOUTUBE */
 #include "gui_font.h"
 #include "mouse.h"
 #include "httpd.h"
@@ -49,6 +50,7 @@ int browser_r3_wanted(void); int browser_r3_active(void);
 #include "fs.h"
 #include "coder_app.h"
 #include "docagent.h"   /* SOMA_248_DOC */
+#include "busca_web.h"  /* SOMA_251_RUTAS */
 #include "coder_demo.h"
 #include "web_net.h"   /* PARCHE 087 */
 #include "mem.h"
@@ -873,9 +875,11 @@ static const struct command_entry cmd_table[] = {
     { "font",         cmd_font,         CMD_F_SAFE,   "Muestra o cambia la fuente tipografica activa (classic|modern)" },
     { "terminal",     cmd_terminal,     CMD_F_SAFE,   "Abre la ventana del terminal de la GUI (barra de desplazamiento, seleccion, copiar/pegar, zoom)" },
     { "media",        cmd_media,        CMD_F_SAFE,   "Reproductor multimedia (video AVI y audio WAV del almacen BIGFS): media gui|list|play|pause|stop|seek|status" },
+    { "youtube",      cmd_youtube,      CMD_F_NORMAL, "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | estado" },
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
     { "imagen",       cmd_imagen,       CMD_F_SAFE,   "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)" },
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
+    { "traza",        cmd_traza,        CMD_F_SAFE,   "Tiempos y tokens de las ultimas llamadas al modelo (/agent/traza.txt)" },
     { "documento",    cmd_documento,    CMD_F_NORMAL, "Documentos profesionales con IA: documento <peticion> | exportar <ruta> [pdf|html|png] | revisar <ruta> | abrir <ruta>" },
     { "suma",         cmd_suma,         CMD_F_SAFE,   "Tamano y CRC-32 de un archivo: suma <archivo>" },
     { "descargar",    cmd_descargar,    CMD_F_SAFE,   "Descarga una URL a un archivo: descargar <url> [archivo] (sin limite de 16 KiB)" },

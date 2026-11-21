@@ -54,4 +54,15 @@ imagen/*.img
 # SOMA_236_EXPORTAR: exportacion del proyecto en texto (exportar_txt.py)
 exportacion/
 modelos/
+
+# SOMA_252_GITHUB: modelos, voces y datos locales (pesan cientos de MB o son del usuario)
+*.onnx
+*.gguf
+*.safetensors
+voz_raiz/
+voces/
+.soma_parches/
+/llm.conf
+*.wav
+*.pdf
 .soma_parches/

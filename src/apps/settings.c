@@ -1098,7 +1098,7 @@ static void render_acerca(const struct sl *L)
     {
         card(L->cx, y3, L->cw, h3);
         tx(L->cx + 20, y3 + 12, 22, "Componentes de terceros", 13, KC_TXT, 1);
-        tx_wrap(L->cx + 20, y3 + 38, L->cw - 40, "uACPI (MIT), whisper.cpp y ggml (MIT, voz a texto), fuentes DejaVu (licencia libre Bitstream Vera) y Liberation Sans (SIL OFL 1.1), firmware WiFi de Intel (licencia de redistribucion de Intel). SOMA Orbital y SOMA Tecnica son propias (MIT).", 11, KC_DIM, 18);
+        tx_wrap(L->cx + 20, y3 + 38, L->cw - 40, "uACPI (MIT), whisper.cpp y ggml (MIT, voz a texto), voces de Piper (las instala el usuario; cada voz tiene su licencia), fuentes DejaVu (licencia libre Bitstream Vera) y Liberation Sans (SIL OFL 1.1), firmware WiFi de Intel (licencia de redistribucion de Intel). SOMA Orbital y SOMA Tecnica son propias (MIT).", 11, KC_DIM, 18);
     }
 }
 static void render_apariencia(const struct sl *L)

@@ -33,6 +33,7 @@
 #include "paint.h"
 #include "codeedit.h"                               /* SOMA_219_AVISO */
 #include "media.h"
+#include "youtube.h"                                /* SOMA_250_YOUTUBE */
 #include "term_ui.h"
 #include "clipboard.h"   /* SOMA_PARCHE_PORTAPAPELES */
 #include "web_font.h"    /* SOMA_PARCHE_028_UI: texto proporcional suavizado en las barras de titulo */
@@ -97,7 +98,8 @@ enum app_mode {
     APP_SYSMON,    /* PARCHE 089: monitor del sistema */
     APP_RECORDER,  /* SOMA_177_T480S: grabadora */
     APP_CAMERA,    /* SOMA_178_T480S: camara web */
-    APP_CAPTURE    /* SOMA_179_T480S: captura de pantalla y audio interno */
+    APP_CAPTURE,   /* SOMA_179_T480S: captura de pantalla y audio interno */
+    APP_YOUTUBE    /* SOMA_250_YOUTUBE: videos de YouTube (busqueda y reproduccion en directo) */
 };
 
 static enum app_mode current_app = APP_DESKTOP;
@@ -311,6 +313,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_PAINT:          return 860u;   /* PARCHE 083: lienzo + herramientas + panel de color */
     case APP_CODER_APP:      return 720u;   /* PARCHE 093 */
     case APP_MEDIA:          return 880u;   /* SOMA_240_ICONOS: biblioteca + escenario + controles con nombre */
+    case APP_YOUTUBE:        return 760u;   /* SOMA_250_YOUTUBE: reproductor + lista lateral */
     case APP_SOMA_APP:       return 320u; /*PL12_APP_MIN_W*/
     case APP_TERMINAL_SHELL: return 360u;
     case APP_AGENTS:         return 400u;
@@ -407,6 +410,7 @@ static int soma_clip_apply(int op)
     case APP_CODER_APP:    if (coder_app_clip_op(op)) { her_refresh_all(); fb_present(); return 1; } return 0;   /* PARCHE 093 */
     case APP_PAINT:        return paint_clip_op(op);
     case APP_FILE_MANAGER: return fm_clip_op(op);
+    case APP_YOUTUBE:      if (youtube_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_250_YOUTUBE: la caja de busqueda */
     case APP_WEB_BROWSER:
         if (op == CLIP_OP_PASTE) {                       /* equivale a escribir el texto en el campo activo */
             uint32_t n = 0; const char *t = clip_text(&n);
@@ -860,13 +864,13 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         }
         if (!her_dragging && !her_resizing) {   /* SOMA_179_T480S: Captura, Camara y Grabadora se repintan solas (hora, nivel, imagen) aunque no se mueva el raton:
                                                  * sus tick() estaban dentro de mouse_poll y no corrian sin actividad del puntero */
-            static const int live_apps[3] = { APP_CAPTURE, APP_CAMERA, APP_RECORDER };
-            for (int k = 0; k < 3; k++) {
+            static const int live_apps[4] = { APP_CAPTURE, APP_CAMERA, APP_RECORDER, APP_YOUTUBE };   /* SOMA_250_YOUTUBE: el video se pinta solo */
+            for (int k = 0; k < 4; k++) {
                 int app = live_apps[k], si = -1;
                 for (int i = 0; i < her_num_windows; i++) if ((int)her_windows[i].app == app) si = i;
                 if (si < 0) continue;
                 uint8_t own = acct_set_owner((uint8_t)(ACCT_APP0 + app));
-                int ch = app == APP_CAPTURE ? capapp_tick() : app == APP_CAMERA ? camapp_tick() : recorder_tick();
+                int ch = app == APP_CAPTURE ? capapp_tick() : app == APP_CAMERA ? camapp_tick() : app == APP_YOUTUBE ? youtube_tick() : recorder_tick();
                 if (ch) {
                     struct her_win_node *sw = &her_windows[si];
                     int covered = 0;
@@ -1024,6 +1028,9 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 if (current_app == APP_RECORDER && !her_dragging && !her_resizing) {   /* SOMA_177_T480S: nivel y tiempo en vivo */
                     if (recorder_tick()) { recorder_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
+                if (current_app == APP_YOUTUBE && !her_dragging && !her_resizing) {    /* SOMA_250_YOUTUBE: rueda, resaltado y seleccion en la busqueda */
+                    if (youtube_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { youtube_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
                 if (current_app == APP_PDF && !her_dragging && !her_resizing) {      /* PARCHE 088: rueda y arrastre del lector PDF */
                     if (pdfview_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { pdfview_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
@@ -1160,6 +1167,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
 
                 if (current_app != APP_DESKTOP) {
                     agent_global_focus = (current_app == APP_AGENT_CHAT) ? 1 : 0;
+                    if (current_app == APP_YOUTUBE) {                /* SOMA_250_YOUTUBE */
+                        youtube_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        youtube_render_window(win_x, win_y, win_w, win_h, 1);
+                    } else
                     if (current_app == APP_RECORDER) {               /* SOMA_177_T480S */
                         recorder_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
                         recorder_render_window(win_x, win_y, win_w, win_h, 1);
@@ -1275,6 +1286,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 if (current_app == APP_CODER_APP) {                                 /* PARCHE 093: Esc cierra barras/seleccion del editor, no sale del escritorio */
                     if (coder_app_escape()) { coder_app_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                     continue;
+                }
+                if (current_app == APP_YOUTUBE && youtube_escape()) {              /* SOMA_250_YOUTUBE: Esc sale de la caja de busqueda o del video */
+                    youtube_render_window(win_x, win_y, win_w, win_h, 1);
+                    fb_present(); continue;
                 }
                 if (current_app == APP_NOTEPAD && notepad_escape()) {              /* SOMA_PARCHE_028_UI: Esc cierra el menu o el dialogo del Notepad */
                     notepad_render_window(win_x, win_y, win_w, win_h, 1);
@@ -1430,6 +1445,9 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 continue;
             }
 
+            if (current_app == APP_YOUTUBE) {                    /* SOMA_250_YOUTUBE */
+                youtube_handle_key(c); youtube_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
             if (current_app == APP_CAPTURE) {                    /* SOMA_179_T480S */
                 if (c == 27) { her_close_current_app_vortex(); continue; }
                 capapp_handle_key(c); capapp_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;

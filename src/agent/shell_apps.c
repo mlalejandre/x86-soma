@@ -73,6 +73,18 @@ static int cmd_pdf(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* SOMA_251_RUTAS: "traza" - tiempo, tamanos y tokens de las ultimas llamadas al modelo */
+static int cmd_traza(const char *args, char *out_buf, uint32_t max_out)
+{
+    (void)args;
+    static char b[8192];
+    int n = vfs_read("/agent/traza.txt", b, sizeof b - 1);
+    if (n <= 0) { shell_emit("traza: aun no hay llamadas al modelo registradas\n", out_buf, max_out); return 1; }
+    b[n] = 0;
+    shell_emit(b, out_buf, max_out);
+    return 1;
+}
+
 /* SOMA_248_DOC: documentos con acabado profesional (ver src/agent/docagent.h)
  *   documento <peticion>                         redacta, maqueta, revisa (con vision si el modelo la tiene) y exporta a PDF
  *   documento exportar <ruta> [pdf|html|png] [destino]
@@ -807,6 +819,17 @@ static int cmd_terminal(const char *args, char *out_buf, uint32_t max_out)
     kprint("Iniciando Terminal SOMA...\n");
     gui_open_terminal(dbg);
     uint32_t p = 0; soma_str_put(out_buf, max_out, &p, "Terminal cerrado.");
+    return 1;
+}
+
+/* SOMA_250_YOUTUBE: youtube [texto] | servidor <ip[:puerto]>|auto | clave <texto>|- | calidad 240|360|480 | fps N | estado */
+static int cmd_youtube(const char *args, char *out_buf, uint32_t max_out)
+{
+    while (*args == ' ') args++;
+    if (out_buf && max_out) out_buf[0] = 0;
+    if (youtube_command(args, out_buf, max_out)) return 1;
+    gui_open_youtube(args);
+    uint32_t p = 0; soma_str_put(out_buf, max_out, &p, *args ? "YouTube abierto: buscando." : "YouTube abierto.");
     return 1;
 }
 

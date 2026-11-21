@@ -147,7 +147,7 @@ const char *gui_app_title(int app)
     case APP_FILE_MANAGER: return "Archivos"; case APP_IMAGE_VIEWER: return "Imagenes"; case APP_NOTEPAD: return "Bloc de notas";
     case APP_AGENT_MEMORY: return "Memoria de agentes"; case APP_LAYOUT: return "Maquetador"; case APP_AGENTS: return "Agentes";
     case APP_PAINT: return "Paint"; case APP_CODER_APP: return "Coder"; case APP_MEDIA: return "Media"; case APP_SETTINGS: return "Ajustes";
-    case APP_PDF: return "Lector PDF"; case APP_SYSMON: return "Monitor del sistema"; case APP_RECORDER: return "Grabadora"; case APP_CAMERA: return "Camara"; case APP_CAPTURE: return "Captura"; case APP_SOMA_APP: return "Programa SOMA"; case APP_DESKTOP: return "Escritorio";
+    case APP_PDF: return "Lector PDF"; case APP_SYSMON: return "Monitor del sistema"; case APP_RECORDER: return "Grabadora"; case APP_CAMERA: return "Camara"; case APP_CAPTURE: return "Captura"; case APP_YOUTUBE: return "YouTube"; case APP_SOMA_APP: return "Programa SOMA"; case APP_DESKTOP: return "Escritorio";
     default: return "Aplicacion";
     }
 }
@@ -420,6 +420,23 @@ void gui_open_media(const char *path)   /* PARCHE 091: el hilo del agente pide t
 {
     int tok = gui_enter();
     gui_open_media__impl(path);
+    gui_leave(tok);
+}
+
+/* SOMA_250_YOUTUBE: abre la ventana de YouTube y, si se da un texto, lo busca */
+static void gui_open_youtube__impl(const char *query)
+{
+    if (gui_win_open(APP_YOUTUBE)) { if (query && *query) { youtube_search(query); gui_live_paint(); } return; }
+    ensure_window_geom();
+    g_pending_app = APP_YOUTUBE;
+    if (query && *query) youtube_search(query);
+    cmd_vsoma("", 0, 0);
+    g_pending_app = APP_DESKTOP;
+}
+void gui_open_youtube(const char *query)
+{
+    int tok = gui_enter();
+    gui_open_youtube__impl(query);
     gui_leave(tok);
 }
 

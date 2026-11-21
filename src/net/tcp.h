@@ -10,6 +10,7 @@ int tcp_connect(const uint8_t *dst_ip, uint16_t dst_port, uint32_t timeout_ms);
 int tcp_send(int h, const void *data, uint32_t len);
 int tcp_recv(int h, void *buf, uint16_t max, uint32_t timeout_ms);
 int tcp_close(int h);
+int tcp_abort(int h);                                              /* SOMA_250_YOUTUBE: cierre inmediato con RST (descarga cancelada) */
 /* PARCHE 142: conexion no bloqueante y propiedad (syscalls de red de los procesos de ring 3) */
 int tcp_connect_start(const uint8_t *dst_ip, uint16_t dst_port);   /* descriptor o -1 */
 int tcp_connect_poll(int h);                                       /* 1 establecida, 0 pendiente, -1 fallida (liberada) */

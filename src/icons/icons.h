@@ -35,7 +35,8 @@ enum soma_icon_id {
     ICON_MIC = 15,         /* SOMA_177_T480S: grabadora (microfono, vectorial) */
     ICON_CAM = 16,         /* SOMA_178_T480S: camara web (vectorial) */
     ICON_SCR = 17,         /* SOMA_179_T480S: captura de pantalla (vectorial) */
-    ICON_COUNT = 18
+    ICON_YOUTUBE = 18,     /* SOMA_250_YOUTUBE: YouTube (vectorial) */
+    ICON_COUNT = 19
 };
 
 static inline const uint8_t (*icon_get_data(int id))[16]

@@ -40,6 +40,8 @@ struct llm_img;
 int  llm_chat_ex(const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
                  char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
 int  llm_vision_unsupported(void);
+/* SOMA_251_RUTAS: quien hace la proxima llamada (para /agent/traza.txt: tiempo, tamanos y tokens de cada llamada) */
+void llm_trace_tag(const char *tag);
 
 /* Suite de verificacion HTTP + LLM. */
 void net_run_llm_test(void);

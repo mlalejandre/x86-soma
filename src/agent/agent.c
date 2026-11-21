@@ -4,6 +4,7 @@
 #include "agent.h"
 #include "coder_app.h"
 #include "docagent.h"   /* SOMA_248_DOC */
+#include "agent_ruta.h"  /* SOMA_251_RUTAS */
 #include "rtc.h"
 #include "console.h"
 #include "llm.h"
@@ -28,7 +29,7 @@
 
 #define MAX_STM_ENTRIES     8
 #define STM_PROMPT_WINDOW   2
-#define MAX_DELEGATION_DEPTH 3
+#define MAX_DELEGATION_DEPTH 2   /* SOMA_251_RUTAS: antes 3 (y un agente podia delegarse a si mismo) */
 
 struct agent_profile {
     const char *name;
@@ -107,6 +108,8 @@ char agent_last_response[8192] = {0};
 int  agent_resume_pending = 0;
 static int agent_patch_attempts = 0;
 static int delegation_depth = 0;
+static const char *g_deleg_chain[MAX_DELEGATION_DEPTH + 2];     /* SOMA_251_RUTAS: agentes de la cadena actual (no se delega en uno de ellos) */
+int agent_in_delegation(void) { return delegation_depth > 0; }
 
 static char mailbox_buf[MAILBOX_SIZE];
 static char hpatch_buf[2048];
@@ -217,10 +220,12 @@ static void stm_append_interaction(const struct agent_profile *agent, const char
     }
     fb_puts(updated, sizeof(updated), &pos, "\"\n  Respuesta: \"");
     const char *vm = verdict_msg;
-    while (*vm && pos < sizeof(updated) - 300) {
+    uint32_t vcount = 0;                                       /* SOMA_251_RUTAS: un extracto (una redaccion entera inflaba todos los prompts siguientes) */
+    while (*vm && pos < sizeof(updated) - 300 && vcount < 600) {
         if (*vm != '\n' && *vm != '\r') fb_putc(updated, sizeof(updated), &pos, *vm);
-        vm++;
+        vm++; vcount++;
     }
+    if (*vm) fb_puts(updated, sizeof(updated), &pos, " [...]");
     fb_puts(updated, sizeof(updated), &pos, "\"\n");
 
     if (r > 0) {
@@ -270,8 +275,9 @@ static void inject_agent_memory(const struct agent_profile *agent, char *dst, ui
         fb_puts(dst, max, pos, "\n");
     }
 
-    /* 3. Pizarra Compartida Multi-Agente (Shared Blackboard) */
-    n = vfs_read("/agent/blackboard.txt", buf, sizeof(buf) - 1);
+    /* 3. Pizarra Compartida Multi-Agente (Shared Blackboard). SOMA_251_RUTAS: solo dentro de una delegacion (antes el ultimo
+     *    dictamen, de cualquier mision, se colaba en el prompt de todos los agentes) */
+    n = delegation_depth > 0 ? vfs_read("/agent/blackboard.txt", buf, sizeof(buf) - 1) : 0;
     if (n > 0) {
         buf[n] = '\0';
         fb_puts(dst, max, pos, "- Pizarra Compartida Multi-Agente: ");
@@ -280,7 +286,7 @@ static void inject_agent_memory(const struct agent_profile *agent, char *dst, ui
     }
 
     /* 4. Directiva de Memoria Semántica y Delegación */
-    fb_puts(dst, max, pos, "- Herramientas Clave: Usa 'mem_search <keyword>' para explorar /mem/ y 'delegate <agente> \"<mision>\"' para coordinar tareas especializadas.\n");
+    fb_puts(dst, max, pos, "- Herramientas: usa una herramienta solo si la mision la necesita; si puedes responder con lo que sabes, responde con action=final en el primer paso.\n");
 
     /* 5. Inyección de Ventana Deslizante de STM */
     {   /* MAYORDOMO_V2_KNOWLEDGE: catalogo vivo de comandos autorizados. */
@@ -333,9 +339,16 @@ int delegate_cmd(const char *args, char *out_buf, uint32_t max_out)
     }
 
     if (delegation_depth >= MAX_DELEGATION_DEPTH) {
-        kprint("delegate: profundidad maxima de delegacion alcanzada (3)\n");
-        uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Error: limite de delegacion alcanzado");
+        kprint("delegate: profundidad maxima de delegacion alcanzada\n");
+        uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Error: limite de delegacion alcanzado. Responde con lo que ya tienes (action=final).");
         return 1;
+    }
+    for (int i = 0; i <= delegation_depth && i < MAX_DELEGATION_DEPTH + 2; i++) {    /* SOMA_251_RUTAS: ni a si mismo ni hacia atras */
+        if (g_deleg_chain[i] && str_eq_ci(g_deleg_chain[i], target_agent)) {
+            kprint("delegate: '"); kprint(target_agent); kprint("' ya esta en la cadena de delegacion: no se delega\n");
+            uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Error: no puedes delegar en ti mismo ni en un agente que ya esta trabajando en esta mision. Hazlo tu o responde con action=final.");
+            return 1;
+        }
     }
 
     kprint("\n\033[1;33m[ORQUESTACION MULTI-AGENTE] Delegando tarea a '");
@@ -343,13 +356,17 @@ int delegate_cmd(const char *args, char *out_buf, uint32_t max_out)
     kprint("'...\033[0m\n");
 
     delegation_depth++;
+    agent_last_response[0] = '\0';
     agent_run(target_agent, sub_mission);
+    g_deleg_chain[delegation_depth] = 0;
     delegation_depth--;
 
-    static char bb[1024];
-    int r = vfs_read("/agent/blackboard.txt", bb, sizeof(bb) - 1);
-    if (r > 0) bb[r] = '\0';
-    else bb[0] = '\0';
+    /* SOMA_251_RUTAS: el resultado REAL del subagente (antes la pizarra: recortada a ~500 caracteres, y vieja si el subagente
+     * era el maquetador o el programador, que no la escriben) */
+    static char bb[4096];
+    uint32_t r = 0;
+    while (agent_last_response[r] && r + 1 < sizeof bb) { bb[r] = agent_last_response[r]; r++; }
+    bb[r] = '\0';
 
     uint32_t pos = 0;
     fb_puts(out_buf, max_out, &pos, "[DELEGACION A ");
@@ -1309,7 +1326,8 @@ void agent_refresh_knowledge(void)
 
 static int mayordomo_should_handle(const char *mission)
 {
-    if (mayordomo_should_handle_base(mission)) return 1;
+    if (ar_mayordomo(mission)) return 1;                       /* SOMA_251_RUTAS: por palabras (antes "programa" contenia "ram") */
+    (void)mayordomo_should_handle_base;
     if (mayordomo_skill_for(mission)) return 1;
     return mayordomo_is_catalog_query(mission);
 }
@@ -1411,8 +1429,8 @@ static void mayordomo_run(const char *mission)
             return;
         }
     }
-    if (mayordomo_has(mission, "ram") || mayordomo_has(mission, "heap") ||
-        mayordomo_has(mission, "memoria")) {
+    if (ar_word(mission, "ram") || ar_word(mission, "heap") ||
+        ar_word(mission, "memoria")) {
         mayordomo_dispatch("Telemetria de RAM y heap", mayordomo_ram_command(mission));
         return;
     }
@@ -1672,19 +1690,78 @@ static void llmfix_save_debug(const char *path, const char *text)
 /* PARCHE 097: las misiones de programacion van al programador (coder_core), no al bucle generico */
 static int programador_should_handle(const char *m)
 {
-    static const char *const no[] = { "historia", "cuento", "documento", "maquet", "poema", "carta", "informe", "redacta", "noticia", "busca en", "investiga", 0 };
-    static const char *const verb[] = { "crea", "haz", "programa", "escribe", "genera", "desarrolla", "construye", "disena", "diseña", "modifica",
-                                        "mejora", "corrige", "arregla", "implementa", "codifica", 0 };
-    static const char *const noun[] = { "app", "aplicacion", "aplicación", "programa", "juego", "calculadora", "reloj", "contador", "cronometro",
-                                        "cronómetro", "temporizador", "script", "codigo", "código", "soma-lang", "snake", "pong", "tetris",
-                                        "ventana", "boton", "botón", "conversor", "agenda", "lista de tareas", 0 };
+    /* SOMA_251_RUTAS: por palabras completas, y "programa" solo cuenta como verbo al principio ("programa un reloj"): "dime un
+     * resumen del programa Erasmus" iba al programador */
+    static const char *const no[] = { "historia", "cuento", "documento", "maquet*", "poema", "carta", "informe", "redacta", "redactar", "redaccion",
+                                      "noticia", "noticias", "busca en", "investiga", "resumen", "resume", "explica", "explicame", 0 };
+    static const char *const verb[] = { "crea", "creame", "haz", "hazme", "escribe", "escribeme", "genera", "desarrolla", "construye", "disena", "modifica",
+                                        "mejora", "corrige", "arregla", "implementa", "codifica", "programame", 0 };
+    static const char *const noun[] = { "app", "apps", "aplicacion", "programa", "programita", "juego", "calculadora", "reloj", "contador", "cronometro",
+                                        "temporizador", "script", "codigo", "soma lang", "snake", "pong", "tetris", "ventana", "boton", "conversor", "agenda",
+                                        "lista de tareas", 0 };
     if (mayordomo_has(m, ".soma")) return 1;
-    for (int i = 0; no[i]; i++) if (mayordomo_has(m, no[i])) return 0;
-    int v = 0, n = 0;
-    for (int i = 0; verb[i]; i++) if (mayordomo_has(m, verb[i])) v = 1;
-    for (int i = 0; noun[i]; i++) if (mayordomo_has(m, noun[i])) n = 1;
-    return v && n;
+    if (ar_any(m, no)) return 0;
+    const char *t = m; while (*t == ' ') t++;
+    int starts_prog = 1; { static const char pg[] = "programa"; for (int i = 0; i < 8; i++) if ((t[i] | 32) != pg[i]) { starts_prog = 0; break; } if (starts_prog && t[8] != ' ' && t[8]) starts_prog = 0; }
+    int v = ar_any(m, verb) || starts_prog;
+    return v && ar_any(m, noun);
 }
+/* SOMA_251_RUTAS: respuesta directa (una llamada, texto normal). 1 = respondida, 0 = necesita herramientas, -1 = el modelo fallo. */
+static int direct_answer(const struct agent_profile *agent, const char *mission)
+{
+    static const char SYS_DIRECTO[] =
+        "Eres SOMA, el asistente del sistema operativo SOMA. Responde directamente, en el idioma del usuario, con calidad y sin "
+        "preambulos: si te piden una redaccion, un texto, una lista, una explicacion o una traduccion, escribela completa y bien "
+        "organizada; si es una pregunta, contestala. No uses JSON ni bloques de codigo salvo que te pidan codigo. "
+        "Si para responder BIEN necesitas datos actuales de internet, leer o cambiar archivos del equipo, ejecutar programas u "
+        "ordenes del sistema, o informacion del propio equipo, responde exactamente " AR_TOOLS_MARK " y nada mas.";
+    char *prompt = (char *)kmalloc(8192), *reply = (char *)kmalloc(32768);
+    if (!prompt || !reply) { if (prompt) kfree(prompt); if (reply) kfree(reply); return 0; }
+    uint32_t pl = 0;
+    struct rtc_time t; rtc_get_datetime(&t);
+    fb_puts(prompt, 8192, &pl, "FECHA: "); fb_put_dec(prompt, 8192, &pl, t.year); fb_putc(prompt, 8192, &pl, '-');
+    if (t.month < 10) fb_putc(prompt, 8192, &pl, '0');
+    fb_put_dec(prompt, 8192, &pl, t.month); fb_putc(prompt, 8192, &pl, '-');
+    if (t.day < 10) fb_putc(prompt, 8192, &pl, '0');
+    fb_put_dec(prompt, 8192, &pl, t.day); fb_puts(prompt, 8192, &pl, "\n");
+    stm_load_into_prompt(agent, prompt, 6144, &pl);                      /* lo ultimo que se hablo ("ahora en ingles", "mas corto"...) */
+    fb_puts(prompt, 8192, &pl, "\nPETICION DEL USUARIO:\n");
+    fb_puts(prompt, 8192, &pl, mission);
+    prompt[pl < 8192 ? pl : 8191] = 0;
+    gui_thought_update("Respondiendo directamente...");
+    kprint("\n\033[1;36m[SOMA] Respuesta directa (una llamada al modelo, sin herramientas)\033[0m\n");
+    llm_trace_tag("directa");
+    int ok = llm_chat_ex(SYS_DIRECTO, prompt, 0, 0, 6000, reply, 32768, 300000);
+    kfree(prompt);
+    if (ok != 1) {
+        uint32_t p = 0; agent_last_response[0] = 0;
+        fb_puts(agent_last_response, sizeof agent_last_response, &p, "No pude hablar con el modelo: ");
+        fb_puts(agent_last_response, sizeof agent_last_response, &p, llm_last_error[0] ? llm_last_error : "sin respuesta");
+        kprint(agent_last_response); kprint("\n");
+        kfree(reply);
+        return -1;
+    }
+    { char *a = (char *)find_substr(reply, "<think>"), *b = a ? (char *)find_substr(a, "</think>") : 0;       /* razonamiento fuera */
+      if (a && b) { b += 8; uint32_t k = 0; while (b[k]) { a[k] = b[k]; k++; } a[k] = 0; } }
+    const char *r = reply; while (*r == ' ' || *r == '\n' || *r == '\r') r++;
+    { const char *mk = find_substr(r, AR_TOOLS_MARK); if (mk && mk - r < 40) { kfree(reply); return 0; } }
+    char path[96]; uint32_t ap = 0;
+    agent_last_response[0] = 0;
+    fb_puts(agent_last_response, sizeof agent_last_response, &ap, r);
+    if (ar_wants_save(mission, path, sizeof path)) {                           /* se guarda LO YA ESCRITO (sin volver a generarlo) */
+        if (!path[0]) { uint32_t q = 0; fb_puts(path, sizeof path, &q, "/workspace/respuesta.txt"); }
+        uint32_t n = 0; while (r[n]) n++;
+        int w = vfs_write(path, r, n);
+        fb_puts(agent_last_response, sizeof agent_last_response, &ap, w >= 0 ? "\n\n(Guardado en " : "\n\n(No se pudo guardar en ");
+        fb_puts(agent_last_response, sizeof agent_last_response, &ap, path);
+        fb_puts(agent_last_response, sizeof agent_last_response, &ap, ")");
+    }
+    kprint("\n\033[1;32m[soma] - DICTAMEN FINAL\033[0m\n  \033[1;36m"); kprint(agent_last_response); kprint("\033[0m\n\n");
+    stm_append_interaction(agent, mission, agent_last_response);
+    kfree(reply);
+    return 1;
+}
+
 /* SOMA_248_DOC: los documentos con formato (informes, papers, presentaciones, revistas, cartas, CV, email...) los hace el maquetador */
 static void maquetador_run(const char *mission)
 {
@@ -1738,15 +1815,24 @@ void agent_run(const char *agent_name, const char *mission)
         mayordomo_run(mission);
         return;
     }
-    if (str_eq_ci(requested_agent, "soma") && mayordomo_should_handle(mission)) {
-        agent_run("mayordomo", mission);
-        return;
-    }
+    /* SOMA_251_RUTAS: el programador antes que el Mayordomo ("crea un programa..." acababa ensenando la RAM) */
     if (str_eq_ci(requested_agent, "coder") || (str_eq_ci(requested_agent, "soma") && programador_should_handle(mission))) {
         while (*mission == ' ') mission++;
         if (*mission) { programador_run(mission); return; }
     }
+    if (str_eq_ci(requested_agent, "soma") && mayordomo_should_handle(mission)) {
+        agent_run("mayordomo", mission);
+        return;
+    }
     const struct agent_profile *agent = resolve_agent(requested_agent);
+    if (delegation_depth < MAX_DELEGATION_DEPTH + 2) g_deleg_chain[delegation_depth] = agent->name;   /* SOMA_251_RUTAS */
+    /* SOMA_251_RUTAS: respuesta directa. Conversacion, redacciones, explicaciones, traducciones...: UNA llamada al modelo, sin JSON
+     * ni herramientas. Si el modelo dice que necesita herramientas (AR_TOOLS_MARK), se sigue por el bucle de siempre. */
+    if (*mission && str_eq_ci(agent->name, "soma") && delegation_depth == 0 && ar_direct_ok(mission)) {
+        int dr = direct_answer(agent, mission);
+        if (dr != 0) return;                                             /* 1 respondida; -1 el modelo no contesto (ya se dijo) */
+        kprint("[SOMA] La mision necesita herramientas: paso al bucle de agente.\n");
+    }
 
     if (*mission == '\0') {
         kprint("Uso: "); kprint(agent->name); kprint(" <mision en lenguaje natural>\n");
@@ -1815,7 +1901,9 @@ void agent_run(const char *agent_name, const char *mission)
     uint32_t ap_len = 0;
     int finished = 0;
     int coder_mode = (str_eq_ci(agent->name, "coder") || find_substr(mission, ".soma") != 0);
-    int max_steps = coder_mode ? 10 : 14;
+    int max_steps = coder_mode ? 10 : 8;                              /* SOMA_251_RUTAS: antes 14 */
+    int llm_down = 0;
+    char save_path[96]; int wants_save = ar_wants_save(mission, save_path, sizeof save_path);
 
     for (int step = 1; step <= max_steps; ++step) {
         ap_len = 0;
@@ -1825,23 +1913,11 @@ void agent_run(const char *agent_name, const char *mission)
         uint32_t cur_h = cur_t.hour + 2;
         if (cur_h >= 24) { cur_h -= 24; cur_d += 1; }
 
+        /* SOMA_251_RUTAS: primero lo que no cambia (identidad, herramientas, reglas) y al final la mision y el historial: el servidor
+         * reutiliza el prompt ya procesado de una mision a otra (antes la mision iba al principio y se procesaba todo cada vez) */
         fb_puts(agent_prompt_buf, 16384, &ap_len, "IDENTIDAD: ");
         fb_puts(agent_prompt_buf, 16384, &ap_len, agent->role_desc);
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "\n\nMISION DEL USUARIO: '");
-        const char *p_mval = mission;
-        while (*p_mval && ap_len < 16384 - 2400) agent_prompt_buf[ap_len++] = *p_mval++;
-
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "'.\n"
-                            "Entorno: SOMA OS Bare-Metal (" MYOS_ARCH_NAME ") | IP 10.0.2.15 | RamFS en /.\n"
-                            "FECHA ACTUAL DEL SISTEMA: ");
-        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_y);
-        fb_putc(agent_prompt_buf, 16384, &ap_len, '-');
-        if (cur_mo < 10) fb_putc(agent_prompt_buf, 16384, &ap_len, '0');
-        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_mo);
-        fb_putc(agent_prompt_buf, 16384, &ap_len, '-');
-        if (cur_d < 10) fb_putc(agent_prompt_buf, 16384, &ap_len, '0');
-        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_d);
-        fb_puts(agent_prompt_buf, 16384, &ap_len, " (CEST)\n\n");
+        fb_puts(agent_prompt_buf, 16384, &ap_len, "\nEntorno: SOMA OS Bare-Metal (" MYOS_ARCH_NAME ") | RamFS en /.\n\n");
 
         const char *p_ctx = "HERRAMIENTAS BARE-METAL DISPONIBLES:\n"
                             "  delegate <agente> \"<mision>\"  Delega a mayordomo, buscador o maquetador.\n"
@@ -1868,11 +1944,12 @@ void agent_run(const char *agent_name, const char *mission)
                             "\"search\":\"exacto\",\"replace\":\"nuevo\"},"
                             "\"verdict\":\"respuesta final si action=final\"}\n"
                             "\n"
-                            "ROL DE ORQUESTACION: SOMA coordina; delega operaciones de sistema a mayordomo y no ejecuta directamente comandos de archivos/telemetria.\n"
+                            "EFICIENCIA: si puedes cumplir la mision con lo que sabes (redactar, explicar, responder), hazlo YA con action='final' y el texto completo en verdict. "
+                            "Usa herramientas solo para lo que no sabes o no puedes hacer sin ellas, y delega solo tareas especializadas (nunca en ti mismo).\n"
                             "POLITICA DE DIRECTORIOS Y ESPACIOS DE TRABAJO:\n"
                             "1) RUTA PREFERENTE PARA AGENTES: Si creas notas, informes o borradores generados por la IA, usa preferentemente '/workspace/' (ej. '/workspace/notas.txt' o '/workspace/informe.txt') salvo que el usuario pida otra ruta explicita.\n"
                             "2) ARCHIVOS DE USUARIO: Los documentos y notas personales del usuario se encuentran en '/mis_archivos/'.\n"
-                            "3) Si la mision pide crear/guardar/modificar un archivo tras buscar o procesar, DEBES ejecutar 'write <ruta> '<contenido>'' (con comillas simples) en un paso intermedio ANTES de emitir action='final'.\n" /*PL7_SOMA_PROMPT*/
+                            "3) Si la mision pide expresamente guardar el resultado en un archivo, SOMA guarda el texto de verdict por ti: no repitas el texto en un write.\n" /*PL7_SOMA_PROMPT SOMA_251_RUTAS*/
                             "4) Solo emite action='final' cuando TODOS los objetivos de la mision esten completamente cumplidos en el hardware.\n";
         fb_puts(agent_prompt_buf, 16384, &ap_len, p_ctx);
         /* SOMA_CODER_DYNAMIC_GATE_V3 */
@@ -1912,6 +1989,17 @@ void agent_run(const char *agent_name, const char *mission)
         }
 
         inject_agent_memory(agent, agent_prompt_buf, 16384, &ap_len);
+        fb_puts(agent_prompt_buf, 16384, &ap_len, "\nFECHA ACTUAL DEL SISTEMA: ");
+        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_y);
+        fb_putc(agent_prompt_buf, 16384, &ap_len, '-');
+        if (cur_mo < 10) fb_putc(agent_prompt_buf, 16384, &ap_len, '0');
+        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_mo);
+        fb_putc(agent_prompt_buf, 16384, &ap_len, '-');
+        if (cur_d < 10) fb_putc(agent_prompt_buf, 16384, &ap_len, '0');
+        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_d);
+        fb_puts(agent_prompt_buf, 16384, &ap_len, "\n\nMISION DEL USUARIO: '");
+        { const char *p_mval = mission; while (*p_mval && ap_len < 16384 - 2400) agent_prompt_buf[ap_len++] = *p_mval++; }
+        fb_puts(agent_prompt_buf, 16384, &ap_len, "'.\n");
 
         if (hist_len > 0) {
             const char *h_hdr = "\nAcciones ya ejecutadas en pasos anteriores (los cuerpos de write se omiten):\n";
@@ -1935,8 +2023,10 @@ void agent_run(const char *agent_name, const char *mission)
         while (*p_rules && ap_len < 16384 - 1) agent_prompt_buf[ap_len++] = *p_rules++;
         agent_prompt_buf[ap_len] = '\0';
 
-        if (!llm_chat_json(agent_prompt_buf, agent_reply_buf, 32768, 60000)) {
+        { char tg[40]; uint32_t tq = 0; fb_puts(tg, sizeof tg, &tq, agent->name); fb_puts(tg, sizeof tg, &tq, "/paso "); fb_put_dec(tg, sizeof tg, &tq, (uint64_t)step); llm_trace_tag(tg); }
+        if (!llm_chat_json(agent_prompt_buf, agent_reply_buf, 32768, 240000)) {   /* SOMA_251_RUTAS: 60 s cortaban textos largos */
             kprint("Error en comunicacion estructurada con el agente.\n");
+            llm_down = 1;
             break;
         }
 
@@ -2253,23 +2343,12 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                 }
             }
 
-            int demands_file = (find_substr(mission, "crea") != 0 ||
-                                find_substr(mission, "crear") != 0 ||
-                                find_substr(mission, "guarda") != 0 ||
-                                find_substr(mission, "guardar") != 0 ||
-                                find_substr(mission, "escribe") != 0 ||
-                                find_substr(mission, "escribir") != 0 ||
-                                find_substr(mission, "copiar su contenido") != 0 ||
-                                find_substr(mission, "copia su contenido") != 0 ||
-                                find_substr(mission, ".soma") != 0 ||
-                                find_substr(mission, ".txt") != 0 ||
-                                find_substr(mission, ".sh") != 0 ||
-                                find_substr(mission, ".log") != 0);
-
+            /* SOMA_251_RUTAS: antes "crea"/"escribe"/"guarda" como trozos de palabra ("describe", "creacion"...) obligaban a escribir un
+             * archivo: se rechazaba la respuesta y el modelo tenia que repetir el texto en un write y otra vez en final. Ahora solo si la
+             * mision pide guardar, y lo guarda SOMA con el texto que ya hay (sin volver a generarlo). */
+            int demands_file = wants_save;
             int file_written = (find_substr(history_buf, "ejecutaste 'write ") != 0 ||
                                 find_substr(history_buf, "ejecutaste 'echo ") != 0 ||
-                                find_substr(history_buf, "ejecutaste 'touch ") != 0 ||
-                                find_substr(history_buf, " > ") != 0 ||
                                 (cmd_f[0] == 'w' && cmd_f[1] == 'r' && cmd_f[2] == 'i'));
 
             /* SOMA_CODER_VERIFICATION_GATE */
@@ -2376,10 +2455,14 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                 }
             }
 
-            if (demands_file && !file_written) {
-                kprint("\n>> [GUARDIA SOMA]: Bloqueada alucinacion. Falta escribir fisicamente el archivo.\n");
-                history_add_note(history_buf, &hist_len, 8192, step, "RECHAZADO: La mision pide crear/guardar un archivo. Debes ejecutar 'write <ruta> \"<contenido>\"' antes de finalizar.");
-                continue;
+            static char saved_note[160]; saved_note[0] = 0;
+            if (demands_file && !file_written && !coder_mode && verdict[0]) {
+                if (!save_path[0]) { uint32_t q = 0; fb_puts(save_path, sizeof save_path, &q, "/workspace/respuesta.txt"); }
+                uint32_t vn = 0; while (verdict[vn]) vn++;
+                int w = vfs_write(save_path, verdict, vn);
+                uint32_t q = 0; fb_puts(saved_note, sizeof saved_note, &q, w >= 0 ? "\n\n(Guardado en " : "\n\n(No se pudo guardar en ");
+                fb_puts(saved_note, sizeof saved_note, &q, save_path); fb_puts(saved_note, sizeof saved_note, &q, ")");
+                kprint("\n>> [SOMA]: texto guardado en "); kprint(save_path); kprint("\n");
             }
 
             const char *v_final = verdict[0] ? verdict : (th[0] ? th : "Mision completada y cambios persistidos en el sistema.");
@@ -2403,6 +2486,7 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
             } else {
                 fb_puts(agent_last_response, sizeof(agent_last_response), &alr_p, v_final);
             }
+            fb_puts(agent_last_response, sizeof(agent_last_response), &alr_p, saved_note);   /* SOMA_251_RUTAS */
 
             char bb_update[512];
             uint32_t bbp = 0;
@@ -2436,8 +2520,16 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
         finished = 1;
     }
 
+    if (!finished && llm_down) {                                   /* SOMA_251_RUTAS: sin modelo no se pide otro resumen al modelo */
+        uint32_t p = 0; agent_last_response[0] = 0;
+        fb_puts(agent_last_response, sizeof agent_last_response, &p, "No pude completar la mision: ");
+        fb_puts(agent_last_response, sizeof agent_last_response, &p, llm_last_error[0] ? llm_last_error : "el modelo no respondio");
+        kprint(agent_last_response); kprint("\n");
+        finished = 1;
+    }
     if (!finished) {
         kprint("\n>> [SOMA AGENT]: Sintetizando dictamen con la informacion disponible...\n");
+        llm_trace_tag("resumen final");
         ap_len = 0;
         fb_puts(agent_prompt_buf, 16384, &ap_len, "MISION: '");
         const char *pm = mission;

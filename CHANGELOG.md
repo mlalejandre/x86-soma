@@ -6,6 +6,60 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+### Repaso antes de publicar (252)
+- README al día: el Maquetador ya no es «#SOMA-LAYOUT v1», la sección de agentes describe los caminos actuales y desaparece la
+  mención a un streaming del LLM que no existe.
+- `.gitignore`: voces y modelos (`*.onnx`, `*.gguf`), carpeta de pruebas de voz, copias de los parches (`.soma_parches/`),
+  audios, PDF y una posible `llm.conf` con claves.
+- Ajustes → Acerca de: las voces de Piper en los créditos de terceros.
+
+### Caminos de los agentes más rápidos y correctos (251)
+- **Respuesta directa**: conversación, redacciones, explicaciones y traducciones se resuelven con UNA llamada al modelo, en texto
+  normal (sin JSON, sin herramientas, sin el catálogo de órdenes en el prompt). Si el modelo necesita herramientas lo dice
+  (`[[HERRAMIENTAS]]`) y se sigue por el bucle del agente. Medido con un modelo simulado a 40 tokens/s: «escribe una redacción de
+  20 frases sobre la Primera Guerra Mundial» pasa de 15 llamadas y 320 s a 1 llamada y 17 s.
+- **Rutas por palabras completas** (`src/agent/agent_ruta.c`): «crea un programa…» y «dime un resumen del programa Erasmus» ya
+  no acaban enseñando la RAM («programa» contenía «ram»); el programador va antes que el Mayordomo; «describe» ya no cuenta como
+  «escribe» ni «creación» como «crea».
+- **Guardar solo si se pide** (guárdalo, en un archivo, una ruta o nombre.txt): SOMA guarda el texto ya escrito; antes rechazaba
+  la respuesta y el modelo tenía que repetir la redacción en un `write` y otra vez al final.
+- **Búsqueda web de verdad** (`src/agent/busca_web.c`): Wikipedia (API) y DuckDuckGo ligero por HTTPS, 8 s como mucho cada una, y
+  aviso inmediato sin red. Antes solo había un proxy en el puerto 8095 de la puerta de enlace: en el portátil era el router y
+  cada búsqueda podía esperar 30-45 s para fallar.
+- **Delegación**: nadie delega en sí mismo ni en un agente que ya trabaja en la misión (se vio Buscador → Buscador → Buscador);
+  profundidad 2; el resultado que vuelve es el real del subagente (antes la pizarra: 500 caracteres o el dictamen de otro).
+- **Maquetador solo con formato**: «redacta un informe breve» se contesta en el orbe; el maquetador (HTML, revisión y PDF) se
+  usa al pedir PDF, maquetar, presentación, revista...
+- **Sin contaminación**: la pizarra solo se ve dentro de una delegación; la memoria corta guarda un extracto (600 caracteres).
+- **Tiempos**: 240 s por paso (60 s cortaban textos largos y se regeneraba todo con otro resumen); si el modelo no responde no
+  se pide otro resumen; 8 pasos como mucho (antes 14). El prompt pone primero lo que no cambia (el servidor lo reutiliza).
+- **Traza** de cada llamada al modelo: quién llama, milisegundos, tamaños y los tokens que diga el servidor (también razonamiento
+  oculto y tokens reutilizados) en `/agent/traza.txt`; orden `traza`.
+- Las tildes escapadas en JSON (`\u00e1`) se decodifican («está», no «estu00e1»).
+- Pruebas nuevas: `tests/test_rutas_251.c` (29 casos de rutas) y `tests/test_busca_251.c` (lectura de Wikipedia y DuckDuckGo).
+
+### YouTube: buscar y ver vídeos dentro de SOMA (250)
+- **Aplicación YouTube** (`src/apps/youtube.c`, icono nuevo en el escritorio, orden `youtube [búsqueda]`): caja de búsqueda,
+  resultados con miniatura, duración y canal, y un reproductor propio con pausa, saltos de 10 s, barra de progreso, calidad
+  (240/360/480p), «anterior/siguiente», lista «A continuación» y paso automático al siguiente vídeo. Teclas: Espacio, flechas,
+  `n`/`p`, `q` (calidad), `/` (buscar), Esc (volver a los resultados).
+- **Servicio del anfitrión** (`tools/yt_service.py`, lo arranca `ejecutar.py` en 127.0.0.1:8097): SOMA no decodifica H.264/AV1
+  ni puede resolver las direcciones de YouTube, así que el Mac/PC busca con yt-dlp, sirve las miniaturas en JPEG y **emite el
+  vídeo convertido con ffmpeg a AVI (MJPG + PCM) mientras SOMA lo reproduce**. Cabecera AVI propia con la duración ya puesta;
+  si YouTube rechaza a ffmpeg, plan B por tubería desde yt-dlp. `--demo` genera vídeos de prueba sin YouTube ni yt-dlp.
+- **Reproducción mientras llega** (`src/apps/media.c`, `media_play_stream`): el motor de SOMA Media lee de una fuente que crece.
+  Sin datos espera («Cargando») y reanuda con unos 2 s de margen en vez de dar el vídeo por terminado; el reloj no corre durante
+  la espera; la pausa recoloca el audio con puntos de control en vez de recorrer el archivo desde el principio.
+- **Nada pasa por el disco**: el vídeo vive en una ventana de 16 MiB de memoria (`yt_ring`, `src/apps/yt_proto.h`) que suelta
+  lo ya visto; en pausa la descarga se detiene sola. Saltar es pedir el vídeo desde otro segundo.
+- **En un PC real** (T480s): `python3 tools/yt_service.py --bind 0.0.0.0 --clave X` en otro equipo de la red y, en SOMA,
+  `youtube servidor <ip>` y `youtube clave X` (o escribir `servidor <ip>` en la caja de búsqueda). Se guarda en
+  `/etc/secreto/youtube.conf`, que los agentes no pueden leer.
+- `tcp_abort` (`src/net/tcp.c`): cierre inmediato de una descarga cancelada (antes, hasta 3 s de espera).
+- Pruebas nuevas: `tests/test_youtube_250.c` (protocolo, configuración y la ventana de memoria con un reproductor simulado,
+  más datos al azar) y `tests/test_yt_service_250.py` (el AVI emitido pasa por el lector y el decodificador JPEG de SOMA;
+  camino real con un yt-dlp de pega y un «YouTube» local: cabeceras, salto y plan B).
+
 ### El orbe lee sus respuestas, elección de voz, página Sonido y fuentes en listas desplegables (250)
 - **El orbe habla** (activado por defecto): cada respuesta se lee con la voz de Piper elegida, en un hilo (buscar o instalar la
   voz no frena el escritorio). Alt o una pregunta nueva cortan la lectura. Texto preparado para leer (`src/core/habla_texto.h`):

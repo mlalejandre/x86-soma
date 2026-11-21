@@ -542,6 +542,17 @@ int tcp_close(int h)
     return 0;
 }
 
+/* SOMA_250_YOUTUBE: cierre inmediato. tcp_close espera el cierre ordenado del otro extremo (hasta 3 s si este sigue enviando,
+ * como al cancelar una descarga a medias); aqui se corta con RST y la conexion queda libre al momento. */
+int tcp_abort(int h)
+{
+    struct tcp_conn *c = get_conn(h);
+    if (!c) return -1;
+    if (c->state != TCP_CLOSED && c->state != TCP_LISTEN) conn_emit(c, TCP_RST | TCP_ACK, c->snd_nxt, 0, 0, 0);
+    c->state = TCP_CLOSED; c->used = 0; c->owner_tid = 0;
+    return 0;
+}
+
 void tcp_cleanup_for_thread(uint32_t tid)
 {
     for (int i = 0; i < TCP_MAX_CONN; ++i) {

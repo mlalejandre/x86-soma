@@ -793,7 +793,7 @@ static void cdr_write_report(const char *target, int ok, int repairs, const char
 
 static int cdr_force_new;
 /* PARCHE 096: adaptadores del entorno del nucleo agentico */
-static int cdr_env_llm(const char *prompt, char *out, uint32_t max, uint32_t to) { return llm_chat(prompt, out, max, to); }
+static int cdr_env_llm(const char *prompt, char *out, uint32_t max, uint32_t to) { llm_trace_tag("programador"); return llm_chat(prompt, out, max, to); }   /* SOMA_251: traza */
 static int cdr_env_read(const char *path, char *buf, uint32_t max) { return vfs_read(path, buf, max); }
 static int cdr_env_write(const char *path, const char *buf, uint32_t len) { return vfs_write(path, buf, len); }
 static void cdr_env_status(int phase, const char *desc, const char *thought) { cdr_set_state(CODER_JOB_WORKING, phase, desc, thought); }

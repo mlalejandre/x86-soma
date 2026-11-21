@@ -219,6 +219,22 @@ static int extract_json_field(const char *json, const char *key, char *out, uint
                 out[len++] = '\t';
             } else if (*p == '/') {
                 out[len++] = '/';
+            } else if (*p == 'u') {                               /* SOMA_251_RUTAS: \uXXXX (y pares sustitutos) a UTF-8 */
+                uint32_t cp = 0; int ok = 1;
+                for (int k = 1; k <= 4; k++) { char c = p[k]; int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; if (v < 0) { ok = 0; break; } cp = cp * 16 + (uint32_t)v; }
+                if (!ok) { out[len++] = 'u'; }
+                else {
+                    p += 4;
+                    if (cp >= 0xD800 && cp < 0xDC00 && p[1] == '\\' && p[2] == 'u') {
+                        uint32_t lo = 0; int ok2 = 1;
+                        for (int k = 3; k <= 6; k++) { char c = p[k]; int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; if (v < 0) { ok2 = 0; break; } lo = lo * 16 + (uint32_t)v; }
+                        if (ok2 && lo >= 0xDC00 && lo < 0xE000) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); p += 6; }
+                    }
+                    if (cp < 0x80) out[len++] = (char)cp;
+                    else if (cp < 0x800) { if (len + 2 >= out_max) break; out[len++] = (char)(0xC0 | (cp >> 6)); out[len++] = (char)(0x80 | (cp & 0x3F)); }
+                    else if (cp < 0x10000) { if (len + 3 >= out_max) break; out[len++] = (char)(0xE0 | (cp >> 12)); out[len++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[len++] = (char)(0x80 | (cp & 0x3F)); }
+                    else { if (len + 4 >= out_max) break; out[len++] = (char)(0xF0 | (cp >> 18)); out[len++] = (char)(0x80 | ((cp >> 12) & 0x3F)); out[len++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[len++] = (char)(0x80 | (cp & 0x3F)); }
+                }
             } else if (*p) {
                 out[len++] = *p;
             } else {
@@ -371,6 +387,53 @@ static void llm_fetch_error(int rc, const struct wn_resp *rs)
     st[n] = 0; set_err(st, "");
 }
 
+/* ---------------------------------------------------------------- SOMA_251_RUTAS: traza de cada llamada al modelo
+ * /agent/traza.txt: hora de arranque, quien llama, milisegundos, caracteres de prompt y respuesta, y los tokens que diga el servidor
+ * (entrada, salida, razonamiento oculto, velocidad). Ultimas 40 llamadas. Orden "traza". */
+static char g_trace_tag[40] = "?";
+void llm_trace_tag(const char *t) { uint32_t i = 0; while (t && t[i] && i + 1 < sizeof g_trace_tag) { g_trace_tag[i] = t[i]; i++; } g_trace_tag[i] = 0; }
+#define TRACE_N 40
+static char g_trace[TRACE_N][160]; static int g_trace_head, g_trace_n;
+static long json_num(const char *j, const char *key)
+{
+    if (!j) return -1;
+    uint32_t kl = my_strlen(key);
+    for (const char *p = j; *p; p++) {
+        if (*p != '"') continue;
+        uint32_t k = 0; while (k < kl && p[1 + k] == key[k]) k++;
+        if (k != kl || p[1 + kl] != '"') continue;
+        const char *v = p + 2 + kl; while (*v == ' ' || *v == ':') v++;
+        if (*v < '0' || *v > '9') continue;
+        long n = 0; while (*v >= '0' && *v <= '9') n = n * 10 + (*v++ - '0');
+        return n;
+    }
+    return -1;
+}
+static void tput(char *o, uint32_t cap, uint32_t *q, const char *s) { while (s && *s && *q + 1 < cap) o[(*q)++] = *s++; o[*q] = 0; }
+static void tnum(char *o, uint32_t cap, uint32_t *q, long v) { char b[24]; int i = 23; b[i] = 0; if (v < 0) { tput(o, cap, q, "?"); return; } if (!v) b[--i] = '0'; while (v) { b[--i] = (char)('0' + v % 10); v /= 10; } tput(o, cap, q, b + i); }
+static void trace_record(uint64_t t0, uint32_t prompt_chars, const char *json, uint32_t reply_chars, int ok)
+{
+    char *l = g_trace[g_trace_head]; uint32_t q = 0; l[0] = 0;
+    uint64_t now = timer_get_uptime_ms();
+    tnum(l, 160, &q, (long)(t0 / 1000)); tput(l, 160, &q, "s "); tput(l, 160, &q, g_trace_tag);
+    tput(l, 160, &q, ": "); tnum(l, 160, &q, (long)(now - t0)); tput(l, 160, &q, " ms, prompt "); tnum(l, 160, &q, (long)prompt_chars);
+    tput(l, 160, &q, " c, respuesta "); tnum(l, 160, &q, (long)reply_chars); tput(l, 160, &q, " c");
+    long pi = json_num(json, "prompt_tokens"); if (pi < 0) pi = json_num(json, "input_tokens"); if (pi < 0) pi = json_num(json, "promptTokenCount");
+    long co = json_num(json, "completion_tokens"); if (co < 0) co = json_num(json, "output_tokens"); if (co < 0) co = json_num(json, "candidatesTokenCount");
+    long re = json_num(json, "reasoning_tokens"); if (re < 0) re = json_num(json, "thoughtsTokenCount");
+    long cached = json_num(json, "cached_tokens"); if (cached < 0) cached = json_num(json, "cache_n");
+    if (pi >= 0 || co >= 0) { tput(l, 160, &q, " | tokens "); tnum(l, 160, &q, pi); tput(l, 160, &q, "->"); tnum(l, 160, &q, co); }
+    if (re > 0) { tput(l, 160, &q, " (razonamiento "); tnum(l, 160, &q, re); tput(l, 160, &q, ")"); }
+    if (cached > 0) { tput(l, 160, &q, " (reutilizados "); tnum(l, 160, &q, cached); tput(l, 160, &q, ")"); }
+    if (!ok) tput(l, 160, &q, " | FALLO");
+    g_trace_head = (g_trace_head + 1) % TRACE_N; if (g_trace_n < TRACE_N) g_trace_n++;
+    static char f[TRACE_N * 162]; uint32_t fq = 0; f[0] = 0;
+    for (int i = 0; i < g_trace_n; i++) { int k = (g_trace_head - g_trace_n + i + TRACE_N) % TRACE_N; tput(f, sizeof f, &fq, g_trace[k]); tput(f, sizeof f, &fq, "\n"); }
+    (void)vfs_write("/agent/traza.txt", f, fq);
+    llm_trace_tag("?");
+}
+static uint32_t slen_(const char *s) { uint32_t n = 0; while (s && s[n]) n++; return n; }
+
 static int llm_request(const char *prompt, int json_mode, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
     if (!ensure_llm_buffers()) return 0;
@@ -379,6 +442,7 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
     while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);          /* una peticion al LLM cada vez (bufferes compartidos) */
     int ok = 0;
     llm_last_error[0] = 0;
+    uint64_t t_start = timer_get_uptime_ms();
     int blen = llm_proto_chat(c, prompt, json_mode, payload_buf, 65536, &h);
     if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); kprint(llm_last_error); kprint("\n"); goto out; }
     uint8_t ip[4]; uint16_t port;
@@ -393,6 +457,7 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
         } else if (!resp.body) { set_err("LLM: respuesta vacia", ""); kprint("LLM: empty HTTP response body\n"); }
         else if (!llm_proto_reply(c, resp.body, reply_out, reply_max) && !extract_json_content(resp.body, reply_out, reply_max)) { set_err("LLM: no se pudo leer la respuesta del servidor", ""); kprint("LLM: could not extract content from JSON response\n"); }
         else ok = 1;
+        trace_record(t_start, slen_(prompt), code == 200 ? resp.body : 0, ok ? slen_(reply_out) : 0, ok);
         goto out;
     }
     {
@@ -401,6 +466,7 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
         if (rc != 0 || rs.status != 200 || !rs.body) { llm_fetch_error(rc, &rs); kprint(llm_last_error); kprint("\n"); }
         else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
         else ok = 1;
+        trace_record(t_start, slen_(prompt), rc == 0 ? rs.body : 0, ok ? slen_(reply_out) : 0, ok);
         wn_free(&rs);
     }
 out:
@@ -436,6 +502,7 @@ int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *im
         struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
         rq.url = h.url; rq.method = h.method; rq.body = body; rq.body_len = (uint32_t)blen; rq.ctype = "application/json"; rq.accept = "application/json";
         rq.timeout_ms = timeout_ms; rq.max_body = 1u << 20; rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1;
+        uint64_t t_start = timer_get_uptime_ms();
         int rc = wn_fetch(&rq, &rs);
         if (rc != 0 || rs.status != 200 || !rs.body) {
             static char m[200]; m[0] = 0;
@@ -447,6 +514,7 @@ int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *im
             kprint(llm_last_error); kprint("\n");
         } else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
         else ok = 1;
+        trace_record(t_start, slen_(prompt) + slen_(system), rc == 0 ? rs.body : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
         wn_free(&rs);
     }
 out:

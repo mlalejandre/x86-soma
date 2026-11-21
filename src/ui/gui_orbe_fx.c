@@ -188,6 +188,7 @@ static uint32_t ofx_app_color(int app)
     case APP_RECORDER:       return 0x00F87171u;
     case APP_CAMERA:         return 0x0038BDF8u;   /* SOMA_178_T480S */
     case APP_CAPTURE:        return 0x00A78BFAu;   /* SOMA_179_T480S */
+    case APP_YOUTUBE:        return 0x00FF4444u;   /* SOMA_250_YOUTUBE */
     case APP_SOMA_APP:       return 0x0038BDF8u; /*PL12_OFX_COL*/
     default:                 return 0x007DD3FCu;
     }

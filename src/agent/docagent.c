@@ -104,8 +104,9 @@ int docagent_should_handle(const char *m)
     while (*m == ' ') m++;
     if (find_ci(m, "maquetador") == m) return 1;                       /* misiones que manda el Maquetador ("maquetador: ...") */
     static const char *const verb[] = { "redacta", "escribe", "prepara", "maqueta", "disena", "crea", "genera", "haz", "elabora", "hazme", "preparame", "redactame", "escribeme", 0 };
+    /* SOMA_251_RUTAS: hace falta pedir FORMATO; "redacta un informe breve" ya no lanza todo el maquetador (PDF y revisiones) */
     static const char *const fmt[] = { "pdf", "maquet", "formato", "profesional", "presentacion", "diapositiva", "paper", "revista", "folleto",
-                                       "curriculum", "newsletter", "informe", "carta formal", "imprimir", "latex", "html", 0 };
+                                       "curriculum", "newsletter", "carta formal", "imprimir", "latex", "html", 0 };
     static const char *const doc[] = { "informe", "documento", "paper", "articulo", "revista", "email", "correo", "carta", "libro", "capitulo",
                                        "presentacion", "diapositivas", "curriculum", " cv", "memoria", "propuesta", "folleto", "newsletter", "manual", "dossier", 0 };
     static const char *const no[] = { ".soma", "programa", "aplicacion", "app ", "juego", "script", "codigo", "funcion", "busca en", 0 };
@@ -353,6 +354,7 @@ static int review_round(const char *mission, char *doc, uint32_t *dlen_, int *is
     struct llm_img im[4]; for (int i = 0; i < s.n; i++) { im[i].data = s.png[i]; im[i].len = s.len[i]; im[i].mime = "image/png"; }
     char m[64]; uint32_t q = 0; put(m, sizeof m, &q, s.n ? "Revisando las paginas con vision (ronda " : "Revisando la maquetacion (ronda "); putn(m, sizeof m, &q, round); put(m, sizeof m, &q, ")...");
     prog(m);
+    llm_trace_tag("documento/revision");
     int ok = llm_chat_ex(SYS_REVIEW, prompt, im, s.n, 16000, reply, REPLY_MAX, LLM_TIMEOUT);
     if (ok == -2 && s.n) {                                          /* el modelo no ve imagenes: misma revision sin ellas */
         prog("El modelo no admite imagenes: reviso solo con el informe de la maquetacion");
@@ -491,10 +493,12 @@ int docagent_run(const char *mission, char *out, uint32_t max, char *path_out, u
         put(prompt, 8192, &p, "PETICION DEL USUARIO:\n"); put(prompt, 8192, &p, mission);
         put(prompt, 8192, &p, "\n\nTIPO DE DOCUMENTO Y RECETA: "); put(prompt, 8192, &p, KINDS[ki].recipe);
         if (hoy[0]) { put(prompt, 8192, &p, "\n\nFECHA DE HOY: "); put(prompt, 8192, &p, hoy); }
-        { uint32_t bn = 0; char *bb = vfs_read_alloc("/agent/blackboard.txt", &bn);                /* notas del buscador, si las hay */
+        extern int agent_in_delegation(void);
+        { uint32_t bn = 0; char *bb = agent_in_delegation() ? vfs_read_alloc("/agent/blackboard.txt", &bn) : 0;   /* notas del buscador (solo si se lo delego) SOMA_251 */
           if (bb) { if (bn > 3000) bb[3000] = 0; put(prompt, 8192, &p, "\n\nNOTAS DE INVESTIGACION (usalas si vienen al caso; no copies basura):\n"); put(prompt, 8192, &p, bb); kfree(bb); } }
         put(prompt, 8192, &p, "\n\nEscribe ahora el documento completo.");
         prog("Redactando y maquetando el documento...");
+        llm_trace_tag("documento/redaccion");
         int ok = llm_chat_ex(SYS_DOC, prompt, 0, 0, 16000, reply, REPLY_MAX, LLM_TIMEOUT);
         if (ok != 1) { put(out, max, &op, "El modelo no ha respondido: "); put(out, max, &op, llm_last_error); goto fin0; }
     }

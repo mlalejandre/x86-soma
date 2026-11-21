@@ -12,6 +12,7 @@ static void her_minimize_window(int idx)
     }
     struct her_win_node v = her_windows[idx];
     if (v.app == APP_TERMINAL_SHELL) her_term_focus(-1);
+    if (v.app == APP_YOUTUBE) youtube_close();                /* SOMA_250_YOUTUBE: sin ventana el video se para (se reanuda al volver) */
     {   /* fase: el hueco mas amplio entre los iconos ya en orbita */
         uint32_t best = 0, bestd = 0;
         for (uint32_t c = 0; c < 1024u; c += 32u) {
@@ -60,6 +61,7 @@ static void her_kill_minimized(int idx)
     if (dead.app == APP_TERMINAL_SHELL) her_term_kill(dead.term_slot);
     her_inst_drop(dead.app, dead.term_slot);                  /* SOMA_211_NOTAS / SOMA_212 */
     if (dead.app == APP_CAMERA) camapp_close();
+    if (dead.app == APP_YOUTUBE) youtube_close();             /* SOMA_250_YOUTUBE */
     if (dead.app == APP_SOMA_APP) gui_soma_win_on_close();
     for (int j = idx; j < her_min_count - 1; ++j) { her_minimized[j] = her_minimized[j + 1]; her_min_phase[j] = her_min_phase[j + 1]; }
     --her_min_count;
@@ -105,6 +107,7 @@ static void her_close_target_window_vortex(int win_idx)
         gui_soma_win_on_close(); /*PL12_NOTIFY_CLOSE*/
     }
     if (closing_app == APP_CAMERA) camapp_close();     /* SOMA_178_T480S: apaga la camara */
+    if (closing_app == APP_YOUTUBE) youtube_close();   /* SOMA_250_YOUTUBE: corta el video y la descarga al momento */
 
     for (int i = win_idx; i < her_num_windows - 1; ++i) {
         her_windows[i] = her_windows[i + 1];
@@ -154,6 +157,7 @@ static void her_close_target_window_vortex(int win_idx)
     case APP_RECORDER:       app_col = 0x00F87171u; break;
     case APP_CAMERA:         app_col = 0x0038BDF8u; break;                /* SOMA_178_T480S */
     case APP_CAPTURE:        app_col = 0x00A78BFAu; break;                /* SOMA_179_T480S */
+    case APP_YOUTUBE:        app_col = 0x00FF4444u; break;                /* SOMA_250_YOUTUBE */
     case APP_SOMA_APP:       app_col = 0x0038BDF8u; break; /*PL12_VORTEX_COL*/
     default:                 app_col = 0x007DD3FCu; break;
     }

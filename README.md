@@ -164,7 +164,7 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
     |        +------------------------------------------------------+        |
     |        |        ANILLO ORBITAL DE ACRECIÓN Y HORIZONTE        |        |
     |        |            * Vórtice Central Cósmico (30 FPS)        |        |
-    |        |     (Entrada Reactiva en Vivo / Streaming de LLM)    |        |
+    |        |      (Entrada Reactiva en Vivo / Voz y dictado)      |        |
     |        +------------------------------------------------------+        |
     |              ^                 ^                 ^          ^          |
     |             /                 |                 |           \          |
@@ -185,9 +185,9 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
 - SOMA Browser: Navegador visual con motor de renderizado HTML/CSS, imágenes locales/remotas BMP/PPM y adaptador para JavaScript reactivo.
 - SOMA Paint: Editor bitmap sobre lienzo de 80×60 con lápiz, pincel, figuras geométricas, relleno por inundación (flood fill), paleta y guardado BMP a disco.
 - SOMA File Manager: Explorador de archivos para SOMAFS02 con clasificación por tipo, tamaño, metadatos y apertura directa.
-- SOMA Notepad: Editor de texto gráfico con seguimiento y volcado en vivo (live streaming) de los archivos creados por los agentes.
+- SOMA Notepad: Editor de texto gráfico con seguimiento en vivo de los archivos creados por los agentes y lectura en voz alta.
 - SOMA Memory View: Visor en árbol del grafo de conocimiento persistente, la pizarra compartida (Blackboard) y la memoria episódica.
-- Document Layout: Motor de maquetación editorial para previsualizar documentos estructurados bajo el estándar #SOMA-LAYOUT v1.
+- Maquetador: documentos HTML y LaTeX paginados como en papel (A4, A5, carta, 16:9, email), exportación a PDF/HTML/PNG y revisión con IA (ver *Documentos con acabado profesional*).
 - Terminal Gráfica: Consola interactiva con emulación ANSI, historial persistente, autocompletado y tuberías (| , > , && , ||).
 - SOMA Studio: editor de código para SOMA-LANG y Python con explorador, verificación, ejecución y peticiones a la IA; pestañas *Crear con IA*, *Proyectos* y *Registro*.
 - SOMA Media: reproductor de vídeo AVI (MJPG + PCM) y audio WAV del almacén BIGFS, con biblioteca, visualización del sonido y controles con nombre.
@@ -202,13 +202,15 @@ pinta algo, cabe en su caja y no repite el dibujo de otro.
 
 ## 🤖 Jerarquía y Orquestación Multi-Agente
 
-SOMA ejecuta un bucle cognitivo ReAct (Reason + Act) con agentes especializados:
+SOMA elige el camino más corto para cada petición (ver *Cómo decide SOMA el camino de una petición*). Agentes:
 
-- soma: Orquestador superior. Descompone objetivos complejos, delega tareas especializadas y sintetiza dictámenes finales.
-- mayordomo: Agente operativo determinista y de baja latencia. Ejecuta consultas de memoria, operaciones de VFS, búsquedas y archivos sin consumir tokens LLM.
-- buscador: Especialista en investigación externa web (DuckDuckGo / proxy HTTP) y recuperación semántica interna mediante algoritmo BM25 / TF-IDF.
-- maquetador: Especialista editorial. Transforma síntesis e informes en documentos maquetados con jerarquía visual estructurada.
-- Blackboard IPC: Pizarra persistente compartida (/agent/blackboard.txt) para consenso e intercambio de contexto entre agentes.
+- soma: orquestador. Responde directamente con una sola llamada al modelo cuando no hacen falta herramientas; si las necesita,
+  usa un bucle ReAct (Reason + Act) con herramientas y delegación (como mucho dos niveles, nunca en sí mismo).
+- mayordomo: agente operativo determinista y sin modelo: RAM, disco, archivos, carpetas y órdenes del sistema.
+- programador: crea y modifica programas SOMA-LANG y Python (compila, comprueba y, con modelos multimodales, revisa la ventana).
+- buscador: investigación web (Wikipedia y DuckDuckGo por HTTPS) y búsqueda en la memoria interna (BM25).
+- maquetador: documentos con acabado profesional y PDF.
+- Pizarra (/agent/blackboard.txt): contexto compartido solo entre los agentes de una misma delegación.
 
 ---
 
@@ -511,6 +513,18 @@ Cómo funciona:
 - **Programas también**: cuando el programador termina una aplicación gráfica y el modelo ve imágenes, SOMA la abre, captura
   su ventana y un "diseñador de interfaces" la critica; si propone cambios, el programador hace una ronda de mejora (solo se
   queda si compila). La captura queda en `/agent/coder_captura.png`.
+
+## ⚡ Cómo decide SOMA el camino de una petición
+
+1. **Documento con formato** (PDF, maquetar, presentación, revista, paper...) → Maquetador.
+2. **Programa** (crea/haz + app, programa, juego, calculadora...) → Programador.
+3. **Operación del sistema** (RAM, disco, archivos, carpetas...) → Mayordomo, sin el modelo.
+4. **Conversación, redacción, explicación, traducción** → **respuesta directa**: una sola llamada al modelo.
+5. **Lo demás** (internet, datos actuales, archivos, ejecutar) → agente con herramientas (`search` busca en Wikipedia y DuckDuckGo).
+
+Las palabras se comparan completas, sin mayúsculas ni tildes. Si pides guardar («guárdalo», «en notas.txt»), SOMA guarda el
+texto ya escrito. `traza` enseña el tiempo y los tokens de las últimas llamadas al modelo (`/agent/traza.txt`): si algo tarda,
+ahí se ve si es el modelo (y si razona en oculto) o el camino.
 
 ## 🧾 Exportar el proyecto en texto
 

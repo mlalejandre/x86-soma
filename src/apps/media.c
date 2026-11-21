@@ -56,6 +56,17 @@ static uint64_t st_audio_bytes;
 static volatile uint64_t last_render_ms;
 static volatile int gui_seen;                /* la ventana se ha dibujado alguna vez: solo entonces vale la deteccion de 'ventana cerrada' */
 static int is_audio_only;
+/* SOMA_250_YOUTUBE: fuente que CRECE mientras se reproduce (la da quien descarga, p. ej. la aplicacion YouTube). El reproductor
+ * solo lee lo que ya ha llegado; si se queda sin datos espera ("cargando") en vez de dar el video por terminado. */
+static struct media_stream g_stream;                 /* la pedida con media_play_stream */
+static struct media_stream ses_stream;               /* la de la sesion en curso */
+static volatile int stream_on;                       /* la sesion en curso lee de ses_stream */
+static volatile int stream_pending;                  /* pedido un flujo que la sesion aun no ha tomado */
+static volatile int buffering;                       /* esperando datos de la fuente */
+static uint64_t movi_decl;                           /* final de movi segun la cabecera (en un flujo: "abierto") */
+static uint64_t stall_ms;                            /* reloj de pared: instante en que empezo la espera (0 = no espera) */
+#define STREAM_TAG "yt:"
+static int is_stream_path(const char *p) { return p && p[0] == 'y' && p[1] == 't' && p[2] == ':'; }
 static uint8_t vu[48];                       /* niveles del ultimo audio para la visualizacion de los WAV */
 static int vu_n;
 
@@ -136,7 +147,44 @@ static uint64_t wall0_ms, wall_base_us;              /* ancla del reloj de pared
 static uint64_t last_audio_us;
 static unsigned char *araw; static short *aout; static unsigned char *vbuf, *hdrbuf;
 
-static int rd(uint64_t off, void *buf, uint32_t n) { return bigfs_read(fs_, ino_, off, buf, n) == (int64_t)n; }
+static int rd(uint64_t off, void *buf, uint32_t n)
+{
+    if (stream_on) return ses_stream.read(ses_stream.ctx, off, buf, n) == (int64_t)n;
+    return bigfs_read(fs_, ino_, off, buf, n) == (int64_t)n;
+}
+/* SOMA_250_YOUTUBE */
+static int src_live(void) { return stream_on && !ses_stream.eof(ses_stream.ctx); }       /* aun pueden llegar mas datos */
+static void src_refresh(void)                                                               /* final de movi = lo que ha llegado */
+{
+    if (!stream_on) return;
+    uint64_t have = ses_stream.avail(ses_stream.ctx);
+    av.movi_end = (uint32_t)(have < movi_decl ? have : movi_decl);
+}
+static void stall_begin(void) { buffering = 1; if (wall_mode && !stall_ms) stall_ms = timer_get_uptime_ms(); }
+static void stall_end(void)
+{
+    buffering = 0;
+    if (stall_ms) { wall0_ms += timer_get_uptime_ms() - stall_ms; stall_ms = 0; }   /* el reloj de pared no cuenta la espera */
+}
+/* Cuando un flujo se queda sin datos no se reanuda con el primer byte que llega (el video iria a tirones): se espera a tener
+ * unos 2 segundos por delante. El ritmo (bytes por segundo) se mide con lo ya reproducido. */
+static uint64_t rebuf_need(void)
+{
+    uint64_t rate = 300u * 1024u;                                                    /* sin medida aun: 300 KiB/s */
+    uint64_t played_us = (uint64_t)next_idx * av.usec_per_frame;
+    if (next_idx > 15 && played_us && voff > av.movi_start) rate = (voff - av.movi_start) * 1000000u / played_us;
+    uint64_t need = rate * 2u;
+    if (need < 128u * 1024u) need = 128u * 1024u;
+    if (need > 2048u * 1024u) need = 2048u * 1024u;
+    return need;
+}
+/* Puntos de control del audio: (bytes de audio anteriores al chunk, desplazamiento del chunk). Sirven para recolocar el cursor
+ * (pausa) sin recorrer el archivo desde el principio: en un flujo, el principio ya no esta en memoria. */
+#define CK_N 256
+static uint64_t ck_acc[CK_N], ck_off[CK_N]; static uint32_t ck_w, ck_cnt;
+static uint64_t a_acc_next;                          /* bytes de audio de los chunks ya entregados por next_audio_chunk */
+static void ck_reset(void) { ck_w = ck_cnt = 0; a_acc_next = 0; }
+static void ck_push(uint64_t acc, uint64_t off) { ck_acc[ck_w] = acc; ck_off[ck_w] = off; ck_w = (ck_w + 1) % CK_N; if (ck_cnt < CK_N) ck_cnt++; }
 
 static void free_buffers(void)
 {
@@ -147,13 +195,16 @@ static void free_buffers(void)
 
 static int next_audio_chunk(void)
 {
+    src_refresh();
     while (aoff + 8 <= av.movi_end) {
         unsigned char h[8]; struct avi_chunk c;
         if (!rd(aoff, h, 8)) return 0;
         avi_chunk_parse(h, &c);
         uint64_t here = aoff;
+        if (c.kind != AVI_K_LIST && here + 8 + c.size > av.movi_end && src_live()) return 0;   /* SOMA_250: a medio llegar: se reintenta */
         aoff = avi_chunk_next(aoff, &c);
         if (c.kind == AVI_K_AUDIO && c.stream == av.audio_stream && c.size > 0 && here + 8 + c.size <= av.movi_end) {
+            ck_push(a_acc_next, here); a_acc_next += c.size;
             achunk_off = here + 8; achunk_rem = c.size; return 1;
         }
     }
@@ -170,17 +221,31 @@ static void audio_cursor_set(uint64_t target)
         achunk_off = wv.data_offset + target; achunk_rem = total - target; a_pos = target; return;
     }
     uint64_t acc = 0; aoff = av.movi_start;
+    {   /* SOMA_250_YOUTUBE: se empieza en el punto de control mas cercano por detras, no en el principio del archivo */
+        int best = -1;
+        for (uint32_t i = 0; i < ck_cnt; ++i) if (ck_acc[i] <= target && (best < 0 || ck_acc[i] > ck_acc[best])) best = (int)i;
+        if (best >= 0) { acc = ck_acc[best]; aoff = ck_off[best]; }
+        ck_w = ck_cnt = 0;
+    }
+    src_refresh();
     while (aoff + 8 <= av.movi_end) {
         unsigned char h[8]; struct avi_chunk c;
         if (!rd(aoff, h, 8)) break;
         avi_chunk_parse(h, &c);
-        uint64_t here = aoff; aoff = avi_chunk_next(aoff, &c);
+        uint64_t here = aoff;
+        if (c.kind != AVI_K_LIST && here + 8 + c.size > av.movi_end && src_live()) { a_acc_next = acc; a_pos = acc; return; }   /* aun no ha llegado: se sigue desde aqui */
+        aoff = avi_chunk_next(aoff, &c);
         if (c.kind == AVI_K_AUDIO && c.stream == av.audio_stream && here + 8 + c.size <= av.movi_end) {
-            if (acc + c.size > target) { uint64_t sk = target - acc; achunk_off = here + 8 + sk; achunk_rem = c.size - sk; a_pos = target; return; }
+            if (acc + c.size > target) {
+                uint64_t sk = target - acc; achunk_off = here + 8 + sk; achunk_rem = c.size - sk; a_pos = target;
+                ck_push(acc, here); a_acc_next = acc + c.size;
+                return;
+            }
             acc += c.size;
         }
     }
-    audio_done = 1; a_pos = acc;
+    a_acc_next = acc; a_pos = acc;
+    if (!src_live()) audio_done = 1;
 }
 
 static void vu_update(const short *s, uint32_t frames)
@@ -206,7 +271,7 @@ static void feed_audio(void)
     uint64_t space = st[0];
     uint32_t guard = 0;
     while (queued < lead && space >= 8192 && guard++ < 16) {
-        if (achunk_rem == 0 && !next_audio_chunk()) { audio_done = 1; break; }
+        if (achunk_rem == 0 && !next_audio_chunk()) { if (!src_live()) audio_done = 1; break; }   /* SOMA_250: en un flujo vivo, ya llegara */
         uint64_t want = achunk_rem < 8192 ? achunk_rem : 8192;
         if (a_ch == 1 && want > 4096) want = 4096;
         for (int i = 0; i < ncarry; ++i) araw[i] = carry[i];
@@ -241,6 +306,7 @@ static uint64_t clock_us(void)
         if (audio_sys_status(st) == 0) last_audio_us = st[1];
         return A0_us + last_audio_us;
     }
+    if (stall_ms) now = stall_ms;                        /* SOMA_250_YOUTUBE: esperando datos, el tiempo no corre */
     return wall_base_us + (now - wall0_ms) * 1000u;
 }
 
@@ -254,11 +320,14 @@ static void clock_to_wall(void)         /* el audio dejo de alimentarse: se sigu
 static int next_video_chunk(void)
 {
     if (cn_valid) return 1;
+    src_refresh();
     while (voff + 8 <= av.movi_end) {
         unsigned char h[8]; struct avi_chunk c;
         if (!rd(voff, h, 8)) { voff = av.movi_end; return 0; }
         avi_chunk_parse(h, &c);
-        uint64_t here = voff; voff = avi_chunk_next(voff, &c);
+        uint64_t here = voff;
+        if (c.kind != AVI_K_LIST && here + 8 + c.size > av.movi_end && src_live()) return 0;   /* SOMA_250: a medio llegar: se reintenta */
+        voff = avi_chunk_next(voff, &c);
         if (c.kind == AVI_K_VIDEO && c.stream == av.video_stream) {
             if (c.size && here + 8 + c.size > av.movi_end) { voff = av.movi_end; return 0; }
             cn_here = here; cn_size = c.size; cn_idx = next_idx++; cn_valid = 1; return 1;
@@ -315,6 +384,7 @@ static int service_commands(int *paused_state)
             if (wall_mode) { /* wall_base_us ya guardado */ }
         }
     }
+    if (cmd_seek_us >= 0 && stream_on) cmd_seek_us = -1;   /* SOMA_250_YOUTUBE: en un flujo el salto lo hace quien descarga */
     if (cmd_seek_us >= 0) {
         int64_t t = cmd_seek_us; cmd_seek_us = -1;
         uint64_t d = dur_us;
@@ -350,22 +420,48 @@ static void run_session(const char *path)
     audio_on = audio_done = video_done = wall_mode = 0; ncarry = 0; cn_valid = 0; next_idx = 0;
     free_buffers();
     scopy(cur_path, path, sizeof cur_path);
+    ck_reset(); buffering = 0; stall_ms = 0; stream_on = 0; movi_decl = 0;
 
+    if (is_stream_path(path)) {                          /* SOMA_250_YOUTUBE: datos que van llegando */
+        stream_pending = 0;
+        if (!g_stream.read || !g_stream.avail || !g_stream.eof) { setmsg("Flujo no disponible", ""); state = ST_ERROR; return; }
+        ses_stream = g_stream; stream_on = 1; fsize_ = 0;
+    } else {
     int e; fs_ = bigfs_sys(&e);
     if (!fs_) { setmsg("BIGFS no disponible", ""); state = ST_ERROR; return; }
     if (bigfs_lookup(fs_, path, &ino_) != (int)BIGFS_T_FILE) { setmsg("No se encuentra el archivo", ""); state = ST_ERROR; return; }
     struct bigfs_stat st;
     if (bigfs_stat(fs_, ino_, &st) < 0) { setmsg("No se puede leer el archivo", ""); state = ST_ERROR; return; }
     fsize_ = st.size;
+    }
 
     hdrbuf = (unsigned char *)kmalloc(65536); araw = (unsigned char *)kmalloc(16384 + 8);
     aout = (short *)kmalloc(16384 * 2 + 16); vbuf = (unsigned char *)kmalloc(VBUF_BYTES);
     if (!hdrbuf || !araw || !aout || !vbuf) { setmsg("Sin memoria", ""); state = ST_ERROR; goto done; }
-    int64_t n = bigfs_read(fs_, ino_, 0, hdrbuf, 65536);
+    int64_t n; int r;
+    if (stream_on) {                                     /* se espera a que llegue la cabecera completa (hasta 30 s) */
+        uint64_t t0 = timer_get_uptime_ms();
+        for (;;) {
+            uint64_t have = ses_stream.avail(ses_stream.ctx);
+            n = (int64_t)(have > 65536 ? 65536 : have);
+            r = n >= 12 && rd(0, hdrbuf, (uint32_t)n) ? avi_parse(hdrbuf, (size_t)n, &av) : AVI_E_TRUNC;
+            if (r != AVI_E_TRUNC) break;
+            if (cmd_stop || cmd_open) goto done;
+            if (ses_stream.eof(ses_stream.ctx) || timer_get_uptime_ms() - t0 > 30000u) { setmsg("El video no ha llegado", ""); state = ST_ERROR; goto done; }
+            if (gui_seen && timer_get_uptime_ms() - last_render_ms > IDLE_STOP_MS) goto done;
+            thread_sleep(20);
+        }
+        if (r != AVI_OK) { setmsg("Flujo no valido: ", avi_strerror(r)); state = ST_ERROR; goto done; }
+        fsize_ = (uint64_t)n;
+    } else {
+    n = bigfs_read(fs_, ino_, 0, hdrbuf, 65536);
     if (n <= 0) { setmsg("Archivo vacio", ""); state = ST_ERROR; goto done; }
-    int r = avi_parse(hdrbuf, (size_t)n, &av);
+    r = avi_parse(hdrbuf, (size_t)n, &av);
+    }
     if (r == AVI_OK) {
-        if ((uint64_t)av.movi_end > fsize_) av.movi_end = (uint32_t)fsize_;
+        movi_decl = av.movi_end;
+        if (stream_on) src_refresh();
+        else if ((uint64_t)av.movi_end > fsize_) av.movi_end = (uint32_t)fsize_;
         if ((uint64_t)av.width * av.height > MAXPIX) { setmsg("Video demasiado grande (maximo 1280x720)", ""); state = ST_ERROR; goto done; }
         fbuf_px = av.width * av.height;
         fbuf[0] = (uint32_t *)kmalloc((size_t)fbuf_px * 4); fbuf[1] = (uint32_t *)kmalloc((size_t)fbuf_px * 4);
@@ -388,7 +484,8 @@ static void run_session(const char *path)
     if (!audio_on && a_rate) setmsg("Sin audio (dispositivo ocupado o ausente): se reproduce en silencio", "");
     else setmsg("", "");
     if (is_audio_only && !audio_on) { setmsg("No se puede abrir el audio", ""); state = ST_ERROR; goto done; }
-    feed_audio();
+    if (stream_on) stall_begin();                        /* SOMA_250_YOUTUBE: un flujo empieza cuando hay un par de segundos recibidos */
+    else feed_audio();
     state = ST_PLAYING;
 
     {
@@ -396,6 +493,12 @@ static void run_session(const char *path)
         for (;;) {
             if (service_commands(&paused)) break;
             if (paused) { thread_sleep(15); continue; }
+            if (buffering) {                             /* SOMA_250_YOUTUBE: esperando datos; ni audio ni video hasta tener margen */
+                src_refresh();
+                uint64_t ahead = av.movi_end > voff ? av.movi_end - voff : 0;
+                if (src_live() && ahead < rebuf_need()) { thread_sleep(20); pos_us = clock_us(); continue; }
+                stall_end();
+            }
             feed_audio();
             if (is_audio_only) {
                 uint64_t c = clock_us();
@@ -410,7 +513,10 @@ static void run_session(const char *path)
                 if (audio_done) break;
                 thread_sleep(10); pos_us = clock_us(); continue;
             }
-            if (!next_video_chunk()) { video_done = 1; continue; }
+            if (!next_video_chunk()) {
+                if (src_live()) { stall_begin(); thread_sleep(15); pos_us = clock_us(); continue; }   /* SOMA_250_YOUTUBE: aun no ha llegado */
+                video_done = 1; continue;
+            }
             uint64_t pts = (uint64_t)cn_idx * av.usec_per_frame;
             uint64_t clk = clock_us();
             if (clk + EARLY_US < pts) {                  /* aun no es la hora: se espera un poco y se vuelve a mirar */
@@ -447,6 +553,8 @@ static void run_session(const char *path)
         if (cmd_stop || (gui_seen && timer_get_uptime_ms() - last_render_ms > IDLE_STOP_MS)) { free_buffers(); state = ST_IDLE; pos_us = 0; }
     }
 done:
+    stream_on = 0; buffering = 0;                        /* SOMA_250_YOUTUBE: la fuente ya no se lee */
+    if (state == ST_LOADING) { state = ST_IDLE; free_buffers(); }
     if (audio_on) { audio_sys_close(0); audio_on = 0; }
     if (hdrbuf) { kfree(hdrbuf); hdrbuf = 0; }
     if (araw) { kfree(araw); araw = 0; }
@@ -472,6 +580,7 @@ int media_play(const char *path)
 {
     if (!path || !*path || slen(path) > BIGFS_PATH_MAX) return -22;
     scopy(cmd_path, path, sizeof cmd_path);
+    stream_pending = 0;                                  /* SOMA_250_YOUTUBE: lo pone media_play_stream tras esta llamada */
     last_render_ms = timer_get_uptime_ms();
     if (thread_alive) { cmd_open = 1; cmd_pause = 0; return 0; }
     cmd_stop = 0; cmd_open = 0; cmd_pause = 0;
@@ -479,6 +588,35 @@ int media_play(const char *path)
     state = ST_LOADING;
     if (!thread_create("mediad", mediad_main, 0)) { thread_alive = 0; state = ST_ERROR; setmsg("No se pudo crear el hilo", ""); return -12; }
     return 0;
+}
+
+/* SOMA_250_YOUTUBE: reproduce un AVI (MJPG + PCM) que va llegando. Ver media.h. */
+int media_play_stream(const struct media_stream *s, const char *title)
+{
+    if (!s || !s->read || !s->avail || !s->eof) return -22;
+    char p[BIGFS_PATH_MAX + 1]; uint32_t k = 0;
+    put_str(p, sizeof p, &k, STREAM_TAG); put_str(p, sizeof p, &k, title && *title ? title : "video");
+    for (uint32_t i = 3; p[i]; ++i) if (p[i] == '/') p[i] = '-';          /* el titulo se muestra como nombre de archivo */
+    g_stream = *s;
+    int r = media_play(p);
+    if (r == 0) stream_pending = 1;
+    return r;
+}
+int media_stream_busy(void) { return thread_alive && (stream_on || stream_pending); }
+void media_keepalive(void) { last_render_ms = timer_get_uptime_ms(); gui_seen = 1; }
+int media_frame(const uint32_t **px, uint32_t *w, uint32_t *h)
+{
+    if (front < 0 || !fbuf[front] || !fw || !fh) return 0;
+    *px = fbuf[front]; *w = fw; *h = fh;
+    return 1;
+}
+void media_get_info(struct media_info *o)
+{
+    o->state = stream_pending ? ST_LOADING : state;
+    o->stream = stream_pending || (is_stream_path(cur_path) && state != ST_IDLE); o->buffering = buffering && state == ST_PLAYING;
+    o->paused = state == ST_PAUSED;
+    o->pos_us = pos_us; o->dur_us = dur_us; o->frames = st_shown; o->dropped = st_dropped; o->width = fw; o->height = fh;
+    o->msg = msg;
 }
 
 void media_pause_toggle(void)
@@ -489,6 +627,7 @@ void media_pause_toggle(void)
 
 void media_stop(void)
 {
+    stream_pending = 0;
     if (thread_alive) { cmd_stop = 1; cmd_pause = 0; return; }
     free_buffers(); state = ST_IDLE; pos_us = 0; setmsg("", "");
 }
@@ -595,7 +734,7 @@ void media_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, int
 
     /* cabecera: icono de la app, archivo actual y estado */
     {
-        const char *t = cur_path[0] && state != ST_IDLE ? base_name(cur_path) : nfiles ? base_name(files[sel < nfiles ? sel : 0].path) : "Sin archivos";
+        const char *t = cur_path[0] && state != ST_IDLE ? (is_stream_path(cur_path) ? cur_path + 3 : base_name(cur_path)) : nfiles ? base_name(files[sel < nfiles ? sel : 0].path) : "Sin archivos";
         char sub[96]; uint32_t p = 0;
         int wav = cur_path[0] && has_ext(cur_path, ".wav");
         if (state == ST_ERROR || state == ST_LOADING) put_str(sub, sizeof sub, &p, wav ? "Audio WAV" : "Video AVI");

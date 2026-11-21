@@ -5,7 +5,7 @@
 /* SOMA ASYNC MATERIALIZE PATCH v4 */
 /* SOMA ORBITAL CALM PATCH v3 */
 /* SOMA ORBITAL ICONS PATCH v2: iconos como cuerpos en orbita estable. */
-#define HER_DOCK_ITEM_COUNT 18
+#define HER_DOCK_ITEM_COUNT 19
 #define HER_ICON_ANIM_MAX   256u
 #define HER_ICON_BOX_SIZE   44
 
@@ -35,6 +35,7 @@ static const struct her_dock_item her_dock_items[HER_DOCK_ITEM_COUNT] = {
     { ICON_CAM,      0x0038BDF8,  "CAMARA",  APP_CAMERA },          /* SOMA_178_T480S: camara web */
     { ICON_SCR,      0x00A78BFA,  "CAPTURA", APP_CAPTURE },         /* SOMA_179_T480S: captura de pantalla */
     { ICON_SETTINGS, 0x0094A3B8,  "AJUSTES", APP_SETTINGS },        /* PARCHE 085: engranaje */
+    { ICON_YOUTUBE,  0x00FF4444,  "YOUTUBE", APP_YOUTUBE },         /* SOMA_250_YOUTUBE: videos de YouTube */
 };
 
 /* La aparicion se escalona ligeramente para que los iconos escapen uno tras
@@ -108,10 +109,10 @@ static void her_place_window_corner(uint32_t cur_w, uint32_t cur_h, int corner)
  * 0: asistentes, 1: sistema/desarrollo, 2: trabajo,
  * 3: multimedia, 4: captura/red. Posiciones estaticas en el escritorio. */
 static const uint8_t her_group_col[HER_DOCK_ITEM_COUNT] = {
-    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1
+    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4
 };
 static const uint8_t her_group_row[HER_DOCK_ITEM_COUNT] = {
-    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3
+    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3
 };
 /* SOMA_208_ESCRITORIO: disposicion del usuario. Cada icono guarda su posicion en milesimas de pantalla (+1; 0 = la del grupo) para
  * que sirva a cualquier resolucion. Se guarda en /etc/escritorio.conf. */
@@ -398,6 +399,11 @@ static void her_icon_dist(int icon, int32_t X, int32_t Y, int32_t *dm, int32_t *
         IC_M(ic_seg(X, Y, 14, 22, 14, 14, 20)); IC_M(ic_seg(X, Y, 14, 14, 22, 14, 20)); IC_M(ic_seg(X, Y, 42, 14, 50, 14, 20)); IC_M(ic_seg(X, Y, 50, 14, 50, 22, 20));
         IC_M(ic_seg(X, Y, 14, 42, 14, 50, 20)); IC_M(ic_seg(X, Y, 14, 50, 22, 50, 20)); IC_M(ic_seg(X, Y, 42, 50, 50, 50, 20)); IC_M(ic_seg(X, Y, 50, 42, 50, 50, 20));
         IC_A(ic_circ(X, Y, 32, 32, 8));
+        break;
+    case ICON_YOUTUBE:                                   /* SOMA_250_YOUTUBE: placa redondeada llena con el triangulo de reproducir */
+        IC_M(ic_rbox(X, Y, 32, 32, 25, 18, 9));
+        IC_A(ic_seg(X, Y, 28, 25, 28, 39, 26)); IC_A(ic_seg(X, Y, 28, 25, 40, 32, 26)); IC_A(ic_seg(X, Y, 28, 39, 40, 32, 26));
+        IC_A(ic_circ(X, Y, 32, 32, 5));
         break;
     case ICON_MONITOR:                                   /* PARCHE 089: pantalla con una grafica */
         IC_M(ic_seg(X, Y, 12, 16, 52, 16, 20)); IC_M(ic_seg(X, Y, 52, 16, 52, 44, 20)); IC_M(ic_seg(X, Y, 52, 44, 12, 44, 20)); IC_M(ic_seg(X, Y, 12, 44, 12, 16, 20));

@@ -1051,6 +1051,13 @@ def main() -> int:
         web_gateway.ensure_gateway()
     except Exception as exc:
         print(f"[pasarela web] no disponible ({exc}); las paginas https:// no cargaran")
+    # SOMA_250_YOUTUBE: servicio de la aplicacion YouTube (127.0.0.1:8097, que SOMA ve en 10.0.2.2:8097). Busca con yt-dlp y
+    # convierte el video con ffmpeg mientras SOMA lo reproduce. Sin yt-dlp arranca en modo demo; sin ffmpeg no arranca.
+    try:
+        import yt_service
+        yt_service.ensure_service()
+    except Exception as exc:
+        print(f"[youtube] servicio no disponible ({exc}); la aplicacion YouTube no tendra videos")
 
     patched = False
     cycles = 0
