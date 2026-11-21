@@ -39,6 +39,13 @@ enum { LLM_P_OK = 0, LLM_P_NOMODEL = -1, LLM_P_NOKEY = -2, LLM_P_TOOBIG = -3, LL
 const char *llm_proto_strerror(int e);
 /* Peticion de chat. Deja el cuerpo JSON en body (devuelve su longitud, o un LLM_P_* negativo) y URL y cabeceras en h. */
 int  llm_proto_chat(const struct llm_conf *c, const char *prompt, int json_mode, char *body, uint32_t max, struct llm_http *h);
+/* SOMA_248_DOC: chat con indicaciones de sistema propias e imagenes (PNG/JPEG) para modelos multimodales. max_tokens 0 = 8192.
+ * llm_proto_chat_ex_size: bytes de cuerpo que hacen falta. llm_proto_no_vision: el error dice que el modelo no admite imagenes. */
+struct llm_img { const uint8_t *data; uint32_t len; const char *mime; };
+uint32_t llm_proto_chat_ex_size(const char *system, const char *prompt, const struct llm_img *img, int nimg);
+int  llm_proto_chat_ex(const struct llm_conf *c, const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
+                       char *body, uint32_t max, struct llm_http *h);
+int  llm_proto_no_vision(int status, const char *err);
 int  llm_proto_models(const struct llm_conf *c, struct llm_http *h);         /* peticion GET de la lista de modelos; LLM_P_* */
 /* Texto de la respuesta del modelo. 1 = extraido. */
 int  llm_proto_reply(const struct llm_conf *c, const char *json, char *out, uint32_t max);

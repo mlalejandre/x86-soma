@@ -708,6 +708,9 @@ int fb_set_logical(uint32_t lw, uint32_t lh)
 #endif
 }
 
+#ifndef SOMA_WEBSVC
+void voz_ptt_overlay_draw(void) __attribute__((weak));   /* SOMA_245_PTT: pastilla del dictado (src/ui/gui_voz.c) */
+#endif
 void fb_present(void)
 {
     if (!fb_mapped) return;
@@ -715,6 +718,9 @@ void fb_present(void)
     if (!fb_user_exclusive()) tr_present();          /* PARCHE 085: antes que las esquinas y los avisos (esos van opacos) */
     if (!fb_user_exclusive()) fb_cguard_present();   /* SOMA_PARCHE_028_UI: esquinas redondeadas de la ventana activa */
     if (!fb_user_exclusive()) clip_overlay_draw();   /* SOMA_PARCHE_PORTAPAPELES: avisos y panel del portapapeles */
+#ifndef SOMA_WEBSVC
+    if (!fb_user_exclusive() && voz_ptt_overlay_draw) voz_ptt_overlay_draw();   /* SOMA_245_PTT */
+#endif
 
 #if defined(__x86_64__)
     if (fb_backbuffer && fb_sc_on) { fb_present_scaled(); return; }   /* SOMA_225_AJUSTES */

@@ -523,7 +523,7 @@ static int attr_px(const struct wnode *n, const char *name, int base, int *is_pc
     if (!wu_isdigit(*v)) return -1;
     int x = wu_atoi(v); const char *q = v; while (wu_isdigit(*q) || *q == '.') q++;
     if (*q == '%') { *is_pct = 1; return base >= 0 ? x * base / 100 : -1; }
-    return x;
+    return g_wc_zoom != 100 && (!g_wc_zoom_owner || g_wc_zoom_owner()) ? x * g_wc_zoom / 100 : x;   /* SOMA_248_DOC */
 }
 
 /* ----------------------------- bordes, margenes y tamanos ----------------------------- */
@@ -908,6 +908,7 @@ struct wil {
     int cw, left0, right0, ly, lleft, lright, lx, lstart_x, lhas, pend_sp, first_line, spfr;
     int asc, dsc, tbh, last_base, indent;
     struct wfrag *fr; int nfr, capfr, fs;
+    int ending;                                  /* SOMA_248_DOC: cerrando el bloque (ultima linea: no se justifica) */
     struct wlat *la; int nla, capla;
     struct wldeco *ld; int nld, capld;
     struct wdeco *dc; int ndc, capdc;
@@ -1001,6 +1002,21 @@ static void il_finish_line(struct wil *S, int forced, const struct wstyle *st_fo
     }
     int off = 0, ta = b->st->text_align, used = S->lx - S->lstart_x, avail = S->lright - S->lstart_x;
     if (ta == TA_CENTER) off = (avail - used) / 2; else if (ta == TA_RIGHT) off = avail - used;
+    else if (ta == TA_JUSTIFY && !forced && !S->ending && avail > used && S->nla == 0) {
+        /* SOMA_248_DOC: justificado: el hueco se reparte entre los blancos de la linea (no en la ultima linea del parrafo) */
+        int nsp = 0, last = S->nfr - 1;
+        uint32_t lastlen = last >= S->fs ? S->fr[last].len : 0;
+        while (last >= S->fs && lastlen && S->fr[last].txt[lastlen - 1] == ' ') lastlen--;
+        for (int i = S->fs; i < S->nfr; i++) { uint32_t n = i == last ? lastlen : S->fr[i].len; for (uint32_t k = 0; k < n; k++) if (S->fr[i].txt[k] == ' ') nsp++; }
+        if (nsp > 0 && (avail - used) * 4 < avail) {                 /* huecos enormes (lineas casi vacias): sin justificar */
+            int64_t per = (int64_t)(avail - used) * 64 / nsp, acc = 0;
+            for (int i = S->fs; i < S->nfr; i++) {
+                uint32_t n = i == last ? lastlen : S->fr[i].len; int c = 0;
+                for (uint32_t k = 0; k < n; k++) if (S->fr[i].txt[k] == ' ') c++;
+                S->fr[i].x += (int32_t)(acc >> 6); S->fr[i].jsp = (int32_t)per; acc += per * c; S->fr[i].w += (int32_t)((per * c) >> 6);
+            }
+        }
+    }
     if (off < 0) off = 0;
     if (off) {
         for (int i = S->fs; i < S->nfr; i++) S->fr[i].x += off;
@@ -1193,7 +1209,7 @@ static int lay_inline(struct wlay *L, struct wbox *b, struct wctx *cx, int cw)
         }
     }
     il_flush_seg(S);
-    if (S->lhas) il_finish_line(S, 0, b->st);
+    S->ending = 1; if (S->lhas) il_finish_line(S, 0, b->st); S->ending = 0;
     il_place_pending(S);
     int ch = S->ly - (b->pt + b->bt);
     b->baseline = S->last_base ? S->last_base : -1;
@@ -2439,6 +2455,16 @@ static void paint_text_lines(struct wpt *P, struct wbox *b, int x, int y, int al
             if (s->text_decor & 1) fillr(P, x + f->x, by + s->font_px / 10 + 1, tw2 + ew, wmax(1, s->font_px / 14), mul_alpha(s->color, alpha));
             done_y = f->y; continue;
         }
+        if (f->jsp > 0) {                                            /* SOMA_248_DOC: justificado: palabra a palabra */
+            int64_t pen = (int64_t)(x + f->x) * 64; uint32_t a = 0; int fl2 = fontfl(s), a8 = (int)(((s->color >> 24) * (uint32_t)alpha) / 255);
+            while (a < f->len) {
+                uint32_t e = a; while (e < f->len && f->txt[e] != ' ') e++;
+                if (e > a) wf_draw((int32_t)(pen >> 6), by, f->txt + a, e - a, s->font_px, s->color & 0xFFFFFF, fl2, a8);
+                uint32_t e2 = e < f->len ? e + 1 : e;
+                pen += (int64_t)wf_width64(f->txt + a, e2 - a, s->font_px, fl2 | WF_RAW | WF_WEB) + (e < f->len ? f->jsp : 0);
+                a = e2;
+            }
+        } else
         wf_draw(x + f->x, by, f->txt, f->len, s->font_px, s->color & 0xFFFFFF, fontfl(s), (int)(((s->color >> 24) * (uint32_t)alpha) / 255));
         if (s->text_decor) {
             int th = wmax(1, s->font_px / 14); uint32_t c = mul_alpha(s->color, alpha);

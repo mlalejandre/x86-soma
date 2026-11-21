@@ -22,6 +22,7 @@
 #include "fwcfg.h"
 #include "usbdisk.h"
 #include "fat.h"
+#include "fs.h"        /* SOMA_246: /etc/voz.conf */
 
 extern const uint8_t _binary_voz_elf_start[], _binary_voz_elf_end[];
 
@@ -40,32 +41,100 @@ static int ends_with(const char *s, const char *e)
 }
 static void lock(void) { if (!lk_init) { kmutex_init(&lk, "voz"); lk_init = 1; } kmutex_lock(&lk); }
 
-/* Modelo a usar: el recomendado si esta; si no, el primer .bin de /modelos. 0 = encontrado (ruta y tamano). */
-int voz_model(char *path, uint32_t cap, uint64_t *size)
+/* SOMA_246_VOZ_MODELOS: tres niveles de modelo, elegidos en Ajustes > Voz (o con "voz modelo rapido|preciso|maximo") y guardados en
+ * /etc/voz.conf. El nivel de un .bin sale de su nombre: tiny/base -> Rapido, small/medium -> Preciso, large/turbo -> Maxima precision. */
+static const char *const TIER_FILE[VOZ_TIERS] = { "ggml-base-q5_1.bin", "ggml-small-q5_1.bin", "ggml-large-v3-turbo-q5_0.bin" };
+static const char *const TIER_NAME[VOZ_TIERS] = { "Rapido", "Preciso", "Maxima precision" };
+static const char *const TIER_KEY[VOZ_TIERS]  = { "rapido", "preciso", "maximo" };
+static const char *const TIER_FWCFG[VOZ_TIERS] = { "opt/soma/modelo", "opt/soma/modelo_preciso", "opt/soma/modelo_maximo" };   /* QEMU */
+static const uint32_t TIER_MB[VOZ_TIERS] = { 60, 190, 575 };
+static int g_pref = -1;
+static volatile int g_prog = -1;                       /* instalacion en curso: 0..100 */
+
+const char *voz_tier_file(int t) { return t >= 0 && t < VOZ_TIERS ? TIER_FILE[t] : ""; }
+const char *voz_tier_name(int t) { return t >= 0 && t < VOZ_TIERS ? TIER_NAME[t] : ""; }
+const char *voz_tier_key(int t)  { return t >= 0 && t < VOZ_TIERS ? TIER_KEY[t] : ""; }
+uint32_t voz_tier_mb(int t)      { return t >= 0 && t < VOZ_TIERS ? TIER_MB[t] : 0; }
+int voz_install_progress(void)   { return g_prog; }
+static int has_sub(const char *s, const char *sub)
+{
+    for (; s && *s; ++s) {
+        uint32_t i = 0;
+        for (; sub[i]; ++i) { char c = s[i]; if (c >= 'A' && c <= 'Z') c = (char)(c + 32); if (c != sub[i]) break; }
+        if (!sub[i]) return 1;
+    }
+    return 0;
+}
+int voz_tier_of(const char *name)
+{
+    if (has_sub(name, "large") || has_sub(name, "turbo")) return 2;
+    if (has_sub(name, "small") || has_sub(name, "medium")) return 1;
+    return 0;
+}
+int voz_tier_from_key(const char *k)
+{
+    for (int t = 0; t < VOZ_TIERS; ++t) {
+        uint32_t i = 0; while (k[i] && TIER_KEY[t][i] && k[i] == TIER_KEY[t][i]) i++;
+        if (i >= 4 && (!k[i] || k[i] == ' ')) return t;            /* basta con las 4 primeras letras: "rapi", "prec", "maxi" */
+    }
+    return -1;
+}
+int voz_pref(void)
+{
+    if (g_pref < 0) {
+        char b[64]; int n = vfs_read("/etc/voz.conf", b, sizeof b - 1);
+        g_pref = 0;
+        if (n > 0) { b[n] = 0; for (int i = 0; i + 7 < n; ++i) if (b[i] == 'm' && b[i + 1] == 'o' && b[i + 2] == 'd' && b[i + 6] == '=' ) { int t = voz_tier_from_key(b + i + 7); if (t >= 0) g_pref = t; break; } }
+    }
+    return g_pref;
+}
+void voz_set_pref(int t)
+{
+    if (t < 0 || t >= VOZ_TIERS) return;
+    g_pref = t;
+    char b[48]; uint32_t p = 0; sput(b, sizeof b, &p, "modelo="); sput(b, sizeof b, &p, TIER_KEY[t]); sput(b, sizeof b, &p, "\n");
+    (void)vfs_write("/etc/voz.conf", b, p);
+}
+
+/* Modelo instalado de un nivel: el recomendado si esta; si no, cualquier otro .bin de ese nivel. 0 = encontrado. */
+int voz_installed(int tier, char *path, uint32_t cap, uint64_t *size)
 {
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return -1;
-    uint32_t ino; struct bigfs_stat st;
-    if (bigfs_lookup(fs, VOZ_MODEL_DEFAULT, &ino) == (int)BIGFS_T_FILE && bigfs_stat(fs, ino, &st) == 0) {
-        uint32_t p = 0; sput(path, cap, &p, VOZ_MODEL_DEFAULT); if (size) *size = st.size; return 0;
+    if (!fs || tier < 0 || tier >= VOZ_TIERS) return -1;
+    uint32_t ino, dir; struct bigfs_stat st;
+    char rec[96]; uint32_t q = 0; sput(rec, sizeof rec, &q, VOZ_DIR "/"); sput(rec, sizeof rec, &q, TIER_FILE[tier]);
+    if (bigfs_lookup(fs, rec, &ino) == (int)BIGFS_T_FILE && bigfs_stat(fs, ino, &st) == 0 && st.size > (1u << 20)) {
+        uint32_t p = 0; sput(path, cap, &p, rec); if (size) *size = st.size; return 0;
     }
-    if (bigfs_lookup(fs, VOZ_DIR, &ino) != (int)BIGFS_T_DIR) return -1;
+    if (bigfs_lookup(fs, VOZ_DIR, &dir) != (int)BIGFS_T_DIR) return -1;
     uint32_t cur = 0;
-    while (bigfs_readdir(fs, ino, &cur, &st) == 1) {
-        if (st.type != BIGFS_T_FILE || !ends_with(st.name, ".bin")) continue;
+    while (bigfs_readdir(fs, dir, &cur, &st) == 1) {
+        if (st.type != BIGFS_T_FILE || st.name[0] == '.' || st.size <= (1u << 20) || !ends_with(st.name, ".bin") || voz_tier_of(st.name) != tier) continue;
         uint32_t p = 0; sput(path, cap, &p, VOZ_DIR "/"); sput(path, cap, &p, st.name);
         if (size) *size = st.size;
         return 0;
     }
     return -1;
 }
+/* Modelo a usar: el del nivel elegido; si no esta instalado, el del nivel mas cercano que haya (primero los mas rapidos). */
+int voz_model_tier(char *path, uint32_t cap, uint64_t *size, int *tier)
+{
+    int want = voz_pref();
+    static const int order[VOZ_TIERS][VOZ_TIERS] = { { 0, 1, 2 }, { 1, 0, 2 }, { 2, 1, 0 } };
+    for (int k = 0; k < VOZ_TIERS; ++k) {
+        int t = order[want][k];
+        if (voz_installed(t, path, cap, size) == 0) { if (tier) *tier = t; return 0; }
+    }
+    return -1;
+}
+int voz_model(char *path, uint32_t cap, uint64_t *size) { return voz_model_tier(path, cap, size, 0); }
 
 int voz_ready(const char **why)
 {
     static const char *d; if (!why) why = &d;
     if (!usermode_avx2_ok()) { *why = "este procesador no tiene AVX2/FMA (o no esta activo): hace falta para el reconocimiento de voz"; return 0; }
     char m[96];
-    if (voz_model(m, sizeof m, 0) != 0) { *why = "no hay modelo de voz instalado (copia ggml-base-q5_1.bin a la carpeta MODELOS del pendrive y ejecuta: voz instalar)"; return 0; }
+    if (voz_model(m, sizeof m, 0) != 0) { *why = "no hay modelo de voz instalado (copia ggml-base-q5_1.bin a la carpeta MODELOS del pendrive y ejecuta: voz instalar; otros modelos en Ajustes > Voz)"; return 0; }
     *why = "";
     return 1;
 }
@@ -73,36 +142,9 @@ int voz_ready(const char **why)
 void voz_stop(void) { int i = g_idx; if (i >= 0) { g_stopped = 1; usermode_stop(i); } }
 int voz_busy(void) { return g_idx >= 0; }
 
-int voz_run(const char *user_args, char *out, uint32_t cap, int64_t *code_out)
+/* Lanza voz.elf con "args" y una region de heap_mib MiB bajo demanda; espera a que termine. Un proceso a la vez (cerrojo). */
+static int run_proc(const char *args, uint64_t heap_mib, char *out, uint32_t cap, int64_t *code_out)
 {
-    const char *why;
-    if (out && cap) out[0] = 0;
-    /* SOMA_243_VOZ_AUTO: sin modelo en el almacen, se instala solo desde la carpeta MODELOS del pendrive (antes habia que
-     * escribir "voz instalar" en el terminal y la Grabadora solo decia que faltaba) */
-    { char m[96];
-      if (usermode_avx2_ok() && voz_model(m, sizeof m, 0) != 0) {
-          static char msg[256];
-          if (!out) kprint("voz: no hay modelo en el almacen: instalandolo desde el pendrive...\n");
-          if (voz_install(msg, sizeof msg) != 0) {
-              if (out) { uint32_t p = 0; sput(out, cap, &p, "[voz] no hay modelo instalado: "); sput(out, cap, &p, msg); sput(out, cap, &p, "\n"); }
-              else { kprint("voz: "); kprint(msg); kprint("\n"); }
-              return -2;
-          }
-          if (!out) { kprint("voz: "); kprint(msg); kprint("\n"); }
-      } }
-    if (!voz_ready(&why)) { if (out) { uint32_t p = 0; sput(out, cap, &p, "[voz] "); sput(out, cap, &p, why); sput(out, cap, &p, "\n"); } else { kprint("voz: "); kprint(why); kprint("\n"); } return -2; }
-    char model[96]; uint64_t msize = 0;
-    (void)voz_model(model, sizeof model, &msize);
-    /* memoria: el modelo + los bufers de calculo (base ~250 MB en total, small ~700 MB). La region es virtual: solo gasta lo que se toca. */
-    uint64_t heap_mib = 1024 + (msize >> 20) * 6;
-    if (heap_mib > 4096) heap_mib = 4096;
-    char args[USER_ARGS_MAX]; uint32_t p = 0;
-    sput(args, sizeof args, &p, "-H "); sdec(args, sizeof args, &p, heap_mib);
-    sput(args, sizeof args, &p, " -m "); sput(args, sizeof args, &p, model);
-    sput(args, sizeof args, &p, " ");
-    if (p + slen(user_args) + 1 >= sizeof args) { if (!out) kprint("voz: la ruta del audio es demasiado larga\n"); return -3; }
-    sput(args, sizeof args, &p, user_args);
-
     lock();
     struct uregion r;
     r.va = USER_HEAP_VA; r.npages = (uint32_t)(heap_mib << 8); r.used = 0;
@@ -140,7 +182,43 @@ int voz_run(const char *user_args, char *out, uint32_t cap, int64_t *code_out)
     return code == 0 ? 0 : 1;
 }
 
+int voz_run(const char *user_args, char *out, uint32_t cap, int64_t *code_out)
+{
+    const char *why;
+    if (out && cap) out[0] = 0;
+    /* SOMA_243_VOZ_AUTO: sin modelo en el almacen, se instala solo desde la carpeta MODELOS del pendrive (antes habia que
+     * escribir "voz instalar" en el terminal y la Grabadora solo decia que faltaba) */
+    { char m[96]; int want = voz_pref();
+      /* SOMA_246: el modelo del nivel elegido en Ajustes tampoco hace falta instalarlo a mano: si esta en el pendrive, se copia */
+      if (usermode_avx2_ok() && voz_installed(want, m, sizeof m, 0) != 0 && (voz_model(m, sizeof m, 0) != 0 || voz_on_stick(want, 0, 0, 0) == 0)) {
+          static char msg[256];
+          int have_other = voz_model(m, sizeof m, 0) == 0;
+          if (!out) kprint("voz: el modelo elegido no esta en el almacen: instalandolo desde el pendrive...\n");
+          if (voz_install(msg, sizeof msg) != 0 && !have_other) {
+              if (out) { uint32_t p = 0; sput(out, cap, &p, "[voz] no hay modelo instalado: "); sput(out, cap, &p, msg); sput(out, cap, &p, "\n"); }
+              else { kprint("voz: "); kprint(msg); kprint("\n"); }
+              return -2;
+          }
+          if (!out) { kprint("voz: "); kprint(msg); kprint("\n"); }
+      } }
+    if (!voz_ready(&why)) { if (out) { uint32_t p = 0; sput(out, cap, &p, "[voz] "); sput(out, cap, &p, why); sput(out, cap, &p, "\n"); } else { kprint("voz: "); kprint(why); kprint("\n"); } return -2; }
+    char model[96]; uint64_t msize = 0;
+    (void)voz_model(model, sizeof model, &msize);
+    /* memoria: el modelo + los bufers de calculo (base ~250 MB en total, small ~700 MB). La region es virtual: solo gasta lo que se toca. */
+    uint64_t heap_mib = 1024 + (msize >> 20) * 6;
+    if (heap_mib > 4096) heap_mib = 4096;
+    char args[USER_ARGS_MAX]; uint32_t p = 0;
+    sput(args, sizeof args, &p, "-H "); sdec(args, sizeof args, &p, heap_mib);
+    sput(args, sizeof args, &p, " -m "); sput(args, sizeof args, &p, model);
+    sput(args, sizeof args, &p, " ");
+    if (p + slen(user_args) + 1 >= sizeof args) { if (!out) kprint("voz: la ruta del audio es demasiado larga\n"); return -3; }
+    sput(args, sizeof args, &p, user_args);
+
+    return run_proc(args, heap_mib, out, cap, code_out);
+}
+
 /* ---- instalacion del modelo ---- */
+static int g_copy_ggml = 1;                               /* SOMA_247: 0 al copiar voces (.onnx/.json), que no son ggml */
 static int copy_into(struct bigfs *fs, const char *dst, uint32_t size, int from_fwcfg, const char *fat_path, char *msg, uint32_t cap)
 {
     uint32_t p = 0;
@@ -152,6 +230,7 @@ static int copy_into(struct bigfs *fs, const char *dst, uint32_t size, int from_
     uint8_t *buf = (uint8_t *)kmalloc(CH);
     if (!buf) { bigfs_unlink(fs, dst); sput(msg, cap, &p, "sin memoria"); return -1; }
     uint32_t done = 0, last_pct = 0;
+    g_prog = 0;
     kprint("voz: copiando el modelo (");
     { char b[16]; uint32_t q = 0; sdec(b, sizeof b, &q, size >> 20); kprint(b); }
     kprint(" MiB)...\n");
@@ -163,15 +242,16 @@ static int copy_into(struct bigfs *fs, const char *dst, uint32_t size, int from_
             if (r <= 0) { kfree(buf); bigfs_unlink(fs, dst); sput(msg, cap, &p, "error leyendo el pendrive: "); sput(msg, cap, &p, why); return -1; }
             n = (uint32_t)r;
         }
-        if (done == 0 && (n < 4 || buf[0] != 'l' || buf[1] != 'm' || buf[2] != 'g' || buf[3] != 'g')) {
+        if (done == 0 && g_copy_ggml && (n < 4 || buf[0] != 'l' || buf[1] != 'm' || buf[2] != 'g' || buf[3] != 'g')) {
             kfree(buf); bigfs_unlink(fs, dst);
-            sput(msg, cap, &p, "el archivo no es un modelo ggml de whisper.cpp (usa ggml-base-q5_1.bin)");
+            sput(msg, cap, &p, "el archivo no es un modelo ggml de whisper.cpp (usa los ggml-*.bin de whisper.cpp)");
             return -1;
         }
         int64_t w = bigfs_write(fs, ino, done, buf, n);
         if (w != (int64_t)n) { kfree(buf); bigfs_unlink(fs, dst); sput(msg, cap, &p, "error escribiendo en el almacen: "); sput(msg, cap, &p, w < 0 ? bigfs_strerror((int)w) : "escritura incompleta"); return -1; }
         done += n;
         uint32_t pct = (uint32_t)((uint64_t)done * 100 / size);
+        g_prog = (int)pct;                                     /* SOMA_246: progreso para Ajustes > Voz */
         if (pct / 20 != last_pct / 20) { char b[8]; uint32_t q = 0; sdec(b, sizeof b, &q, pct); kprint("voz: "); kprint(b); kprint(" %\n"); last_pct = pct; }
         thread_yield();
     }
@@ -180,10 +260,34 @@ static int copy_into(struct bigfs *fs, const char *dst, uint32_t size, int from_
     return 0;
 }
 
-int voz_install(char *msg, uint32_t cap)
+/* Esta el modelo de un nivel en la carpeta MODELOS del pendrive (o, en QEMU, en fw_cfg)? 0 = si (nombre y tamano). */
+int voz_on_stick(int tier, char *name, uint32_t cap, uint32_t *size)
+{
+    if (tier < 0 || tier >= VOZ_TIERS) return -1;
+    uint32_t fsz = fwcfg_open(TIER_FWCFG[tier]);
+    if (fsz) { if (name) { uint32_t p = 0; sput(name, cap, &p, TIER_FILE[tier]); } if (size) *size = fsz; return 0; }
+    struct fat_dirent *d = (struct fat_dirent *)kmalloc(24 * sizeof *d);   /* lo llaman a la vez Ajustes y el dictado */
+    if (!d) return -2;
+    const char *why;
+    int n = usbdisk_bootdir("MODELOS", d, 24, &why);
+    int pick = -1;
+    /* SOMA_243: macOS deja copias "._nombre" de 4 KB (metadatos AppleDouble) que tambien acaban en .bin: se ignoran */
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_dir || d[i].name[0] == '.' || d[i].size <= (1u << 20) || !ends_with(d[i].name, ".bin") || voz_tier_of(d[i].name) != tier) continue;
+        if (pick < 0 || ends_with(d[i].name, TIER_FILE[tier])) pick = i;
+    }
+    if (pick < 0) { kfree(d); return n < 0 ? -2 : -1; }
+    if (name) { uint32_t p = 0; sput(name, cap, &p, d[pick].name); }
+    if (size) *size = d[pick].size;
+    kfree(d);
+    return 0;
+}
+
+int voz_install_tier(int tier, char *msg, uint32_t cap)
 {
     uint32_t p = 0;
     if (cap) msg[0] = 0;
+    if (tier < 0 || tier >= VOZ_TIERS) return -1;
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) { sput(msg, cap, &p, "no hay almacen BIGFS (preparalo con: big format yes)"); return -1; }
     uint32_t ino;
@@ -199,28 +303,36 @@ int voz_install(char *msg, uint32_t cap)
         if (b && bigfs_create(fs, "/grabaciones/voz_prueba.wav", &a2) >= 0) { fwcfg_read_seq(b, asize); (void)bigfs_write(fs, a2, 0, b, asize); kprint("voz: audio de prueba en /grabaciones/voz_prueba.wav\n"); }
         if (b) kfree(b);
     }
-    uint32_t size = fwcfg_open("opt/soma/modelo");             /* QEMU */
-    if (size) r = copy_into(fs, VOZ_MODEL_DEFAULT, size, 1, 0, msg, cap);
-    else {                                                     /* pendrive: carpeta MODELOS de la particion de arranque */
-        static struct fat_dirent d[16];
-        const char *why;
-        int n = usbdisk_bootdir("MODELOS", d, 16, &why);
-        int pick = -1;
-        /* SOMA_243: macOS deja copias "._nombre" de 4 KB (metadatos AppleDouble) que tambien acaban en .bin: se ignoran */
-        for (int i = 0; i < n; ++i) if (!d[i].is_dir && d[i].name[0] != '.' && d[i].size > (1u << 20) && ends_with(d[i].name, ".bin") && (pick < 0 || ends_with(d[i].name, "base-q5_1.bin"))) pick = i;
-        if (pick < 0) {
-            sput(msg, cap, &p, n < 0 ? why : "la carpeta MODELOS del pendrive no tiene ningun .bin");
-            sput(msg, cap, &p, ". Copia ggml-base-q5_1.bin (whisper.cpp, 60 MB) en la carpeta MODELOS de la unidad SOMA del pendrive y repite 'voz instalar'.");
-            kmutex_unlock(&lk);
-            return -1;
-        }
-        char src[96], dst[96]; uint32_t q = 0; sput(src, sizeof src, &q, "MODELOS/"); sput(src, sizeof src, &q, d[pick].name);
-        q = 0; sput(dst, sizeof dst, &q, VOZ_DIR "/");
-        for (const char *c = d[pick].name; *c && q + 1 < sizeof dst; ++c) dst[q++] = (*c >= 'A' && *c <= 'Z') ? (char)(*c + 32) : *c;
-        dst[q] = 0;
-        r = copy_into(fs, dst, d[pick].size, 0, src, msg, cap);
+    char name[FAT_NAME_MAX + 1]; uint32_t size = 0;
+    int st = voz_on_stick(tier, name, sizeof name, &size);
+    if (st != 0) {
+        sput(msg, cap, &p, st == -2 ? "no se puede leer la carpeta MODELOS del pendrive" : "la carpeta MODELOS del pendrive no tiene el modelo ");
+        if (st != -2) { sput(msg, cap, &p, TIER_NAME[tier]); sput(msg, cap, &p, " ("); sput(msg, cap, &p, TIER_FILE[tier]); sput(msg, cap, &p, ")"); }
+        sput(msg, cap, &p, ". Copialo en la carpeta MODELOS de la unidad SOMA del pendrive.");
+        kmutex_unlock(&lk);
+        return -1;
     }
+    char dst[96]; uint32_t q = 0; sput(dst, sizeof dst, &q, VOZ_DIR "/");
+    for (const char *c = name; *c && q + 1 < sizeof dst; ++c) dst[q++] = (*c >= 'A' && *c <= 'Z') ? (char)(*c + 32) : *c;
+    dst[q] = 0;
+    uint32_t fsz = fwcfg_open(TIER_FWCFG[tier]);               /* reabre fw_cfg: la lectura es secuencial */
+    if (fsz) r = copy_into(fs, dst, fsz, 1, 0, msg, cap);
+    else { char src[96]; q = 0; sput(src, sizeof src, &q, "MODELOS/"); sput(src, sizeof src, &q, name); r = copy_into(fs, dst, size, 0, src, msg, cap); }
+    g_prog = -1;
     kmutex_unlock(&lk);
+    return r;
+}
+
+/* "voz instalar": el modelo del nivel elegido; si no esta en el pendrive y no hay ninguno instalado, cualquiera que haya. */
+int voz_install(char *msg, uint32_t cap)
+{
+    int want = voz_pref();
+    int r = voz_install_tier(want, msg, cap);
+    if (r == 0) return 0;
+    char m[96];
+    if (voz_model(m, sizeof m, 0) == 0) return r;              /* ya hay otro: se usa ese (el aviso dice que falta el elegido) */
+    for (int t = 0; t < VOZ_TIERS; ++t) if (t != want && voz_on_stick(t, 0, 0, 0) == 0) return voz_install_tier(t, msg, cap);
+    if (cap) { uint32_t p = 0; msg[0] = 0; sput(msg, cap, &p, "la carpeta MODELOS del pendrive no tiene ningun modelo. Copia ggml-base-q5_1.bin (whisper.cpp, 60 MB) en la carpeta MODELOS de la unidad SOMA del pendrive y repite 'voz instalar'."); }
     return r;
 }
 
@@ -238,3 +350,167 @@ int voz_last_recording(char *path, uint32_t cap)
     }
     return found ? 0 : -1;
 }
+
+/* ===================================================================== SOMA_247_HABLA: texto a voz (voces de Piper)
+ * La voz (un .onnx de Piper y su .onnx.json) se copia de la carpeta MODELOS del pendrive a /voces del almacen (o, en QEMU, de
+ * -fw_cfg name=opt/soma/voz,file=x.onnx y name=opt/soma/voz_json,file=x.onnx.json). El texto va a /voz/leer.txt y voz.elf
+ * --habla lo lee en voz alta (sintetiza frase a frase y la manda a la tarjeta de sonido). */
+#define VOCES_DIR "/voces"
+static volatile int g_sp_state;                            /* 0 nada; 1 preparando o leyendo */
+static volatile uint32_t g_sp_ver;
+static char g_sp_msg[200];
+static char *g_sp_text; static uint32_t g_sp_len;
+
+static int is_onnx(const char *n) { return n[0] != '.' && ends_with(n, ".onnx"); }
+
+int voz_voice(char *path, uint32_t cap, uint64_t *size)
+{
+    int e = 0; struct bigfs *fs = bigfs_sys(&e);
+    if (!fs) return -1;
+    uint32_t dir; struct bigfs_stat st;
+    if (bigfs_lookup(fs, VOCES_DIR, &dir) != (int)BIGFS_T_DIR) return -1;
+    uint32_t cur = 0;
+    while (bigfs_readdir(fs, dir, &cur, &st) == 1) {
+        if (st.type != BIGFS_T_FILE || !is_onnx(st.name) || st.size < (1u << 20)) continue;
+        uint32_t p = 0; sput(path, cap, &p, VOCES_DIR "/"); sput(path, cap, &p, st.name);
+        if (size) *size = st.size;
+        return 0;
+    }
+    return -1;
+}
+
+static void lower_into(char *dst, uint32_t cap, const char *prefix, const char *name)
+{
+    uint32_t q = 0; sput(dst, cap, &q, prefix);
+    for (const char *c = name; *c && q + 1 < cap; ++c) dst[q++] = (*c >= 'A' && *c <= 'Z') ? (char)(*c + 32) : *c;
+    dst[q < cap ? q : cap - 1] = 0;
+}
+
+int voz_voice_install(char *msg, uint32_t cap)
+{
+    uint32_t p = 0;
+    if (cap) msg[0] = 0;
+    int e = 0; struct bigfs *fs = bigfs_sys(&e);
+    if (!fs) { sput(msg, cap, &p, "no hay almacen BIGFS (preparalo con: big format yes)"); return -1; }
+    uint32_t ino;
+    if (bigfs_lookup(fs, VOCES_DIR, &ino) != (int)BIGFS_T_DIR && bigfs_mkdir(fs, VOCES_DIR) < 0) { sput(msg, cap, &p, "no se pudo crear " VOCES_DIR); return -1; }
+    lock();
+    int r = -1;
+    g_copy_ggml = 0;
+    uint32_t sz = fwcfg_open("opt/soma/voz");                  /* QEMU */
+    if (sz) {
+        r = copy_into(fs, VOCES_DIR "/voz.onnx", sz, 1, 0, msg, cap);
+        uint32_t js = fwcfg_open("opt/soma/voz_json");
+        if (r == 0 && js) { char m2[96]; (void)copy_into(fs, VOCES_DIR "/voz.onnx.json", js, 1, 0, m2, sizeof m2); }
+    } else {
+        struct fat_dirent *d = (struct fat_dirent *)kmalloc(32 * sizeof *d);
+        const char *why = "sin memoria";
+        int n = d ? usbdisk_bootdir("MODELOS", d, 32, &why) : -1;
+        int pick = -1;
+        for (int i = 0; i < n; ++i) if (!d[i].is_dir && is_onnx(d[i].name) && d[i].size > (1u << 20)) { pick = i; break; }
+        if (pick < 0) {
+            sput(msg, cap, &p, n < 0 ? why : "la carpeta MODELOS del pendrive no tiene ninguna voz (.onnx)");
+            sput(msg, cap, &p, ". Copia una voz de Piper (el .onnx y su .onnx.json) en la carpeta MODELOS de la unidad SOMA del pendrive.");
+        } else {
+            char src[FAT_NAME_MAX + 16], dst[FAT_NAME_MAX + 16]; uint32_t q = 0;
+            sput(src, sizeof src, &q, "MODELOS/"); sput(src, sizeof src, &q, d[pick].name);
+            lower_into(dst, sizeof dst, VOCES_DIR "/", d[pick].name);
+            r = copy_into(fs, dst, d[pick].size, 0, src, msg, cap);
+            if (r == 0) {                                      /* su configuracion: nombre.onnx.json (si esta) */
+                for (int i = 0; i < n; ++i) {
+                    if (d[i].is_dir || d[i].name[0] == '.' || !ends_with(d[i].name, ".json")) continue;
+                    uint32_t a = slen(d[pick].name), b = slen(d[i].name);
+                    if (b != a + 5) continue;
+                    int same = 1; for (uint32_t k = 0; k < a; ++k) { char x = d[i].name[k], y = d[pick].name[k]; if (x >= 'A' && x <= 'Z') x = (char)(x + 32); if (y >= 'A' && y <= 'Z') y = (char)(y + 32); if (x != y) { same = 0; break; } }
+                    if (!same) continue;
+                    char js[FAT_NAME_MAX + 16], jd[FAT_NAME_MAX + 16], m2[96]; q = 0;
+                    sput(js, sizeof js, &q, "MODELOS/"); sput(js, sizeof js, &q, d[i].name);
+                    lower_into(jd, sizeof jd, VOCES_DIR "/", d[i].name);
+                    (void)copy_into(fs, jd, d[i].size, 0, js, m2, sizeof m2);
+                    break;
+                }
+            }
+        }
+        if (d) kfree(d);
+    }
+    g_copy_ggml = 1;
+    g_prog = -1;
+    kmutex_unlock(&lk);
+    if (r == 0) { p = 0; msg[0] = 0; sput(msg, cap, &p, "voz instalada en " VOCES_DIR); }
+    return r;
+}
+
+/* Lee el texto en voz alta (sincrono). Con out, la salida del programa va ahi; sin out, a la consola. */
+int voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap)
+{
+    uint32_t p = 0;
+    if (out && cap) out[0] = 0;
+    if (!usermode_avx2_ok()) { if (out) sput(out, cap, &p, "[habla] este procesador no tiene AVX2: la lectura en voz alta no esta disponible\n"); else kprint("habla: sin AVX2\n"); return -2; }
+    char voice[96]; uint64_t vsize = 0;
+    if (voz_voice(voice, sizeof voice, &vsize) != 0) {
+        static char msg[256];
+        if (!out) kprint("habla: no hay voz en el almacen: instalandola desde el pendrive...\n");
+        if (voz_voice_install(msg, sizeof msg) != 0 || voz_voice(voice, sizeof voice, &vsize) != 0) {
+            if (out) { sput(out, cap, &p, "[habla] no hay voz instalada: "); sput(out, cap, &p, msg); sput(out, cap, &p, "\n"); } else { kprint("habla: "); kprint(msg); kprint("\n"); }
+            return -2;
+        }
+    }
+    int e = 0; struct bigfs *fs = bigfs_sys(&e);
+    if (!fs) return -2;
+    uint32_t ino;
+    if (bigfs_lookup(fs, "/voz", &ino) != (int)BIGFS_T_DIR) (void)bigfs_mkdir(fs, "/voz");
+    if (bigfs_lookup(fs, "/voz/leer.txt", &ino) >= 0) (void)bigfs_unlink(fs, "/voz/leer.txt");
+    if (bigfs_create(fs, "/voz/leer.txt", &ino) < 0 || bigfs_write(fs, ino, 0, text, len) != (int64_t)len) {
+        if (out) { sput(out, cap, &p, "[habla] no se pudo guardar el texto\n"); }
+        return -3;
+    }
+    /* memoria: la voz (x3: el archivo, los pesos y los reordenados) + el generador (frases largas: ~70 MB por buffer) */
+    uint64_t heap_mib = 1024 + (vsize >> 20) * 3;
+    if (heap_mib > 3072) heap_mib = 3072;
+    char args[USER_ARGS_MAX]; uint32_t q = 0;
+    sput(args, sizeof args, &q, "--habla -H "); sdec(args, sizeof args, &q, heap_mib);
+    sput(args, sizeof args, &q, " -m "); sput(args, sizeof args, &q, voice); sput(args, sizeof args, &q, " /voz/leer.txt");
+    if (q + 2 >= sizeof args) { if (out) sput(out, cap, &p, "[habla] el nombre de la voz es demasiado largo\n"); return -3; }
+    int64_t code = 0;
+    return run_proc(args, heap_mib, out, cap, &code);
+}
+
+static char g_sp_out[2048];
+static void speak_thread(void *arg)
+{
+    (void)arg;
+    int r = voz_speak_run(g_sp_text, g_sp_len, g_sp_out, sizeof g_sp_out);
+    /* el motivo, si fallo: la ultima linea "[habla] ..." que no sea de progreso */
+    g_sp_msg[0] = 0;
+    if (r != 0) {
+        for (const char *l = g_sp_out; *l;) {
+            const char *e2 = l; while (*e2 && *e2 != '\n') e2++;
+            int inf = (e2 - l) > 8 && l[0] == '[' && (l[1] == 'h' || l[1] == 'v');
+            if (inf) { const char *b = l; while (b < e2 && *b != ']') b++; if (b < e2) b++; while (b < e2 && *b == ' ') b++;
+                if (!(e2 - b > 5 && b[0] == 'f' && b[1] == 'r' && b[2] == 'a' && b[3] == 's' && b[4] == 'e')) { uint32_t k = 0; while (b < e2 && k + 1 < sizeof g_sp_msg) g_sp_msg[k++] = *b++; g_sp_msg[k] = 0; } }
+            l = *e2 ? e2 + 1 : e2;
+        }
+        if (!g_sp_msg[0]) { uint32_t k = 0; sput(g_sp_msg, sizeof g_sp_msg, &k, "No se pudo leer el texto"); }
+    }
+    if (g_sp_text) { kfree(g_sp_text); g_sp_text = 0; }
+    g_sp_state = 0; g_sp_ver++;
+}
+
+int voz_speak_start(const char *text, uint32_t len)
+{
+    if (g_sp_state) return -16;
+    if (!len) return -22;
+    if (len > 200000) len = 200000;
+    char *t = (char *)kmalloc(len + 1);
+    if (!t) return -12;
+    for (uint32_t i = 0; i < len; ++i) t[i] = text[i];
+    t[len] = 0;
+    g_sp_text = t; g_sp_len = len; g_sp_msg[0] = 0;
+    g_sp_state = 1; g_sp_ver++;
+    if (!thread_create("habla", speak_thread, 0)) { kfree(t); g_sp_text = 0; g_sp_state = 0; g_sp_ver++; return -11; }
+    return 0;
+}
+void voz_speak_stop(void) { if (g_sp_state) voz_stop(); }
+int voz_speak_state(void) { return g_sp_state; }
+uint32_t voz_speak_ver(void) { return g_sp_ver; }
+const char *voz_speak_msg(void) { return g_sp_msg; }

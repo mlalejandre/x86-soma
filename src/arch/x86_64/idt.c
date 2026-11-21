@@ -1,5 +1,6 @@
 #include "bootfb.h"
 #include "idt.h"
+#include "smp.h"
 #include "web_fault.h"
 int gui_fault_recover(int vector, uint64_t fault_rip, uint64_t fault_addr, uint64_t *rip, uint64_t *rsp);   /* SOMA_221_RESCATE (gui.c) */
 int gui_hang_tick(uint64_t *rip, uint64_t *rsp);
@@ -312,6 +313,7 @@ void isr_exception_handler(struct trap_frame *tf)
         return;
     }
     /* SOMA_PARCHE_014_RING3: una excepcion en ring 3 mata el proceso de usuario, no el kernel */
+    if ((tf->cs & 3) == 3 && tf->vector < 32 && smp_user_fault(tf->vector, tf->rip, read_cr2())) return;   /* SOMA_244_HILOS (no vuelve) */
     if ((tf->cs & 3) == 3 && usermode_active()) {
         if (tf->vector == 14 && usermode_demand_fault(read_cr2(), tf->error_code)) return;   /* PARCHE 138: region bajo demanda */
         usermode_on_fault(tf->vector, tf->rip, read_cr2());

@@ -7,6 +7,7 @@
 // en la salida: una linea por segmento. Las lineas que empiezan por "[voz]" son informacion, no texto reconocido.
 #include "whisper.h"
 #include "ggml.h"
+#include "voz_filtros.h"   // SOMA_245: contra las alucinaciones
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,8 @@ uint64_t voz_uptime_ms(void);
 void voz_flush(void);
 void voz_exit(int code) __attribute__((noreturn));
 extern int voz_quiet_stderr;
+extern int voz_pretouch;
+int voz_threads_free(void);
 long voz_getargs(char * buf, long n);
 int voz_map_heap(void * va, unsigned long size);
 }
@@ -113,7 +116,7 @@ static void progress_cb(struct whisper_context *, struct whisper_state *, int pr
 int voz_main(int argc, char ** argv) {
     const char * model = "/modelos/ggml-base-q5_1.bin", * lang = "es", * wav = nullptr;
     const char * prompt = nullptr;
-    int threads = 1; bool no_ts = true, short_ctx = true;
+    int threads = 0, beam = 5; bool no_ts = true, short_ctx = true, use_vad = true;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "-m") && i + 1 < argc) model = argv[++i];
         else if (!std::strcmp(argv[i], "-l") && i + 1 < argc) lang = argv[++i];
@@ -122,11 +125,16 @@ int voz_main(int argc, char ** argv) {
         else if (!std::strcmp(argv[i], "-v")) { g_verbose = 1; voz_quiet_stderr = 0; }
         else if (!std::strcmp(argv[i], "-T")) no_ts = false;
         else if (!std::strcmp(argv[i], "-C")) short_ctx = false;
+        else if (!std::strcmp(argv[i], "-V")) use_vad = false;                   // sin recortar silencios
+        else if (!std::strcmp(argv[i], "-b") && i + 1 < argc) beam = std::atoi(argv[++i]);   // 1 = voraz (mas rapido)
         else if (!std::strcmp(argv[i], "-p") && i + 1 < argc) { static std::string pr; pr = argv[++i]; for (char & c : pr) if (c == '_') c = ' '; prompt = pr.c_str(); }   // palabras_unidas_con_guiones
         else wav = argv[i];
     }
-    if (!wav) { std::printf("[voz] uso: voz [-m modelo] [-l idioma] [-T] [-C] [-p palabras_clave] [-v] archivo.wav\n"); return 2; }
-    if (threads < 1) threads = 1;
+    if (!wav) { std::printf("[voz] uso: voz [-m modelo] [-l idioma] [-T] [-C] [-V] [-b haz] [-p palabras_clave] [-v] archivo.wav\n"); return 2; }
+    // SOMA_244_HILOS: un hilo por nucleo libre (el principal + los secundarios), hasta 4: con mas, el reparto de whisper no gana
+    if (threads <= 0) { int f = voz_threads_free(); if (f < 0) f = 0; threads = 1 + (f < 3 ? f : 3); }
+    if (threads > 8) threads = 8;
+    if (threads > 1) voz_pretouch = 1;                    // los hilos secundarios no pueden provocar fallos de pagina
     whisper_log_set(log_cb, nullptr);
     ggml_log_set(log_cb, nullptr);
 
@@ -134,6 +142,16 @@ int voz_main(int argc, char ** argv) {
     std::vector<float> pcm; std::string err; double secs = 0;
     if (!load_wav(wav, pcm, err, secs)) { std::printf("[voz] %s: %s\n", wav, err.c_str()); return 3; }
     if (secs < 0.3) { std::printf("[voz] el audio es demasiado corto (%.1f s)\n", secs); return 3; }
+    // SOMA_245: detector de voz. Sin voz no se reconoce nada (whisper rellenaria el silencio con frases inventadas); con voz se
+    // recortan los silencios del principio y del final y se acortan las pausas largas. Con -T (marcas de tiempo) o -V no se recorta.
+    {
+        voz_vad_info vi{};
+        std::vector<float> trimmed = pcm;
+        bool any = voz_vad_trim(trimmed, WHISPER_SAMPLE_RATE, &vi);
+        if (!any) { std::printf("[voz] no se oye ninguna voz: habla mas cerca del microfono o comprueba su volumen\n"); return 6; }
+        if (g_verbose) std::printf("[voz] voz detectada: %d ms en %d tramos (ruido %.4f, umbral %.4f); se reconocen %d ms\n", vi.speech_ms, vi.regions, vi.noise, vi.thr, vi.kept_ms);
+        if (use_vad && no_ts) { pcm.swap(trimmed); secs = (double)pcm.size() / WHISPER_SAMPLE_RATE; }
+    }
 
     whisper_context_params cp = whisper_context_default_params();
     cp.use_gpu = false;
@@ -142,7 +160,16 @@ int voz_main(int argc, char ** argv) {
     uint64_t t1 = voz_uptime_ms();
     if (g_verbose) std::printf("[voz] modelo cargado en %llu ms; audio %.1f s\n", (unsigned long long)(t1 - t0), secs);
 
-    whisper_full_params p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    // SOMA_245: decodificacion conservadora contra alucinaciones: busqueda en haz (5), sin texto previo como contexto, sin tokens de
+    // "no habla" (musica, aplausos), y los umbrales de OpenAI para repetir con mas temperatura o descartar un tramo sin voz.
+    whisper_full_params p = whisper_full_default_params(beam > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+    if (beam > 1) p.beam_search.beam_size = beam;
+    p.suppress_nst = true;
+    p.temperature = 0.0f;
+    p.temperature_inc = 0.2f;
+    p.entropy_thold = 2.4f;
+    p.logprob_thold = -1.0f;
+    p.no_speech_thold = 0.6f;
     p.n_threads = threads;
     p.language = lang;
     p.translate = false;
@@ -156,33 +183,78 @@ int voz_main(int argc, char ** argv) {
     p.progress_callback = progress_cb;
     // el codificador trabaja siempre sobre 30 s; con audios cortos se le da solo lo necesario (cada posicion son 20 ms, mas margen):
     // varias veces mas rapido para dictados cortos. Con -C se usa la ventana completa (un poco mas preciso).
-    if (short_ctx && secs < 28.0) { int ctx = (int)(secs * 50.0) + 128; p.audio_ctx = ctx < 1500 ? ctx : 0; }
+    if (short_ctx && secs < 28.0) { int ctx = (int)(secs * 50.0) + 192; p.audio_ctx = ctx < 1500 ? ctx : 0; }
     p.initial_prompt = prompt;         // -p: vocabulario inicial (ojo: con la voz sintetica a veces se salta frases; por defecto ninguno)
-    if (whisper_full(ctx, p, pcm.data(), (int)pcm.size()) != 0) { std::printf("[voz] fallo el reconocimiento\n"); whisper_free(ctx); return 5; }
-    uint64_t t2 = voz_uptime_ms();
+    // SOMA_249_REPES: tope de tokens por tramo segun lo que dura el audio (unos 8 tokens por segundo de habla como mucho): un bucle
+    // de repeticion no puede llenar la salida. Sin marcas de tiempo todo el dictado es un solo tramo.
+    if (no_ts) p.max_tokens = (int)(secs * 9.0) + 24;
 
-    int n = whisper_full_n_segments(ctx);
-    int printed = 0;
-    for (int i = 0; i < n; i++) {
-        const char * t = whisper_full_get_segment_text(ctx, i);
-        while (*t == ' ') t++;
-        if (!*t) continue;
-        if (!no_ts) {
-            int64_t a = whisper_full_get_segment_t0(ctx, i), b = whisper_full_get_segment_t1(ctx, i);   // centesimas
-            std::printf("[%02d:%02d.%02d -> %02d:%02d.%02d] ", (int)(a / 6000), (int)(a / 100 % 60), (int)(a % 100), (int)(b / 6000), (int)(b / 100 % 60), (int)(b % 100));
+    // SOMA_245: limpieza de cada tramo: probabilidad de "no hay voz", confianza media de sus palabras, anotaciones, frases tipicas
+    // de subtitulos y bucles de repeticion. Lo descartado se cuenta (con -v se ve por que).
+    // SOMA_249_REPES: los tramos que se quedan se juntan y se limpian de repeticiones TODOS juntos (whisper repite a veces la frase
+    // entera en tramos seguidos), y se escriben una sola vez al final.
+    int printed = 0, dropped = 0;
+    auto decode = [&](std::string & out, bool & suspicious) -> bool {
+        printed = 0; dropped = 0; out.clear();
+        if (whisper_full(ctx, p, pcm.data(), (int)pcm.size()) != 0) return false;
+        int n = whisper_full_n_segments(ctx);
+        std::string raw;
+        for (int i = 0; i < n; i++) {
+            float nsp = whisper_full_get_segment_no_speech_prob(ctx, i);
+            double psum = 0; int pn = 0;
+            for (int k = 0; k < whisper_full_n_tokens(ctx, i); k++) {
+                whisper_token_data td = whisper_full_get_token_data(ctx, i, k);
+                if (td.id >= whisper_token_eot(ctx)) continue;            // tokens especiales y marcas de tiempo
+                psum += td.p; pn++;
+            }
+            float pavg = pn ? (float)(psum / pn) : 0.0f;
+            std::string t = voz_collapse_repeats(voz_strip_annotations(whisper_full_get_segment_text(ctx, i)));
+            const char * why = nullptr; bool weak = false;
+            if (t.empty()) why = "vacio o solo anotaciones";
+            else if (nsp > 0.6f && pavg < 0.5f) why = "sin voz";
+            else if (voz_is_stock_phrase(t, &weak)) why = "frase tipica de subtitulos";
+            else if (weak && (nsp > 0.3f || pavg < 0.55f)) why = "frase corta dudosa";
+            else if (pavg < 0.3f) why = "confianza muy baja";
+            if (why) { dropped++; if (g_verbose) std::printf("[voz] descartado (%s; no-voz %.2f, confianza %.2f): %s\n", why, nsp, pavg, t.c_str()); continue; }
+            if (!no_ts) {
+                char ts[64];
+                int64_t a0 = whisper_full_get_segment_t0(ctx, i), b0 = whisper_full_get_segment_t1(ctx, i);   // centesimas
+                std::snprintf(ts, sizeof ts, "[%02d:%02d.%02d -> %02d:%02d.%02d] ", (int)(a0 / 6000), (int)(a0 / 100 % 60), (int)(a0 % 100), (int)(b0 / 6000), (int)(b0 / 100 % 60), (int)(b0 % 100));
+                out += ts; out += t; out += "\n";
+            } else { if (!raw.empty()) raw += ' '; raw += t; }
+            printed++;
         }
-        std::printf("%s\n", t);
-        printed++;
+        suspicious = false;
+        if (no_ts && !raw.empty()) {
+            std::string c = voz_collapse_repeats(raw);
+            suspicious = c.size() + 8 < raw.size() || voz_words_per_sec(c, secs) > 5.5;
+            if (g_verbose && c != raw) std::printf("[voz] repeticion quitada: %s\n", raw.c_str());
+            out = c + "\n";
+        }
+        return true;
+    };
+    std::string text; bool susp = false;
+    if (!decode(text, susp)) { std::printf("[voz] fallo el reconocimiento\n"); whisper_free(ctx); return 5; }
+    // con la ventana de audio recortada whisper entra a veces en bucle: si huele a repeticion, otra vez con la ventana completa
+    if (susp && p.audio_ctx != 0) {
+        if (g_verbose) std::printf("[voz] posible bucle de repeticion: repito con la ventana de audio completa\n");
+        p.audio_ctx = 0;
+        std::string t2; bool s2 = false; int pr0 = printed, dr0 = dropped;
+        if (decode(t2, s2) && !t2.empty() && (!s2 || t2.size() < text.size())) text = t2;
+        else { printed = pr0; dropped = dr0; }
     }
-    if (!printed) std::printf("[voz] (no se reconocio ninguna palabra)\n");
-    std::printf("[voz] %.1f s de audio en %.1f s (modelo %.1f s, reconocimiento %.1f s, memoria %zu MiB)\n",
-                secs, (t2 - t0) / 1000.0, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0, voz_heap_peak() >> 20);
+    uint64_t t2 = voz_uptime_ms();
+    if (!text.empty()) std::printf("%s", text.c_str());
+    if (!printed) std::printf(dropped ? "[voz] no se entendio con seguridad lo que se dijo: prueba otra vez\n" : "[voz] (no se reconocio ninguna palabra)\n");
+    std::printf("[voz] %.1f s de audio en %.1f s (modelo %.1f s, reconocimiento %.1f s, %d hilo%s, memoria %zu MiB)\n",
+                secs, (t2 - t0) / 1000.0, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0, threads, threads == 1 ? "" : "s", voz_heap_peak() >> 20);
     whisper_free(ctx);
     return 0;
 }
 
 // ---- arranque: pila propia de 2 MiB (la del proceso es de 64 KiB), constructores globales, argumentos y monton
 extern "C" { uint8_t voz_stack[2u << 20] __attribute__((aligned(64), used)); }
+int habla_main(int argc, char ** argv);              // SOMA_247_HABLA: habla.cpp
 extern "C" void (*__init_array_start[])(void);
 extern "C" void (*__init_array_end[])(void);
 extern "C" [[noreturn]] void voz_cstart(void) {
@@ -204,7 +276,7 @@ extern "C" [[noreturn]] void voz_cstart(void) {
     if (voz_map_heap((void *)VOZ_HEAP_VA, heap_mib << 20) != 0) { std::printf("[voz] sin memoria para el monton\n"); voz_flush(); voz_exit(4); }
     voz_heap_init((void *)VOZ_HEAP_VA, heap_mib << 20);
     for (void (**f)(void) = __init_array_start; f < __init_array_end; f++) (*f)();
-    int r = voz_main(argc, argv);
+    int r = (argc > 1 && !std::strcmp(argv[1], "--habla")) ? habla_main(argc - 1, argv + 1) : voz_main(argc, argv);   // SOMA_247: texto a voz
     voz_flush();
     voz_exit(r);
 }

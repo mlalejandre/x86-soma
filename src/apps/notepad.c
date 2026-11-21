@@ -61,7 +61,7 @@ static int np_hover_btn = -1;
 #define CTX_ITEM_H  26
 #define CTX_SEP_H   9
 #define CTX_PAD     6
-enum { MI_CUT = 0, MI_COPY, MI_PASTE, MI_DEL, MI_ALL, MI_LINE, MI_OPEN, MI_SAVE, MI_BROWSER };
+enum { MI_CUT = 0, MI_COPY, MI_PASTE, MI_DEL, MI_ALL, MI_LINE, MI_OPEN, MI_SAVE, MI_BROWSER, MI_SPEAK };
 struct np_mi { const char *label; const char *key; int id; };
 static const struct np_mi np_menu[] = {
     { "Cortar",               "Ctrl+X", MI_CUT },
@@ -75,6 +75,10 @@ static const struct np_mi np_menu[] = {
     { "Abrir archivo...",     "Ctrl+O", MI_OPEN },
     { "Guardar",              "Ctrl+S", MI_SAVE },
     { "Abrir en el navegador", "Ctrl+B", MI_BROWSER },
+#if defined(__x86_64__)
+    { 0, 0, -1 },
+    { "Leer en voz alta",     0,        MI_SPEAK },                 /* SOMA_247_HABLA: la seleccion o todo el texto */
+#endif
 };
 #define CTX_N ((int)(sizeof(np_menu) / sizeof(np_menu[0])))
 
@@ -999,14 +1003,26 @@ static void np_draw_cp(int32_t x, int32_t y, const uint8_t *s, uint32_t len, uin
 /* -------------------------------------------------------------------------
  * Barra de herramientas (una sola tabla para dibujar y para pulsar)
  * ------------------------------------------------------------------------- */
-enum { NB_NEW = 0, NB_OPEN, NB_SAVE, NB_SAVEAS, NB_CUT, NB_COPY, NB_PASTE, NB_BROWSER, NB_COUNT };
-static const char *const np_btn_label[NB_COUNT] = { "Nuevo", "Abrir", "Guardar", "Guardar como", "Cortar", "Copiar", "Pegar", "Ver en navegador" };
+enum { NB_NEW = 0, NB_OPEN, NB_SAVE, NB_SAVEAS, NB_CUT, NB_COPY, NB_PASTE, NB_SPEAK, NB_BROWSER, NB_COUNT };
+static const char *const np_btn_label[NB_COUNT] = { "Nuevo", "Abrir", "Guardar", "Guardar como", "Cortar", "Copiar", "Pegar", "Leer en voz alta", "Ver en navegador" };
+/* SOMA_247_HABLA: lectura en voz alta (texto a voz con una voz de Piper; solo x86_64) */
+#if defined(__x86_64__)
+#include "voz_sys.h"
+static int np_speaking(void) { return voz_speak_state(); }
+#else
+static int np_speaking(void) { return 0; }
+#endif
+static const char *np_label(int i) { return (i == NB_SPEAK && np_speaking()) ? "Parar lectura" : np_btn_label[i]; }
+struct np_geo;
+struct np_rect;
+static void np_speak_rect(const struct np_geo *g, struct np_rect *r);
 struct np_rect { int32_t x, y, w, h; };
 
 static void np_btn_rects(const struct np_geo *g, struct np_rect *r)
 {
     int32_t x = g->x + 10, y = g->y + 6, h = NP_TOOLBAR_H - 12, right = g->x + g->w - 8;
     for (int i = 0; i < NB_COUNT; ++i) {
+        if (i == NB_SPEAK) { r[i].x = r[i].w = 0; r[i].y = y; r[i].h = h; continue; }   /* va en la tira de la ruta (siempre cabe) */
         if (i == NB_CUT || i == NB_BROWSER) x += 11;                 /* separador de grupo */
         int32_t w = np_tw(np_btn_label[i], 12) + 22;
         r[i].y = y; r[i].h = h;
@@ -1014,6 +1030,11 @@ static void np_btn_rects(const struct np_geo *g, struct np_rect *r)
         r[i].x = x; r[i].w = w;
         x += w + 4;
     }
+}
+__attribute__((unused)) static void np_speak_rect(const struct np_geo *g, struct np_rect *r)   /* SOMA_247_HABLA: a la derecha de la ruta */
+{
+    int32_t w = np_tw("Leer en voz alta", 11) + 46;
+    r->h = NP_CRUMB_H - 6; r->y = g->crumb_y + 3; r->w = w; r->x = g->x + g->w - w - 8;
 }
 static int np_btn_hit(const struct np_geo *g, int32_t mx, int32_t my)
 {
@@ -1145,7 +1166,7 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
             if (primary) { fb_fill_rounded_rect(r[i].x, r[i].y, r[i].w, r[i].h, 7, hot ? 0x000E7FD6 : 0x000B6BCB); fg = 0x00FFFFFF; }
             else if (hot) { fb_fill_rounded_rect(r[i].x, r[i].y, r[i].w, r[i].h, 7, NC_HOVER); fg = 0x00FFFFFF; }
             if (i == NB_BROWSER && !primary) fg = hot ? 0x00FFFFFF : NC_ACCENT;
-            np_tx(r[i].x + 11, r[i].y, r[i].h, np_btn_label[i], 12, fg, 0);
+            np_tx(r[i].x + 11, r[i].y, r[i].h, np_label(i), 12, fg, 0);
         }
     }
 
@@ -1171,6 +1192,20 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
             else if (np_dirty) { fb_fill_rrect_aa(cx, cy - 4, 8, 8, 4, 0xFFF59E0Bu); cx += 14; np_tx(cx, g.crumb_y, NP_CRUMB_H, "sin guardar", 11, 0x00A8823E, 0); }
         }
         fb_reset_clip();
+#if defined(__x86_64__)
+        {   /* SOMA_247_HABLA: "Leer en voz alta" / "Parar lectura", a la derecha de la ruta */
+            struct np_rect b; np_speak_rect(&g, &b);
+            int on = np_speaking(), hot = np_mx >= b.x && np_mx < b.x + b.w && np_my >= b.y && np_my < b.y + b.h;
+            fb_fill_rounded_rect(b.x, b.y, b.w, b.h, 9, on ? (hot ? 0x00B91C1C : 0x007F1D1D) : (hot ? NC_HOVER : 0x00182133));
+            int32_t ix = b.x + 10, iy = b.y + b.h / 2;                     /* altavoz */
+            uint32_t ic = on ? 0xFFFFFFFFu : 0xFF7DD3FCu;
+            fb_fill_rrect_aa(ix, iy - 3, 4, 6, 1, ic);
+            for (int k = 0; k < 4; k++) fb_fill_rect((uint32_t)(ix + 4 + k), (uint32_t)(iy - 2 - k), 1, (uint32_t)(4 + 2 * k), ic & 0xFFFFFF);
+            if (on) { fb_fill_rect((uint32_t)(ix + 11), (uint32_t)(iy - 3), 2, 6, 0x00FFFFFF); fb_fill_rect((uint32_t)(ix + 14), (uint32_t)(iy - 3), 2, 6, 0x00FFFFFF); }
+            else for (int k = 0; k < 2; k++) fb_stroke_rrect_aa(ix + 6 + 3 * k, iy - 3 - 2 * k, 6 + 2 * k, 6 + 4 * k, 3 + k, (ic & 0x00FFFFFFu) | 0x90000000u);
+            np_tx(b.x + 34, b.y, b.h, np_label(NB_SPEAK), 11, on ? 0x00FFFFFF : 0x00BAE6FD, 0);
+        }
+#endif
     }
 
     /* 3. Editor */
@@ -1297,6 +1332,20 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
  * ------------------------------------------------------------------------- */
 static void np_select_all(void) { np_sel = 0; np_cursor = np_len; np_goal_col = -1; }
 
+/* SOMA_247_HABLA: Leer en voz alta / Parar lectura. Lee la seleccion si la hay; si no, todo el documento. */
+static void np_speak_toggle(void)
+{
+#if defined(__x86_64__)
+    if (voz_speak_state()) { voz_speak_stop(); clip_toast("Lectura detenida"); return; }
+    uint32_t lo = 0, hi = np_len;
+    if (np_has_sel()) np_sel_range(&lo, &hi);
+    uint32_t k = lo; while (k < hi && (np_text[k] == ' ' || np_text[k] == '\n' || np_text[k] == '\t' || np_text[k] == '\r')) k++;
+    if (k >= hi) { clip_toast("No hay texto que leer"); return; }
+    int r = voz_speak_start(np_text + lo, hi - lo);
+    clip_toast(r == 0 ? (np_has_sel() ? "Leyendo la seleccion en voz alta..." : "Leyendo en voz alta...") : "No se pudo empezar a leer");
+#endif
+}
+
 static void np_btn_exec(int b)
 {
     switch (b) {
@@ -1313,6 +1362,7 @@ static void np_btn_exec(int b)
     case NB_COPY:   notepad_clip_op(CLIP_OP_COPY); break;
     case NB_PASTE:  notepad_clip_op(CLIP_OP_PASTE); break;
     case NB_BROWSER: notepad_open_in_browser(np_path); break;
+    case NB_SPEAK:  np_speak_toggle(); break;
     default: break;
     }
 }
@@ -1329,6 +1379,7 @@ static void np_menu_exec(int id)
     case MI_OPEN:  dlg_mode = NP_DLG_OPEN; dlg_open_documents_folder(); break;
     case MI_SAVE:  notepad_save(); break;
     case MI_BROWSER: notepad_open_in_browser(np_path); break;
+    case MI_SPEAK: np_speak_toggle(); break;
     default: break;
     }
 }
@@ -1476,6 +1527,12 @@ int notepad_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y,
     np_layout(g.cols);
     np_clamp_scroll(&g);
 
+#if defined(__x86_64__)
+    {   /* SOMA_247_HABLA: boton de la tira de la ruta */
+        struct np_rect b; np_speak_rect(&g, &b);
+        if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) { np_speak_toggle(); return 1; }
+    }
+#endif
     /* Barra de herramientas */
     {
         int b = np_btn_hit(&g, mx, my);

@@ -73,6 +73,59 @@ static int cmd_pdf(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* SOMA_248_DOC: documentos con acabado profesional (ver src/agent/docagent.h)
+ *   documento <peticion>                         redacta, maqueta, revisa (con vision si el modelo la tiene) y exporta a PDF
+ *   documento exportar <ruta> [pdf|html|png] [destino]
+ *   documento revisar <ruta> [indicaciones]       revision de director de arte con IA; guarda la version anterior
+ *   documento abrir <ruta>                       en el Maquetador (vista de paginas) */
+static void doc_resolve(const char *in, char *out, uint32_t max)
+{
+    uint32_t k = 0;
+    if (in[0] == '/') { while (in[k] && k + 1 < max) { out[k] = in[k]; k++; } out[k] = 0; return; }
+    static const char *const pre[2] = { "/workspace/docs/", "/workspace/" };
+    static const char *const ext[3] = { "", ".html", ".tex" };            /* "documento exportar informe" vale */
+    for (int i = 0; i < 2; i++) for (int e = 0; e < 3; e++) {
+        uint32_t q = 0; out[0] = 0; soma_str_put(out, max, &q, pre[i]); soma_str_put(out, max, &q, in); soma_str_put(out, max, &q, ext[e]);
+        if (vfs_size(out) >= 0) return;
+    }
+    uint32_t q = 0; out[0] = 0; soma_str_put(out, max, &q, "/workspace/docs/"); soma_str_put(out, max, &q, in);
+}
+static int cmd_documento(const char *args, char *out_buf, uint32_t max_out)
+{
+    static char rep[8192]; uint32_t p = 0; rep[0] = 0;
+    while (args && *args == ' ') args++;
+    if (!args || !*args) {
+        soma_str_put(rep, sizeof rep, &p, "Uso:\n  documento <peticion>      p. ej. documento informe trimestral de ventas con graficos, en PDF\n"
+                                          "  documento exportar <ruta> [pdf|html|png] [destino]\n  documento revisar <ruta> [indicaciones]\n  documento abrir <ruta>\n"
+                                          "Tipos: informe, paper (HTML o LaTeX), revista, presentacion 16:9, carta, curriculum, email, libro A5.\n"
+                                          "Se guardan en /workspace/docs/ (fuente y PDF).\n");
+        shell_emit(rep, out_buf, max_out); return 1;
+    }
+    char w[16]; uint32_t k = 0; const char *a = args;
+    while (*a && *a != ' ' && k < sizeof w - 1) w[k++] = *a++;
+    w[k] = 0; while (*a == ' ') a++;
+    if (str_eq(w, "exportar") || str_eq(w, "abrir") || str_eq(w, "revisar")) {
+        char rp[64]; uint32_t j = 0; while (*a && *a != ' ' && j < sizeof rp - 1) rp[j++] = *a++;
+        rp[j] = 0; while (*a == ' ') a++;
+        if (!rp[0]) { shell_emit("documento: falta la ruta\n", out_buf, max_out); return 1; }
+        char path[96]; doc_resolve(rp, path, sizeof path);
+        if (str_eq(w, "abrir")) { gui_open_layout_file(path); soma_str_put(rep, sizeof rep, &p, "Abierto en el Maquetador: "); soma_str_put(rep, sizeof rep, &p, path); soma_str_put(rep, sizeof rep, &p, "\n"); }
+        else if (str_eq(w, "exportar")) {
+            char fmt[12]; j = 0; while (*a && *a != ' ' && j < sizeof fmt - 1) fmt[j++] = *a++;
+            fmt[j] = 0; while (*a == ' ') a++;
+            (void)docagent_export(path, fmt[0] ? fmt : "pdf", *a ? a : 0, rep, sizeof rep - 2);
+            p = 0; while (rep[p]) p++; soma_str_put(rep, sizeof rep, &p, "\n");
+        } else { (void)docagent_review(path, a, rep, sizeof rep - 2); p = 0; while (rep[p]) p++; soma_str_put(rep, sizeof rep, &p, "\n"); }
+        shell_emit(rep, out_buf, max_out); return 1;
+    }
+    static char path[96];
+    int ok = docagent_run(args, rep, sizeof rep - 2, path, sizeof path);
+    p = 0; while (rep[p]) p++; soma_str_put(rep, sizeof rep, &p, "\n");
+    shell_emit(rep, out_buf, max_out);
+    if (ok && path[0]) { extern int gui_is_running(void); if (gui_is_running()) gui_open_layout_file(path); }
+    return 1;
+}
+
 /* PARCHE 087: "suma <archivo>" - tamano y CRC-32 (comprobar que un archivo grande llega y se guarda entero) */
 static int cmd_suma(const char *args, char *out_buf, uint32_t max_out)
 {
@@ -716,7 +769,9 @@ static int cmd_navegador(const char *args, char *out_buf, uint32_t max_out)
 /* PARCHE 085: "ajustes" - transparencia de las ventanas y fuente de la interfaz */
 static int cmd_ajustes(const char *args, char *out_buf, uint32_t max_out)
 {
-    (void)args; uint32_t p = 0;
+    uint32_t p = 0;
+    while (args && *args == ' ') args++;
+    if (args && args[0] == 'v' && args[1] == 'o' && args[2] == 'z') { void settings_goto_voz(void); settings_goto_voz(); }   /* SOMA_246: "ajustes voz" */
     gui_open_settings();
     soma_str_put(out_buf, max_out, &p, "Ajustes abiertos.");
     return 1;

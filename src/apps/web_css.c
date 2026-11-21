@@ -135,6 +135,11 @@ static const char *next_tok(const char *p, const char *end, const char **ts, uin
 
 struct lin { int64_t px, pct; int scalar; int64_t sc; };   /* px/pct en milesimas */
 
+/* SOMA_248_DOC: escala global de las unidades absolutas (px, pt, cm, mm, in...) en %. 100 = normal (el navegador). Los documentos
+ * se pintan a 150 % para imprimir y exportar a PDF con nitidez: todo el CSS escala igual, como el zoom de un navegador. */
+int g_wc_zoom = 100;
+int (*g_wc_zoom_owner)(void);            /* si esta puesto, la escala solo vale en el hilo que la pidio (el navegador sigue a 100 %) */
+#define WZ(v) ((g_wc_zoom == 100 || (g_wc_zoom_owner && !g_wc_zoom_owner())) ? (int64_t)(v) : (int64_t)(v) * g_wc_zoom / 100)
 static int unit_len(const char *p, uint32_t n)
 {
     uint32_t i = 0; while (i < n && (wu_isalpha(p[i]) || p[i] == '%')) i++; return (int)i;
@@ -166,10 +171,10 @@ static int calc_factor(const char **pp, const char *end, const struct lctx *cx, 
     o->px = 0; o->pct = 0; o->scalar = 0; o->sc = v;
     if (ul == 0) { o->scalar = 1; }
     else if (ul == 1 && *p == '%') o->pct = v;
-    else if (ul == 2 && wu_strnieq(p, "px", 2)) o->px = v;
+    else if (ul == 2 && wu_strnieq(p, "px", 2)) o->px = WZ(v);
     else if (ul == 2 && wu_strnieq(p, "em", 2)) o->px = (int64_t)v * cx->font_px;
     else if (ul == 3 && wu_strnieq(p, "rem", 3)) o->px = (int64_t)v * cx->root_px;
-    else if (ul == 2 && wu_strnieq(p, "pt", 2)) o->px = (int64_t)v * 4 / 3;
+    else if (ul == 2 && wu_strnieq(p, "pt", 2)) o->px = WZ((int64_t)v * 4 / 3);
     else if (ul == 3 && (wu_lower(p[0]) == 'd' || wu_lower(p[0]) == 's' || wu_lower(p[0]) == 'l') && wu_strnieq(p + 1, "vh", 2) && !g_wl181_off) o->px = (int64_t)v * cx->vh / 100;   /* SOMA_181: dvh/svh/lvh */
     else if (ul == 3 && (wu_lower(p[0]) == 'd' || wu_lower(p[0]) == 's' || wu_lower(p[0]) == 'l') && wu_strnieq(p + 1, "vw", 2) && !g_wl181_off) o->px = (int64_t)v * cx->vw / 100;
     else if (ul == 2 && wu_strnieq(p, "lh", 2) && !g_wl181_off) o->px = (int64_t)v * cx->font_px * 118 / 100;
@@ -180,11 +185,11 @@ static int calc_factor(const char **pp, const char *end, const struct lctx *cx, 
     else if (ul == 4 && wu_strnieq(p, "vmax", 4)) o->px = (int64_t)v * (cx->vw > cx->vh ? cx->vw : cx->vh) / 100;
     else if (ul == 2 && wu_strnieq(p, "ch", 2)) o->px = (int64_t)v * cx->font_px * (g_wl181_off ? 500 : 636) / 1000;   /* SOMA_181: ancho del 0 de la fuente (antes media em) */
     else if (ul == 2 && wu_strnieq(p, "ex", 2)) o->px = (int64_t)v * cx->font_px / 2;
-    else if (ul == 2 && wu_strnieq(p, "cm", 2)) o->px = (int64_t)v * 3780 / 100;
-    else if (ul == 2 && wu_strnieq(p, "mm", 2)) o->px = (int64_t)v * 378 / 100;
-    else if (ul == 2 && wu_strnieq(p, "in", 2)) o->px = (int64_t)v * 96;
-    else if (ul == 2 && wu_strnieq(p, "pc", 2)) o->px = (int64_t)v * 16;
-    else if (ul == 1 && wu_lower(*p) == 'q') o->px = (int64_t)v * 945 / 1000;
+    else if (ul == 2 && wu_strnieq(p, "cm", 2)) o->px = WZ((int64_t)v * 3780 / 100);
+    else if (ul == 2 && wu_strnieq(p, "mm", 2)) o->px = WZ((int64_t)v * 378 / 100);
+    else if (ul == 2 && wu_strnieq(p, "in", 2)) o->px = WZ((int64_t)v * 96);
+    else if (ul == 2 && wu_strnieq(p, "pc", 2)) o->px = WZ((int64_t)v * 16);
+    else if (ul == 1 && wu_lower(*p) == 'q') o->px = WZ((int64_t)v * 945 / 1000);
     else if (ul == 2 && wu_strnieq(p, "fr", 2)) { o->scalar = 1; *pp = p; return 1; }
     else return 0;
     p += ul; *pp = p; return 1;
@@ -243,7 +248,7 @@ static int parse_len(const char *t, uint32_t n, const struct lctx *cx, struct wl
         if (l.scalar && !allow_num_as_px) { if (l.sc != 0) return 0; }
         o->kind = LK_VAL;
         o->px = (int32_t)((l.scalar ? l.sc : l.px + (l.px >= 0 ? 500 : -500)) / 1000);
-        if (l.scalar) o->px = (int32_t)(l.sc / 1000);
+        if (l.scalar) o->px = (int32_t)WZ(l.sc / 1000);
         o->pct = (int32_t)(l.pct / 10);
     }
     return 1;
@@ -406,7 +411,7 @@ static void apply_border_one(struct actx *a, struct wstyle *st, int mask, const 
     while ((p = next_tok(p, e, &ts, &tl))) {
         int bs = border_style_of(ts, tl);
         if (bs >= 0) { sty = bs; seen_style = 1; continue; }
-        if (is_kw(ts, tl, "thin")) { w = 1; continue; } if (is_kw(ts, tl, "medium")) { w = 3; continue; } if (is_kw(ts, tl, "thick")) { w = 5; continue; }
+        if (is_kw(ts, tl, "thin")) { w = (int)WZ(1); continue; } if (is_kw(ts, tl, "medium")) { w = (int)WZ(3); continue; } if (is_kw(ts, tl, "thick")) { w = (int)WZ(5); continue; }
         uint32_t c = tok_color(ts, tl, st->color, &ok);
         if (ok) { col = c; continue; }
         struct wlen l; if (parse_len(ts, tl, &a->lc, &l, 0) && l.kind == LK_VAL) w = l.px;
@@ -580,7 +585,7 @@ static int family_is_mono(const char *v, uint32_t vl)
 static int font_size_of(struct actx *a, const char *t, uint32_t n, int *out)
 {
     static const struct { const char *k; int px; } kw[] = { {"xx-small", 9}, {"x-small", 10}, {"small", 13}, {"medium", 16}, {"large", 18}, {"x-large", 24}, {"xx-large", 32}, {"xxx-large", 48} };
-    for (unsigned i = 0; i < sizeof(kw) / sizeof(kw[0]); i++) if (is_kw(t, n, kw[i].k)) { *out = kw[i].px; return 1; }
+    for (unsigned i = 0; i < sizeof(kw) / sizeof(kw[0]); i++) if (is_kw(t, n, kw[i].k)) { *out = (int)WZ(kw[i].px); return 1; }
     if (is_kw(t, n, "smaller")) { *out = a->lc.font_px * 83 / 100; return 1; }
     if (is_kw(t, n, "larger")) { *out = a->lc.font_px * 120 / 100; return 1; }
     struct wlen l; if (!parse_len(t, n, &a->lc, &l, 0) || l.kind != LK_VAL) return 0;
@@ -836,7 +841,7 @@ static void apply_prop(struct actx *a, struct wstyle *st, int prop, const char *
     case PR_BORDER_LEFT: apply_border_one(a, st, 8, v, vl); return;
     case PR_BORDER_WIDTH: case PR_BORDER_TOP_WIDTH: case PR_BORDER_RIGHT_WIDTH: case PR_BORDER_BOTTOM_WIDTH: case PR_BORDER_LEFT_WIDTH: {
         struct wlen b4[4]; int w[4]; int n = 0; const char *p = v, *e = v + vl;
-        while (n < 4 && (p = next_tok(p, e, &ts, &tl))) { int px = 3; if (is_kw(ts, tl, "thin")) px = 1; else if (is_kw(ts, tl, "medium")) px = 3; else if (is_kw(ts, tl, "thick")) px = 5; else if (parse_len(ts, tl, &a->lc, &b4[0], 0) && b4[0].kind == LK_VAL) px = b4[0].px; w[n++] = px; }
+        while (n < 4 && (p = next_tok(p, e, &ts, &tl))) { int px = (int)WZ(3); if (is_kw(ts, tl, "thin")) px = (int)WZ(1); else if (is_kw(ts, tl, "medium")) px = (int)WZ(3); else if (is_kw(ts, tl, "thick")) px = (int)WZ(5); else if (parse_len(ts, tl, &a->lc, &b4[0], 0) && b4[0].kind == LK_VAL) px = b4[0].px; w[n++] = px; }
         if (!n) return;
         int bw[4] = { w[0], n > 1 ? w[1] : w[0], n > 2 ? w[2] : w[0], n > 3 ? w[3] : (n > 1 ? w[1] : w[0]) };
         if (prop == PR_BORDER_WIDTH) { for (int i = 0; i < 4; i++) if (st->border_style[i]) st->border_w[i] = (int16_t)bw[i]; }
@@ -1950,7 +1955,7 @@ static int attr_len(const char *v, struct wlen *o)
     if (!wu_isdigit(*v)) return 0;
     int n = 0; while (wu_isdigit(*v)) { if (n < 100000) n = n * 10 + (*v - '0'); v++; }
     memset(o, 0, sizeof(*o)); o->kind = LK_VAL;
-    if (*v == '%') o->pct = n * 100; else o->px = n;
+    if (*v == '%') o->pct = n * 100; else o->px = (int32_t)WZ(n);   /* SOMA_248_DOC: atributos width/height en px tambien escalan */
     return 1;
 }
 static uint32_t attr_color(const char *v)
@@ -2012,7 +2017,7 @@ static void apply_presentational(struct wnode *n, struct wstyle *st)
             if (rel) sz = 3 + sz;
             if (sz < 1) sz = 1;
             if (sz > 7) sz = 7;
-            st->font_px = (int16_t)fs[sz];
+            st->font_px = (int16_t)WZ(fs[sz]);
         }
         if ((v = wd_attr(n, "face"))) st->mono = (uint8_t)family_is_mono(v, wu_strlen(v));
     }
@@ -2159,7 +2164,7 @@ static void compute_pseudo(struct wcss *c, struct wnode *n, struct wstyle *st, s
     init_style(pst, st);
     sort_rules(m, nm);
     c->pc_len = -1; c->creset[0] = c->cinc[0] = c->cset[0] = 0;
-    struct actx a; a.par = st; a.c = c; a.lc.root_px = 16; a.lc.vw = c->vw; a.lc.vh = c->vh; a.lc.font_px = st->font_px;
+    struct actx a; a.par = st; a.c = c; a.lc.root_px = (int)WZ(16); a.lc.vw = c->vw; a.lc.vh = c->vh; a.lc.font_px = st->font_px;
     cascade_pass(c, pst, &a, m, nm, 0, 0, 0);
     cascade_pass(c, pst, &a, m, nm, 0, 0, 1);
     for (int i = 0; i < 4; i++) if (pst->border_color[i] == 1) pst->border_color[i] = pst->color;
@@ -2216,7 +2221,7 @@ static void compute_node(struct wcss *c, struct wnode *n, const struct wstyle *p
     }
     int ninl = 0; const char *sty = wd_attr(n, "style");
     if (sty && *sty) { uint32_t sl = wu_strlen(sty); ninl = parse_decls(c, sty, sty + sl, tmpd, 96); }
-    struct actx a; a.par = par; a.c = c; a.lc.root_px = 16; a.lc.vw = c->vw; a.lc.vh = c->vh; a.lc.font_px = par->font_px;
+    struct actx a; a.par = par; a.c = c; a.lc.root_px = (int)WZ(16); a.lc.vw = c->vw; a.lc.vh = c->vh; a.lc.font_px = par->font_px;
     c->creset[0] = c->cinc[0] = c->cset[0] = 0;
     cascade_pass(c, st, &a, m, nm, tmpd, ninl, 0);
     cascade_pass(c, st, &a, m, nm, tmpd, ninl, 1);
@@ -2232,7 +2237,7 @@ static void compute_node(struct wcss *c, struct wnode *n, const struct wstyle *p
         if (ph) {
             init_style(ph, st); ph->color = 0x01000000u; ph->italic = 2; ph->bold = 2;
             sort_rules(pm[2], npm[2]); c->pc_len = -1;
-            struct actx pa; pa.par = st; pa.c = c; pa.lc.root_px = 16; pa.lc.vw = c->vw; pa.lc.vh = c->vh; pa.lc.font_px = st->font_px;
+            struct actx pa; pa.par = st; pa.c = c; pa.lc.root_px = (int)WZ(16); pa.lc.vw = c->vw; pa.lc.vh = c->vh; pa.lc.font_px = st->font_px;
             cascade_pass(c, ph, &pa, pm[2], npm[2], 0, 0, 0); cascade_pass(c, ph, &pa, pm[2], npm[2], 0, 0, 1);
             if (ph->color != 0x01000000u) st->ph_color = ph->color ? ph->color : 0x00000001u;
             if (ph->italic != 2) st->ph_italic = (int8_t)(ph->italic != 0);
@@ -2277,7 +2282,7 @@ void wc_compute(struct wcss *c, int vw, int vh)
     struct wstyle *root = (struct wstyle *)kmalloc(sizeof(struct wstyle));
     struct wdecl *tmpd = (struct wdecl *)kmalloc(sizeof(struct wdecl) * 96);
     if (!root || !tmpd) { if (root) kfree(root); if (tmpd) kfree(tmpd); return; }
-    memset(root, 0, sizeof(*root)); root->font_px = 16; root->color = 0xFF000000u; root->spacing_h = root->spacing_v = g_wl181_off ? 2 : 0;   /* SOMA_181: border-spacing inicial 0 (la hoja base lo pone a 2px en <table>) */
+    memset(root, 0, sizeof(*root)); root->font_px = (int)WZ(16); root->color = 0xFF000000u; root->spacing_h = root->spacing_v = g_wl181_off ? 2 : 0;   /* SOMA_181: border-spacing inicial 0 (la hoja base lo pone a 2px en <table>) */
     struct wnode *docn = c->d->root;
     for (struct wnode *n = docn->first; n; ) {
         if (n->type == WN_ELEM) {

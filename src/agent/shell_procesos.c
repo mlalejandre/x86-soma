@@ -162,6 +162,37 @@ static int cmd_python(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* SOMA_247_HABLA: texto a voz con una voz de Piper (ver src/arch/x86_64/voz_sys.c y src/user/voz/habla.cpp) */
+static int cmd_habla(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0;
+    if (max_out) out_buf[0] = 0;
+#if defined(__x86_64__)
+    while (args && *args == ' ') args++;
+    if (!args) args = "";
+    if (!args[0]) {
+        char v[96]; uint64_t sz = 0;
+        soma_str_put(out_buf, max_out, &pos, "Texto a voz (voces de Piper, sin conexion)\n");
+        if (voz_voice(v, sizeof v, &sz) == 0) {
+            soma_str_put(out_buf, max_out, &pos, "  voz: "); soma_str_put(out_buf, max_out, &pos, v);
+            soma_str_put(out_buf, max_out, &pos, " ("); soma_str_put_dec(out_buf, max_out, &pos, (uint32_t)(sz >> 20)); soma_str_put(out_buf, max_out, &pos, " MiB)\n");
+        } else soma_str_put(out_buf, max_out, &pos, "  voz: ninguna. Copia una voz de Piper (el .onnx y su .onnx.json) en la carpeta MODELOS del pendrive\n");
+        soma_str_put(out_buf, max_out, &pos, voz_speak_state() ? "  leyendo ahora (habla parar)\n" : "");
+        soma_str_put(out_buf, max_out, &pos, "Uso: habla texto  |  habla instalar  |  habla parar. En Notas: boton Leer en voz alta");
+        return 1;
+    }
+    if (str_eq(args, "instalar")) { (void)voz_voice_install(out_buf, max_out); return 1; }
+    if (str_eq(args, "parar")) { voz_speak_stop(); voz_stop(); soma_str_put(out_buf, max_out, &pos, "Lectura detenida"); return 1; }
+    uint32_t n = 0; while (args[n]) n++;
+    int r = voz_speak_run(args, n, 0, 0);
+    soma_str_put(out_buf, max_out, &pos, r == 0 ? "" : "habla: no se pudo leer el texto");
+#else
+    (void)args;
+    soma_str_put(out_buf, max_out, &pos, "habla: de momento solo en x86_64");
+#endif
+    return 1;
+}
+
 /* SOMA_241_VOZ: voz a texto con whisper.cpp (ver src/arch/x86_64/voz_sys.c). Los audios y el modelo estan en el almacen BIGFS. */
 static int cmd_voz(const char *args, char *out_buf, uint32_t max_out)
 {
@@ -170,16 +201,31 @@ static int cmd_voz(const char *args, char *out_buf, uint32_t max_out)
 #if defined(__x86_64__)
     while (args && *args == ' ') args++;
     if (!args) args = "";
+    if (shell_starts_with(args, "modelo ")) {                 /* SOMA_246_VOZ_MODELOS: voz modelo rapido|preciso|maximo */
+        const char *k = args + 7; while (*k == ' ') k++;
+        int t = voz_tier_from_key(k);
+        if (t < 0) { soma_str_put(out_buf, max_out, &pos, "voz modelo: elige rapido, preciso o maximo"); return 1; }
+        voz_set_pref(t);
+        char m[96];
+        soma_str_put(out_buf, max_out, &pos, "Modelo de voz: "); soma_str_put(out_buf, max_out, &pos, voz_tier_name(t));
+        if (voz_installed(t, m, sizeof m, 0) == 0) { soma_str_put(out_buf, max_out, &pos, " ("); soma_str_put(out_buf, max_out, &pos, m); soma_str_put(out_buf, max_out, &pos, ")"); }
+        else if (voz_on_stick(t, 0, 0, 0) == 0) soma_str_put(out_buf, max_out, &pos, ": esta en el pendrive y se instalara al usarlo (o ahora con: voz instalar)");
+        else { soma_str_put(out_buf, max_out, &pos, ": no instalado. Copia "); soma_str_put(out_buf, max_out, &pos, voz_tier_file(t)); soma_str_put(out_buf, max_out, &pos, " en la carpeta MODELOS del pendrive; mientras tanto se usa otro"); }
+        return 1;
+    }
     if (!args[0] || str_eq(args, "modelo") || str_eq(args, "estado")) {
-        const char *why; char m[96]; uint64_t sz = 0;
+        const char *why; char m[96]; uint64_t sz = 0; int tier = 0;
         soma_str_put(out_buf, max_out, &pos, "Voz a texto (whisper.cpp, sin conexion; espanol por defecto)\n");
         soma_str_put(out_buf, max_out, &pos, usermode_avx2_ok() ? "  CPU: AVX2 activo\n" : "  CPU: sin AVX2 (no se puede usar)\n");
-        if (voz_model(m, sizeof m, &sz) == 0) {
-            soma_str_put(out_buf, max_out, &pos, "  modelo: "); soma_str_put(out_buf, max_out, &pos, m);
-            soma_str_put(out_buf, max_out, &pos, " ("); soma_str_put_dec(out_buf, max_out, &pos, (uint32_t)(sz >> 20)); soma_str_put(out_buf, max_out, &pos, " MiB)\n");
+        soma_str_put(out_buf, max_out, &pos, "  elegido: "); soma_str_put(out_buf, max_out, &pos, voz_tier_name(voz_pref())); soma_str_put(out_buf, max_out, &pos, " (Ajustes > Voz, o: voz modelo rapido|preciso|maximo)\n");
+        if (voz_model_tier(m, sizeof m, &sz, &tier) == 0) {
+            soma_str_put(out_buf, max_out, &pos, "  en uso: "); soma_str_put(out_buf, max_out, &pos, m);
+            soma_str_put(out_buf, max_out, &pos, " ("); soma_str_put_dec(out_buf, max_out, &pos, (uint32_t)(sz >> 20)); soma_str_put(out_buf, max_out, &pos, " MiB)");
+            if (tier != voz_pref()) soma_str_put(out_buf, max_out, &pos, "  <- el elegido no esta instalado");
+            soma_str_put(out_buf, max_out, &pos, "\n");
         } else soma_str_put(out_buf, max_out, &pos, "  modelo: ninguno. Copia ggml-base-q5_1.bin en la carpeta MODELOS del pendrive y ejecuta: voz instalar\n");
         if (!voz_ready(&why) && usermode_avx2_ok() && voz_model(m, sizeof m, 0) == 0) { soma_str_put(out_buf, max_out, &pos, "  "); soma_str_put(out_buf, max_out, &pos, why); soma_str_put(out_buf, max_out, &pos, "\n"); }
-        soma_str_put(out_buf, max_out, &pos, "Uso: voz archivo.wav  |  voz ultima (la ultima grabacion)  |  voz instalar  |  opciones -T -l idioma -v");
+        soma_str_put(out_buf, max_out, &pos, "Uso: voz archivo.wav  |  voz ultima (la ultima grabacion)  |  voz instalar  |  voz modelo rapido|preciso|maximo  |  opciones -T -l idioma -v -b haz");
         return 1;
     }
     if (str_eq(args, "instalar")) {

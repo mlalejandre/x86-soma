@@ -13,4 +13,28 @@ void voz_stop(void);
 int  voz_busy(void);
 int  voz_install(char *msg, uint32_t cap);                /* 0 = modelo copiado a /modelos */
 int  voz_last_recording(char *path, uint32_t cap);        /* 0 = ruta de la grabacion mas reciente */
+/* SOMA_246_VOZ_MODELOS: nivel de modelo (0 Rapido = base, 1 Preciso = small, 2 Maxima precision = large-v3-turbo) */
+#define VOZ_TIERS 3
+int  voz_pref(void);                                      /* nivel elegido (/etc/voz.conf; por defecto 0) */
+void voz_set_pref(int tier);
+int  voz_tier_of(const char *name);                       /* nivel de un .bin por su nombre */
+int  voz_tier_from_key(const char *key);                  /* "rapido" / "preciso" / "maximo" -> nivel, -1 si no */
+const char *voz_tier_file(int tier);                      /* nombre recomendado del .bin */
+const char *voz_tier_name(int tier);
+const char *voz_tier_key(int tier);
+uint32_t voz_tier_mb(int tier);                           /* tamano aproximado del .bin recomendado */
+int  voz_installed(int tier, char *path, uint32_t cap, uint64_t *size);    /* 0 = hay un modelo de ese nivel en /modelos */
+int  voz_on_stick(int tier, char *name, uint32_t cap, uint32_t *size);     /* 0 = esta en MODELOS del pendrive; -2 sin pendrive */
+int  voz_model_tier(char *path, uint32_t cap, uint64_t *size, int *tier);  /* el que se usara (el elegido o el mas cercano) */
+int  voz_install_tier(int tier, char *msg, uint32_t cap);                  /* copia el modelo de ese nivel a /modelos */
+int  voz_install_progress(void);                          /* -1 = no se esta instalando; si no, 0..100 */
+/* SOMA_247_HABLA: texto a voz con una voz de Piper (/voces: el .onnx y su .onnx.json) */
+int  voz_voice(char *path, uint32_t cap, uint64_t *size);  /* 0 = hay voz instalada */
+int  voz_voice_install(char *msg, uint32_t cap);           /* copia la voz de MODELOS del pendrive a /voces */
+int  voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap);   /* lee en voz alta (sincrono) */
+int  voz_speak_start(const char *text, uint32_t len);      /* lo mismo en segundo plano: 0 = empezo; -16 ya esta leyendo */
+void voz_speak_stop(void);
+int  voz_speak_state(void);                                /* 1 = preparando o leyendo */
+uint32_t voz_speak_ver(void);                              /* cambia al empezar y al terminar (para repintar) */
+const char *voz_speak_msg(void);                           /* motivo del ultimo fallo ("" si fue bien) */
 #endif

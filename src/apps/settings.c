@@ -16,6 +16,8 @@
 #include "sysicon.h"         /* SOMA_225_AJUSTES: pagina Iconos */
 #include "hwmon.h"           /* SOMA_226_SISTEMA: pagina Sistema */
 #ifdef __x86_64__
+#include "voz_sys.h"          /* SOMA_246_VOZ_MODELOS: pagina Voz */
+#include "usermode.h"
 #include "bootdiag.h"         /* SOMA_228_ARRANQUE: arranque, SOMADATA e informe en la pagina Sistema */
 #include "usbdisk.h"
 #include "sysdisk.h"
@@ -219,6 +221,10 @@ __attribute__((unused)) static void button(int x, int y, int w, const char *t, i
 }
 /* ================================================================ SOMA_195: pagina IA (con que modelo de lenguaje habla SOMA) */
 #define PAGE_IA 3
+#define PAGE_VOZ     6     /* SOMA_246_VOZ_MODELOS */
+#define PAGE_SISTEMA 7
+#define PAGE_ACERCA  8
+#define NITEMS 9
 static struct llm_conf g_ia;                          /* copia de trabajo; se guarda con "Guardar y probar" */
 static char g_ia_f[4][LLM_KEY_MAX];                   /* lo que se esta escribiendo: servidor, modelo, clave y (SOMA_196) clave del lanzador */
 static const int IA_FMAX[4] = { LLM_BASE_MAX - 1, LLM_MODEL_MAX - 1, LLM_KEY_MAX - 1, LLM_KEY_MAX - 1 };
@@ -302,10 +308,12 @@ static void ia_start(int job)
 }
 static int ia_tick(void) { if (g_ia_seen != g_ia_ver) { g_ia_seen = g_ia_ver; return 1; } return 0; }
 
+static int voz_page_tick(void);   /* SOMA_246_VOZ_MODELOS (abajo) */
 static uint32_t g_sig; static uint64_t g_last_tick;
 int settings_tick(void)
 {
     if (g_page == PAGE_IA) return ia_tick();
+    if (g_page == PAGE_VOZ) return voz_page_tick();                     /* SOMA_246_VOZ_MODELOS */
     if (g_page != 1) return 0;
     static uint64_t last_check;                                         /* SOMA_175C2: como mucho 2 veces por segundo (antes en cada vuelta */
     uint64_t t = timer_get_uptime_ms();                                  /* del bucle de la GUI, ~1000 veces/s, y consultaba el enlace de cada */
@@ -636,13 +644,13 @@ static int key_ia(char c)
 }
 
 /* SOMA_227_IMAGEN: la barra lateral se compacta si la ventana es baja (8 apartados) */
-static int sb_step(const struct sl *L) { int st = (L->h - 64) / 8; return st >= 40 ? 40 : (st < 28 ? 28 : st); }
+static int sb_step(const struct sl *L) { int st = (L->h - 64) / NITEMS; return st >= 40 ? 40 : (st < 28 ? 28 : st); }
 static int sb_y(const struct sl *L, int i) { return L->y + (sb_step(L) < 40 ? 52 : 60) + i * sb_step(L); }
 static void render_sidebar(const struct sl *L)
 {
     tx(L->x + 18, L->y + 14, 30, "Ajustes", 18, KC_TXT, 1);
-    static const char *const items[8] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Sistema", "Acerca de" };   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de */
-    for (int i = 0; i < 8; i++) {
+    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sistema", "Acerca de" };   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
+    for (int i = 0; i < NITEMS; i++) {
         int st = sb_step(L), ih = st - 6, iy = sb_y(L, i), on = i == g_page;
         if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, ih, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + ih / 2 - 9, 3, 18, 1, KC_ACC); }
         int ix = L->x + 30, icy = iy + ih / 2; uint32_t ic = on ? 0xFFFFFFFFu : 0xFF8592A8u;
@@ -652,7 +660,8 @@ static void render_sidebar(const struct sl *L)
         else if (i == 3) { fb_stroke_rrect_aa(ix - 8, icy - 7, 16, 12, 4, ic); fb_fill_rrect_aa(ix - 4, icy - 2, 2, 2, 1, ic); fb_fill_rrect_aa(ix + 2, icy - 2, 2, 2, 1, ic); fb_fill_rect((uint32_t)(ix - 5), (uint32_t)(icy + 5), 3, 3, ic & 0xFFFFFF); }   /* IA */
         else if (i == 4) { fb_stroke_rrect_aa(ix - 8, icy - 6, 16, 11, 2, ic); fb_fill_rect((uint32_t)(ix - 3), (uint32_t)(icy + 6), 6, 2, ic & 0xFFFFFF); }
         else if (i == 5) { for (int k = 0; k < 4; k++) fb_stroke_rrect_aa(ix - 8 + (k & 1) * 9, icy - 8 + (k >> 1) * 9, 7, 7, 2, ic); }
-        else if (i == 6) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
+        else if (i == PAGE_VOZ) { fb_stroke_rrect_aa(ix - 3, icy - 9, 7, 12, 3, ic); fb_stroke_rrect_aa(ix - 7, icy - 3, 15, 9, 4, ic); fb_fill_rect((uint32_t)ix, (uint32_t)(icy + 6), 1, 4, ic & 0xFFFFFF); }   /* microfono */
+        else if (i == PAGE_SISTEMA) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
         else { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 1, 2, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 5, 2, 2, ic & 0xFFFFFF); }
         tx(L->x + 46, iy, ih, items[i], 13, on ? 0x00FFFFFF : KC_DIM, on);
     }
@@ -817,8 +826,6 @@ static int click_iconos(const struct sl *L, int32_t mx, int32_t my)
 }
 
 /* ================================================================ SOMA_226_SISTEMA: paginas Sistema y Acerca de */
-#define PAGE_SISTEMA 6
-#define PAGE_ACERCA  7
 static struct hw_cpu g_hcpu; static struct hw_gpu g_hgpu; static struct hw_board g_hbrd; static int g_hw_ok;
 static void hw_load(void) { if (!g_hw_ok) { hwmon_cpu(&g_hcpu); hwmon_gpu(&g_hgpu); hwmon_board(&g_hbrd); g_hw_ok = 1; } }
 static void kvrow(int x, int y, int w, const char *k, const char *v)
@@ -995,7 +1002,7 @@ static void render_acerca(const struct sl *L)
     {
         card(L->cx, y3, L->cw, h3);
         tx(L->cx + 20, y3 + 12, 22, "Componentes de terceros", 13, KC_TXT, 1);
-        tx_wrap(L->cx + 20, y3 + 38, L->cw - 40, "uACPI (MIT), fuentes DejaVu (licencia libre Bitstream Vera) y Liberation Sans (SIL OFL 1.1), firmware WiFi de Intel (licencia de redistribucion de Intel). SOMA Orbital y SOMA Tecnica son propias (MIT).", 11, KC_DIM, 18);
+        tx_wrap(L->cx + 20, y3 + 38, L->cw - 40, "uACPI (MIT), whisper.cpp y ggml (MIT, voz a texto), fuentes DejaVu (licencia libre Bitstream Vera) y Liberation Sans (SIL OFL 1.1), firmware WiFi de Intel (licencia de redistribucion de Intel). SOMA Orbital y SOMA Tecnica son propias (MIT).", 11, KC_DIM, 18);
     }
 }
 static void render_apariencia(const struct sl *L)
@@ -1037,9 +1044,158 @@ static void render_apariencia(const struct sl *L)
     /* pie */
     render_reset(L, L->reset_y);
 }
-#define NPAGES 8
+/* ================================================================ SOMA_246_VOZ_MODELOS: pagina Voz
+ * Modelo de reconocimiento del dictado (Alt) y de la Grabadora: Rapido (base), Preciso (small) o Maxima precision
+ * (large-v3-turbo). El estado (instalado / en el pendrive) se consulta en un hilo: leer el pendrive puede tardar. */
+#ifdef __x86_64__
+static volatile int g_vz_inst[VOZ_TIERS], g_vz_stick[VOZ_TIERS], g_vz_ver, g_vz_busy, g_vz_job;   /* job: 0 consultar, 1+t instalar t */
+static uint32_t g_vz_stick_mb[VOZ_TIERS];
+static char g_vz_used[96], g_vz_msg[200]; static volatile int g_vz_msg_ok;
+static int g_vz_seen = -1, g_vz_last_prog = -2;
+static void vz_scan(void)
+{
+    for (int t = 0; t < VOZ_TIERS; t++) {
+        char m[96]; uint32_t sz = 0;
+        g_vz_inst[t] = voz_installed(t, m, sizeof m, 0) == 0;
+        g_vz_stick[t] = voz_on_stick(t, 0, 0, &sz) == 0; g_vz_stick_mb[t] = sz >> 20;
+    }
+    int tier = -1; char m[96]; uint64_t sz = 0;
+    g_vz_used[0] = 0;
+    if (voz_model_tier(m, sizeof m, &sz, &tier) == 0) { s_cat(g_vz_used, m, sizeof g_vz_used); s_cat(g_vz_used, "  (", sizeof g_vz_used); s_num(g_vz_used, sizeof g_vz_used, (int)(sz >> 20)); s_cat(g_vz_used, " MiB)", sizeof g_vz_used); }
+}
+static void vz_worker(void *arg)
+{
+    (void)arg;
+    if (g_vz_job > 0) {
+        int t = g_vz_job - 1; static char msg[256];
+        int r = voz_install_tier(t, msg, sizeof msg);
+        g_vz_msg[0] = 0; s_cat(g_vz_msg, r == 0 ? "Listo: " : "No se pudo instalar: ", sizeof g_vz_msg); s_cat(g_vz_msg, msg, sizeof g_vz_msg); g_vz_msg_ok = r == 0;
+    }
+    vz_scan();
+    g_vz_busy = 0; g_vz_ver++;
+}
+static void vz_start(int job)
+{
+    if (g_vz_busy) return;
+    g_vz_job = job; g_vz_busy = 1;
+    if (!thread_create("ajustes_voz", vz_worker, 0)) { g_vz_busy = 0; g_vz_msg[0] = 0; s_cat(g_vz_msg, "No se pudo crear el hilo", sizeof g_vz_msg); g_vz_msg_ok = 0; }
+}
+static void voz_page_open(void) { if (!g_vz_busy) { if (g_vz_job == 0) g_vz_msg[0] = 0; vz_start(0); } }
+static int voz_page_tick(void)
+{
+    int ch = 0;
+    if (g_vz_seen != g_vz_ver) { g_vz_seen = g_vz_ver; ch = 1; }
+    int pr = voz_install_progress();
+    if (pr != g_vz_last_prog) { g_vz_last_prog = pr; ch = 1; }
+    return ch;
+}
+struct vz_lay { int y1, row_y, row_h, h1, btn_y, btn_w, y2, h2; };
+static void vz_lay(const struct sl *L, struct vz_lay *V)
+{
+    V->y1 = L->y + 84; V->row_y = V->y1 + 66; V->row_h = 80;
+    V->btn_y = V->row_y + VOZ_TIERS * (V->row_h + 8) + 6; V->btn_w = 220;
+    V->h1 = V->btn_y + 32 + 50 - V->y1;
+    V->y2 = V->y1 + V->h1 + 12; V->h2 = 150;
+}
+static void render_voz(const struct sl *L)
+{
+    static const char *const DESC[VOZ_TIERS] = {
+        "El m\xC3\xA1s r\xC3\xA1pido; falla m\xC3\xA1s con nombres y con ruido.",
+        "M\xC3\xA1s preciso, ~3 veces m\xC3\xA1s lento. Recomendado.",
+        "El m\xC3\xA1s preciso, ~8-10 veces m\xC3\xA1s lento." };
+    tx(L->cx, L->y + 18, 30, "Voz y dictado", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "Mant\xC3\xA9n Alt para dictar en cualquier sitio (sin conexi\xC3\xB3n).", 12, KC_DIM, 0);
+    struct vz_lay V; vz_lay(L, &V);
+    card(L->cx, V.y1, L->cw, V.h1);
+    tx(L->cx + 20, V.y1 + 12, 24, "Modelo de transcripci\xC3\xB3n", 14, KC_TXT, 1);
+    { char u[140] = "En uso: "; s_cat(u, g_vz_used[0] ? g_vz_used : (g_vz_busy ? "..." : "ninguno"), sizeof u); fb_set_clip(L->cx + 20, V.y1 + 36, L->cw - 40, 22); tx(L->cx + 20, V.y1 + 36, 22, u, 11, KC_FAINT, 0); fb_reset_clip(); }
+    int pref = voz_pref(), prog = voz_install_progress();
+    for (int t = 0; t < VOZ_TIERS; t++) {
+        int ry = V.row_y + t * (V.row_h + 8), rx = L->cx + 16, rw = L->cw - 32, on = t == pref;
+        fb_fill_rounded_rect(rx, ry, rw, V.row_h, 10, on ? 0x00142640 : 0x000C1119);
+        if (on) fb_stroke_rrect_aa(rx, ry, rw, V.row_h, 10, 0xFF38BDF8u);
+        fb_stroke_rrect_aa(rx + 14, ry + V.row_h / 2 - 9, 18, 18, 9, on ? 0xFF38BDF8u : 0xFF566379u);      /* boton de opcion */
+        if (on) fb_fill_rrect_aa(rx + 19, ry + V.row_h / 2 - 4, 8, 8, 4, 0xFF38BDF8u);
+        char nm[80]; nm[0] = 0; s_cat(nm, voz_tier_name(t), sizeof nm);
+        if (t == 2) { nm[0] = 0; s_cat(nm, "M\xC3\xA1xima precisi\xC3\xB3n", sizeof nm); }
+        else if (t == 0) { nm[0] = 0; s_cat(nm, "R\xC3\xA1pido", sizeof nm); }
+        tx(rx + 44, ry + 8, 22, nm, 14, on ? 0x00FFFFFF : KC_TXT, 1);
+        char fl[80]; fl[0] = 0; s_cat(fl, voz_tier_file(t), sizeof fl); s_cat(fl, "  ~", sizeof fl); s_num(fl, sizeof fl, (int)voz_tier_mb(t)); s_cat(fl, " MB", sizeof fl);
+        fb_set_clip(rx + 44, ry + 4, rw - 58, V.row_h - 8);
+        tx(rx + 44, ry + 31, 20, fl, 11, KC_FAINT, 0);
+        tx(rx + 44, ry + 52, 20, DESC[t], 11, KC_DIM, 0);
+        fb_reset_clip();
+        const char *st; uint32_t sc;
+        if (g_vz_busy && g_vz_job == t + 1) { st = "Instalando..."; sc = 0x0093C5FD; }
+        else if (g_vz_inst[t]) { st = "Instalado"; sc = 0x0034D399; }
+        else if (g_vz_stick[t]) { st = "En el pendrive"; sc = 0x00FBBF24; }
+        else { st = "No disponible"; sc = 0x00566379; }
+        int sw_ = tw(st, 11, 1) + 20;
+        fb_fill_rounded_rect(rx + rw - sw_ - 14, ry + 10, sw_, 22, 11, 0x00111827);
+        tx(rx + rw - sw_ - 4, ry + 10, 22, st, 11, sc, 1);
+    }
+    /* boton: instalar el elegido (si esta en el pendrive y no instalado) o volver a mirar el pendrive */
+    int can_inst = !g_vz_busy && !g_vz_inst[pref] && g_vz_stick[pref];
+    const char *bl = g_vz_busy ? (g_vz_job ? "Instalando..." : "Buscando...") : can_inst ? "Instalar desde el pendrive" : "Buscar en el pendrive";
+    int bx = L->cx + 20;
+    fb_fill_rounded_rect(bx, V.btn_y, V.btn_w, 32, 16, can_inst ? KC_PRIMARY : 0x00182133);
+    fb_stroke_rrect_aa(bx, V.btn_y, V.btn_w, 32, 16, can_inst ? 0xFF38BDF8u : 0xFF2B6CB0u);
+    tx(bx + (V.btn_w - tw(bl, 13, 1)) / 2, V.btn_y, 32, bl, 13, can_inst ? 0x00FFFFFF : 0x0093C5FD, 1);
+    int mx0 = bx + V.btn_w + 16, mw = L->cx + L->cw - 20 - mx0;
+    if (prog >= 0 && mw > 40) {                                       /* progreso de la copia */
+        fb_fill_rounded_rect(mx0, V.btn_y + 12, mw, 8, 4, 0x00182133);
+        fb_fill_rounded_rect(mx0, V.btn_y + 12, mw * prog / 100 > 8 ? mw * prog / 100 : 8, 8, 4, 0x0038BDF8);
+    }
+    const char *msg = g_vz_msg;
+    char hint[200];
+    if (!msg[0]) {
+        hint[0] = 0;
+        if (!usermode_avx2_ok()) s_cat(hint, "Este procesador no tiene AVX2: el reconocimiento de voz no funciona en este equipo.", sizeof hint);
+        else if (g_vz_inst[pref]) s_cat(hint, "El dictado y la Grabadora usan este modelo desde ya.", sizeof hint);
+        else if (g_vz_stick[pref]) s_cat(hint, "Se instalar\xC3\xA1 solo al dictar, o ahora con el bot\xC3\xB3n (copia al almac\xC3\xA9n).", sizeof hint);
+        else { s_cat(hint, "No est\xC3\xA1 en la carpeta MODELOS del pendrive: mientras tanto se usa el instalado m\xC3\xA1s parecido.", sizeof hint); }
+        msg = hint;
+    }
+    fb_set_clip(L->cx + 20, V.btn_y + 38, L->cw - 40, 40);
+    tx_wrap(L->cx + 20, V.btn_y + 42, L->cw - 40, msg, 11, g_vz_msg[0] ? (g_vz_msg_ok ? 0x0034D399 : 0x00FCA5A5) : KC_FAINT, 17);
+    fb_reset_clip();
+    card(L->cx, V.y2, L->cw, V.h2);
+    tx(L->cx + 20, V.y2 + 12, 22, "C\xC3\xB3mo a\xC3\xB1" "adir un modelo", 13, KC_TXT, 1);
+    tx_wrap(L->cx + 20, V.y2 + 38, L->cw - 40, "Descarga el archivo de huggingface.co/ggerganov/whisper.cpp (carpeta \"Files\") y c\xC3\xB3pialo en la carpeta MODELOS de la unidad SOMA del pendrive, junto a ggml-base-q5_1.bin. Despu\xC3\xA9s elige aqu\xC3\xAD el modelo y pulsa Instalar (o dicta: se instala solo). Sirven tambi\xC3\xA9n otras variantes del mismo tama\xC3\xB1o (q5_0, q8_0); el nivel se deduce del nombre: base, small, large/turbo.", 11, KC_DIM, 18);
+}
+static int click_voz(const struct sl *L, int32_t mx, int32_t my)
+{
+    struct vz_lay V; vz_lay(L, &V);
+    for (int t = 0; t < VOZ_TIERS; t++) {
+        int ry = V.row_y + t * (V.row_h + 8);
+        if (mx >= L->cx + 16 && mx < L->cx + L->cw - 16 && my >= ry && my < ry + V.row_h) {
+            if (t != voz_pref()) { voz_set_pref(t); g_vz_msg[0] = 0; vz_start(0); }
+            return 1;
+        }
+    }
+    if (mx >= L->cx + 20 && mx < L->cx + 20 + V.btn_w && my >= V.btn_y && my < V.btn_y + 32 && !g_vz_busy) {
+        int p = voz_pref();
+        g_vz_msg[0] = 0;
+        vz_start(!g_vz_inst[p] && g_vz_stick[p] ? p + 1 : 0);
+        return 1;
+    }
+    return 0;
+}
+#else
+static void voz_page_open(void) { }
+static int voz_page_tick(void) { return 0; }
+static void render_voz(const struct sl *L)
+{
+    tx(L->cx, L->y + 18, 30, "Voz y dictado", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "El reconocimiento de voz (whisper.cpp) de momento solo funciona en x86_64 (necesita AVX2).", 12, KC_DIM, 0);
+}
+static int click_voz(const struct sl *L, int32_t mx, int32_t my) { (void)L; (void)mx; (void)my; return 0; }
+#endif
+
+#define NPAGES NITEMS
 static int g_sc[NPAGES], g_sc_max[NPAGES], g_sdrag;           /* SOMA_227_IMAGEN: desplazamiento por pagina */
 static int sc_page(void) { return g_page >= 0 && g_page < NPAGES ? g_page : 0; }
+void settings_goto_voz(void) { g_page = PAGE_VOZ; voz_page_open(); }
 void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int focus)
 {
     (void)focus;
@@ -1060,6 +1216,7 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     case PAGE_IA:       render_ia(&C); break;
     case PAGE_PANTALLA: render_pantalla(&C); break;
     case PAGE_ICONOS:   render_iconos(&C); break;
+    case PAGE_VOZ:      render_voz(&C); break;          /* SOMA_246_VOZ_MODELOS */
     case PAGE_SISTEMA:  render_sistema(&C); break;
     case PAGE_ACERCA:   render_acerca(&C); break;
     default:            render_apariencia(&C); break;
@@ -1116,7 +1273,7 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     struct sl L; lay(&L, x, y, w, h);
     g_drag = 0;
     if (mx >= L.x + 10 && mx < L.x + L.side_w - 10) {                   /* SOMA_175C: barra lateral */
-        for (int i = 0; i < 8; i++) { int iy = sb_y(&L, i); if (my >= iy && my < iy + sb_step(&L) - 6) { g_page = i; g_pw_focus = 0; g_ia_focus = -1; if (i == PAGE_IA && !g_ia_busy) g_ia_loaded = 0; return i == PAGE_IA; } }
+        for (int i = 0; i < NITEMS; i++) { int iy = sb_y(&L, i); if (my >= iy && my < iy + sb_step(&L) - 6) { g_page = i; g_pw_focus = 0; g_ia_focus = -1; if (i == PAGE_IA && !g_ia_busy) g_ia_loaded = 0; if (i == PAGE_VOZ) voz_page_open(); return i == PAGE_IA || i == PAGE_VOZ; } }
     }
     int pg = sc_page();
     if (g_sc_max[pg] > 0 && mx >= L.x + L.w - 16 && mx < L.x + L.w && my >= L.y && my < L.y + L.h) {   /* SOMA_227_IMAGEN: barra */
@@ -1130,6 +1287,7 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     if (g_page == PAGE_PANTALLA) return click_pantalla(&L, mx, my);     /* SOMA_225_AJUSTES */
     if (g_page == PAGE_ICONOS) return click_iconos(&L, mx, my);
     if (g_page == PAGE_SISTEMA) return click_sistema(&L, mx, my);      /* SOMA_226_SISTEMA */
+    if (g_page == PAGE_VOZ) return click_voz(&L, mx, my);              /* SOMA_246_VOZ_MODELOS */
     if (my >= L.sl_y - 6 && my < L.sl_y + 26 && mx >= L.sl_x - 12 && mx < L.sl_x + L.sl_w + 12) { g_drag = 1; int c = set_opacity_from(&L, mx); if (c) save(); return c; }
     if (mx >= L.tg_x && mx < L.tg_x + 44 && my >= L.tg_y && my < L.tg_y + 24) { g_active_opaque = !g_active_opaque; save(); return 1; }
     if (click_reset(&L, mx, my, L.reset_y)) return 1;

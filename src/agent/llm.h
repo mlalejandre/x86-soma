@@ -34,6 +34,13 @@ int  llm_launcher_start(const char *model, uint32_t max_wait_ms, void (*progress
 int  llm_launcher_stop(void);                                 /* 0 = parado */
 extern char llm_last_error[200];                              /* motivo del ultimo fallo, en claro */
 
+/* SOMA_248_DOC: chat con indicaciones de sistema propias e imagenes (struct llm_img de llm_proto.h). 1 = respuesta, 0 = fallo,
+ * -2 = el modelo no admite imagenes (se recuerda para ese modelo: llm_vision_unsupported). */
+struct llm_img;
+int  llm_chat_ex(const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
+                 char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
+int  llm_vision_unsupported(void);
+
 /* Suite de verificacion HTTP + LLM. */
 void net_run_llm_test(void);
 

@@ -12,7 +12,7 @@ enum { BF_FLOAT = 1, BF_ABS = 2, BF_FIXED = 4, BF_BFC = 8, BF_ANON = 16, BF_REL 
 enum { II_TEXT = 1, II_OPEN, II_CLOSE, II_BR, II_ATOM, II_FLOAT, II_ABS };
 struct wii { uint8_t type; const struct wstyle *st; struct wnode *node; struct wnode *link; const char *txt; uint32_t len; struct wbox *box; };
 
-struct wfrag { int32_t x, y, w; int16_t asc, dsc; uint8_t va; int16_t sh; const char *txt; uint16_t len; const struct wstyle *st; struct wnode *node; struct wnode *link; };
+struct wfrag { int32_t x, y, w; int16_t asc, dsc; uint8_t va; int16_t sh; const char *txt; uint16_t len; const struct wstyle *st; struct wnode *node; struct wnode *link; int32_t jsp; };   /* SOMA_248_DOC: jsp = espacio extra por blanco (1/64 px, text-align: justify) */
 struct wdeco { int32_t x0, y0, x1, y1; const struct wstyle *st; struct wnode *node; struct wnode *link; uint8_t first, last; };
 
 struct wbox {

@@ -27,5 +27,12 @@ int smp_found(void);                     /* procesadores que declara el firmware
 uint64_t smp_core_wakes(int i);          /* veces que el secundario i desperto de hlt */
 uint32_t smp_core_boot_ms(int i);        /* lo que tardo en arrancar */
 uint32_t smp_tramp_addr(void);
+/* SOMA_244_HILOS: hilos de usuario (solo calculo) en los nucleos secundarios; ver smp.c */
+int  smp_user_free(void);
+int  smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint64_t exit_rip, uint32_t owner);
+int  smp_user_poll(int core, uint32_t owner, int64_t *status);
+void smp_user_kill_owner(uint32_t owner);
+int  smp_user_fault(uint64_t vector, uint64_t rip, uint64_t cr2);
+void smp_user_info(int core, int *vec, uint64_t *rip, uint64_t *cr2);
 #endif
 #endif

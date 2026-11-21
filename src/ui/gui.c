@@ -61,6 +61,10 @@
 #include "scrcap.h"
 #include "camera.h"
 #include "micrec.h"
+#if defined(__x86_64__)
+#include "voz_sys.h"      /* SOMA_244_VOZ */
+#include "usermode.h"
+#endif
 #include "sysicon.h"                                /* SOMA_218_ENERGIA */
 #include "soma_str.h"
 /* SOMA_221_RESCATE: el escritorio sabe en todo momento a quien da paso (el mismo dueno que usa el Monitor para contar la CPU) y
@@ -297,7 +301,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_FILE_MANAGER:   return 480u;
     case APP_IMAGE_VIEWER:   return 460u;
     case APP_NOTEPAD:        return 400u;
-    case APP_LAYOUT:         return 820u;   /* PARCHE 084: hoja + barra */
+    case APP_LAYOUT:         return 900u;   /* PARCHE 084: hoja + barra (SOMA_248_DOC: + PDF, HTML y Revisar IA) */
     case APP_SETTINGS:       return 760u;   /* PARCHE 085 */
     case APP_PDF:            return 760u;   /* PARCHE 088 */
     case APP_SYSMON:         return 900u;   /* PARCHE 089 */
@@ -320,6 +324,7 @@ static uint32_t her_app_min_w(enum app_mode app)
 #include "gui_iconos.c"          /* iconos en orbita y vectoriales */
 #include "gui_ventanas.c"        /* arrastre de iconos y gadget */
 #include "gui_agente.c"          /* el agente en su propio hilo y los turnos de pantalla */
+#include "gui_voz.c"             /* SOMA_245_PTT: dictado para todo el sistema (mantener Alt) */
 #include "gui_orbe_fx.c"         /* efectos del orbe: particulas */
 #include "gui_fotograma.c"       /* dibujo de cada fotograma */
 #include "gui_minimizar.c"       /* minimizar */
@@ -586,6 +591,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         acct_set_owner(ACCT_DESKTOP);   /* PARCHE 089: el bucle y la animacion son del escritorio; cada aplicacion se cuenta al dibujarse y al recibir eventos */
         g_gui_loop_on = 1;
         { struct tcb *gt = thread_current(); if (gt) g_gui_tid = gt->tid; }   /* PARCHE 098 */
+        { struct tcb *gt = thread_current(); if (gt) g_turn_gui_tid = gt->tid; }   /* SOMA_248_DOC */
 #if defined(__x86_64__)
         if (__builtin_setjmp(her_jb)) {                         /* SOMA_221_RESCATE: vuelta desde una aplicacion colgada o averiada */
             her_after_rescue();
@@ -599,6 +605,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             g_gui_grant = 1;
             while (g_gui_req && g_agent_thr_on) thread_sleep(1);
             g_gui_grant = 0;
+            HER_SYNC_WIN(); her_refresh_all(); fb_present();
+        }
+        if (g_turn_req) {               /* SOMA_248_DOC: otro hilo dibuja fuera de pantalla (documentos) */
+            gui_turn_service();
             HER_SYNC_WIN(); her_refresh_all(); fb_present();
         }
         if (current_app == APP_SETTINGS && !her_dragging && !her_resizing && settings_tick()) {   /* SOMA_175C: Ajustes > Redes al dia */
@@ -710,6 +720,11 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             gui_stress_n = 0; gui_stress_done = 1;
             HER_SYNC_WIN(); her_refresh_all(); fb_present();
             continue;
+        }
+        {   /* SOMA_245_PTT: dictado para todo el sistema (mantener Alt); la pastilla la dibuja fb_present encima de todo */
+            int vz = her_voz_tick();
+            if (vz == 2) { HER_SYNC_WIN(); her_refresh_all(); fb_present(); }
+            else if (vz == 1) fb_present();
         }
         if (console_take_super()) {                             /* SOMA_168B_ORBE: tecla Windows / Option */
             if (her_num_windows > 0) {
@@ -1238,6 +1253,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             char c = kgetc();
             if (soma_clip_gui_key(c)) continue;   /* SOMA_PARCHE_PORTAPAPELES */
             acct_set_owner((uint8_t)(ACCT_APP0 + current_app));   /* PARCHE 089 */
+            if (c == 27 && her_voz_escape()) continue;                       /* SOMA_244_VOZ: Esc cancela el dictado */
             if (c == 27) {
                 if (current_app == APP_TERMINAL_SHELL && term_popup_open()) {      /* SOMA_PARCHE_024_TERM: Esc cierra el menu */
                     term_popup_close();

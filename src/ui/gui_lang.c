@@ -386,8 +386,10 @@ void gui_soma_win_text(int x, int y, const char *str, uint32_t color)
     }
 }
 
+static volatile uint32_t g_soma_presents;   /* SOMA_248_DOC: fotogramas presentados (para la captura de la revision visual) */
 void gui_soma_win_present(void)
 {
+    g_soma_presents++;
     if (!fb_is_active()) return;
     if (!gui_on_gui_thread()) { g_soma_dirty = 1; return; }   /* PARCHE 098: el escritorio compone el fotograma */
     int idx = her_find_window(APP_SOMA_APP);
@@ -398,6 +400,22 @@ void gui_soma_win_present(void)
     fb_present();
 }
 
+/* SOMA_248_DOC: copia de lo que ve el usuario en la ventana del programa (la parte de la superficie que cabe en la ventana).
+ * Devuelve el numero de fotogramas presentados hasta ahora; *px (kmalloc) queda a 0 si no hay ventana. */
+uint32_t gui_soma_win_snapshot(uint32_t **px, int *w, int *h)
+{
+    *px = 0; *w = *h = 0;
+    if (!soma_app_surf || !gui_soma_win_is_active()) return g_soma_presents;
+    int ww, wh; gui_soma_win_get_size(&ww, &wh);
+    if (ww > SOMA_APP_SURF_W) ww = SOMA_APP_SURF_W;
+    if (wh > SOMA_APP_SURF_H) wh = SOMA_APP_SURF_H;
+    uint32_t *b = (uint32_t *)kmalloc((size_t)ww * (size_t)wh * 4u);
+    if (!b) return g_soma_presents;
+    for (int y = 0; y < wh; y++) for (int x = 0; x < ww; x++) b[y * ww + x] = soma_app_surf[(uint32_t)y * SOMA_APP_SURF_W + (uint32_t)x] | 0xFF000000u;
+    *px = b; *w = ww; *h = wh;
+    return g_soma_presents;
+}
+uint32_t gui_soma_win_presents(void) { return g_soma_presents; }
 void gui_soma_win_get_size(int *out_w, int *out_h)
 {
     int idx = her_find_window(APP_SOMA_APP);
@@ -652,4 +670,3 @@ static void ensure_window_geom(void)
     g_live_win_h = HER_CLI_H(her_win_h);
 
 }
-

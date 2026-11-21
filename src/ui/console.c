@@ -406,7 +406,7 @@ void kprint_ip(const uint8_t *ip)
 }
 
 #if defined(__x86_64__) || defined(__aarch64__)          /* PARCHE 062: en aarch64 la cola la alimenta el teclado USB (xHCI) */
-#define KBD_BUF_SIZE 128
+#define KBD_BUF_SIZE 4096                       /* SOMA_245_PTT: cabe un dictado entero (antes 128) */
 static volatile char kbd_buf[KBD_BUF_SIZE];
 static volatile uint32_t kbd_head = 0;
 static volatile uint32_t kbd_tail = 0;
@@ -624,13 +624,43 @@ extern void hotkey_post(int code) __attribute__((weak));   /* SOMA_168_T480S: ba
 static volatile uint32_t kbd_super_count;
 static int lalt_down, lalt_other;
 uint32_t console_take_super(void) { return __sync_lock_test_and_set(&kbd_super_count, 0); }
+/* SOMA_245_PTT: el Alt izquierdo es "pulsar para hablar" en todo el sistema. Con el modo encendido (console_set_alt_voice), el
+ * teclado solo informa: Alt abajo/arriba, numero de pulsaciones y si se toco otra tecla con Alt (atajo: no es dictado). La GUI
+ * graba mientras esta pulsado y, si fue solo un toque, llama al orbe como antes (console_post_super). */
+static volatile int kbd_alt_voice, kbd_ptt_down, kbd_ptt_other;
+static volatile uint32_t kbd_ptt_seq;
+void console_set_alt_voice(int on) { kbd_alt_voice = on ? 1 : 0; }
+void console_ptt_state(int *down, int *other, uint32_t *seq) { *down = kbd_ptt_down; *other = kbd_ptt_other; *seq = kbd_ptt_seq; }
+void console_post_super(void) { kbd_super_count++; kbd_events++; }
+/* inyecta texto (UTF-8) en la cola del teclado, como si se escribiera: lo usa el dictado. Devuelve los bytes que cupieron. */
+uint32_t console_inject_text(const char *t)
+{
+    uint32_t n = 0;
+    unsigned long fl;
+#ifdef __x86_64__
+    __asm__ volatile ("pushfq; cli; popq %0" : "=r"(fl) :: "memory");        /* el IRQ del teclado tambien escribe en la cola */
+#else
+    __asm__ volatile ("mrs %0, daif\n msr daifset, #2" : "=r"(fl) :: "memory");
+#endif
+    for (; t && t[n]; n++) {
+        uint32_t next = (kbd_head + 1) % KBD_BUF_SIZE;
+        if (next == kbd_tail) break;
+        kbd_mod[kbd_head] = 0; kbd_buf[kbd_head] = t[n]; kbd_head = next; kbd_events++;
+    }
+#ifdef __x86_64__
+    __asm__ volatile ("pushq %0; popfq" :: "r"(fl) : "memory", "cc");
+#else
+    __asm__ volatile ("msr daif, %0" :: "r"(fl) : "memory");
+#endif
+    return n;
+}
 static void keyboard_scancode(uint8_t sc)
 {
     if (sc == 0xE0) {
         e0_prefix = 1;
         return;
     }
-    if (lalt_down && !(sc & 0x80) && (sc != 0x38 || e0_prefix)) lalt_other = 1;   /* SOMA_168B: Option acompanada */
+    if (lalt_down && !(sc & 0x80) && (sc != 0x38 || e0_prefix)) { lalt_other = 1; kbd_ptt_other = 1; }   /* SOMA_168B: Option acompanada */
     if (e0_prefix) {
         e0_prefix = 0;
         if (sc == 0x5B || sc == 0x5C) { kbd_super_count++; kbd_events++; return; }   /* SOMA_168B: tecla Windows */
@@ -658,8 +688,11 @@ static void keyboard_scancode(uint8_t sc)
         if (k != 0) kbd_push_byte(k);   /* PARCHE 094: con sus modificadores */
         return;
     }
-    if (sc == 0x38) { if (!lalt_down) { lalt_down = 1; lalt_other = 0; } return; }     /* SOMA_168B: Option / Alt izquierdo */
-    if (sc == 0xB8) { if (lalt_down && !lalt_other) { kbd_super_count++; kbd_events++; } lalt_down = 0; return; }
+    if (sc == 0x38) {                                                                   /* SOMA_168B: Option / Alt izquierdo */
+        if (!lalt_down) { lalt_down = 1; lalt_other = 0; kbd_ptt_other = 0; kbd_ptt_down = 1; kbd_ptt_seq++; kbd_events++; }   /* SOMA_245_PTT */
+        return;
+    }
+    if (sc == 0xB8) { if (lalt_down && !lalt_other && !kbd_alt_voice) { kbd_super_count++; kbd_events++; } lalt_down = 0; kbd_ptt_down = 0; kbd_events++; return; }
     if (sc == 0x1D) {
         ctrl_active = 1;
         return;

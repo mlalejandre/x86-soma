@@ -48,6 +48,7 @@ int browser_r3_wanted(void); int browser_r3_active(void);
 #include "console.h"
 #include "fs.h"
 #include "coder_app.h"
+#include "docagent.h"   /* SOMA_248_DOC */
 #include "coder_demo.h"
 #include "web_net.h"   /* PARCHE 087 */
 #include "mem.h"
@@ -744,6 +745,7 @@ static const struct command_entry cmd_table[] = {
     { "grabadora",    cmd_grabadora,    CMD_F_NORMAL, "Abre la aplicacion Grabadora (microfono: grabar, escuchar, guardar WAV)" },
     { "big",          cmd_big,          CMD_F_NORMAL, "Almacen de archivos grandes: big info|format yes|ls|mkdir|rm|mv|stat|cat|put|get|write|truncate|fsck|bench" },
     { "exec",         cmd_exec,         CMD_F_NORMAL, "Ejecuta un programa ELF de usuario (ring 3): exec [-b] /bin/hello.elf [plazo_ms]" },
+    { "habla",        cmd_habla,        CMD_F_NORMAL, "Texto a voz (voz de Piper): habla texto | habla instalar | habla parar | habla (estado)" },
     { "voz",          cmd_voz,          CMD_F_NORMAL, "Voz a texto (whisper.cpp, espanol): voz archivo.wav | voz ultima | voz instalar | voz modelo. Opciones: -T marcas de tiempo, -l idioma, -v detalles" },
     { "python",       cmd_python,       CMD_F_NORMAL, "Python (MicroPython en ring 3; ventanas con from soma import win): python | python script.py [args] | python -c \"codigo\". Rutas relativas: /workspace" },
     { "procs",        cmd_procs,        CMD_F_NORMAL, "Lista los procesos de usuario (libera los terminados)" },
@@ -874,6 +876,7 @@ static const struct command_entry cmd_table[] = {
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
     { "imagen",       cmd_imagen,       CMD_F_SAFE,   "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)" },
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
+    { "documento",    cmd_documento,    CMD_F_NORMAL, "Documentos profesionales con IA: documento <peticion> | exportar <ruta> [pdf|html|png] | revisar <ruta> | abrir <ruta>" },
     { "suma",         cmd_suma,         CMD_F_SAFE,   "Tamano y CRC-32 de un archivo: suma <archivo>" },
     { "descargar",    cmd_descargar,    CMD_F_SAFE,   "Descarga una URL a un archivo: descargar <url> [archivo] (sin limite de 16 KiB)" },
 #if defined(__x86_64__)

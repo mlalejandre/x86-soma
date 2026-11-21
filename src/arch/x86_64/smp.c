@@ -30,6 +30,7 @@
 #define SMP_STACK   (32 * 1024)
 #define SMP_IST     (16 * 1024)
 #define WAKE_VECTOR 0xF0
+#define KICK_VECTOR 0xF1           /* SOMA_244_HILOS: parar un hilo de usuario */
 #define SPIN_BEFORE_HLT 400            /* pausas antes de dormir: dos volcados seguidos no pagan el despertar */
 
 /* ---------------------------------------------------------------- trampolin (se copia a memoria baja; nunca corre aqui) */
@@ -127,12 +128,62 @@ __asm__(
     "    popq %rcx\n"
     "    popq %rax\n"
     "    iretq\n"
+
+    /* SOMA_244_HILOS: aviso para que un nucleo deje el hilo de usuario que ejecuta (proceso que muere). Si interrumpio a
+     * ring 3, smp_user_kicked vuelve al bucle del nucleo (no regresa aqui); si no, solo EOI. */
+    ".global smp_kick_stub\n"
+    "smp_kick_stub:\n"
+    "    testb $3, 8(%rsp)\n"
+    "    jz 4f\n"
+    "    andq $-16, %rsp\n"
+    "    call smp_user_kicked\n"
+    "    ud2\n"
+    "4:  pushq %rax\n"
+    "    pushq %rcx\n"
+    "    pushq %rdx\n"
+    "    cmpb $0, smp_eoi_x2(%rip)\n"
+    "    jne 5f\n"
+    "    movq smp_eoi_mmio(%rip), %rax\n"
+    "    movl $0, (%rax)\n"
+    "    jmp 6f\n"
+    "5:  movl $0x80B, %ecx\n"
+    "    xorl %eax, %eax\n"
+    "    xorl %edx, %edx\n"
+    "    wrmsr\n"
+    "6:  popq %rdx\n"
+    "    popq %rcx\n"
+    "    popq %rax\n"
+    "    iretq\n"
+
+    /* SOMA_244_HILOS: int64_t smp_user_enter(struct ujob *j): guarda el contexto del nucleo y salta a ring 3 con el CR3 del
+     * proceso (j->cr3), en j->rip con la pila j->rsp y rdi = j->arg. Vuelve por smp_user_resume(j, estado). */
+    ".global smp_user_enter, smp_user_resume\n"
+    "smp_user_enter:\n"
+    "    pushq %rbx\n pushq %rbp\n pushq %r12\n pushq %r13\n pushq %r14\n pushq %r15\n"
+    "    movq %rsp, 0(%rdi)\n"                     /* j->saved_rsp */
+    "    movq 8(%rdi), %rax\n"
+    "    movq %rax, %cr3\n"                        /* j->cr3 */
+    "    pushq $0x1B\n"                            /* SS de usuario */
+    "    pushq 24(%rdi)\n"                         /* j->rsp */
+    "    pushq $0x202\n"                           /* RFLAGS: IF (para el aviso de parada) */
+    "    pushq $0x23\n"                            /* CS de usuario */
+    "    pushq 16(%rdi)\n"                         /* j->rip */
+    "    movq 32(%rdi), %rdi\n"                    /* argumento */
+    "    xorl %eax, %eax\n xorl %ebx, %ebx\n xorl %ecx, %ecx\n xorl %edx, %edx\n xorl %esi, %esi\n xorl %ebp, %ebp\n"
+    "    xorl %r8d, %r8d\n xorl %r9d, %r9d\n xorl %r10d, %r10d\n xorl %r11d, %r11d\n"
+    "    xorl %r12d, %r12d\n xorl %r13d, %r13d\n xorl %r14d, %r14d\n xorl %r15d, %r15d\n"
+    "    iretq\n"
+    "smp_user_resume:\n"                           /* (rdi = j, rsi = estado) */
+    "    movq 0(%rdi), %rsp\n"
+    "    movq %rsi, %rax\n"
+    "    popq %r15\n popq %r14\n popq %r13\n popq %r12\n popq %rbp\n popq %rbx\n"
+    "    ret\n"
     ".popsection\n"
 );
 
 extern const uint8_t smp_tramp_start[], smp_tramp_end[], smp_tr_jmp32[], smp_tr_cr3[], smp_tr_jmp64[], smp_tr_entry[];
 extern const uint8_t smp_tr_gdt[], smp_tr_gdtbase[], smp_tr_pm32[], smp_tr_lm64[];
-extern void smp_ap_entry64(void), smp_wake_stub(void);
+extern void smp_ap_entry64(void), smp_wake_stub(void), smp_kick_stub(void);
 extern uint64_t gdt64[];
 void smp_ap_main(uint64_t idx);
 
@@ -325,6 +376,7 @@ void smp_init(void)
     smp_eoi_x2 = (uint8_t)apic_lapic_x2();
     smp_eoi_mmio = (uint64_t)apic_lapic_mmio() + 0xB0;
     idt_set_vector(WAKE_VECTOR, smp_wake_stub);
+    idt_set_vector(KICK_VECTOR, smp_kick_stub);              /* SOMA_244_HILOS */
     build_tramp();
     int n = 1;
     for (int i = 0; i < a->nlapic && n < SMP_MAX; i++) {
@@ -351,9 +403,129 @@ const char *smp_method(void) { return g_method; }
 const char *smp_why(void) { return g_why; }
 int smp_found(void) { return g_found; }
 
+/* ================================================================ SOMA_244_HILOS: hilos de usuario en los nucleos secundarios
+ * Un proceso (el reconocimiento de voz) puede ejecutar trabajos de CALCULO en los nucleos libres: cada hilo corre en ring 3 en un
+ * nucleo secundario, con el CR3 del proceso y con interrupciones (solo para el aviso de parada; el LAPIC no da otras). El hilo NO
+ * puede hacer llamadas al sistema (la instruccion syscall no esta activa en los secundarios: da #UD) ni provocar fallos de pagina
+ * que haya que servir (el proceso toca antes su memoria). Termina ejecutando ud2 en j->exit_rip; cualquier otra excepcion lo
+ * termina con error. Mientras haya hilos de usuario, smp_parallel calcula solo en el nucleo 0 (no espera a nadie). */
+struct ujob {
+    uint64_t saved_rsp, cr3, rip, rsp, arg, exit_rip;     /* 0..40: los usa el ensamblador */
+    volatile int64_t status;
+    volatile int state;                                  /* 0 libre, 1 reservado/en marcha, 2 terminado */
+    volatile int in_user;
+    uint32_t owner;
+    uint64_t fault_rip, fault_cr2; int fault_vec;
+    uint8_t *trap_stack;
+};
+_Static_assert(__builtin_offsetof(struct ujob, exit_rip) == 40, "struct ujob: desplazamientos del ensamblador");
+#define UJOB_TRAP 16384
+static struct ujob g_ujob[SMP_MAX];
+static volatile int g_user_cores;
+extern int64_t smp_user_enter(struct ujob *j);
+extern void smp_user_resume(struct ujob *j, int64_t status) __attribute__((noreturn));
+uint64_t vmm_kernel_as(void);
+int usermode_avx2_ok(void);
+
+static void smp_user_job(int idx, int n, void *arg)
+{
+    (void)n;
+    struct ujob *j = (struct ujob *)arg;
+    g_slot[idx].pc->tss.rsp0 = (uint64_t)(uintptr_t)(j->trap_stack + UJOB_TRAP);
+    __asm__ volatile ("fninit");
+    { uint32_t mx = 0x1F80; __asm__ volatile ("ldmxcsr %0" : : "m"(mx)); }
+    if (usermode_avx2_ok()) __asm__ volatile ("vzeroall" ::: "memory");
+    j->in_user = 1;
+    int64_t st = smp_user_enter(j);
+    j->in_user = 0;
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(vmm_kernel_as()) : "memory");
+    j->status = st;
+    __atomic_store_n(&j->state, 2, __ATOMIC_RELEASE);
+}
+static struct ujob *this_ujob(void)
+{
+    uint32_t id = apic_this_id();
+    for (int c = 1; c < g_ncpu; c++) if (g_slot[c].apic_id == id && g_ujob[c].state == 1 && g_ujob[c].in_user) return &g_ujob[c];
+    return 0;
+}
+/* Excepcion en ring 3: si es un hilo de usuario de un secundario, lo termina (0 = salida normal por ud2 en exit_rip). */
+int smp_user_fault(uint64_t vector, uint64_t rip, uint64_t cr2)
+{
+    if (g_user_cores == 0) return 0;
+    struct ujob *j = this_ujob();
+    if (!j) return 0;
+    int64_t st = 0;
+    if (!(vector == 6 && rip == j->exit_rip)) { j->fault_vec = (int)vector; j->fault_rip = rip; j->fault_cr2 = cr2; st = -1000 - (int64_t)vector; }
+    smp_user_resume(j, st);
+}
+void smp_user_kicked(void)
+{
+    if (smp_eoi_x2) wrmsr_(0x80B, 0); else *(volatile uint32_t *)(uintptr_t)smp_eoi_mmio = 0;
+    struct ujob *j = this_ujob();
+    if (!j) { for (;;) __asm__ volatile ("cli; hlt"); }  /* no deberia pasar */
+    smp_user_resume(j, -4000);
+}
+int smp_user_free(void)
+{
+    if (!g_enabled) return 0;
+    int n = 0;
+    for (int c = 1; c < g_ncpu; c++) if (g_slot[c].online && g_ujob[c].state == 0) n++;
+    return n;
+}
+/* Lanza un hilo de usuario en un nucleo libre. Devuelve el nucleo (>0) o <0 (-11 = no hay nucleo libre, -12 sin memoria). */
+int smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint64_t exit_rip, uint32_t owner)
+{
+    if (!g_enabled || g_ncpu < 2 || __atomic_load_n(&g_busy, __ATOMIC_ACQUIRE)) return -11;
+    int c;
+    for (c = 1; c < g_ncpu; c++) if (g_slot[c].online && g_ujob[c].state == 0) break;
+    if (c >= g_ncpu) return -11;
+    struct ujob *j = &g_ujob[c];
+    if (!j->trap_stack) { j->trap_stack = (uint8_t *)kmalloc(UJOB_TRAP); if (!j->trap_stack) return -12; }
+    j->cr3 = cr3; j->rip = rip; j->rsp = rsp; j->arg = arg; j->exit_rip = exit_rip; j->owner = owner;
+    j->status = 0; j->in_user = 0; j->fault_vec = -1;
+    j->state = 1;
+    __atomic_add_fetch(&g_user_cores, 1, __ATOMIC_SEQ_CST);
+    struct slot *s = &g_slot[c];
+    s->fn = smp_user_job; s->arg = j; s->idx = c; s->n = 1;
+    uint32_t q = s->seq + 1;
+    __atomic_store_n(&s->seq, q, __ATOMIC_SEQ_CST);
+    __asm__ volatile ("mfence" ::: "memory");
+    if (__atomic_load_n(&s->sleeping, __ATOMIC_SEQ_CST)) apic_send_ipi(s->apic_id, WAKE_VECTOR);
+    return c;
+}
+/* 1 = terminado (estado en *st; el nucleo queda libre), 0 = sigue, <0 = no es de ese dueno */
+int smp_user_poll(int c, uint32_t owner, int64_t *st)
+{
+    if (c < 1 || c >= g_ncpu || g_ujob[c].state == 0 || g_ujob[c].owner != owner) return -1;
+    if (__atomic_load_n(&g_ujob[c].state, __ATOMIC_ACQUIRE) != 2) return 0;
+    while (__atomic_load_n(&g_slot[c].done, __ATOMIC_ACQUIRE) != g_slot[c].seq) __asm__ volatile ("pause");   /* el bucle del nucleo cerro el trabajo */
+    if (st) *st = g_ujob[c].status;
+    g_ujob[c].state = 0;
+    __atomic_sub_fetch(&g_user_cores, 1, __ATOMIC_SEQ_CST);
+    return 1;
+}
+void smp_user_info(int c, int *vec, uint64_t *rip, uint64_t *cr2) { if (c > 0 && c < SMP_MAX) { *vec = g_ujob[c].fault_vec; *rip = g_ujob[c].fault_rip; *cr2 = g_ujob[c].fault_cr2; } }
+/* Para (y libera) todos los hilos de un dueno: el proceso termina. Espera hasta 200 ms a cada uno. */
+void smp_user_kill_owner(uint32_t owner)
+{
+    if (g_user_cores == 0) return;
+    for (int c = 1; c < g_ncpu; c++) {
+        struct ujob *j = &g_ujob[c];
+        if (j->state == 0 || j->owner != owner) continue;
+        uint64_t end = rdtsc_() + us_ticks(200000);
+        while (__atomic_load_n(&j->state, __ATOMIC_ACQUIRE) == 1 && rdtsc_() < end) {
+            if (j->in_user) apic_send_ipi(g_slot[c].apic_id, KICK_VECTOR);
+            delay_us(50);
+        }
+        if (j->state == 2) { int64_t st; (void)smp_user_poll(c, owner, &st); }
+        else kprint("SMP: un hilo de usuario no se detuvo (el nucleo queda fuera de servicio)\n");
+    }
+}
+
 int smp_parallel_n(smp_fn fn, void *arg, int n)
 {
     int cpus = smp_cpus();
+    if (__atomic_load_n(&g_user_cores, __ATOMIC_ACQUIRE)) { fn(0, 1, arg); return 1; }   /* SOMA_244: nucleos ocupados por hilos de usuario */
     if (n > cpus) n = cpus;
     if (n < 1) n = 1;
     if (n == 1 || __atomic_exchange_n(&g_busy, 1, __ATOMIC_ACQUIRE)) { fn(0, 1, arg); return 1; }   /* sin anidar */

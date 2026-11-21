@@ -3,6 +3,7 @@
 #include "agent_net.h"
 #include "agent.h"
 #include "coder_app.h"
+#include "docagent.h"   /* SOMA_248_DOC */
 #include "rtc.h"
 #include "console.h"
 #include "llm.h"
@@ -88,10 +89,9 @@ static const struct agent_profile AGENT_REGISTRY[] = {
     {
         "maquetador",
         "MAQUETADOR - DOCUMENT LAYOUT AGENT",
-        "Eres Maquetador, el agente de diseno editorial de SOMA. PROHIBIDO usar herramientas (write, shell, patch, search, curl). NO guardes archivos. NO expliques. NO uses markdown. Tu UNICA salida es el documento en formato #SOMA-LAYOUT v1 en texto ASCII (sin acentos: usa n por ñ, e por é, etc.). Empieza por la linea #SOMA-LAYOUT v1. Meta: TITLE, SUBTITLE, FONT (modern|classic|bold), ALIGN (left|center), MARGIN (8-64). Tras --- bloques H1:/H2:/H3:/P:/QUOTE:/LIST:/HR/FOOTER:. En LIST el valor NO lleva guion inicial (el render lo añade). Texto profesional y claro."
-        "Reglas: 1) Empieza siempre con la linea #SOMA-LAYOUT v1. 2) Meta: TITLE, SUBTITLE, FONT (modern|classic|bold), ALIGN (left|center), MARGIN (8-64). "
-        "3) Tras --- usa bloques H1:/H2:/H3:/P:/QUOTE:/LIST:/HR/FOOTER:. 4) No inventes HTML ni Markdown. 5) Texto profesional, claro y estructurado. "
-        "6) Si recibes notas del buscador, reorganiza y maqueta; no copies basura de la web.",
+        "Eres Maquetador, el agente de diseno editorial de SOMA (SOMA_248_DOC). Escribes documentos con acabado profesional en HTML con la hoja de estilo de la casa "
+        "(o LaTeX para papers con formulas): informes, papers, revistas, presentaciones 16:9, cartas, CV, email y libros. SOMA los pagina, los revisa (con vision si el "
+        "modelo la tiene) y los exporta a PDF. Las misiones de documentos las resuelve el modulo docagent; si te llega una aqui, responde solo con el documento completo.",
         "/agent/maquetador.txt",
         "/agent/maquetador_stm.txt"
     }
@@ -1685,6 +1685,31 @@ static int programador_should_handle(const char *m)
     for (int i = 0; noun[i]; i++) if (mayordomo_has(m, noun[i])) n = 1;
     return v && n;
 }
+/* SOMA_248_DOC: los documentos con formato (informes, papers, presentaciones, revistas, cartas, CV, email...) los hace el maquetador */
+static void maquetador_run(const char *mission)
+{
+    extern int gui_is_running(void);
+    static char path[96];
+    kprint("\n\033[1;35m[MAQUETADOR] La mision es un documento con formato: lo redacta, maqueta, revisa y exporta el maquetador.\033[0m\n");
+    agent_last_response[0] = '\0';
+    /* desde el Maquetador: "maquetador: <tema>" y "maquetador revisa <ruta> [indicaciones]" */
+    if ((mission[0] | 32) == 'm' && (mission[1] | 32) == 'a' && (mission[2] | 32) == 'q' && (mission[3] | 32) == 'u' && (mission[4] | 32) == 'e' &&
+        (mission[5] | 32) == 't' && (mission[6] | 32) == 'a' && (mission[7] | 32) == 'd' && (mission[8] | 32) == 'o' && (mission[9] | 32) == 'r') {
+        mission += 10; while (*mission == ':' || *mission == ' ') mission++;
+        if (mission[0] == 'r' && mission[1] == 'e' && mission[2] == 'v' && mission[3] == 'i' && mission[4] == 's' && mission[5] == 'a' && mission[6] == ' ') {
+            const char *a = mission + 7; while (*a == ' ') a++;
+            uint32_t k = 0; while (a[k] && a[k] != ' ' && k < sizeof path - 1) { path[k] = a[k]; k++; }
+            path[k] = 0; a += k; while (*a == ' ') a++;
+            int okr = docagent_review(path, a, agent_last_response, sizeof(agent_last_response));
+            mayordomo_store_reply(agent_last_response, 1);
+            if (okr && gui_is_running()) gui_open_layout_file(path);
+            return;
+        }
+    }
+    int ok = docagent_run(mission, agent_last_response, sizeof(agent_last_response), path, sizeof path);
+    mayordomo_store_reply(agent_last_response, 1);
+    if (ok && path[0] && gui_is_running()) gui_open_layout_file(path);
+}
 static void programador_run(const char *mission)
 {
     extern int gui_is_running(void);
@@ -1705,6 +1730,10 @@ void agent_run(const char *agent_name, const char *mission)
      * (las redacta el modelo: podrian llevar datos pegados). */
     { extern int shell_agent_mode(void); if (!shell_agent_mode()) agent_net_observe(mission); }
     const char *requested_agent = agent_name ? agent_name : "soma";
+    if (str_eq_ci(requested_agent, "maquetador") || (str_eq_ci(requested_agent, "soma") && docagent_should_handle(mission))) {   /* SOMA_248_DOC */
+        while (*mission == ' ') mission++;
+        if (*mission) { maquetador_run(mission); return; }
+    }
     if (str_eq_ci(requested_agent, "mayordomo")) {
         mayordomo_run(mission);
         return;

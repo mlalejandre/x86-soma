@@ -358,7 +358,11 @@ static void her_draw_user_zone(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
     } else if (current_app == APP_DESKTOP && !her_vortex_closing) {
         /* Prompt interactivo listo para escribir al agente */
         uint32_t ty = (orb_cy > 170u) ? orb_cy - 146u : 20u;
+#if defined(__x86_64__)
+        const char *hint = agent_global_focus ? "soma> escribe una mision...   (manten Alt para dictar)" : "soma> escribe una mision...";   /* SOMA_245_PTT */
+#else
         const char *hint = "soma> escribe una mision...";
+#endif
         uint32_t n = 0; while (hint[n]) n++;
         uint32_t w = n * 9u;
         uint32_t tx = (cur_w > w) ? (cur_w - w) / 2u : 0u;
@@ -441,4 +445,3 @@ static void her_draw_agent_zone(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
         }
     }
 }
-

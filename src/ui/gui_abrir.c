@@ -243,11 +243,11 @@ static void gui_open_layout_file__impl(const char *path)
     cmd_vsoma("", 0, 0);
     g_pending_app = APP_DESKTOP;
 }
-void gui_open_layout_file(const char *path)   /* PARCHE 091: el hilo del agente pide turno de pantalla */
+void gui_open_layout_file(const char *path)   /* PARCHE 091: el hilo del agente pide turno de pantalla (SOMA_248_DOC: cualquier hilo) */
 {
-    int tok = gui_enter();
+    int tok = gui_turn_begin();
     gui_open_layout_file__impl(path);
-    gui_leave(tok);
+    gui_turn_end(tok);
 }
 
 void gui_open_coder_app(void);
@@ -443,4 +443,3 @@ void gui_open_agents(void)   /* PARCHE 091: el hilo del agente pide turno de pan
 /* El estado del raton es compartido con el hilo de fondo */
 #define mouse_x g_mouse_x_s
 #define mouse_y g_mouse_y_s
-

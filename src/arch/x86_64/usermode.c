@@ -9,6 +9,7 @@
 #include "bigfs_errno.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "smp.h"
 #include "idt.h"
 #include "arch.h"
 #include "console.h"
@@ -73,6 +74,7 @@ struct uproc {
     char    *rd_out;                        /* SOMA_239: salida redirigida a un bufer del nucleo (0 = a la consola) */
     uint32_t rd_cap, rd_len;
     const char *rd_in;                      /* SOMA_239: entrada fija (lineas con \n); agotada = fin de entrada */
+    int      may_thr;                       /* SOMA_244_HILOS: puede lanzar hilos en los nucleos secundarios */
 };
 
 static struct uproc procs[USER_MAX_PROCS];
@@ -664,6 +666,43 @@ static int64_t sys_soma_vfs(uint64_t op, uint64_t ureq)
     return w < 0 ? SOMA_EIO : (int64_t)r.len;
 }
 
+/* SOMA_244_HILOS: hilos de usuario en los nucleos secundarios (ver smp.c). Solo para procesos con este bit (voz).
+ *   op 0: nucleos libres; op 1 (a1 = {rip, rsp, arg, exit_rip}): lanza un hilo -> nucleo (>0) o <0;
+ *   op 2 (a1 = nucleo): espera a que termine -> 0 bien, <0 fallo del hilo (o el proceso se para). */
+static int64_t sys_soma_thr(uint64_t op, uint64_t a1)
+{
+    struct uproc *up = usermode_cur;
+    if (op == 0) return smp_user_free();
+    if (op == 1) {
+        if (!usermode_avx2_ok()) return -38;
+        if (!user_range_ok(a1, 32)) return E_FAULT;
+        uint64_t q[4]; copy_from_user(q, a1, 32);
+        if (q[0] < USER_BASE || q[0] - USER_BASE >= USER_CODE_AREA || q[3] < USER_BASE || q[3] - USER_BASE >= USER_CODE_AREA) return -22;
+        return smp_user_start(up->as, q[0], q[1], q[2], q[3], up->tid);
+    }
+    if (op == 2) {
+        for (;;) {
+            int64_t st = 0;
+            int r = smp_user_poll((int)a1, up->tid, &st);
+            if (r < 0) return -22;
+            if (r == 1) {
+                if (st != 0 && st != -4000) {
+                    int vec; uint64_t rip, cr2; smp_user_info((int)a1, &vec, &rip, &cr2);
+                    kprint("[USER] hilo terminado por excepcion de CPU: vector "); kprint_dec((uint32_t)vec);
+                    kprint(" rip=0x"); kprint_hex32((uint32_t)(rip >> 32)); kprint_hex32((uint32_t)rip);
+                    if (vec == 14) { kprint(" cr2=0x"); kprint_hex32((uint32_t)(cr2 >> 32)); kprint_hex32((uint32_t)cr2); }
+                    kprint("\n");
+                }
+                return st;
+            }
+            if (timer_get_uptime_ms() >= up->deadline_ms) { smp_user_kill_owner(up->tid); return -4000; }   /* se paro el proceso */
+            sys_irq_window();                                     /* el reloj y el teclado siguen mientras espera */
+            thread_yield();
+        }
+    }
+    return -22;
+}
+
 int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
 {
     (void)a2;
@@ -675,6 +714,7 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
     /* SOMA_192: un programa NORMAL (filtro por defecto) que pide una llamada inexistente o sin capacidad recibe ENOSYS, como antes del
      * parche 138, y sigue vivo: asi lo exige el oraculo de `usfuzz` (que fallaba desde entonces: los procesos morian con DENIED).
      * Los procesos AISLADOS (filtro restringido: decodificadores, PDF, red) siguen muriendo al primer intento. */
+    if (nr == SYS_SOMA_THR && usermode_cur->may_thr) return sys_soma_thr(a0, a1);   /* SOMA_244_HILOS: solo el proceso de voz */
     if ((nr >= 32 || !(usermode_cur->sysmask & (1u << nr))) && usermode_cur->sysmask == USER_SYS_DEFAULT) return SOMA_ENOSYS;
     if (nr >= 32 || !(usermode_cur->sysmask & (1u << nr))) {        /* PARCHE 138: filtro por proceso (aislados: solo exit) */
         kprint("[USER] proceso terminado: llamada al sistema no permitida por su filtro\n");
@@ -898,6 +938,7 @@ void arch_thread_cleanup(struct tcb *t)
     if (!up->finished) up->exit_code = USER_EXIT_KILLED;       /* matado desde fuera (thread_kill) */
     if (up->audio) { audio_sys_owner_died(up->tid); up->audio = 0; }
     if (up->fb) { fb_user_end(); up->fb = 0; }
+    smp_user_kill_owner(up->tid);                              /* SOMA_244_HILOS: antes de destruir sus tablas de paginas */
     free_pages(up);
     up->nregions = 0;                                          /* PARCHE 138: regiones prestadas: las libera su dueno (sandbox.c) */
     vmm_as_destroy(up->as); up->as = 0;                        /* nunca esta cargado: este hilo ya no es el actual */
@@ -930,6 +971,7 @@ static struct uproc *slot_begin(void)
             up->args[0] = 0; up->name[0] = 0; up->audio = 0; up->fb = 0;
             up->sysmask = USER_SYS_DEFAULT; up->reserve_frames = 0; up->nregions = 0;   /* PARCHE 138 */
             up->rd_out = 0; up->rd_cap = up->rd_len = 0; up->rd_in = 0;                 /* SOMA_239 */
+            up->may_thr = 0;                                                            /* SOMA_244 */
             for (int k = 0; k < USER_MAX_REGIONS; ++k) up->regions[k] = 0;
             /* estado inicial de la FPU: FCW=0x037F (todas las excepciones enmascaradas, doble extendida), MXCSR=0x1F80
              * (idem SSE, redondeo al mas cercano), registros vacios: igual que tras FNINIT */
@@ -1062,7 +1104,9 @@ int usermode_exec_region(const char *name, const void *img, size_t len, uint32_t
     sp.sysmask = sysmask;
     sp.regions[0] = r; sp.nregions = 1;
     sp.reserve_frames = 16384;                                     /* la region no crece si al sistema le quedarian menos de 64 MiB */
-    return exec_common(name, img, len, max_ms, args, &sp, err);
+    int idx = exec_common(name, img, len, max_ms, args, &sp, err);
+    if (idx >= 0) procs[idx].may_thr = 1;                          /* SOMA_244_HILOS: aun no ha corrido (planificador cooperativo) */
+    return idx;
 }
 
 static int exec_common(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, const struct uexec_spec *sp, int *err)

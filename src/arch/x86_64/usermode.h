@@ -80,6 +80,8 @@
 #define SYS_SOMA_CON     30
 #define SYS_SOMA_VFS     31
 #define USER_SYS_PYTHON  (USER_SYS_DEFAULT | (1u << SYS_SOMA_CON) | (1u << SYS_SOMA_VFS))
+/* SOMA_244_HILOS: hilos de calculo en los nucleos secundarios (solo el proceso de voz; fuera del filtro de 32 bits) */
+#define SYS_SOMA_THR     32
 #define USER_MAX_SOCKETS  4
 #define USER_MAX_FDS 8
 #define USER_ARGS_MAX 128

@@ -6,6 +6,96 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+### Dictado: sin copias repetidas del mismo texto (249)
+- **Fallo**: al dictar con Alt, whisper a veces entraba en un bucle y escribía la frase tres o cuatro veces (y la última a
+  medias). El filtro de 245 solo quitaba bloques de hasta 8 palabras repetidos 3 veces, y tramo a tramo.
+- **Arreglo** (`src/user/voz/voz.cpp`, `voz_filtros.h`): bloques de 4 o más palabras repetidos 2 veces seguidas se dejan una sola
+  vez (2-3 palabras con 3 copias, 1 palabra con 4), sin mirar mayúsculas, acentos ni puntuación; se quita la copia a medias del
+  final; la limpieza se hace con todos los tramos juntos; tope de tokens por tramo según la duración del audio; y si el resultado
+  sigue pareciendo un bucle (o pasa de 5,5 palabras por segundo), se reconoce otra vez con la ventana de audio completa.
+- **Dictados largos**: el texto del dictado tenía un tope de 256 bytes y se cortaba sin avisar; ahora 4 KiB.
+- Pruebas: casos nuevos en `tests/test_voz_245.cpp` (el caso real de la frase repetida tres veces y media, y repeticiones legítimas
+  que no se tocan).
+
+### Documentos con acabado profesional y revisión visual con IA (248)
+- **Agente de documentos** (`src/agent/docagent.c`): `documento <petición>`, misiones del orbe ("redacta un informe... en
+  PDF") y **Generar** del Maquetador. Detecta el tipo (informe, paper, revista, presentación, carta, CV, email, libro) y le da
+  al modelo unas indicaciones de editorial (hoja de estilo de la casa, tipografía española, gráficos SVG, prohibiciones) y una
+  receta por tipo. Guarda en `/workspace/docs/` la fuente y el PDF y abre el resultado en el Maquetador.
+- **Motor de documentos** (`src/apps/docgen.c`): HTML con la hoja de estilo de la casa o LaTeX, paginado en A4, A4 apaisado,
+  A5, carta, 16:9 y email; cortes en blanco entre bloques sin títulos huérfanos; cabecera y pie con `{n}/{N}/{titulo}`;
+  números de diapositiva; gráficos SVG con sus textos; revisión automática (`dg_check`); HTML autónomo con `@page`.
+- **Motor web**: escala del CSS por hilo (documentos a 192 ppp sin tocar el navegador), texto justificado de verdad, atributos
+  `width`/`height` escalados; los documentos usan siempre Liberation Sans.
+- **PDF** (`src/core/pdfw.c`): páginas en imagen comprimida (Flate con predictor PNG), tamaño en puntos y título en UTF-16.
+- **Revisión con visión**: `llm_chat_ex` manda indicaciones de sistema propias e imágenes PNG a local/OpenAI (`image_url`),
+  Claude (`image` base64) y Gemini (`inline_data`); si el modelo no ve imágenes se recuerda y se revisa con el informe.
+  El revisor devuelve `VEREDICTO` y el documento corregido; solo se acepta si no empeora (hasta dos rondas).
+- **Programador**: tras escribir una app gráfica, la abre, captura su ventana (`gui_soma_win_snapshot`) y la hace criticar a
+  un "diseñador de interfaces"; una ronda de mejora si hace falta.
+- **Maquetador**: vista de páginas (con sombra, a la anchura de la ventana, A−/A+ de 40 a 250 %), botones **PDF**, **HTML** y
+  **Revisar IA**; exporta en un hilo aparte.
+- **GUI**: `gui_turn_begin/gui_turn_end`, turno de pantalla para cualquier hilo que dibuje fuera de pantalla; `gui_leave` espera
+  a que el escritorio lo vea antes de volver (evita una carrera al pedir turno seguido); `gui_agent_submit`.
+- Pruebas nuevas: `tests/test_docgen_248.c` (paginación, formatos, revisión, PDF con su xref, HTML autónomo, tipo de documento,
+  extracción, veredicto, nombres) y `tests/test_llm_vision_248.c` (peticiones con imágenes de los cuatro proveedores).
+
+### Texto a voz: Notas lee en voz alta con voces de Piper (247)
+- **Notas → Leer en voz alta** (y en el menú del botón derecho): lee la selección o todo el documento; el botón pasa a
+  **Parar lectura**. Orden `habla texto | habla instalar | habla parar | habla`.
+- **Motor propio para las voces VITS de Piper** (`src/user/voz/habla_vits.h`, sin onnxruntime): lector mínimo de ONNX
+  (`habla_onnx.h`), codificador de texto con atención relativa, predictor estocástico de duraciones (splines racionales
+  cuadráticos), flujo de acoplamiento con WaveNet y generador HiFi-GAN (ConvTranspose por fases, resblocks de tipo 1 y 2).
+  Los hiperparámetros salen de los pesos y de los atributos de los nodos, así que valen todas las calidades; también voces
+  de varios hablantes. Convoluciones con im2col + AVX2/FMA repartidas entre los núcleos libres. Comprobado contra
+  onnxruntime: misma salida (diferencia máxima 2e-5) y, por reconocimiento con whisper, el texto exacto.
+- **Texto a fonemas en español** (`habla_g2p_es.h`) al estilo de espeak-ng: números, símbolos, siglas, sílabas, acento y
+  acentos secundarios, alófonos, asimilación de la n, palabras átonas; seseo y yeísmo para voces de América. 95 % de
+  palabras iguales a espeak-ng en un corpus de 380 frases.
+- Va dentro de `voz.elf` (`--habla`); la voz se instala sola desde la carpeta `MODELOS` del pendrive a `/voces` (QEMU:
+  `-fw_cfg name=opt/soma/voz,file=x.onnx` y `name=opt/soma/voz_json,file=x.onnx.json`). Suena por la tarjeta de sonido
+  mientras calcula la frase siguiente.
+- Prueba nueva: `tests/test_habla_247.cpp` (fonemas frente a espeak-ng, números, seseo, lector ONNX).
+
+### Voz: elegir el modelo de transcripción en Ajustes (246)
+- **Ajustes > Voz** (página nueva): tres niveles de modelo, **Rápido** (`ggml-base-q5_1.bin`, el de siempre), **Preciso**
+  (`ggml-small-q5_1.bin`, recomendado) y **Máxima precisión** (`ggml-large-v3-turbo-q5_0.bin`). Cada uno dice si está
+  instalado, en la carpeta `MODELOS` del pendrive o no disponible; **Instalar desde el pendrive** lo copia al almacén con barra
+  de progreso. Lo usan el dictado con Alt, la Grabadora y la orden `voz`.
+- Si el elegido no está instalado pero sí en el pendrive, se instala solo al dictar (la pastilla muestra "Instalando el modelo
+  de voz... N %"); si no está en ningún sitio, se usa el instalado más parecido.
+- Terminal: `voz modelo rapido|preciso|maximo`; `voz` dice el elegido y el que está en uso; `voz instalar` instala el elegido;
+  `ajustes voz` abre Ajustes en esa página. La elección se guarda en `/etc/voz.conf`.
+- QEMU: `-fw_cfg name=opt/soma/modelo_preciso,file=...` y `opt/soma/modelo_maximo` para probar los otros niveles.
+
+### Voz: dictado en todo el sistema manteniendo Alt y menos alucinaciones de whisper (245)
+- **Pulsar para hablar**: se mantiene **Alt** izquierda mientras se habla y al soltarla se transcribe. El texto entra por el
+  teclado, así que llega a quien tenga el foco (orbe, terminal, notas, editor de programas, cualquier campo) igual que si se
+  hubiera escrito; en el orbe además se envía. Toque corto de Alt = abrir el orbe, como antes; Alt + otra tecla = atajo (se
+  descarta lo grabado sin avisar); **Esc** cancela. El aviso es una pastilla global sobre todas las ventanas ("Escuchando" con
+  el nivel del micrófono, "Transcribiendo...", o el motivo si algo falla). Sustituye al modo de 244 (Alt para empezar y Alt para
+  parar, solo en el orbe).
+- **Contra las alucinaciones**: detector de voz (umbral adaptado al ruido, recorte de silencios y pausas; sin voz no se llama
+  a whisper), búsqueda en haz de 5, `suppress_nst`, sin contexto previo, umbrales de entropía/logprob/no-voz con reintento a
+  más temperatura, y filtros por tramo: probabilidad de no-voz + confianza media de los tokens, frases típicas de subtítulos
+  (Amara, "suscríbete", "gracias por ver"...), frases cortas dudosas, anotaciones (`[Música]`, `(risas)`, ♪) y bucles de
+  repetición. `-v` dice qué se descartó y por qué; `-b 1` vuelve a la decodificación voraz; `-V` no recorta silencios.
+- En el ordenador de pruebas, la búsqueda en haz cuesta ~45 % más de tiempo de reconocimiento que la voraz (2,6 s frente a 1,8 s
+  para 7 s de audio, 1 hilo) y acierta más palabras en las grabaciones de prueba.
+- Prueba nueva: `tests/test_voz_245.cpp` (detector de voz, frases típicas, anotaciones, repeticiones).
+
+### Voz: hilos en varios nucleos y dictado al orbe con Alt (244)
+- **Hilos de usuario en los nucleos secundarios**: un proceso puede ejecutar hilos de calculo en los nucleos libres (ring 3 con
+  el espacio de direcciones del proceso; sin llamadas al sistema). La orden `voz` usa hasta 4 hilos (el principal + 3
+  secundarios): en QEMU con 2 nucleos, 7 s de audio pasaron de 1149 s a 558 s (x2,1). Mientras hay hilos de usuario, los
+  repartos de calculo del sistema (smp_parallel) se hacen solo en el nucleo 0. Si el proceso muere, sus hilos se paran con una
+  interrupcion entre procesadores. `-t N` fija el numero de hilos.
+- **Dictado al orbe**: con el campo de la pregunta listo ("soma> escribe una mision...   (Alt: dictar)"), **Alt** empieza a
+  grabar, **Alt** otra vez para, transcribe y envia el texto a SOMA como si se hubiera escrito. **Esc** cancela. Sobre el orbe
+  se ve "Escuchando..." con el nivel del microfono y luego "Transcribiendo...". Escribir a mano sigue igual. En ese modo, Alt
+  sola ya no llama al orbe (la tecla Windows si).
+- Con silencio, whisper se inventa frases: ahora `voz` avisa de que no se oye nada y descarta los segmentos sin voz.
+
 ### Voz a texto: el modelo se instala solo (243)
 - Si no hay modelo en el almacén, `voz` y **Transcribir** lo copian solos desde la carpeta `MODELOS` del pendrive (antes había
   que escribir `voz instalar`). Se ignoran las copias `._*.bin` que deja macOS (antes podían elegirse en lugar del modelo).

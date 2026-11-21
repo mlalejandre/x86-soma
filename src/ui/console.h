@@ -26,6 +26,10 @@ extern volatile int console_muted;
 void console_capture_begin(char *buf, uint32_t cap, const char *input);
 uint32_t console_capture_end(void);
 void console_capture_abort(void);
+void console_set_alt_voice(int on);           /* SOMA_245_PTT: Alt izquierdo = pulsar para hablar */
+void console_ptt_state(int *down, int *other, uint32_t *seq);
+void console_post_super(void);
+uint32_t console_inject_text(const char *utf8);
 int  console_capture_active(void);            /* SOMA_156B */
 int  console_capture_guest(uint32_t tid);     /* SOMA_237_PYTHON: el hilo tid comparte la captura del que llama (0 = ninguno) */
 int  console_capture_mine(void);              /* SOMA_237: el hilo actual (o su invitado) esta capturado */

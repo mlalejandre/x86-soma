@@ -22,7 +22,10 @@ extern const int gui_app_sysmon;
 /* PARCHE 091: el agente corre en su hilo; para tocar la pantalla pide turno (0 = no hacia falta) */
 int  gui_enter(void);
 void gui_leave(int tok);
+int  gui_turn_begin(void);                  /* SOMA_248_DOC: turno de pantalla desde cualquier hilo (0/1/2) */
+void gui_turn_end(int tok);
 int  gui_agent_busy(void);                   /* PARCHE 085 */
+int  gui_agent_submit(const char *mission);  /* SOMA_248_DOC: mision al agente (como escrita en el orbe); 0 enviada, -1 ocupado */
 void gui_open_layout_file(const char *path);   /* PARCHE 084: abre un .tex en el maquetador */
 void gui_open_agents(void);
 void gui_open_notepad(const char *path);
@@ -55,6 +58,8 @@ int         gui_soma_win_get_key(void);
 void        gui_soma_win_push_key(int key);
 void        gui_soma_win_record_click(void);
 void        gui_soma_win_get_size(int *out_w, int *out_h);
+uint32_t    gui_soma_win_snapshot(uint32_t **px, int *w, int *h);   /* SOMA_248_DOC: captura de la ventana del programa (kmalloc) */
+uint32_t    gui_soma_win_presents(void);                             /* SOMA_248_DOC: fotogramas presentados */
 const char *gui_soma_win_get_title(void);
 void        gui_terminal_run(const char *cmd);   /* SOMA_239: ejecuta una orden en el Terminal del escritorio (lo abre si hace falta) */
 void        gui_soma_win_render_body(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh);

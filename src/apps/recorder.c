@@ -347,7 +347,7 @@ void recorder_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, 
             int ph = (int)((timer_get_uptime_ms() / 150) % 8);
             for (int k = 0; k < 8; ++k) fb_fill_rrect_aa(mx + 18 + k * 12, ty + 6, 8, 8, 4, k == ph ? 0x00C4B5FDu : 0x00334155u);
             si_text(mx + 124, ty, 20, m, 13, SI_DIM, 0);
-            si_text_fit(mx + 18, ty + 30, 18, "Suele tardar unos segundos (la primera vez instala el modelo). Puedes seguir usando SOMA.", mw - 36, 11, SI_FAINT, 0);
+            si_text_fit(mx + 18, ty + 30, 18, "Suele tardar unos segundos. Puedes seguir usando SOMA.", mw - 36, 11, SI_FAINT, 0);
         } else if (vz_state == 2) {
             (void)vz_wrap(mx + 18, ty, mw - 36, tb, vz_text, 14, SI_TXT);
         } else if (vz_state == 3) {

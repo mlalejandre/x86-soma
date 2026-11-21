@@ -79,6 +79,8 @@ struct wstyle {
 };
 
 extern int g_wl181_off;   /* SOMA_181 */
+extern int g_wc_zoom;     /* SOMA_248_DOC: escala de las unidades absolutas en % (100 = normal) */
+extern int (*g_wc_zoom_owner)(void);   /* SOMA_248_DOC: 1 si el hilo actual es el que pidio la escala */
 extern int g_wf182_on;    /* SOMA_182 */
 struct wcss;                                   /* contexto de estilos del documento */
 struct wcss *wc_new(struct wdoc *d);

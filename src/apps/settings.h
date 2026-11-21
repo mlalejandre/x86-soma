@@ -12,5 +12,6 @@ int  settings_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, 
 int  settings_wheel(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h, int wheel);   /* SOMA_227_IMAGEN: rueda */
 int  settings_handle_key(char c);
 int  settings_editor_face(void);            /* SOMA_184: cara del editor de texto (FFACE_*, 0 = DejaVu Sans Mono) */
+void settings_goto_voz(void);              /* SOMA_246_VOZ_MODELOS: la proxima vez se ve la pagina Voz ("ajustes voz") */
 int  settings_tick(void);                   /* SOMA_175C: 1 = la pagina Redes cambio (la GUI repinta) */
 #endif

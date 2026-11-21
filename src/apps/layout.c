@@ -1,4 +1,8 @@
-/* PARCHE 084: Maquetador renovado: entiende y dibuja LaTeX (motor propio en tex.c) con la estetica del explorador de archivos.
+/* SOMA_248_DOC: el Maquetador ve documentos de verdad: HTML (con la hoja de estilo de la casa) y LaTeX se paginan como en papel
+ * (A4, A5, carta, 16:9, email) con el motor docgen, se exportan a PDF/HTML y se pueden revisar con IA (con vision si el modelo la tiene).
+ * "Generar" manda la peticion al agente de documentos (docagent) en el hilo del agente: el orbe muestra el progreso y la GUI sigue viva.
+ *
+ * PARCHE 084: Maquetador renovado: entiende y dibuja LaTeX (motor propio en tex.c) con la estetica del explorador de archivos.
  *
  *  - Vista "Documento": hoja blanca con sombra sobre el fondo oscuro, texto suavizado, formulas, tablas, listas, notas, imagenes.
  *  - Vista "Fuente": el .tex con colores (comandos, formulas, comentarios, llaves) y numeros de linea.
@@ -16,6 +20,9 @@
 #include "tex.h"
 #include "web_font.h"
 #include "web_img.h"
+#include "docgen.h"
+#include "docagent.h"
+#include "thread.h"
 
 uint64_t timer_get_uptime_ms(void);
 
@@ -33,7 +40,7 @@ uint64_t timer_get_uptime_ms(void);
 #define KC_AREA    0x00080B12
 #define KC_OK      0x0034D399
 
-#define LY_SRC_MAX    32768
+#define LY_SRC_MAX    98304        /* SOMA_248_DOC: documentos HTML de hasta 96 KiB */
 #define LY_PROMPT_MAX 256
 #define OPS_CAP       14000
 #define POOL_CAP      (192 * 1024)
@@ -48,6 +55,12 @@ static struct tex_out ly_out;
 static int ly_dirty = 1, ly_w_cached, ly_px_cached;
 static int ly_doc_h = 100;
 static uint32_t ly_font_gen;                    /* PARCHE 085: se vuelve a maquetar si cambia la fuente de la interfaz */
+/* SOMA_248_DOC: vista de paginas */
+#define PG_GAP 22
+static struct dg_doc *pg_doc; static int pg_zoom, pg_w, pg_h, pg_n, pg_avail, pg_scale = 100, pg_dirty = 1, pg_failed;
+static uint32_t *pg_px[DG_MAX_PAGES]; static uint32_t pg_font_gen;
+static volatile int ly_job;                     /* exportacion en marcha (hilo aparte) */
+static char ly_job_path[128], ly_job_fmt[8];
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void s_cpy(char *d, const char *s, int max) { int i = 0; while (s && s[i] && i + 1 < max) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -188,7 +201,7 @@ void layout_set_source(const char *src, uint32_t len)
     int legacy = 0; for (uint32_t i = 0; i + 12 <= len && i < 200; i++) if (src[i] == '#' && find(src + i, "#SOMA-LAYOUT") == 0) { legacy = 1; break; }
     if (legacy && !tex_is_latex(src, len)) legacy_to_tex(src, len);
     else { for (uint32_t i = 0; i < len; i++) ly_src[i] = src[i]; ly_src[len] = 0; ly_src_len = len; }
-    ly_scroll = 0; ly_dirty = 1;
+    ly_scroll = 0; ly_dirty = 1; pg_dirty = 1;
     status(legacy ? "Documento #SOMA-LAYOUT convertido a LaTeX" : "Documento cargado", 1);
 }
 static void load_path(void)
@@ -216,51 +229,50 @@ void layout_init(void)
 const char *layout_get_prompt(void) { return ly_prompt; }
 
 /* ---------------------------------------------------------------- IA */
-static void append_blackboard(char *mission, uint32_t max, uint32_t *pos)
-{
-    char bb[1024];
-    int n = vfs_read("/agent/blackboard.txt", bb, sizeof(bb) - 1);
-    if (n <= 0) return;
-    bb[n] = 0; if (n > 400) { bb[400] = 0; n = 400; }
-    const char *hdr = "\n\nNotas de investigacion (blackboard):\n";
-    for (const char *h = hdr; *h && *pos + 1 < max; ++h) mission[(*pos)++] = *h;
-    for (int i = 0; i < n && *pos + 1 < max; ++i) mission[(*pos)++] = bb[i];
-    mission[*pos] = 0;
-}
+static void prog_cb(const char *m) { status(m, 1); }
 static void do_generate(void)
 {
-    if (ly_prompt_len == 0) { status("Escribe primero el tema del documento", 0); return; }
-    status("El maquetador esta escribiendo el LaTeX...", 1);
-    char mission[900]; uint32_t mp = 0;
-    const char *pre = "Escribe un documento profesional en LaTeX sobre el tema indicado. Responde UNICAMENTE con el codigo LaTeX completo, "
-                      "desde \\documentclass{article} hasta \\end{document}, sin explicaciones. Usa \\title, \\author, \\maketitle, \\section, "
-                      "\\subsection, itemize/enumerate, tabular cuando ayude y formulas con $...$ o equation si el tema lo pide. Tema: ";
-    while (*pre && mp + 1 < sizeof mission) mission[mp++] = *pre++;
-    for (uint32_t i = 0; i < ly_prompt_len && mp + 1 < sizeof mission; ++i) mission[mp++] = ly_prompt[i];
-    mission[mp] = 0;
-    append_blackboard(mission, sizeof mission, &mp);
-    agent_run("maquetador", mission);
-    const char *r = agent_last_response;
-    if (!r || !r[0]) { status("Sin respuesta del maquetador (LLM vacio o error)", 0); return; }
-    int a = find(r, "\\documentclass"); if (a < 0) a = find(r, "\\begin{document}"); if (a < 0) a = find(r, "\\section");
-    if (a >= 0) {
-        int b = find(r + a, "\\end{document}"); int n = b >= 0 ? b + 14 : s_len(r + a);
-        int f = find(r + a, "```"); if (f >= 0 && (b < 0 || f < b)) n = f;
-        layout_set_source(r + a, (uint32_t)n);
-    } else if (find(r, "#SOMA-LAYOUT") >= 0 || find(r, "TITLE:") >= 0) layout_set_source(r + (find(r, "#SOMA-LAYOUT") >= 0 ? find(r, "#SOMA-LAYOUT") : 0), 0);
-    else {                                                  /* texto sin formato: parrafos */
-        static char t[LY_SRC_MAX]; t[0] = 0;
-        s_cat(t, "\\documentclass{article}\\begin{document}\\section*{Respuesta del maquetador}\n", sizeof t);
-        s_cat(t, r, sizeof t); s_cat(t, "\n\\end{document}\n", sizeof t);
-        layout_set_source(t, 0);
-    }
-    s_cpy(ly_path, "/workspace/documento.tex", sizeof ly_path);
-    int w = vfs_write(ly_path, ly_src, ly_src_len);
-    status(w >= 0 ? "Documento generado y guardado en /workspace/documento.tex" : "Documento generado (no cupo en RamFS para guardarlo)", 1);
+    if (ly_prompt_len == 0) { status("Escribe primero que documento quieres (tema, tipo, publico, extension...)", 0); return; }
+    char mission[LY_PROMPT_MAX + 16] = "maquetador: "; s_cat(mission, ly_prompt, sizeof mission);
+    docagent_set_progress(prog_cb);
+    int r = gui_agent_submit(mission);
+    if (r == -1) { status("SOMA esta ocupado con otra mision: espera a que termine", 0); return; }
+    status("El maquetador redacta, maqueta y revisa el documento (progreso en el orbe)...", 1);
+}
+static void do_review(void)
+{
+    if (!ly_src_len) return;
+    (void)vfs_write(ly_path, ly_src, ly_src_len);
+    char mission[200] = "maquetador revisa "; s_cat(mission, ly_path, sizeof mission);
+    if (ly_prompt_len) { s_cat(mission, " ", sizeof mission); s_cat(mission, ly_prompt, sizeof mission); }
+    docagent_set_progress(prog_cb);
+    int r = gui_agent_submit(mission);
+    if (r == -1) { status("SOMA esta ocupado con otra mision: espera a que termine", 0); return; }
+    status("Revisando el documento con IA (progreso en el orbe)...", 1);
+}
+/* exportar en un hilo aparte: el motor pide turno de pantalla para cada pagina */
+static void export_main(void *a)
+{
+    (void)a;
+    static char out[300];
+    int ok = docagent_export(ly_job_path, ly_job_fmt, 0, out, sizeof out);
+    status(out, ok);
+    ly_job = 0;
+}
+static void do_export(const char *fmt)
+{
+    if (ly_job) { status("Ya hay una exportacion en marcha", 0); return; }
+    if (!ly_src_len) return;
+    if (vfs_write(ly_path, ly_src, ly_src_len) < 0) { status("No se pudo guardar el documento antes de exportarlo", 0); return; }
+    s_cpy(ly_job_path, ly_path, sizeof ly_job_path); s_cpy(ly_job_fmt, fmt, sizeof ly_job_fmt);
+    docagent_set_progress(prog_cb);
+    ly_job = 1;
+    status(fmt[0] == 'p' && fmt[1] == 'd' ? "Exportando a PDF..." : "Exportando...", 1);
+    if (!thread_create("maq_export", export_main, 0)) { ly_job = 0; status("No se pudo crear el hilo de exportacion", 0); }
 }
 
 /* ---------------------------------------------------------------- disposicion */
-enum { B_OPEN = 0, B_RELOAD, B_EDIT, B_DOC, B_SRC, B_SMALL, B_BIG, B_N };
+enum { B_OPEN = 0, B_RELOAD, B_EDIT, B_DOC, B_SRC, B_SMALL, B_BIG, B_PDF, B_HTML, B_IA, B_N };
 #define TB_H 48
 #define PR_H 52
 #define ST_H 26
@@ -273,8 +285,8 @@ static void lay(struct ll *L, uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh
     int x = L->x + 12;
     for (int i = 0; i < B_N; i++) {
         L->bx[i] = x;
-        x += (i == B_DOC || i == B_SRC) ? 92 : BTN + 4;
-        if (i == B_EDIT || i == B_SRC) x += 14;
+        x += (i == B_DOC || i == B_SRC) ? 92 : i == B_PDF ? 58 : i == B_HTML ? 66 : i == B_IA ? 108 : BTN + 4;
+        if (i == B_EDIT || i == B_SRC || i == B_BIG) x += 14;
     }
     L->path_x = x + 10; L->path_w = L->x + L->w - 12 - L->path_x; if (L->path_w < 0) L->path_w = 0;
     L->st_y = L->y + L->h - ST_H; L->pr_y = L->st_y - PR_H;
@@ -297,9 +309,70 @@ static void typeset_if_needed(const struct ll *L)
     ly_doc_h = ly_out.height + 112;
     if (r < 0) status("Documento demasiado largo: se muestra lo que cabe", 0);
 }
+/* ---- SOMA_248_DOC: paginas con docgen */
+static void pg_free(void)
+{
+    for (int i = 0; i < DG_MAX_PAGES; i++) if (pg_px[i]) { kfree(pg_px[i]); pg_px[i] = 0; }
+    if (pg_doc) { dg_close(pg_doc); pg_doc = 0; }
+    pg_n = 0;
+}
+static int pg_loader(const char *url, uint8_t **data, uint32_t *len)
+{
+    char full[160] = "";
+    if (url[0] != '/') {                                   /* relativa a la carpeta del documento */
+        s_cpy(full, ly_path, sizeof full);
+        int k = s_len(full); while (k > 0 && full[k - 1] != '/') k--;
+        full[k] = 0;
+    }
+    s_cat(full, url, sizeof full);
+    char *b = vfs_read_alloc(full, len);
+    if (!b && url[0] != '/') { char t[160] = "/workspace/"; s_cat(t, url, sizeof t); b = vfs_read_alloc(t, len); }
+    if (!b) return -1;
+    *data = (uint8_t *)b; return 0;
+}
+static void pg_ensure(const struct ll *L)
+{
+    if (ly_font_gen != wf_ui_gen()) { ly_font_gen = wf_ui_gen(); ly_dirty = 1; }
+    if (pg_font_gen != wf_ui_gen()) { pg_font_gen = wf_ui_gen(); pg_dirty = 1; }
+    int avail = L->area_w - 2 * PG_GAP;
+    if (!pg_dirty && avail == pg_avail && (pg_doc || pg_failed)) return;
+    pg_free(); pg_failed = 0; pg_dirty = 0; pg_avail = avail;
+    if (!ly_src_len) { pg_failed = 1; return; }
+    dg_set_loader(pg_loader);
+    char err[120];
+    struct dg_doc *d = dg_open(ly_src, ly_src_len, 100, err, sizeof err);
+    if (!d) { pg_failed = 1; char m[112] = "No se pudo paginar: "; s_cat(m, err, sizeof m); status(m, 0); return; }
+    int w100, h100; dg_page_px(d, &w100, &h100);
+    int z = w100 > 0 ? avail * 100 / w100 : 100;
+    if (z > 100) z = 100;                                  /* a tamano real como mucho (96 ppp) salvo que se amplie */
+    z = z * pg_scale / 100;
+    if (z < 25) z = 25;
+    if (z > 300) z = 300;
+    if (z != 100) { dg_close(d); d = dg_open(ly_src, ly_src_len, z, err, sizeof err); if (!d) { pg_failed = 1; status(err, 0); return; } }
+    pg_doc = d; pg_zoom = z; pg_n = dg_npages(d); dg_page_px(d, &pg_w, &pg_h);
+}
+static int pg_content_h(void) { return pg_doc ? pg_n * (pg_h + PG_GAP) + PG_GAP : 0; }
+static void pg_draw(const struct ll *L, int top)
+{
+    int x = L->area_x + (L->area_w - pg_w) / 2; if (x < L->area_x + 8) x = L->area_x + 8;
+    for (int i = 0; i < pg_n; i++) {
+        int y = L->area_y + PG_GAP + i * (pg_h + PG_GAP) - top;
+        int vis = y + pg_h > L->area_y && y < L->area_y + L->area_h;
+        int near = y + pg_h > L->area_y - 2 * pg_h && y < L->area_y + L->area_h + 2 * pg_h;
+        if (!near && pg_px[i]) { kfree(pg_px[i]); pg_px[i] = 0; }   /* solo se guardan las paginas cercanas */
+        if (!vis) continue;
+        if (!pg_px[i]) {
+            pg_px[i] = (uint32_t *)kmalloc((size_t)pg_w * (size_t)pg_h * 4u);
+            if (!pg_px[i] || dg_render_page(pg_doc, i, pg_px[i]) != 0) { if (pg_px[i]) kfree(pg_px[i]); pg_px[i] = 0; continue; }
+            fb_set_clip(L->area_x, L->area_y, L->area_w, L->area_h);   /* dg_render_page deja el recorte como estaba; por si acaso */
+        }
+        fb_draw_shadow(x, y, pg_w, pg_h, 2, 18, 6, 0x90000000u);
+        fb_blit(x, y, pg_px[i], pg_w, pg_h, pg_w);
+    }
+}
 static int max_scroll(const struct ll *L, int content_h) { int m = content_h - L->area_h + 24; return m > 0 ? m : 0; }
 static int src_lines(void) { int n = 1; for (uint32_t i = 0; i < ly_src_len; i++) if (ly_src[i] == '\n') n++; return n; }
-static int content_height(const struct ll *L) { (void)L; return ly_view ? src_lines() * 18 + 24 : ly_doc_h + 24; }
+static int content_height(const struct ll *L) { (void)L; return ly_view ? src_lines() * 18 + 24 : pg_doc ? pg_content_h() : ly_doc_h + 24; }
 
 /* ---------------------------------------------------------------- iconos */
 #define LN(a, b, c, d, w, col) fb_line_aa((a) * 16, (b) * 16, (c) * 16, (d) * 16, (w), (col))
@@ -383,7 +456,7 @@ void layout_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32
     if (win_w < 240 || win_h < 180) return;
     if (!ly_src_len) layout_init();
     struct ll L; lay(&L, win_x, win_y, win_w, win_h);
-    if (!ly_view) typeset_if_needed(&L);
+    if (!ly_view) { pg_ensure(&L); if (!pg_doc) typeset_if_needed(&L); }
     int ms = max_scroll(&L, content_height(&L));
     if (ly_scroll > ms) ly_scroll = ms;
     if (ly_scroll < 0) ly_scroll = 0;
@@ -403,6 +476,17 @@ void layout_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32
     tx(L.bx[B_DOC] + (90 - tw("Documento", 12, 1)) / 2, L.by, BTN, "Documento", 12, ly_view ? KC_DIM : 0x00FFFFFF, 1);
     tx(L.bx[B_SRC] + (90 - tw("Fuente", 12, 1)) / 2, L.by, BTN, "Fuente", 12, ly_view ? 0x00FFFFFF : KC_DIM, 1);
     fb_fill_rect((uint32_t)(L.bx[B_SRC] + 92 + 8), (uint32_t)(L.by + 6), 1, BTN - 12, KC_LINE);
+    fb_fill_rect((uint32_t)(L.bx[B_BIG] + BTN + 10), (uint32_t)(L.by + 6), 1, BTN - 12, KC_LINE);
+    {   /* SOMA_248_DOC: exportar y revisar */
+        static const char *const lab[3] = { "PDF", "HTML", "Revisar IA" };
+        static const int bw[3] = { 52, 60, 102 };
+        for (int k = 0; k < 3; k++) {
+            int bx = L.bx[B_PDF + k], busy = ly_job && k < 2;
+            fb_fill_rounded_rect(bx, L.by, bw[k], BTN, BTN / 2, k == 2 ? 0x002A2350 : 0x001C2636);
+            fb_stroke_rrect_aa(bx, L.by, bw[k], BTN, BTN / 2, k == 2 ? 0xFF6D5BD0u : 0xFF2C3A50u);
+            tx(bx + (bw[k] - tw(lab[k], 12, 1)) / 2, L.by, BTN, lab[k], 12, busy ? KC_FAINT : (k == 2 ? 0x00C4B5FD : 0x00E5EAF2), 1);
+        }
+    }
     if (L.path_w > 80) {
         fb_fill_rounded_rect(L.path_x, L.by, L.path_w, BTN, BTN / 2, KC_FIELD);
         fb_stroke_rrect_aa(L.path_x, L.by, L.path_w, BTN, BTN / 2, 0xFF263142u);
@@ -417,6 +501,7 @@ void layout_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32
     fb_fill_rect((uint32_t)L.area_x, (uint32_t)L.area_y, (uint32_t)L.w, (uint32_t)L.area_h, KC_AREA);
     fb_set_clip(L.area_x, L.area_y, L.area_w, L.area_h);
     if (ly_view) draw_source(&L, ly_scroll);
+    else if (pg_doc) pg_draw(&L, ly_scroll);
     else {
         int py = L.area_y + 20 - ly_scroll, ph = ly_doc_h;
         fb_draw_shadow(L.paper_x, py, L.paper_w, ph, 4, 26, 10, 0xA0000000u);
@@ -450,7 +535,7 @@ void layout_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32
         if (ly_prompt_len || ly_prompt_focus) {
             tx(fx + 36, fy, fh, ly_prompt, 13, 0x00FFFFFF, 0);
             if (ly_prompt_focus && ((timer_get_uptime_ms() / 530) & 1) == 0) fb_fill_rect((uint32_t)(fx + 37 + tw(ly_prompt, 13, 0)), (uint32_t)(fy + 8), 2, 16, KC_ACC);
-        } else tx(fx + 36, fy, fh, "Pide un documento a la IA: tema, publico, extension...", 13, KC_FAINT, 0);
+        } else tx(fx + 36, fy, fh, "Pide un documento: informe, paper, revista, presentacion, carta, CV, email... (tema, publico, extension)", 13, KC_FAINT, 0);
         fb_reset_clip();
         fb_fill_rounded_rect(L.gen_x, fy, 110, fh, fh / 2, KC_PRIMARY);
         tx(L.gen_x + (110 - tw("Generar", 13, 1)) / 2, fy, fh, "Generar", 13, 0x00FFFFFF, 1);
@@ -464,23 +549,28 @@ void layout_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32
     tx(L.x + 26, L.st_y, ST_H, ly_status, 12, KC_TXT, 0);
     fb_reset_clip();
     b[0] = 0;
-    if (!ly_view) {
+    if (!ly_view && pg_doc) {
+        s_num(b, sizeof b, pg_n); s_cat(b, pg_n == 1 ? " pagina  " : " paginas  ", sizeof b);
+        s_cat(b, dg_format_name(pg_doc), sizeof b); s_cat(b, dg_kind(pg_doc) == DG_TEX ? "  LaTeX  " : "  HTML  ", sizeof b);
+        s_num(b, sizeof b, pg_zoom); s_cat(b, " %", sizeof b);
+    } else if (!ly_view) {
         s_num(b, sizeof b, ly_out.sections); s_cat(b, " secciones  ", sizeof b); s_num(b, sizeof b, ly_out.equations); s_cat(b, " ecuaciones  ", sizeof b);
         if (ly_out.errors) { s_num(b, sizeof b, ly_out.errors); s_cat(b, " sin reconocer  ", sizeof b); }
     } else { s_num(b, sizeof b, src_lines()); s_cat(b, " lineas  ", sizeof b); s_num(b, sizeof b, (int)ly_src_len); s_cat(b, " bytes  ", sizeof b); }
-    s_num(b, sizeof b, ly_px); s_cat(b, " px", sizeof b);
+    if (ly_view || !pg_doc) { s_num(b, sizeof b, ly_px); s_cat(b, " px", sizeof b); }
     tx(L.x + L.w - 14 - tw(b, 12, 0), L.st_y, ST_H, b, 12, ly_out.errors && !ly_view ? 0x00FBBF24 : KC_DIM, 0);
 }
 
 /* ---------------------------------------------------------------- raton y teclado */
 static void set_px(int px) { if (px < 11) px = 11; if (px > 24) px = 24; if (px != ly_px) { ly_px = px; ly_dirty = 1; } }
+static void set_scale(int d) { int s = pg_scale + d; if (s < 40) s = 40; if (s > 250) s = 250; if (s != pg_scale) { pg_scale = s; pg_dirty = 1; ly_scroll = 0; } }
 int layout_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h)
 {
     struct ll L; lay(&L, win_x, win_y, win_w, win_h);
     ly_drag_sb = 0;
     if (my >= L.by && my < L.by + BTN) {
         for (int i = 0; i < B_N; i++) {
-            int w = (i == B_DOC || i == B_SRC) ? 90 : BTN;
+            int w = (i == B_DOC || i == B_SRC) ? 90 : i == B_PDF ? 52 : i == B_HTML ? 60 : i == B_IA ? 102 : BTN;
             if (mx < L.bx[i] || mx >= L.bx[i] + w) continue;
             switch (i) {
             case B_OPEN: case B_RELOAD: load_path(); break;
@@ -489,8 +579,11 @@ int layout_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, 
                 status("Editando en el Bloc de notas: guarda alli y pulsa Recargar", 1); gui_open_notepad(ly_path); break;
             case B_DOC: ly_view = 0; ly_scroll = 0; break;
             case B_SRC: ly_view = 1; ly_scroll = 0; break;
-            case B_SMALL: set_px(ly_px - 1); break;
-            case B_BIG: set_px(ly_px + 1); break;
+            case B_SMALL: if (pg_doc && !ly_view) set_scale(-10); else set_px(ly_px - 1); break;
+            case B_BIG: if (pg_doc && !ly_view) set_scale(10); else set_px(ly_px + 1); break;
+            case B_PDF: do_export("pdf"); break;
+            case B_HTML: do_export("html"); break;
+            case B_IA: do_review(); break;
             }
             ly_prompt_focus = 0;
             return 0;
@@ -527,8 +620,8 @@ void layout_handle_key(char c)
         else if (c == 'j' || c == 14) ly_scroll += 40;
         else if (c == ' ') ly_scroll += 300;
         else if (c == 'b') ly_scroll -= 300;
-        else if (c == '+' || c == '=') set_px(ly_px + 1);
-        else if (c == '-') set_px(ly_px - 1);
+        else if (c == '+' || c == '=') { if (pg_doc && !ly_view) set_scale(10); else set_px(ly_px + 1); }
+        else if (c == '-') { if (pg_doc && !ly_view) set_scale(-10); else set_px(ly_px - 1); }
         else if (c == 'f' || c == '\t') { ly_view = !ly_view; ly_scroll = 0; }
         else if (c == 'r' || c == 18) load_path();
         else if (c == 'g' || c == '\r' || c == '\n') ly_prompt_focus = 1;

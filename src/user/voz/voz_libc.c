@@ -73,6 +73,36 @@ long voz_getargs(char *buf, long n)
 }
 int voz_map_heap(void *va, unsigned long size) { long r = lx6(9, (long)va, (long)size, 3, 0x22 | 0x100000, -1, 0); return r == (long)va ? 0 : -1; }   /* MAP_PRIVATE|ANON|FIXED_NOREPLACE */
 #endif
+/* SOMA_247_HABLA: salida de audio (PCM 16 bits estereo). En SOMA, las llamadas 11-13 del nucleo; en el anfitrion (VOZ_HOST) se
+ * escribe voz_raiz/habla.wav para escucharlo y comprobarlo. */
+#ifndef VOZ_HOST
+long voz_audio_open(long rate) { return sc3_raw(11, rate, 0, 0); }
+long voz_audio_write(const void *buf, long len) { return sc3_raw(12, (long)buf, len, 0); }
+long voz_audio_close(long wait) { return sc3_raw(13, wait, 0, 0); }
+#else
+static long a_fd = -1, a_bytes, a_rate;
+static void a_hdr(void)
+{
+    unsigned char h[44]; long d = a_bytes; unsigned rate = (unsigned)a_rate, br = rate * 4;
+    const char *t = "RIFF____WAVEfmt ";
+    for (int i = 0; i < 16; i++) h[i] = (unsigned char)t[i];
+    unsigned v = (unsigned)(36 + d); h[4] = v; h[5] = v >> 8; h[6] = v >> 16; h[7] = v >> 24;
+    h[16] = 16; h[17] = h[18] = h[19] = 0; h[20] = 1; h[21] = 0; h[22] = 2; h[23] = 0;
+    h[24] = rate; h[25] = rate >> 8; h[26] = rate >> 16; h[27] = rate >> 24; h[28] = br; h[29] = br >> 8; h[30] = br >> 16; h[31] = br >> 24;
+    h[32] = 4; h[33] = 0; h[34] = 16; h[35] = 0; h[36] = 'd'; h[37] = 'a'; h[38] = 't'; h[39] = 'a';
+    h[40] = d; h[41] = d >> 8; h[42] = d >> 16; h[43] = d >> 24;
+    lx(8, a_fd, 0, 0); lx(1, a_fd, (long)h, 44); lx(8, a_fd, 0, 2);
+}
+long voz_audio_open(long rate)
+{
+    if (rate != 22050 && rate != 44100 && rate != 48000 && rate != 16000) return -22;
+    a_fd = lx(2, (long)"voz_raiz/habla.wav", 0x241, 0644); if (a_fd < 0) return -19;     /* O_WRONLY|O_CREAT|O_TRUNC */
+    a_rate = rate; a_bytes = 0; a_hdr(); return 0;
+}
+long voz_audio_write(const void *buf, long len) { if (a_fd < 0) return -9; long r = lx(1, a_fd, (long)buf, len); if (r > 0) a_bytes += r; return r; }
+long voz_audio_close(long wait) { (void)wait; if (a_fd >= 0) { a_hdr(); lx(3, a_fd, 0, 0); a_fd = -1; } return 0; }
+#endif
+
 void voz_exit(int code) __attribute__((noreturn));
 void voz_exit(int code) { sc3(SYS_EXIT, code, 0, 0); for (;;) { } }
 uint64_t voz_uptime_ms(void) { return (uint64_t)sc3(SYS_UPTIME_MS, 0, 0, 0); }
@@ -193,6 +223,12 @@ double atof(const char *s) { return strtod(s, 0); }
 struct blk { size_t size; size_t prev_size; size_t flags; struct blk *next, *prev; void *real; size_t pad[2]; };
 _Static_assert(sizeof(struct blk) == HDR, "cabecera de 64 bytes");
 static uint8_t *h_base, *h_brk, *h_end;
+/* SOMA_244_HILOS: el monton se comparte con los hilos de los nucleos secundarios: cerrojo de espera activa. Y con hilos, cada pagina
+ * nueva se toca al reservarla (en el hilo principal): un hilo secundario no puede provocar fallos de pagina que el nucleo sirva. */
+int voz_pretouch;
+static volatile int h_lock;
+static void hl(void) { while (__atomic_exchange_n(&h_lock, 1, __ATOMIC_ACQUIRE)) __asm__ volatile ("pause"); }
+static void hu(void) { __atomic_store_n(&h_lock, 0, __ATOMIC_RELEASE); }
 static struct blk *h_free;
 static size_t h_peak, h_inuse;
 void voz_heap_init(void *base, size_t size)
@@ -205,7 +241,9 @@ size_t voz_heap_peak(void) { return h_peak; }
 static void fl_remove(struct blk *b) { if (b->prev) b->prev->next = b->next; else h_free = b->next; if (b->next) b->next->prev = b->prev; }
 static void fl_push(struct blk *b) { b->prev = 0; b->next = h_free; if (h_free) h_free->prev = b; h_free = b; }
 static struct blk *nextb(struct blk *b) { return (struct blk *)((uint8_t *)b + b->size); }
-void *malloc(size_t n)
+static void *malloc_nolock(size_t n);
+void *malloc(size_t n) { hl(); void *p = malloc_nolock(n); hu(); return p; }
+static void *malloc_nolock(size_t n)
 {
     if (!h_base) return 0;
     size_t need = ((n + 63) & ~(size_t)63) + HDR;
@@ -227,6 +265,10 @@ void *malloc(size_t n)
         return (uint8_t *)best + HDR;
     }
     if ((size_t)(h_end - h_brk) < need) return 0;
+    if (voz_pretouch) {                                   /* paginas nuevas (y la cabecera del siguiente bloque) */
+        uintptr_t a = ((uintptr_t)h_brk + 4095) & ~(uintptr_t)4095, e = (uintptr_t)h_brk + need + HDR;
+        for (; a < e && a < (uintptr_t)h_end; a += 4096) *(volatile uint8_t *)a = 0;
+    }
     struct blk *b = (struct blk *)h_brk;
     b->prev_size = h_brk == h_base ? 0 : ((struct blk *)h_brk)->prev_size;
     b->size = need; b->flags = F_USED;
@@ -236,11 +278,13 @@ void *malloc(size_t n)
     if (h_inuse > h_peak) h_peak = h_inuse;
     return (uint8_t *)b + HDR;
 }
-void free(void *p)
+static void free_nolock(void *p);
+void free(void *p) { if (!p) return; hl(); free_nolock(p); hu(); }
+static void free_nolock(void *p)
 {
     if (!p) return;
     struct blk *b = (struct blk *)((uint8_t *)p - HDR);
-    if (b->flags & F_ALIGNED) { free(b->real); return; }
+    if (b->flags & F_ALIGNED) { free_nolock(b->real); return; }
     if (!(b->flags & F_USED)) return;                     /* doble liberacion: se ignora */
     h_inuse -= b->size;
     b->flags = 0;
@@ -509,7 +553,7 @@ struct timespec_ { long tv_sec, tv_nsec; };
 int clock_gettime(int clk, struct timespec_ *ts) { (void)clk; uint64_t ms = voz_uptime_ms(); ts->tv_sec = (long)(ms / 1000); ts->tv_nsec = (long)(ms % 1000) * 1000000L; return 0; }
 long clock(void) { return (long)(voz_uptime_ms() * 1000); }
 long sysconf(int n) { (void)n; return 1; }
-int sched_yield(void) { sc3(SYS_YIELD, 0, 0, 0); return 0; }
+int sched_yield(void) { __asm__ volatile ("pause"); return 0; }   /* sin llamada al sistema: lo usan los hilos secundarios */
 int getcpu(unsigned *c, unsigned *nd) { if (c) *c = 0; if (nd) *nd = 0; return 0; }
 int prctl(int o, ...) { (void)o; return -1; }
 int stat(const char *p, void *st) { (void)p; (void)st; return -1; }
@@ -547,17 +591,64 @@ void qsort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void 
     (void)tmp;
 }
 
-/* ------------------------------------------------------------------ hilos: aun no hay hilos de usuario en SOMA */
-int pthread_create(void *t, const void *a, void *(*fn)(void *), void *arg) { (void)t; (void)a; (void)fn; (void)arg; return 11; }   /* EAGAIN */
-int pthread_join(unsigned long t, void **r) { (void)t; (void)r; return 0; }
+/* ------------------------------------------------------------------ hilos (SOMA_244_HILOS)
+ * pthread_create lanza el hilo en un nucleo secundario libre (llamada 32 del nucleo); si no hay, devuelve EAGAIN. El hilo NO puede
+ * hacer llamadas al sistema: los mutex son cerrojos de espera activa y pthread_cond_wait suelta el mutex, espera un poco y lo
+ * vuelve a coger (despertar espurio, permitido: quien espera siempre comprueba su condicion en un bucle, como hace ggml). */
+#define SYS_SOMA_THR 32
+struct vthr { void *(*fn)(void *); void *arg; void *ret; void *stack; long core; };
+void voz_thread_body(struct vthr *t);
+void voz_thread_body(struct vthr *t) { t->ret = t->fn(t->arg); }
+__asm__(".text\n.global voz_thread_entry, voz_thread_exit\n"
+        "voz_thread_entry:\n"            /* rdi = struct vthr *, rsp alineada a 16 */
+        "    call voz_thread_body\n"
+        "voz_thread_exit:\n"
+        "    ud2\n");                     /* el nucleo lo reconoce como fin del hilo */
+extern char voz_thread_entry[], voz_thread_exit[];
+#define VTHR_STACK (512u * 1024u)
+int voz_threads_free(void) { return (int)sc3(SYS_SOMA_THR, 0, 0, 0); }
+int pthread_create(unsigned long *out, const void *attr, void *(*fn)(void *), void *arg)
+{
+    (void)attr;
+#ifdef VOZ_HOST
+    (void)out; (void)fn; (void)arg; return 11;
+#else
+    if (!voz_pretouch) return 11;                          /* sin memoria tocada de antemano no hay hilos */
+    struct vthr *t = malloc(sizeof *t);
+    uint8_t *st = malloc(VTHR_STACK);
+    if (!t || !st) { free(t); free(st); return 11; }
+    t->fn = fn; t->arg = arg; t->ret = 0; t->stack = st;
+    uint64_t req[4];
+    req[0] = (uint64_t)(uintptr_t)voz_thread_entry;
+    req[1] = ((uint64_t)(uintptr_t)st + VTHR_STACK) & ~(uint64_t)15;   /* alineada a 16: voz_thread_entry hace un call */
+    req[2] = (uint64_t)(uintptr_t)t;
+    req[3] = (uint64_t)(uintptr_t)voz_thread_exit;
+    long c = sc3(SYS_SOMA_THR, 1, (long)req, 0);
+    if (c <= 0) { free(st); free(t); return 11; }
+    t->core = c;
+    *out = (unsigned long)(uintptr_t)t;
+    return 0;
+#endif
+}
+int pthread_join(unsigned long th, void **ret)
+{
+    struct vthr *t = (struct vthr *)(uintptr_t)th;
+    if (!t) return 3;
+    long r = sc3(SYS_SOMA_THR, 2, t->core, 0);
+    if (r != 0) { static const char m[] = "[voz] un hilo de calculo fallo\n"; o_flush(); sc3(SYS_WRITE, (long)m, sizeof m - 1, 0); voz_exit(9); }
+    if (ret) *ret = t->ret;
+    free(t->stack); free(t);
+    return 0;
+}
 unsigned long pthread_self(void) { return 1; }
-int pthread_mutex_init(void *m, const void *a) { (void)m; (void)a; return 0; }
+struct vmtx { volatile int l; };
+int pthread_mutex_init(void *m, const void *a) { (void)a; ((struct vmtx *)m)->l = 0; return 0; }
 int pthread_mutex_destroy(void *m) { (void)m; return 0; }
-int pthread_mutex_lock(void *m) { (void)m; return 0; }
-int pthread_mutex_unlock(void *m) { (void)m; return 0; }
+int pthread_mutex_lock(void *m) { struct vmtx *x = m; while (__atomic_exchange_n(&x->l, 1, __ATOMIC_ACQUIRE)) __asm__ volatile ("pause"); return 0; }
+int pthread_mutex_unlock(void *m) { __atomic_store_n(&((struct vmtx *)m)->l, 0, __ATOMIC_RELEASE); return 0; }
 int pthread_cond_init(void *c, const void *a) { (void)c; (void)a; return 0; }
 int pthread_cond_destroy(void *c) { (void)c; return 0; }
-int pthread_cond_wait(void *c, void *m) { (void)c; (void)m; return 0; }
+int pthread_cond_wait(void *c, void *m) { (void)c; pthread_mutex_unlock(m); for (int i = 0; i < 64; ++i) __asm__ volatile ("pause"); pthread_mutex_lock(m); return 0; }
 int pthread_cond_broadcast(void *c) { (void)c; return 0; }
 int pthread_cond_signal(void *c) { (void)c; return 0; }
 int pthread_getaffinity_np(unsigned long t, size_t n, void *s) { (void)t; (void)n; (void)s; return -1; }

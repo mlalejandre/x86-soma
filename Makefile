@@ -139,6 +139,7 @@ OBJS_CORE = \
 	$(BUILD)/agent.o \
 	$(BUILD)/agent_net.o \
 	$(BUILD)/llm_proto.o \
+	$(BUILD)/docagent.o $(BUILD)/docgen.o $(BUILD)/pdfw.o \
 	$(BUILD)/shell.o \
 	$(BUILD)/httpd.o \
 	$(BUILD)/fb.o \
@@ -242,7 +243,7 @@ VOZ_BASE = -m64 -O2 $(SAFE_CFLAGS) -fno-stack-protector -fPIE -mno-red-zone -nos
 	-fno-math-errno -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DNDEBUG -msse4.2 -mf16c -mfma -mbmi2 -mavx -mavx2
 VOZ_DEFS = -D_GNU_SOURCE -DGGML_SOMA -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_SCHED_MAX_COPIES=4 -DGGML_AVX -DGGML_AVX2 -DGGML_BMI2 \
 	-DGGML_F16C -DGGML_FMA -DGGML_SSE42 '-DWHISPER_VERSION="1.9.6-dev"'
-VOZ_INC = -Isrc/user/voz/cxxinc -I$(VOZ_W)/include -I$(VOZ_W)/ggml/include -I$(VOZ_W)/ggml/src -I$(VOZ_W)/ggml/src/ggml-cpu -I$(VOZ_W)/src
+VOZ_INC = -Isrc/user/voz/cxxinc -Isrc/user/voz -I$(VOZ_W)/include -I$(VOZ_W)/ggml/include -I$(VOZ_W)/ggml/src -I$(VOZ_W)/ggml/src/ggml-cpu -I$(VOZ_W)/src
 VOZ_CXXF = $(VOZ_BASE) $(VOZ_DEFS) $(VOZ_INC) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics
 VOZ_CF = $(VOZ_BASE) $(VOZ_DEFS) $(VOZ_INC) -std=gnu11
 VOZ_LIBSTDCXX = $(shell $(CXX) -print-file-name=libstdc++.a)
@@ -256,6 +257,7 @@ $(BUILD)/user/voz.elf: $(VOZ_SRCS) $(shell find $(VOZ_W) -name '*.h') $(wildcard
 	set -e; for f in $(PY_LIBM); do $(CC) $(VOZ_BASE) -w -I$(PY_DIR)/libm_dbl/include -c $$f -o $(BUILD)/user/voz/m_$$(basename $$f .c).o; done
 	$(CXX) $(VOZ_CXXF) -Wall -Wextra -c src/user/voz/voz.cpp -o $(BUILD)/user/voz/voz.o
 	$(CXX) $(VOZ_CXXF) -Wall -Wextra -c src/user/voz/voz_cxx.cpp -o $(BUILD)/user/voz/voz_cxx.o
+	$(CXX) $(VOZ_CXXF) -O3 -Wall -Wextra -c src/user/voz/habla.cpp -o $(BUILD)/user/voz/habla.o
 	$(CC) $(VOZ_BASE) -std=gnu11 -fno-builtin -Wall -Wextra -Werror -c src/user/voz/voz_libc.c -o $(BUILD)/user/voz/voz_libc.o
 	$(CXX) $(VOZ_BASE) -Wl,-T,src/user/voz/voz.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax $(BUILD)/user/voz/*.o \
 		-Wl,--start-group $(VOZ_LIBSTDCXX) -lgcc -Wl,--end-group -o $@
@@ -509,6 +511,7 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_agent_net_193.c src/agent/agent_net.c -o build/tests/test_agent_net_193
 	$(HOST_CC) $(TEST_CFLAGS) -O1 tests/test_x509_194.c src/core/x509.c src/core/tls_roots.c src/core/tlscrypto.c src/core/crypto.c -o build/tests/test_x509_194
 	$(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_llm_proto_195.c src/agent/llm_proto.c -o build/tests/test_llm_proto_195
+	$(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_llm_vision_248.c src/agent/llm_proto.c -o build/tests/test_llm_vision_248   # SOMA_248_DOC
 	$(HOST_CC) -O2 -g -Wall -Wextra -fsanitize=address,undefined tests/test_memfn_199.c -o build/tests/test_memfn_199
 	$(HOST_CC) -O1 -g -w -fsanitize=address,undefined -DWEB_HOST_TEST -Isrc/apps -Isrc/core tests/test_f64_200.c src/apps/web_f64.c -o build/tests/test_f64_200
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -fwrapv -fno-sanitize=signed-integer-overflow,shift,nonnull-attribute -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Itests tests/fuzz_http_201.c src/apps/web_net.c src/apps/web_inflate.c -o build/tests/fuzz_http_201
@@ -607,6 +610,8 @@ test:
 	python3 tests/check_png.py build/tests
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_tex.c src/apps/tex.c -o build/tests/test_tex
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_tex
+	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/agent -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_docgen_248.c tests/layhost/fbhost.c src/apps/docgen.c src/agent/docagent.c src/core/pdfw.c src/core/png_enc.c src/apps/tex.c src/apps/web_layout.c src/apps/web_css.c src/apps/web_html.c src/apps/web_font.c src/ui/soma_fonts.c src/apps/web_img.c src/apps/bmp_dec.c src/apps/web_jpeg.c src/apps/web_inflate.c src/core/jpeg.c -lm -o build/tests/test_docgen_248   # SOMA_248_DOC
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_docgen_248
 	$(HOST_CC) -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 tests/test_pdf.c src/apps/pdf.c src/apps/web_inflate.c src/apps/web_img.c src/apps/bmp_dec.c src/apps/web_jpeg.c src/core/jpeg.c -o build/tests/test_pdf
 	python3 tests/pdf_seeds.py build/tests/pdf
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_pdf --check build/tests/pdf/clasico.pdf build/tests/pdf/xrefstm.pdf
@@ -627,6 +632,10 @@ test:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_iconos_240
 	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Ithird_party/whisper/src tests/test_voz_241.cpp -o build/tests/test_voz_241
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_voz_241
+	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined tests/test_voz_245.cpp -o build/tests/test_voz_245
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_voz_245
+	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined tests/test_habla_247.cpp -o build/tests/test_habla_247
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_habla_247
 	./build/tests/test_sched
 	./build/tests/test_panic
 	./build/tests/test_mutex
@@ -643,6 +652,7 @@ test:
 	./build/tests/test_agent_net_193
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_x509_194
 	./build/tests/test_llm_proto_195
+	./build/tests/test_llm_vision_248
 	./build/tests/test_memfn_199
 	./build/tests/test_f64_200
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/fuzz_http_201 3000 1

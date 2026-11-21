@@ -408,6 +408,53 @@ out:
     return ok;
 }
 
+/* ---------------------------------------------------------------- SOMA_248_DOC: chat con sistema propio e imagenes */
+static char g_novis_model[LLM_MODEL_MAX]; static int g_novis_prov = -1;
+int llm_vision_unsupported(void)
+{
+    const struct llm_conf *c = llm_conf_get();
+    if (g_novis_prov != c->prov) return 0;
+    for (int i = 0; i < LLM_MODEL_MAX; i++) { if (g_novis_model[i] != c->model[c->prov][i]) return 0; if (!g_novis_model[i]) break; }
+    return 1;
+}
+int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
+                char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+{
+    const struct llm_conf *c = llm_conf_get();
+    if (nimg > 0 && llm_vision_unsupported()) { set_err("LLM: el modelo no admite imagenes", ""); return -2; }
+    uint32_t cap = llm_proto_chat_ex_size(system, prompt, img, nimg);
+    char *body = (char *)kmalloc(cap);
+    if (!body) { set_err("LLM: sin memoria para la peticion", ""); return 0; }
+    static struct llm_http h;
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
+    int ok = 0;
+    llm_last_error[0] = 0;
+    int blen = llm_proto_chat_ex(c, system, prompt, img, nimg, max_tokens, body, cap, &h);
+    if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); goto out; }
+    {
+        static struct wn_resp rs;
+        struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
+        rq.url = h.url; rq.method = h.method; rq.body = body; rq.body_len = (uint32_t)blen; rq.ctype = "application/json"; rq.accept = "application/json";
+        rq.timeout_ms = timeout_ms; rq.max_body = 1u << 20; rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1;
+        int rc = wn_fetch(&rq, &rs);
+        if (rc != 0 || rs.status != 200 || !rs.body) {
+            static char m[200]; m[0] = 0;
+            if (rc == 0 && rs.body) (void)llm_proto_error(rs.body, m, sizeof m);
+            if (rc == 0 && nimg > 0 && llm_proto_no_vision(rs.status, m[0] ? m : rs.body)) {
+                g_novis_prov = c->prov; for (int i = 0; i < LLM_MODEL_MAX; i++) { g_novis_model[i] = c->model[c->prov][i]; if (!g_novis_model[i]) break; }
+                set_err("LLM: el modelo no admite imagenes: ", m); ok = -2;
+            } else llm_fetch_error(rc, &rs);
+            kprint(llm_last_error); kprint("\n");
+        } else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
+        else ok = 1;
+        wn_free(&rs);
+    }
+out:
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    kfree(body);
+    return ok;
+}
+
 /* ---------------------------------------------------------------- SOMA_196: lanzador del servidor local (tools/soma_lanzador.py) */
 static int launcher_call(int what, const char *model, struct wn_resp *rs)
 {

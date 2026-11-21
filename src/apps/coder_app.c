@@ -28,6 +28,8 @@
 #include "web_font.h"
 #include "textfield.h"
 #include "sysicon.h"
+#include "png_enc.h"
+#include "docagent.h"   /* SOMA_248_DOC */
 
 /* PARCHE 094: toda la interfaz del Coder con la fuente antialiasada del sistema (antes: mapa de bits 8x8) */
 static int cdr_wf(void) { static int v = -1; if (v < 0) v = wf_init() ? 1 : 0; return v; }
@@ -2147,6 +2149,58 @@ void coder_pick_target(const char *mission, char *out, uint32_t cap)
 }
 
 static void cm_puts(char *o, uint32_t max, uint32_t *p, const char *s) { while (s && *s && *p + 1 < max) o[(*p)++] = *s++; o[*p] = 0; }
+/* SOMA_248_DOC: revision visual del programa. Si el modelo ve imagenes, se lanza la app recien escrita, se captura su ventana, un
+ * "disenador de interfaces" la critica y, si propone cambios, el programador hace UNA ronda de mejora (solo se queda si compila). */
+static volatile int uiv_done; static char uiv_target[128];
+static void uiv_main(void *a) { (void)a; static char o[256]; (void)cmd_lang_run(uiv_target, o, sizeof o); uiv_done = 1; }
+static int coder_ui_snapshot(const char *target, uint8_t **png, uint32_t *pn)
+{
+    *png = 0; *pn = 0;
+    if (gui_soma_win_is_active()) return -1;                        /* hay otro programa abierto: no se toca */
+    cdr_copy(uiv_target, sizeof uiv_target, target); uiv_done = 0;
+    uint32_t p0 = gui_soma_win_presents();
+    if (!thread_create("ui_captura", uiv_main, 0)) return -1;
+    for (int i = 0; i < 4000 && !uiv_done; i++) { if (gui_soma_win_is_active() && gui_soma_win_presents() - p0 >= 3) break; thread_sleep(1); }
+    thread_sleep(250);
+    uint32_t *px = 0; int w = 0, h = 0;
+    (void)gui_soma_win_snapshot(&px, &w, &h);
+    if (gui_soma_win_is_active()) gui_soma_win_close();
+    for (int i = 0; i < 3000 && !uiv_done; i++) thread_sleep(1);
+    if (!px) return -1;
+    size_t cap = (size_t)w * (size_t)h * 3u + 65536u, wk = png_work_size(w, h);
+    uint8_t *b = (uint8_t *)kmalloc(cap); void *work = kmalloc(wk);
+    size_t n = (b && work) ? png_encode_rgb(px, w, h, b, cap, work) : 0;
+    kfree(px); if (work) kfree(work);
+    if (!n) { if (b) kfree(b); return -1; }
+    (void)vfs_write("/agent/coder_captura.png", (const char *)b, (uint32_t)n);
+    *png = b; *pn = (uint32_t)n;
+    return 0;
+}
+static void coder_ui_review(struct cc_env *env, const char *target, const char *mission, struct cc_result *cr)
+{
+    extern int gui_is_running(void);
+    if (!cr->ok || cdr_is_py(target) || !cc_mission_is_gui(mission) || !gui_is_running() || llm_vision_unsupported()) return;
+    cm_log("Revision visual: abro el programa y capturo su ventana");
+    uint8_t *png; uint32_t pn;
+    if (coder_ui_snapshot(target, &png, &pn) != 0) { cm_log("Revision visual: no se pudo capturar la ventana"); return; }
+    static char crit[2048];
+    int r = docagent_ui_review(mission, png, pn, crit, sizeof crit);
+    kfree(png);
+    if (r == -2) { cm_log("Revision visual: el modelo no admite imagenes (se omite)"); return; }
+    if (r <= 0) { cm_log(r == 0 ? "Revision visual: la interfaz esta bien" : "Revision visual: sin respuesta del modelo"); return; }
+    cm_tr_add("\nRevision visual de la captura:\n", 40); cm_tr_add(crit, 2048);
+    static char m2[3072]; m2[0] = 0;
+    cdr_cat(m2, sizeof m2, "modifica el programa para mejorar su diseno visual segun esta revision de una captura de su ventana (no cambies lo que funciona):\n");
+    cdr_cat(m2, sizeof m2, crit);
+    cdr_cat(m2, sizeof m2, "\nEncargo original: "); cdr_cat(m2, sizeof m2, mission);
+    static struct cc_result cr2;
+    int fn = env->force_new; env->force_new = 0;
+    cc_run(env, target, m2, &cr2);
+    env->force_new = fn;
+    if (cr2.ok) { cr2.llm_calls += cr->llm_calls; cr2.repairs += cr->repairs; cr2.auto_fixes += cr->auto_fixes; *cr = cr2; cm_log("Revision visual: diseno mejorado"); }
+    else cm_log("Revision visual: la mejora no compilo; se queda la version anterior");
+}
+
 int coder_run_mission(const char *target_in, const char *mission, char *out, uint32_t max)
 {
     static struct cc_result cr;
@@ -2165,6 +2219,7 @@ int coder_run_mission(const char *target_in, const char *mission, char *out, uin
     env.force_new = (vfs_size(target) > 0 && !cdr_has_ci(mission, "modific") && !cdr_has_ci(mission, "mejora") && !cdr_has_ci(mission, "corrige")
                      && !cdr_has_ci(mission, "arregla") && !cdr_has_ci(mission, "cambia") && !cdr_has_ci(mission, "anade") && !cdr_has_ci(mission, "añade")) ? 1 : 0;
     cc_run(&env, target, mission, &cr);
+    coder_ui_review(&env, target, mission, &cr);                              /* SOMA_248_DOC */
     vfs_write("/agent/coder_ultimo.txt", cm_trace, cm_trace_n);
     cdr_copy(mod_current_file, sizeof mod_current_file, target);
     g_need_rescan = 1; g_need_reload = 1;

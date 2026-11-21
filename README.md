@@ -403,10 +403,104 @@ proceso de usuario con AVX2. Solo en x86_64 (el T480s y QEMU con `-cpu max`).
    - en el terminal: `voz ultima` (la última grabación) o `voz /grabaciones/grab_3.wav`. Opciones: `-T` marcas de tiempo,
      `-l en` otro idioma, `-C` ventana completa de 30 s (algo más preciso en audios cortos, más lento), `-v` detalles.
 
-Con el modelo base, 7 segundos de voz se transcriben en ~1,5 s en el ordenador de pruebas (un hilo; en el T480s, del mismo orden). Acepta WAV PCM de
+     `-b 1` decodificación voraz (más rápida; por defecto búsqueda en haz de 5), `-V` sin recortar silencios.
+
+**Dictado en todo el sistema (pulsar para hablar):** mantén pulsada la tecla **Alt** izquierda mientras hablas y suéltala al
+terminar. El texto se escribe donde esté el cursor, igual que si lo tecleases: el orbe, el terminal, las notas, el editor de
+programas o cualquier campo de texto. En el orbe, además, se envía a SOMA. Mientras se graba aparece abajo "Escuchando" con el
+nivel del micrófono y, al soltar, "Transcribiendo...".
+- Un toque corto de Alt sigue abriendo el orbe; Alt + otra tecla es un atajo normal (no se graba nada).
+- **Esc** cancela mientras graba. Máximo 2 minutos por dictado.
+
+**Elegir el modelo (Ajustes > Voz, o `voz modelo rapido|preciso|maximo`):**
+
+| Nivel | Archivo (whisper.cpp) | Tamaño | Velocidad |
+|---|---|---|---|
+| Rápido | `ggml-base-q5_1.bin` | ~60 MB | la de siempre |
+| Preciso (recomendado) | `ggml-small-q5_1.bin` | ~190 MB | ~3 veces más lento |
+| Máxima precisión | `ggml-large-v3-turbo-q5_0.bin` | ~575 MB | ~8-10 veces más lento |
+
+Se descargan de `huggingface.co/ggerganov/whisper.cpp` y se copian en la carpeta `MODELOS` del pendrive, junto al de
+siempre. En Ajustes > Voz se ve cuál está instalado o en el pendrive; **Instalar desde el pendrive** lo copia al almacén (si
+no, se instala solo la primera vez que se dicta). Si el elegido no está, se usa el instalado más parecido. La elección se
+guarda en `/etc/voz.conf`. El nivel se deduce del nombre (base/tiny, small/medium, large/turbo), así que sirven otras
+variantes (`q5_0`, `q8_0`...).
+
+**Contra las alucinaciones de whisper** (inventar frases con silencio o ruido, "Subtítulos por la comunidad de Amara.org",
+"Gracias por ver", bucles que repiten lo mismo):
+- un detector de voz por energía con umbral adaptado al ruido: sin voz no se reconoce nada, y con voz se recortan los silencios
+  del principio y del final y se acortan las pausas largas;
+- decodificación conservadora: búsqueda en haz, sin texto anterior como contexto, sin tokens de "no habla" (música, aplausos),
+  y los umbrales de OpenAI para repetir con más temperatura o descartar un tramo sin voz;
+- cada tramo se descarta si es probable que no haya voz y su confianza es baja, si es una frase típica de subtítulos, o si es
+  una frase corta dudosa ("Gracias.", "Música."); se quitan las anotaciones (`[Música]`, `(risas)`, ♪) y las repeticiones en bucle.
+- contra los bucles de repetición (la misma frase escrita varias veces): un bloque de 4 o más palabras repetido seguido se deja
+  una sola vez, también entre tramos y con una copia a medias al final; hay un tope de tokens según lo que dura el audio; y si el
+  resultado huele a bucle (repetía, o más de 5,5 palabras por segundo), se vuelve a reconocer con la ventana de audio completa,
+  que es donde whisper entra menos en bucle.
+
+El reconocimiento usa varios núcleos (hasta 4 hilos de cálculo en los núcleos libres). Con el modelo base, 7 segundos de voz se transcriben en ~1,5 s con un hilo en el ordenador de pruebas; con 4 hilos, bastante menos. Acepta WAV PCM de
 8/16/24/32 bits o float, mono o estéreo, a cualquier frecuencia (se pasa a 16 kHz con un filtro sinc). En QEMU funciona pero
 es muy lento, porque emula AVX2: para probar en el ordenador está `make voz-host ARCH=x86_64` (ver
 `third_party/whisper/LEEME_SOMA.md`).
+
+## 🔊 Texto a voz (voces de Piper)
+
+**Notas → Leer en voz alta** lee el documento (o lo seleccionado) con una voz neuronal, sin conexión. El botón pasa a
+**Parar lectura** mientras habla. También desde el terminal: `habla Hola, ¿qué tal?`, `habla parar`, `habla` (estado).
+
+1. Descarga una voz de [Piper](https://huggingface.co/rhasspy/piper-voices/tree/main/es): los **dos** archivos, el `.onnx` y
+   su `.onnx.json`. Para español de España, `es_ES-davefx-medium` (hombre, ~63 MB); de América, `es_MX-claude-high` o
+   `es_AR-daniela-high` (mujer). Las calidades `x_low`, `low`, `medium` y `high` funcionan; `medium` es el mejor equilibrio.
+2. Cópialos en la carpeta `MODELOS` del pendrive (junto al modelo de whisper). La primera vez que se lee algo, la voz se copia
+   sola a `/voces` del almacén (o ahora con `habla instalar`).
+
+Cómo funciona:
+- **Sin onnxruntime**: SOMA implementa la red VITS de Piper (codificador de texto con atención relativa, duraciones
+  estocásticas, flujo y generador HiFi-GAN) leyendo los pesos directamente del `.onnx`. Va en el mismo programa que `voz`
+  (`src/user/voz/habla*.{h,cpp}`) y usa los núcleos libres. En el ordenador de pruebas, 3 s de voz se calculan en 0,6 s con
+  un núcleo; la frase siguiente se calcula mientras suena la anterior.
+- **Pronunciación propia** (`habla_g2p_es.h`): el texto en español pasa a fonemas con reglas (números a palabras, c/z, ll,
+  g/j, r/rr, diptongos e hiatos, acento, alófonos de b/d/g, siglas...), imitando a espeak-ng, que es con lo que se entrenan
+  las voces (espeak-ng no se usa: es GPL). En un corpus de 380 frases coincide en el 95 % de las palabras. Con voces de
+  América (`es-419`, `es-mx`...) aplica seseo y yeísmo.
+- Con una voz de otro idioma lee igualmente, pero con la pronunciación española.
+
+
+## 📰 Documentos con acabado profesional (Maquetador)
+
+Pide a SOMA un documento con formato y lo redacta, lo **pagina como en papel**, lo **revisa** y lo deja en **PDF**:
+
+```
+documento Redacta un informe trimestral de ventas con gráficos, en PDF
+documento prepara una presentación de 8 diapositivas sobre energía solar para el comité
+soma redacta un paper sobre redes neuronales con ecuaciones (en LaTeX)
+```
+
+También desde el orbe ("redacta un informe... con formato profesional") o desde el **Maquetador**: escribe la petición abajo y
+pulsa **Generar** (trabaja en el hilo del agente; el orbe enseña el progreso). Tipos: **informe**, **paper** (HTML o LaTeX),
+**revista**, **presentación 16:9**, **carta formal**, **currículum**, **email** y **libro A5**. Se guardan en `/workspace/docs/`
+(la fuente `.html`/`.tex` y el `.pdf`).
+
+Cómo funciona:
+- **El modelo escribe HTML con la hoja de estilo de la casa** (`dg_house_css`: tipografía en puntos, portada, resumen,
+  indicadores, tablas con cifras alineadas, recuadros, columnas, gráficos SVG, diapositivas, email, carta, libro) y elige el
+  color cambiando seis variables. Para papers con matemáticas escribe LaTeX (motor `tex.c`).
+- **Paginación de verdad** (`src/apps/docgen.c`): formatos A4, A4 apaisado, A5, carta, 16:9 y email con
+  `<meta name="soma-pagina" content="A4; margen=20; pie={titulo} · {n}; cabecera=...">`. Los cortes se buscan en blanco entre
+  bloques, sin dejar un título solo al pie; `.salto-pagina` y cada `.diapositiva` fuerzan página. Texto justificado de verdad.
+- **Revisión automática**: lo que se sale de la página, diapositivas desbordadas, imágenes que faltan, última página casi vacía.
+- **Revisión de director de arte con IA**: si el modelo es **multimodal** (ve imágenes), recibe las páginas renderizadas tal y
+  como saldrán en el PDF y devuelve el documento corregido; si no, revisa con el informe de la maquetación. Hasta dos rondas;
+  la corrección solo se acepta si no empeora. El informe queda en `/agent/doc_revision.txt`. Funciona con los cuatro
+  proveedores (local con `mmproj`, ChatGPT, Claude y Gemini); si el modelo no admite imágenes, SOMA lo recuerda.
+- **Exportar**: PDF (páginas a 192 ppp, 1920×1080 en presentaciones; se abre en cualquier lector y en el de SOMA), **HTML
+  autónomo** (con la hoja de estilo incrustada y `@page`, se ve igual en cualquier navegador) y **PNG** por página:
+  `documento exportar <ruta> pdf|html|png`, o los botones **PDF** y **HTML** del Maquetador. **Revisar IA** revisa el
+  documento abierto (guarda la versión anterior como `-ant`).
+- **Programas también**: cuando el programador termina una aplicación gráfica y el modelo ve imágenes, SOMA la abre, captura
+  su ventana y un "diseñador de interfaces" la critica; si propone cambios, el programador hace una ronda de mejora (solo se
+  queda si compila). La captura queda en `/agent/coder_captura.png`.
 
 ## 🧾 Exportar el proyecto en texto
 

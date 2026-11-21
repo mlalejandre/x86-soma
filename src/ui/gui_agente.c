@@ -28,6 +28,38 @@ void gui_leave(int tok)
     if (!tok) return;
     if (--g_gui_depth > 0) return;
     g_gui_req = 0;
+    while (g_gui_grant && g_gui_loop_on && g_agent_thr_on) thread_sleep(1);   /* SOMA_248_DOC: que el bucle lo vea antes de volver a pedir */
+}
+/* SOMA_248_DOC: turno de pantalla para CUALQUIER hilo (el del agente, ordenes lentas del terminal, trabajos de fondo). Lo usan quienes
+ * dibujan fuera de la pantalla con fb_target_begin (motor de documentos), que cambia el destino de todo el dibujo. En el hilo de la GUI
+ * o sin GUI no hace nada. gui_enter() sigue siendo solo para el hilo del agente (no frena a los demas hilos que escriben archivos). */
+static volatile uint32_t g_turn_gui_tid, g_turn_tid; static volatile int g_turn_req, g_turn_grant; static int g_turn_depth;
+int gui_turn_begin(void)
+{
+    if (!g_gui_loop_on) return 0;
+    if (gui_in_agent_thread()) return gui_enter();
+    struct tcb *t = thread_current();
+    if (!t || t->tid == g_turn_gui_tid) return 0;
+    if (g_turn_tid == t->tid) { g_turn_depth++; return 2; }
+    while (!__sync_bool_compare_and_swap(&g_turn_tid, 0u, t->tid)) { if (!g_gui_loop_on) return 0; thread_sleep(1); }
+    g_turn_depth = 1; g_turn_req = 1;
+    for (uint32_t i = 0; !g_turn_grant && g_gui_loop_on && i < 60000u; i++) thread_sleep(1);
+    return 2;
+}
+void gui_turn_end(int tok)
+{
+    if (tok != 2) { gui_leave(tok); return; }
+    if (--g_turn_depth > 0) return;
+    g_turn_req = 0;
+    while (g_turn_grant && g_gui_loop_on) thread_sleep(1);
+    g_turn_tid = 0;
+}
+static void gui_turn_service(void)              /* bucle principal, punto seguro */
+{
+    if (!g_turn_req) return;
+    g_turn_grant = 1;
+    while (g_turn_req && g_gui_loop_on) thread_sleep(1);
+    g_turn_grant = 0;
 }
 static void agent_thread_main(void *arg)
 {
@@ -68,6 +100,10 @@ static int tbg_is_slow(const char *c)
 {
     while (*c == ' ') c++;
     if (tbg_is_python(c)) return 1;                                                             /* SOMA_237: python tarda lo que tarde el script */
+    if (c[0] == 'd' && c[1] == 'o' && c[2] == 'c' && c[3] == 'u' && c[4] == 'm' && c[5] == 'e' && c[6] == 'n' && c[7] == 't' && c[8] == 'o' && c[9] == ' ') {   /* SOMA_248_DOC */
+        const char *s = c + 10; while (*s == ' ') s++;
+        return !(s[0] == 'a' && s[1] == 'b' && s[2] == 'r' && s[3] == 'i' && s[4] == 'r');                  /* el LLM tarda minutos; abrir es al momento */
+    }
     if (c[0] == 't' && c[1] == 'l' && c[2] == 's' && c[3] == ' ') return 1;                     /* SOMA_176A: tls <url> tarda segundos */
     if (c[0] == 'c' && c[1] == 'a' && c[2] == 'm' && c[3] == ' ') {                            /* SOMA_178_T480S: iniciar, foto y video esperan segundos */
         const char *s = c + 4; while (*s == ' ') s++;
@@ -256,4 +292,17 @@ static void submit_global_agent_prompt(uint32_t win_x, uint32_t win_y, uint32_t 
     agent_global_scroll = 0;
     her_refresh_all();
     fb_present();
+}
+
+/* SOMA_248_DOC: una aplicacion (el Maquetador) entrega una mision al agente como si se escribiera en el orbe: va a su hilo, el orbe
+ * muestra el progreso y la GUI sigue viva. Solo desde el hilo de la GUI. 0 = enviada, -1 = el agente esta ocupado, -2 = vacia. */
+int gui_agent_submit(const char *mission)
+{
+    if (!mission || !*mission) return -2;
+    if (g_agent_thr_on) return -1;
+    uint32_t n = 0;
+    while (mission[n] && n + 1 < sizeof agent_global_cmd) { agent_global_cmd[n] = mission[n]; n++; }
+    agent_global_cmd[n] = 0; agent_global_len = n; agent_global_cursor = n;
+    submit_global_agent_prompt(0, 0, 0, 0);
+    return 0;
 }
