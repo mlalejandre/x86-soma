@@ -351,6 +351,9 @@ static void step_usb(void)
 
 static void step_smp(void)
 {
+#ifdef __x86_64__
+    usermode_fpu_init();                                /* SOMA_241_VOZ: AVX para ring 3 (antes de copiar CR4/XCR0 a los demas nucleos) */
+#endif
 #if defined(__aarch64__) || defined(__x86_64__)
     smp_init();                                         /* PARCHE 082 (aarch64) / SOMA_159_T480S (x86_64): nucleos secundarios para calculo */
     if (smp_cpus() > 1) crypto_parallel = smp_parallel_n;

@@ -6,7 +6,38 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
-### Python con ventanas y en el programador (239)
+### Voz a texto: el modelo se instala solo (243)
+- Si no hay modelo en el almacén, `voz` y **Transcribir** lo copian solos desde la carpeta `MODELOS` del pendrive (antes había
+  que escribir `voz instalar`). Se ignoran las copias `._*.bin` que deja macOS (antes podían elegirse en lugar del modelo).
+
+### Voz a texto en español con whisper.cpp (241)
+- **Orden `voz`**: transcribe un WAV del almacén sin conexión (`voz ultima`, `voz /grabaciones/grab_1.wav`, `-T` con marcas de
+  tiempo, `-l` idioma). `voz instalar` copia el modelo ggml desde la carpeta `MODELOS` del pendrive (o, en QEMU, desde
+  `-fw_cfg name=opt/soma/modelo,file=...`) a `/modelos`. `voz` solo muestra el estado (CPU y modelo).
+- **Grabadora → Transcribir** (o `T`): el texto aparece en un panel sobre la onda, se copia con un botón y se guarda en
+  `/grabaciones/grab_N.txt`. Se puede seguir usando SOMA mientras transcribe y se puede detener.
+- whisper.cpp + ggml (`third_party/whisper`, MIT) como proceso de ring 3 (`src/user/voz/`): C++17 sin excepciones ni RTTI,
+  libc mínima propia, un solo hilo. Para audios cortos el codificador trabaja solo sobre la duración real (3 veces más rápido).
+- **AVX en ring 3**: el núcleo activa XSAVE/AVX al arrancar y guarda el estado AVX de cada proceso (antes solo SSE, con
+  FXSAVE). Los procesos pueden tener una región de memoria grande bajo demanda con marcos de la memoria alta (el T480s tiene
+  ~15 GiB que casi no se usaban).
+- `ejecutar.py -t t480s-usb` copia al pendrive los modelos de la carpeta `modelos/` del proyecto.
+- Pruebas: `tests/test_voz_241.cpp` (divisor de palabras contra `std::regex`); `make voz-host` para probar en Linux.
+
+- **24 iconos nuevos del sistema** (`sysicon.h`): música, película, retroceder, avanzar, pista anterior y siguiente, lista,
+  código, deshacer, rehacer, buscar, reemplazar, ir a la línea, comentario, documento, código fuente, disco, editar,
+  cuadrícula, copiar, cerrar, sin sonido, repetir y terminal. Se ven en *Ajustes → Iconos*.
+- **SOMA Media rediseñado** con el estilo de la Grabadora: biblioteca lateral con icono por tipo (vídeo o audio), el que suena
+  marcado con *play*/*pausa*; cabecera con el archivo, sus datos y una pastilla de estado; escenario con estados vacío,
+  cargando, terminado y error; barra de progreso con tirador y tiempos; controles redondos con nombre (detener, anterior,
+  −10 s, reproducir/pausa, +10 s, siguiente y recargar la biblioteca); visualización del audio en degradado. Abre a
+  880×600 y, si la ventana es estrecha, deja solo los iconos.
+- **SOMA Studio**: pestañas, barra de herramientas y botones con iconos; si la barra no cabe, deshacer, rehacer, ir a la línea
+  y comentar (y después buscar y reemplazar) pasan a ser botones de solo icono con su nombre al pasar el ratón. Archivos
+  con icono de código coloreado por lenguaje (Python en ámbar). Tarjetas con icono en el título, pasos del programador con
+  icono y marca al terminar, ficha del proyecto con insignia y lenguaje, y estados vacíos con icono.
+- Prueba en el anfitrión `tests/test_iconos_240.c` (todos los iconos a 48 y 14 px).
+
 - **`soma.win`**: ventana, dibujo (rect, text, line, circle, pixel), ratón y teclado para Python; la misma API que `win.*`
   de SOMA-LANG. El dibujo va al núcleo por lotes (una llamada al sistema por fotograma). La ventana se cierra sola al
   terminar el script.

@@ -3,6 +3,7 @@ FROM debian:bookworm
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         gcc \
+        g++ \
         binutils \
         make \
         grub-pc-bin \

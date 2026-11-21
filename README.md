@@ -189,6 +189,14 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
 - SOMA Memory View: Visor en árbol del grafo de conocimiento persistente, la pizarra compartida (Blackboard) y la memoria episódica.
 - Document Layout: Motor de maquetación editorial para previsualizar documentos estructurados bajo el estándar #SOMA-LAYOUT v1.
 - Terminal Gráfica: Consola interactiva con emulación ANSI, historial persistente, autocompletado y tuberías (| , > , && , ||).
+- SOMA Studio: editor de código para SOMA-LANG y Python con explorador, verificación, ejecución y peticiones a la IA; pestañas *Crear con IA*, *Proyectos* y *Registro*.
+- SOMA Media: reproductor de vídeo AVI (MJPG + PCM) y audio WAV del almacén BIGFS, con biblioteca, visualización del sonido y controles con nombre.
+
+Todas usan los **iconos vectoriales del sistema** (`src/ui/sysicon.h`): se dibujan con antialiasing a cualquier tamaño y se
+pueden ver todos en *Ajustes → Iconos*. Para añadir uno: una entrada nueva en `enum si_icon` (antes de `SI_COUNT`), su dibujo en
+`si_icon()` sobre una rejilla de 48×48 con las primitivas `L` (trazo), `D` (disco), `O` (aro), `B` (caja redondeada) y `P`
+(polígono), y su nombre en la página de iconos de `settings.c`. La prueba `tests/test_iconos_240.c` comprueba que cada icono
+pinta algo, cabe en su caja y no repite el dibujo de otro.
 
 ---
 
@@ -378,6 +386,27 @@ Qué hay: enteros de precisión ilimitada, `float` doble, cadenas, listas, dicci
 `errno` y `soma` (`leer`, `escribir`, `existe`, `reloj`, `ms`, `dormir`, `win`). No hay `os`, red ni hilos; las rutas privadas
 (`/etc`, `/agent`, `/mem`...) no se pueden leer. Memoria del intérprete: 6 MiB. Plazo: 10 minutos por script (8 horas en modo
 interactivo). La prueba automática está en `tests/prueba_python_237.py`.
+
+## 🎙️ Voz a texto (whisper.cpp)
+
+SOMA transcribe audio en español **sin conexión**, con [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT) como
+proceso de usuario con AVX2. Solo en x86_64 (el T480s y QEMU con `-cpu max`).
+
+1. **Descarga el modelo** `ggml-base-q5_1.bin` (60 MB, multilingüe) de <https://huggingface.co/ggerganov/whisper.cpp>.
+   Más preciso pero unas 3 veces más lento: `ggml-small-q5_1.bin` (181 MB). Los `.en` solo entienden inglés.
+2. **Cópialo al pendrive**, en una carpeta `MODELOS` de la unidad *SOMA* (o deja el archivo en la carpeta `modelos/` del
+   proyecto y `ejecutar.py -t t480s-usb` lo copia solo).
+3. **En SOMA**, una sola vez: `voz instalar` (lo copia al almacén, en `/modelos`).
+4. **Transcribe**:
+   - en la *Grabadora*: elige una grabación y pulsa **Transcribir** (o la tecla `T`). El texto sale en pantalla, se puede
+     copiar y se guarda junto al audio (`/grabaciones/grab_N.txt`);
+   - en el terminal: `voz ultima` (la última grabación) o `voz /grabaciones/grab_3.wav`. Opciones: `-T` marcas de tiempo,
+     `-l en` otro idioma, `-C` ventana completa de 30 s (algo más preciso en audios cortos, más lento), `-v` detalles.
+
+Con el modelo base, 7 segundos de voz se transcriben en ~1,5 s en el ordenador de pruebas (un hilo; en el T480s, del mismo orden). Acepta WAV PCM de
+8/16/24/32 bits o float, mono o estéreo, a cualquier frecuencia (se pasa a 16 kHz con un filtro sinc). En QEMU funciona pero
+es muy lento, porque emula AVX2: para probar en el ordenador está `make voz-host ARCH=x86_64` (ver
+`third_party/whisper/LEEME_SOMA.md`).
 
 ## 🧾 Exportar el proyecto en texto
 

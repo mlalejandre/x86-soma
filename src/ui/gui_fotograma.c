@@ -922,9 +922,9 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     her_windows[idx].w = her_win_w;
     her_windows[idx].h = her_win_h;
     {   /* SOMA_PARCHE_V2_GUI: tamano minimo por aplicacion al abrir */
-        uint32_t mw = her_app_min_w(app), mh = (app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE) ? 600u : HER_MIN_H + 60u;
+        uint32_t mw = her_app_min_w(app), mh = (app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA) ? 600u : HER_MIN_H + 60u;
         if (cur_w > 64u && mw > cur_w - 32u) mw = cur_w - 32u;
-        if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
+        if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
         if (her_windows[idx].w < mw) her_windows[idx].w = mw;
         if (cur_h > 96u && mh <= cur_h - 48u && her_windows[idx].h < mh) her_windows[idx].h = mh;
         if ((app == APP_WEB_BROWSER || app == APP_PDF || app == APP_IMAGE_VIEWER || app == APP_SYSMON || app == APP_CODER_APP) && cur_w > 400u && cur_h > 300u) {   /* PARCHE 088: tambien PDF e imagenes */   /* PARCHE 086: el navegador abre grande (2/3 de ancho, 85 % de alto) */
@@ -981,4 +981,3 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     default: break;
     }
 }
-

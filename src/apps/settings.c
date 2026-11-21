@@ -775,7 +775,10 @@ static int click_pantalla(const struct sl *L, int32_t mx, int32_t my)
 static const char *const SI_NAMES[SI_COUNT] = { "", "Grabar", "Detener", "Reproducir", "Pausa", "Microfono", "Mic. apagado", "Camara",
     "Cam. apagada", "Video", "Guardar", "Nuevo", "Papelera", "Nivel", "Pantalla", "Altavoz", "Pantalla y audio", "Temporizador",
     "Escala", "Indicador", "Carpeta", "Anterior", "Siguiente", "Automatico", "Apagar", "Menos", "Mas", "Imagen", "Onda", "Aceptar",
-    "Disparador", "Reiniciar" };
+    "Disparador", "Reiniciar",
+    "Musica", "Pelicula", "Retroceder", "Avanzar", "Pista anterior", "Pista siguiente", "Lista", "Codigo", "Deshacer", "Rehacer",
+    "Buscar", "Reemplazar", "Ir a la linea", "Comentario", "Documento", "Codigo fuente", "Disco", "Editar", "Cuadricula", "Copiar",
+    "Cerrar", "Sin sonido", "Repetir", "Terminal" };   /* SOMA_240_ICONOS */
 static const char *const VI_NAMES[VICON_COUNT] = { "Agente", "Agentes", "Terminal", "Navegador", "Archivos", "Imagenes", "Notas", "Paint",
     "Maquetacion", "Memoria" };
 static int icon_tabs_y(const struct sl *L) { return L->y + 76; }   /* pestanas "Del sistema" / "De las aplicaciones" */

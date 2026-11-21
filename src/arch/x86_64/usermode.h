@@ -120,6 +120,13 @@ uint64_t usermode_proc_as(int idx);                   /* su espacio de direccion
 uint32_t usermode_proc_tid(int idx);                  /* tid de su hilo (0 si no hay) */
 
 #define USER_MAX_PROCS 8
+/* SOMA_241_VOZ: AVX en ring 3 y region grande para el reconocimiento de voz (ver src/arch/x86_64/voz.c) */
+#define USER_FPU_BYTES 1024                       /* area FXSAVE (512) o XSAVE con AVX (832) */
+#define USER_HEAP_VA   (USER_BASE + 0x40000000ULL)  /* 1 GiB por encima de la base: fuera de la ventana de codigo y pila */
+void usermode_fpu_init(void);                     /* en el procesador de arranque, antes de smp_init */
+int  usermode_avx2_ok(void);                      /* 1 si ring 3 puede usar AVX2/FMA/F16C */
+int  usermode_exec_region(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, uint32_t sysmask,
+                          struct uregion *r, int *err);
 #define USER_STACK_PAGES 16     /* 64 KiB de pila de usuario */
 
 /* SOMA_PARCHE_015_PROC / 017_AS: cada proceso es un hilo del planificador con su propia pila de kernel y su propio

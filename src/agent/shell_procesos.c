@@ -162,6 +162,53 @@ static int cmd_python(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* SOMA_241_VOZ: voz a texto con whisper.cpp (ver src/arch/x86_64/voz_sys.c). Los audios y el modelo estan en el almacen BIGFS. */
+static int cmd_voz(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0;
+    if (max_out) out_buf[0] = 0;
+#if defined(__x86_64__)
+    while (args && *args == ' ') args++;
+    if (!args) args = "";
+    if (!args[0] || str_eq(args, "modelo") || str_eq(args, "estado")) {
+        const char *why; char m[96]; uint64_t sz = 0;
+        soma_str_put(out_buf, max_out, &pos, "Voz a texto (whisper.cpp, sin conexion; espanol por defecto)\n");
+        soma_str_put(out_buf, max_out, &pos, usermode_avx2_ok() ? "  CPU: AVX2 activo\n" : "  CPU: sin AVX2 (no se puede usar)\n");
+        if (voz_model(m, sizeof m, &sz) == 0) {
+            soma_str_put(out_buf, max_out, &pos, "  modelo: "); soma_str_put(out_buf, max_out, &pos, m);
+            soma_str_put(out_buf, max_out, &pos, " ("); soma_str_put_dec(out_buf, max_out, &pos, (uint32_t)(sz >> 20)); soma_str_put(out_buf, max_out, &pos, " MiB)\n");
+        } else soma_str_put(out_buf, max_out, &pos, "  modelo: ninguno. Copia ggml-base-q5_1.bin en la carpeta MODELOS del pendrive y ejecuta: voz instalar\n");
+        if (!voz_ready(&why) && usermode_avx2_ok() && voz_model(m, sizeof m, 0) == 0) { soma_str_put(out_buf, max_out, &pos, "  "); soma_str_put(out_buf, max_out, &pos, why); soma_str_put(out_buf, max_out, &pos, "\n"); }
+        soma_str_put(out_buf, max_out, &pos, "Uso: voz archivo.wav  |  voz ultima (la ultima grabacion)  |  voz instalar  |  opciones -T -l idioma -v");
+        return 1;
+    }
+    if (str_eq(args, "instalar")) {
+        int r = voz_install(out_buf, max_out);
+        pos = 0; while (pos < max_out && out_buf[pos]) pos++;
+        soma_str_put(out_buf, max_out, &pos, r == 0 ? "\nPrueba: voz ultima" : "");
+        return 1;
+    }
+    char a[USER_ARGS_MAX]; uint32_t n = 0;
+    const char *rest = args;
+    if (shell_starts_with(args, "ultima") && (args[6] == 0 || args[6] == ' ')) {   /* la ultima grabacion de la Grabadora */
+        char w[80];
+        if (voz_last_recording(w, sizeof w) != 0) { soma_str_put(out_buf, max_out, &pos, "voz: no hay grabaciones (usa la Grabadora o la orden grabar)"); return 1; }
+        rest = args + 6; while (*rest == ' ') rest++;
+        for (const char *c = rest; *c && n + 2 < sizeof a; ++c) a[n++] = *c;
+        if (n) a[n++] = ' ';
+        for (const char *c = w; *c && n + 1 < sizeof a; ++c) a[n++] = *c;
+        kprint("voz: "); kprint(w); kprint("\n");
+    } else for (const char *c = args; *c && n + 1 < sizeof a; ++c) a[n++] = *c;
+    while (n && a[n - 1] == ' ') n--;
+    a[n] = 0;
+    (void)voz_run(a, 0, 0, 0);
+#else
+    (void)args;
+    soma_str_put(out_buf, max_out, &pos, "voz: de momento solo en x86_64 (necesita procesos de usuario con AVX2)");
+#endif
+    return 1;
+}
+
 /* SOMA_239_PYTHON_GRAFICO: para el programador de SOMA. Comprueba (check=1: solo compila) o ejecuta un programa Python que todavia
  * no esta en disco, con `input` como entrada (lineas separadas por \n; agotada = EOFError) y su salida en out.
  * Devuelve 0 si termino bien, 1 si Python dio un error (el texto esta en out), 2 si se agoto el tiempo, <0 si no se pudo ejecutar. */

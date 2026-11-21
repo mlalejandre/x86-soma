@@ -306,7 +306,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_CAPTURE:        return 720u;   /* SOMA_179_T480S; SOMA_210 */
     case APP_PAINT:          return 860u;   /* PARCHE 083: lienzo + herramientas + panel de color */
     case APP_CODER_APP:      return 720u;   /* PARCHE 093 */
-    case APP_MEDIA:          return 560u;
+    case APP_MEDIA:          return 880u;   /* SOMA_240_ICONOS: biblioteca + escenario + controles con nombre */
     case APP_SOMA_APP:       return 320u; /*PL12_APP_MIN_W*/
     case APP_TERMINAL_SHELL: return 360u;
     case APP_AGENTS:         return 400u;

@@ -233,6 +233,44 @@ $(BUILD)/user/python.elf: $(PY_SRCS) $(PY_LIBM) src/user/python.c src/user/pytho
 $(BUILD)/pyprog.o: $(BUILD)/user/python.elf
 	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../pyprog.o python.elf
 OBJS_ARCH += $(BUILD)/pyprog.o
+# SOMA_241_VOZ: voz a texto con whisper.cpp (third_party/whisper, MIT) como programa de ring 3 con AVX2 (orden "voz").
+# C++17 sin excepciones ni RTTI, con las cabeceras de libstdc++ y una libc propia (src/user/voz/voz_libc.c). De libstdc++.a solo
+# se enlazan los arboles de std::map y la politica de las tablas hash (src/user/voz/cxxinc desactiva las extern template).
+VOZ_W = third_party/whisper
+VOZ_SRCS = $(shell find $(VOZ_W) -name '*.c' -o -name '*.cpp' | grep -v aneforge | sort)
+VOZ_BASE = -m64 -O2 $(SAFE_CFLAGS) -fno-stack-protector -fPIE -mno-red-zone -nostdlib -static -fno-asynchronous-unwind-tables -fno-unwind-tables \
+	-fno-math-errno -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DNDEBUG -msse4.2 -mf16c -mfma -mbmi2 -mavx -mavx2
+VOZ_DEFS = -D_GNU_SOURCE -DGGML_SOMA -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_SCHED_MAX_COPIES=4 -DGGML_AVX -DGGML_AVX2 -DGGML_BMI2 \
+	-DGGML_F16C -DGGML_FMA -DGGML_SSE42 '-DWHISPER_VERSION="1.9.6-dev"'
+VOZ_INC = -Isrc/user/voz/cxxinc -I$(VOZ_W)/include -I$(VOZ_W)/ggml/include -I$(VOZ_W)/ggml/src -I$(VOZ_W)/ggml/src/ggml-cpu -I$(VOZ_W)/src
+VOZ_CXXF = $(VOZ_BASE) $(VOZ_DEFS) $(VOZ_INC) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics
+VOZ_CF = $(VOZ_BASE) $(VOZ_DEFS) $(VOZ_INC) -std=gnu11
+VOZ_LIBSTDCXX = $(shell $(CXX) -print-file-name=libstdc++.a)
+ifeq ($(shell command -v $(CXX) 2>/dev/null),)
+$(error Falta el compilador de C++ ($(CXX)), necesario desde el parche 241 (voz a texto). Con Docker: borra la imagen vieja con "docker rmi soma-toolchain" y vuelve a ejecutar ejecutar.py (la reconstruye con g++). En Debian/Ubuntu: sudo apt install g++)
+endif
+$(BUILD)/user/voz.elf: $(VOZ_SRCS) $(shell find $(VOZ_W) -name '*.h') $(wildcard src/user/voz/*) src/user/voz/cxxinc/bits/c++config.h $(PY_LIBM) | $(BUILD)
+	rm -rf $(BUILD)/user/voz && mkdir -p $(BUILD)/user/voz
+	set -e; for f in $(VOZ_SRCS); do o=$(BUILD)/user/voz/$$(echo $$f | tr / _).o; \
+		case $$f in *.cpp) $(CXX) $(VOZ_CXXF) -w -c $$f -o $$o ;; *) $(CC) $(VOZ_CF) -w -c $$f -o $$o ;; esac; done
+	set -e; for f in $(PY_LIBM); do $(CC) $(VOZ_BASE) -w -I$(PY_DIR)/libm_dbl/include -c $$f -o $(BUILD)/user/voz/m_$$(basename $$f .c).o; done
+	$(CXX) $(VOZ_CXXF) -Wall -Wextra -c src/user/voz/voz.cpp -o $(BUILD)/user/voz/voz.o
+	$(CXX) $(VOZ_CXXF) -Wall -Wextra -c src/user/voz/voz_cxx.cpp -o $(BUILD)/user/voz/voz_cxx.o
+	$(CC) $(VOZ_BASE) -std=gnu11 -fno-builtin -Wall -Wextra -Werror -c src/user/voz/voz_libc.c -o $(BUILD)/user/voz/voz_libc.o
+	$(CXX) $(VOZ_BASE) -Wl,-T,src/user/voz/voz.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax $(BUILD)/user/voz/*.o \
+		-Wl,--start-group $(VOZ_LIBSTDCXX) -lgcc -Wl,--end-group -o $@
+# Variante para el anfitrion Linux (mismo codigo; las llamadas al sistema de SOMA se traducen a Linux): sirve para probar el
+# reconocimiento y su velocidad sin QEMU (que emula AVX2 muy despacio). Rutas del almacen bajo ./voz_raiz:
+#   make voz-host ARCH=x86_64 && mkdir -p voz_raiz/modelos && cp ggml-base-q5_1.bin voz_raiz/modelos/ && build/x86_64/voz_host -H 1400 /x.wav
+voz-host: $(BUILD)/user/voz.elf
+	$(CC) $(VOZ_BASE) -std=gnu11 -fno-builtin -DVOZ_HOST -Wall -Wextra -Werror -c src/user/voz/voz_libc.c -o $(BUILD)/voz_libc_host.o
+	$(CXX) $(VOZ_BASE) -Wl,-T,src/user/voz/voz.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax \
+		$(filter-out %/voz_libc.o,$(wildcard $(BUILD)/user/voz/*.o)) $(BUILD)/voz_libc_host.o \
+		-Wl,--start-group $(VOZ_LIBSTDCXX) -lgcc -Wl,--end-group -o $(BUILD)/voz_host
+.PHONY: voz-host
+$(BUILD)/vozprog.o: $(BUILD)/user/voz.elf
+	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../vozprog.o voz.elf
+OBJS_ARCH += $(BUILD)/vozprog.o $(BUILD)/voz_sys.o
 endif
 
 OBJS_CORE += $(BUILD)/elf.o $(BUILD)/audio.o $(BUILD)/wav.o $(BUILD)/audio_sys.o $(BUILD)/micrec.o $(BUILD)/uvc.o $(BUILD)/avi_wr.o $(BUILD)/camera.o $(BUILD)/jpeg_enc.o $(BUILD)/scrcap_dsp.o $(BUILD)/scrcap.o
@@ -402,6 +440,7 @@ clean:
 
 # SOMA_PARCHE_002_HOST_TESTS: pruebas en host (no afectan a la build del kernel)
 HOST_CC ?= cc
+HOST_CXX ?= c++
 TEST_INC = -Itests -Itests/host_inc -Isrc -Isrc/core -Isrc/drivers -Isrc/fs -Isrc/net -Isrc/ui -Isrc/apps -Isrc/agent -Isrc/lang -Isrc/arch/x86_64
 TEST_WARN = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-address -Wno-unused-function -Wno-unused-variable
 TEST_CFLAGS = -std=gnu11 $(TEST_WARN) -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer $(TEST_INC) $(TEST_EXTRA)
@@ -584,6 +623,10 @@ test:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_guardado_238 build/tests/informe_228.img
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_texto_229.c -o build/tests/test_texto_229
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_texto_229 200000
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_iconos_240.c src/ui/sysicon.c -o build/tests/test_iconos_240
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_iconos_240
+	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Ithird_party/whisper/src tests/test_voz_241.cpp -o build/tests/test_voz_241
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_voz_241
 	./build/tests/test_sched
 	./build/tests/test_panic
 	./build/tests/test_mutex

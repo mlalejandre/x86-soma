@@ -62,7 +62,7 @@ static inline uint32_t cov_of(int32_t sd)                                     /*
     return (uint32_t)c * 16u;
 }
 
-enum { M_FULL, M_BOTTOM, M_TOP, M_RIGHT, M_POWER, M_RESTART };
+enum { M_FULL, M_BOTTOM, M_TOP, M_RIGHT, M_POWER, M_RESTART, M_LEFT };
 static int mask_ok(int mask, int32_t dx, int32_t dy)
 {
     switch (mask) {
@@ -71,6 +71,7 @@ static int mask_ok(int mask, int32_t dx, int32_t dy)
     case M_RIGHT:  return dx * 10 > iabs(dy) * 6;
     case M_POWER:  return !(dy < 0 && iabs(dx) * 10 < -dy * 7);
     case M_RESTART: return !(dy < 0 && dx >= 0 && -dy * 10 > dx * 5);          /* SOMA_218: hueco arriba a la derecha */
+    case M_LEFT:   return -dx * 10 > iabs(dy) * 6;                                /* SOMA_240 */
     default:       return 1;
     }
 }
@@ -166,6 +167,8 @@ static void P(const int8_t *g, int n)
 static void mic(void) { B(17, 5, 31, 29, 7, 0); O(24, 22, 12, M_BOTTOM); L(24, 34, 24, 41); L(17, 42, 31, 42); }
 static void camera(void) { B(5, 14, 43, 40, 5, 0); L(16, 14, 19, 8); L(19, 8, 29, 8); L(29, 8, 32, 14); O(24, 27, 7, M_FULL); D(37, 20, 2); }
 static void screen(void) { B(4, 7, 44, 34, 4, 0); L(24, 34, 24, 41); L(15, 41, 33, 41); }
+static void file_page(void) { L(11, 5, 28, 5); L(28, 5, 37, 14); L(37, 14, 37, 43); L(37, 43, 11, 43); L(11, 43, 11, 5); L(28, 5, 28, 14); L(28, 14, 37, 14); }
+static void speaker_body(void) { static const int8_t g[] = { 4, 18, 12, 18, 22, 9, 22, 39, 12, 30, 4, 30 }; P(g, 6); }
 
 void si_icon(int icon, int32_t cx, int32_t cy, int32_t size, uint32_t rgb)
 {
@@ -204,6 +207,32 @@ void si_icon(int icon, int32_t cx, int32_t cy, int32_t size, uint32_t rgb)
     case SI_CHECK:  L(11, 25, 20, 34); L(20, 34, 37, 15); break;
     case SI_RESTART: { static const int8_t g[] = { 22, 3, 33, 10, 22, 17 }; O(24, 25, 15, M_RESTART); P(g, 3); break; }   /* SOMA_218 */
     case SI_SHUTTER: { int32_t w = I_sw; I_sw = I_s * 3 / 48; O(24, 24, 21, M_FULL); I_sw = w; D(24, 24, 16); break; }
+    /* SOMA_240_ICONOS */
+    case SI_MUSIC:  D(15, 36, 6); D(35, 32, 6); L(20, 36, 20, 10); L(40, 32, 40, 6); { static const int8_t g[] = { 19, 9, 41, 4, 41, 11, 19, 16 }; P(g, 4); } break;
+    case SI_FILM:   B(6, 7, 42, 41, 4, 0); L(14, 7, 14, 41); L(34, 7, 34, 41); L(6, 17, 14, 17); L(6, 31, 14, 31); L(34, 17, 42, 17); L(34, 31, 42, 31); break;
+    case SI_REWIND: { static const int8_t a[] = { 23, 11, 23, 37, 5, 24 }, b[] = { 42, 11, 42, 37, 24, 24 }; P(a, 3); P(b, 3); break; }
+    case SI_FFWD:   { static const int8_t a[] = { 6, 11, 6, 37, 24, 24 }, b[] = { 25, 11, 25, 37, 43, 24 }; P(a, 3); P(b, 3); break; }
+    case SI_SKIP_PREV: { static const int8_t g[] = { 38, 11, 38, 37, 16, 24 }; B(9, 11, 14, 37, 1, 1); P(g, 3); break; }
+    case SI_SKIP_NEXT: { static const int8_t g[] = { 10, 11, 10, 37, 32, 24 }; P(g, 3); B(34, 11, 39, 37, 1, 1); break; }
+    case SI_LIST:   D(10, 13, 3); D(10, 24, 3); D(10, 35, 3); L(18, 13, 40, 13); L(18, 24, 40, 24); L(18, 35, 40, 35); break;
+    case SI_CODE:   L(16, 13, 6, 24); L(6, 24, 16, 35); L(32, 13, 42, 24); L(42, 24, 32, 35); L(27, 9, 21, 39); break;
+    case SI_UNDO:   { static const int8_t g[] = { 5, 16, 15, 8, 15, 24 }; L(14, 16, 28, 16); O(28, 26, 10, M_RIGHT); L(28, 36, 15, 36); P(g, 3); break; }
+    case SI_REDO:   { static const int8_t g[] = { 43, 16, 33, 8, 33, 24 }; L(34, 16, 20, 16); O(20, 26, 10, M_LEFT); L(20, 36, 33, 36); P(g, 3); break; }
+    case SI_SEARCH: O(20, 20, 12, M_FULL); L(29, 29, 41, 41); break;
+    case SI_REPLACE: { static const int8_t a[] = { 42, 16, 33, 9, 33, 23 }, b[] = { 6, 32, 15, 25, 15, 39 }; L(8, 16, 34, 16); P(a, 3); L(40, 32, 14, 32); P(b, 3); break; }
+    case SI_GOTO:   { static const int8_t g[] = { 42, 30, 32, 22, 32, 38 }; L(11, 7, 11, 30); L(11, 30, 33, 30); P(g, 3); break; }
+    case SI_COMMENT: { static const int8_t g[] = { 13, 31, 23, 31, 11, 42 }; B(5, 7, 43, 33, 7, 0); P(g, 3); L(13, 17, 35, 17); L(13, 24, 28, 24); break; }
+    case SI_FILE:   file_page(); L(17, 22, 31, 22); L(17, 29, 31, 29); L(17, 36, 26, 36); break;
+    case SI_FILE_CODE: file_page(); L(21, 23, 16, 29); L(16, 29, 21, 35); L(27, 23, 32, 29); L(32, 29, 27, 35); break;
+    case SI_DISK:   B(6, 6, 42, 42, 5, 0); B(15, 6, 31, 17, 1, 0); B(13, 26, 35, 42, 2, 0); break;
+    case SI_EDIT:   { static const int8_t g[] = { 31, 9, 39, 17, 18, 38, 8, 40, 10, 30 }; P(g, 5); L(8, 43, 40, 43); break; }
+    case SI_GRID:   B(6, 6, 21, 21, 4, 0); B(27, 6, 42, 21, 4, 0); B(6, 27, 21, 42, 4, 0); B(27, 27, 42, 42, 4, 0); break;
+    case SI_COPY:   B(16, 16, 42, 42, 5, 0); L(10, 32, 7, 32); L(7, 32, 7, 7); L(7, 7, 32, 7); L(32, 7, 32, 10); break;
+    case SI_CLOSE:  L(12, 12, 36, 36); L(36, 12, 12, 36); break;
+    case SI_SPEAKER_OFF: speaker_body(); L(30, 17, 43, 31); L(43, 17, 30, 31); break;
+    case SI_LOOP:   { static const int8_t a[] = { 38, 7, 44, 13, 38, 19 }, b[] = { 10, 29, 4, 35, 10, 41 };
+                      L(9, 24, 9, 17); L(9, 17, 16, 13); L(16, 13, 39, 13); P(a, 3); L(39, 24, 39, 31); L(39, 31, 32, 35); L(32, 35, 9, 35); P(b, 3); break; }
+    case SI_TERMINAL: B(4, 7, 44, 41, 5, 0); L(12, 17, 19, 24); L(19, 24, 12, 31); L(23, 32, 34, 32); break;
     default: break;
     }
 }

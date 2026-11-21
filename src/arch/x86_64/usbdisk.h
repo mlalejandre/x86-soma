@@ -20,4 +20,8 @@ int usbdisk_flush(void);
 /* SOMA_228_ARRANQUE: reescribe en su sitio un fichero que ya existe en la particion FAT de arranque del pendrive (la "SOMA", nunca
  * SOMADATA), por ejemplo "INFORME.TXT". No crea ficheros ni cambia su tamano (ver fat_overwrite). 0 = escrito; si no, *why dice por que. */
 int usbdisk_bootfile_write(const char *name, const char *data, uint32_t len, const char **why);
+/* SOMA_241_VOZ: lectura de la particion FAT de arranque (para instalar el modelo de voz copiado al pendrive) */
+struct fat_dirent;
+int usbdisk_bootfile_read(const char *name, uint32_t off, void *buf, uint32_t len, uint32_t *size_out, const char **why);
+int usbdisk_bootdir(const char *path, struct fat_dirent *out, int max, const char **why);
 #endif

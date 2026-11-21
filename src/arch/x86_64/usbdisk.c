@@ -279,3 +279,51 @@ int usbdisk_bootfile_write(const char *name, const char *data, uint32_t len, con
     kmutex_unlock(&g_lock);
     return r;
 }
+
+/* SOMA_241_VOZ: lee un trozo de un fichero de la particion FAT de arranque del pendrive (la "SOMA"), por ejemplo el modelo de voz
+ * MODELOS/ggml-base-q5_1.bin que el usuario copia desde su ordenador. Con buf=0 solo da el tamano. Devuelve los bytes leidos o <0. */
+int usbdisk_bootfile_read(const char *name, uint32_t off, void *buf, uint32_t len, uint32_t *size_out, const char **why)
+{
+    static struct fat_vol v;
+    static const char *dummy; if (!why) why = &dummy;
+    if (!g.active && !xhci_msc_ready()) { *why = "SOMA no arranco desde un pendrive"; return -1; }
+    kmutex_lock(&g_lock);
+    int r = -1;
+    if (g.active && !still_ours()) *why = "el pendrive del sistema no responde";
+    else {
+        struct fat_io io = { bf_read, 0, xhci_msc_get()->sectors };
+        int e = fat_mount(&v, &io);
+        if (e != 0) *why = "no se encontro la particion de arranque FAT";
+        else {
+            struct fat_dirent d;
+            e = fat_stat(&v, name, &d);
+            if (e != 0) *why = e == FAT_E_NOENT ? "no esta en el pendrive" : fat_err_str(e);
+            else if (d.is_dir) *why = "es una carpeta";
+            else {
+                if (size_out) *size_out = d.size;
+                if (!buf) r = 0;
+                else { r = fat_read(&v, name, off, buf, len); if (r < 0) *why = fat_err_str(r); else *why = ""; }
+            }
+        }
+    }
+    kmutex_unlock(&g_lock);
+    return r;
+}
+/* SOMA_241_VOZ: lista una carpeta de la particion de arranque (para buscar el modelo). Devuelve las entradas escritas o <0. */
+int usbdisk_bootdir(const char *path, struct fat_dirent *out, int max, const char **why)
+{
+    static struct fat_vol v;
+    static const char *dummy; if (!why) why = &dummy;
+    if (!g.active && !xhci_msc_ready()) { *why = "SOMA no arranco desde un pendrive"; return -1; }
+    kmutex_lock(&g_lock);
+    int r = -1, total = 0;
+    if (g.active && !still_ours()) *why = "el pendrive del sistema no responde";
+    else {
+        struct fat_io io = { bf_read, 0, xhci_msc_get()->sectors };
+        int e = fat_mount(&v, &io);
+        if (e != 0) *why = "no se encontro la particion de arranque FAT";
+        else { r = fat_readdir(&v, path, out, max, &total); if (r < 0) *why = r == FAT_E_NOENT ? "no existe la carpeta" : fat_err_str(r); }
+    }
+    kmutex_unlock(&g_lock);
+    return r;
+}

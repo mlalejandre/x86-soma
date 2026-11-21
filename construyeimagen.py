@@ -78,8 +78,9 @@ def compilar(local):
     else:
         if not shutil.which("docker"):
             sys.exit("No encuentro Docker. Instala Docker Desktop (Windows/Mac) o docker.io (Linux), o usa --local.")
-        tiene = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "test", "-d",
-                                "/usr/lib/grub/x86_64-efi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        # SOMA_242_TOOLCHAIN: GRUB para UEFI y g++ (voz a texto, parche 241); si falta algo se reconstruye el contenedor
+        tiene = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "sh", "-c",
+                                "test -d /usr/lib/grub/x86_64-efi && command -v g++"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
         if not tiene:
             print("Preparando el contenedor de compilacion (solo la primera vez, unos minutos)...")
             if subprocess.run(["docker", "build", "--platform", "linux/amd64", "-t", DOCKER_IMAGE, "."], cwd=ROOT).returncode:

@@ -53,4 +53,5 @@ imagen/*.img
 
 # SOMA_236_EXPORTAR: exportacion del proyecto en texto (exportar_txt.py)
 exportacion/
+modelos/
 .soma_parches/

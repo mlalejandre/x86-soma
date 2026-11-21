@@ -76,6 +76,12 @@ def get_host_uid_gid() -> tuple[str, str]:
 def docker_image_exists() -> bool:
     res = subprocess.run(["docker", "image", "inspect", DOCKER_IMAGE],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if res.returncode != 0:
+        return False
+    # SOMA_242_TOOLCHAIN: desde el parche 241 (voz a texto, whisper.cpp) hace falta g++. Una imagen antigua sin g++ cuenta como
+    # inexistente, asi se reconstruye sola con el Dockerfile actual.
+    res = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "sh", "-c", "command -v g++"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return res.returncode == 0
 
 
@@ -669,6 +675,21 @@ def t480s_copy(mnt: str) -> int:
             os.sync()
         except OSError as e:
             print(f"(aviso: no se pudo crear INFORME.TXT: {e})")
+    # SOMA_241_VOZ: modelos de voz (whisper.cpp) que haya en la carpeta modelos/ del proyecto -> MODELOS/ del pendrive.
+    # Dentro de SOMA, "voz instalar" los copia al almacen. Se baja con: https://huggingface.co/ggerganov/whisper.cpp (ggml-base-q5_1.bin)
+    mods = sorted(Path(__file__).resolve().parent.glob("modelos/ggml-*.bin"))
+    if mods:
+        mdir = Path(mnt) / "MODELOS"
+        mdir.mkdir(exist_ok=True)
+        for m in mods:
+            d = mdir / m.name
+            if d.exists() and d.stat().st_size == m.stat().st_size:
+                continue
+            print(f"Copiando el modelo de voz {m.name} ({m.stat().st_size >> 20} MiB) a {mdir} ...")
+            try:
+                shutil.copyfile(m, d); os.sync()
+            except OSError as e:
+                print(f"(aviso: no se pudo copiar {m.name}: {e})")
     if shutil.which("dot_clean"):                                     # quita los ._* que deja macOS
         subprocess.run(["dot_clean", "-m", mnt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("[OK] Copia verificada (SHA-256 identico).")

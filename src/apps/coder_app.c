@@ -27,6 +27,7 @@
 #include "clipboard.h"
 #include "web_font.h"
 #include "textfield.h"
+#include "sysicon.h"
 
 /* PARCHE 094: toda la interfaz del Coder con la fuente antialiasada del sistema (antes: mapa de bits 8x8) */
 static int cdr_wf(void) { static int v = -1; if (v < 0) v = wf_init() ? 1 : 0; return v; }
@@ -381,8 +382,9 @@ static void cdr_log(const char *msg)
  * ------------------------------------------------------------------------ */
 static int      cdr_inited = 0;
 static enum cdr_tab cdr_tab_cur = CDR_TAB_EDITOR;
-static const struct { const char *t; uint32_t w; enum cdr_tab tab; } cdr_tabs[] = {   /* PARCHE 093 */
-    { "EDITOR", 92, CDR_TAB_EDITOR }, { "CREAR CON IA", 124, CDR_TAB_NEW }, { "PROYECTOS", 104, CDR_TAB_PROJECTS }, { "REGISTRO", 96, CDR_TAB_LOG } };
+static const struct { const char *t; uint32_t w; enum cdr_tab tab; int icon; } cdr_tabs[] = {   /* PARCHE 093; SOMA_240_ICONOS: con icono */
+    { "EDITOR", 114, CDR_TAB_EDITOR, SI_CODE }, { "CREAR CON IA", 146, CDR_TAB_NEW, SI_AUTO }, { "PROYECTOS", 126, CDR_TAB_PROJECTS, SI_GRID },
+    { "REGISTRO", 118, CDR_TAB_LOG, SI_LIST } };
 #define CDR_NTABS 4
 static void cdr_open_in_editor(const char *path);
 static int ide_inited;
@@ -1045,27 +1047,36 @@ void coder_app_init(void)
 /* ------------------------------------------------------------------------
  * Renderizado de controles y vistas
  * ------------------------------------------------------------------------ */
-static void cdr_draw_btn(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-                         const char *lbl, uint32_t bg, uint32_t brd, uint32_t txt)
+/* SOMA_240_ICONOS: los botones llevan un icono vectorial del sistema (sysicon.h) delante del texto, o solo el icono */
+#define CDR_ICO 15
+static void cdr_draw_btn_i(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int icon,
+                           const char *lbl, uint32_t bg, uint32_t brd, uint32_t txt, int hover)
 {   /* PARCHE 094: botones planos redondeados; los neutros sin borde, los de accion con tinte y contorno suave */
     int neutral = (brd == CDR_C_BORDER2 || brd == CDR_C_BORDER);
     if (neutral) { bg = 0x00182132u; txt = (txt == CDR_C_SOFT || txt == CDR_C_GRAY) ? 0x00D5DCE8u : txt; }
-    fb_fill_rounded_rect((int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h, 7, bg);
+    if (hover) bg = si_mix(bg, 0x00FFFFFFu, 18);
+    fb_fill_rrect_aa((int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h, 7, bg);
     if (!neutral) fb_stroke_rrect_aa((int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h, 7, 0x90000000u | brd);
-    else fb_fill_rect(x + 7, y, w > 14 ? w - 14 : 1, 1, 0x00222C40u);
-    int tw = cdr_tw(lbl);
-    font_draw_string(x + (uint32_t)(((int)w - tw) / 2 > 4 ? ((int)w - tw) / 2 : 6), y + (h - 9) / 2, lbl, txt, 1);
+    else fb_fill_rect(x + 7, y, w > 14 ? w - 14 : 1, 1, hover ? 0x00334155u : 0x00222C40u);
+    int tw = lbl && lbl[0] ? cdr_tw(lbl) : 0;
+    int tot = (icon ? CDR_ICO : 0) + (icon && tw ? 7 : 0) + tw;
+    int cx = (int)x + ((int)w - tot) / 2; if (cx < (int)x + 6) cx = (int)x + 6;
+    uint32_t ic = neutral ? si_mix(txt, 0x0060A5FAu, 70) : txt;
+    if (icon) { si_icon(icon, cx + CDR_ICO / 2, (int)y + (int)h / 2, tw ? CDR_ICO : CDR_ICO + 3, ic); cx += CDR_ICO + (tw ? 7 : 0); }
+    if (tw) font_draw_string((uint32_t)cx, y + (h - 9) / 2, lbl, txt, 1);
 }
 
 static void cdr_draw_tab_btn(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-                             const char *title, int active)
-{   /* PARCHE 094: pestanas de tipo subrayado */
-    int tw = cdr_tw(title);
+                             const char *title, int active, int icon)
+{   /* PARCHE 094: pestanas de tipo subrayado; SOMA_240_ICONOS: con icono */
+    int tw = cdr_tw(title), tot = tw + (icon ? CDR_ICO + 8 : 0);
     if (active) {
-        fb_fill_rounded_rect((int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h, 7, 0x00162036u);
-        fb_fill_rounded_rect((int32_t)(x + 12), (int32_t)(y + h - 3), (int32_t)(w - 24), 3, 1, CDR_C_GREEN);
+        fb_fill_rrect_aa((int32_t)x, (int32_t)y, (int32_t)w, (int32_t)h, 7, 0x00162036u);
+        fb_fill_rrect_aa((int32_t)(x + 12), (int32_t)(y + h - 3), (int32_t)(w - 24), 3, 1, CDR_C_GREEN);
     }
-    font_draw_string(x + (uint32_t)((int)w - tw) / 2, y + (h - 9) / 2 - 1, title, active ? CDR_C_WHITE : CDR_C_DIM, 1);
+    int cx = (int)x + ((int)w - tot) / 2;
+    if (icon) { si_icon(icon, cx + CDR_ICO / 2, (int)y + (int)h / 2 - 1, CDR_ICO, active ? CDR_C_GREEN : 0x0064748Bu); cx += CDR_ICO + 8; }
+    font_draw_string((uint32_t)cx, y + (h - 9) / 2 - 1, title, active ? CDR_C_WHITE : CDR_C_DIM, 1);
 }
 
 
@@ -1081,7 +1092,8 @@ static void cdr_draw_tab_btn(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
 extern int keyboard_ctrl_held(void);
 extern int keyboard_shift_held(void);
 
-struct ide_btn { int x, y, w, h; int id; };
+struct ide_btn { int x, y, w, h; int id; const char *tip; };   /* SOMA_240_ICONOS: tip = nombre si el boton es solo icono */
+static int ide_hover_id;          /* boton de la barra bajo el raton (0 = ninguno) */
 enum { IB_NEW = 1, IB_OPEN, IB_SAVE, IB_SAVEAS, IB_UNDO, IB_REDO, IB_FIND, IB_REPL, IB_GOTO, IB_COMMENT, IB_VERIFY, IB_RUN, IB_IA, IB_IA_FIELD, IB_IA_CANCEL };
 static struct ide_btn ide_btns[24]; static int ide_nb;
 static int  ide_focus;           /* 0 editor, 1 campo IA */
@@ -1210,11 +1222,12 @@ static void ide_track_job(const struct cdr_snap *sn)
     }
     ide_was_working = working;
 }
-static void ide_add_btn(int *x, int y, const char *t, int id, uint32_t bg, uint32_t br, uint32_t tx)
+static int ide_btn_w(const char *t, int icon, int compact) { return compact ? 32 : cdr_tw(t) + 24 + (icon ? CDR_ICO + 7 : 0); }
+static void ide_add_btn_i(int *x, int y, const char *t, int id, int icon, int compact, uint32_t bg, uint32_t br, uint32_t tx)
 {
-    int w = cdr_tw(t) + (id == IB_RUN ? 40 : 24);
-    cdr_draw_btn((uint32_t)*x, (uint32_t)y, (uint32_t)w, 28, t, bg, br, tx);
-    if (ide_nb < 24) { ide_btns[ide_nb].x = *x; ide_btns[ide_nb].y = y; ide_btns[ide_nb].w = w; ide_btns[ide_nb].h = 28; ide_btns[ide_nb].id = id; ide_nb++; }
+    int w = ide_btn_w(t, icon, compact);
+    cdr_draw_btn_i((uint32_t)*x, (uint32_t)y, (uint32_t)w, 28, icon, compact ? 0 : t, bg, br, tx, ide_hover_id == id);
+    if (ide_nb < 24) { ide_btns[ide_nb].x = *x; ide_btns[ide_nb].y = y; ide_btns[ide_nb].w = w; ide_btns[ide_nb].h = 28; ide_btns[ide_nb].id = id; ide_btns[ide_nb].tip = compact ? t : 0; ide_nb++; }
     *x += w + 6;
 }
 static void ide_sep(int *x, int y) { fb_fill_rect((uint32_t)(*x + 3), (uint32_t)(y + 6), 1, 16, 0x00263043u); *x += 10; }
@@ -1227,6 +1240,11 @@ static void ide_card(int x, int y, int w, int h, uint32_t bg, uint32_t edge)
 }
 static const char *ide_base(const char *p) { const char *n = p; for (; *p; p++) if (*p == '/') n = p + 1; return n; }
 
+static uint32_t cdr_file_col(const struct cdr_proj *p, int strong)
+{
+    uint32_t c = cdr_is_py(p->path) ? CDR_C_AMBER : p->is_gui ? CDR_C_GREEN : CDR_C_CYAN;
+    return strong ? c : si_mix(0x000C1220u, c, 200);
+}
 static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h, const struct cdr_snap *sn)
 {
     int x0 = (int)win_x + 12, w = (int)win_w - 24, y0 = (int)win_y + 54, y1 = (int)(win_y + win_h) - 10;
@@ -1239,25 +1257,30 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
     /* ---- barra de herramientas ---- */
     int bx = x0, by = y0;
     uint32_t pb = CDR_C_PANEL, pr = CDR_C_BORDER2, pt = CDR_C_SOFT;
-    ide_add_btn(&bx, by, "Nuevo", IB_NEW, pb, pr, pt);
-    ide_add_btn(&bx, by, "Abrir", IB_OPEN, pb, pr, pt);
-    ide_add_btn(&bx, by, "Guardar", IB_SAVE, ce_dirty() ? 0x000E2F26u : pb, ce_dirty() ? CDR_C_GREEN : pr, ce_dirty() ? 0x00A7F3D0u : pt);
-    if (w > 960) ide_add_btn(&bx, by, "Guardar como", IB_SAVEAS, pb, pr, pt);
-    ide_sep(&bx, by);
-    ide_add_btn(&bx, by, "Deshacer", IB_UNDO, pb, pr, pt);
-    ide_add_btn(&bx, by, "Rehacer", IB_REDO, pb, pr, pt);
-    ide_sep(&bx, by);
-    ide_add_btn(&bx, by, "Buscar", IB_FIND, pb, pr, pt);
-    if (w > 840) ide_add_btn(&bx, by, "Reemplazar", IB_REPL, pb, pr, pt);
-    if (w > 780) ide_add_btn(&bx, by, "Ir a", IB_GOTO, pb, pr, pt);
-    if (w > 1040) ide_add_btn(&bx, by, "Comentar", IB_COMMENT, pb, pr, pt);
-    {   /* acciones principales alineadas a la derecha */
-        int rw = cdr_tw("Verificar") + 24 + 6 + cdr_tw("Ejecutar") + 40;
+    {   /* SOMA_240_ICONOS: cada boton con su icono; si no cabe todo, los de edicion pasan a ser solo icono (con su nombre al pasar el raton) */
+        static const struct { const char *t; int id, icon, grp; } tb[] = {
+            { "Nuevo", IB_NEW, SI_NEW, 0 }, { "Abrir", IB_OPEN, SI_FOLDER, 0 }, { "Guardar", IB_SAVE, SI_DISK, 0 }, { "Guardar como", IB_SAVEAS, SI_SAVE, 2 },
+            { 0, 0, 0, 0 }, { "Deshacer", IB_UNDO, SI_UNDO, 1 }, { "Rehacer", IB_REDO, SI_REDO, 1 },
+            { 0, 0, 0, 0 }, { "Buscar", IB_FIND, SI_SEARCH, 2 }, { "Reemplazar", IB_REPL, SI_REPLACE, 2 }, { "Ir a la linea", IB_GOTO, SI_GOTO, 1 }, { "Comentar", IB_COMMENT, SI_COMMENT, 1 } };
+        int ntb = (int)(sizeof tb / sizeof tb[0]);
+        int rw = ide_btn_w("Verificar", SI_CHECK, 0) + 6 + ide_btn_w("Ejecutar", SI_PLAY, 0);
+        int avail = w - rw - 16, level;
+        for (level = 0; level < 3; level++) {                   /* 0 todo con texto, 1 grupo 1 solo icono, 2 grupos 1 y 2 solo icono */
+            int tot = 0;
+            for (int i = 0; i < ntb; i++) tot += tb[i].t ? ide_btn_w(tb[i].t, tb[i].icon, tb[i].grp && tb[i].grp <= level) + 6 : 10;
+            if (tot <= avail) break;
+        }
+        for (int i = 0; i < ntb; i++) {
+            if (!tb[i].t) { ide_sep(&bx, by); continue; }
+            int compact = tb[i].grp && tb[i].grp <= level;
+            if (bx + ide_btn_w(tb[i].t, tb[i].icon, compact) > x0 + avail) continue;     /* ventana muy estrecha: se omite */
+            int dirty = tb[i].id == IB_SAVE && ce_dirty();
+            ide_add_btn_i(&bx, by, tb[i].t, tb[i].id, tb[i].icon, compact, dirty ? 0x000E2F26u : pb, dirty ? CDR_C_GREEN : pr, dirty ? 0x00A7F3D0u : pt);
+        }
+        /* acciones principales alineadas a la derecha */
         int rx = x0 + w - rw; if (rx < bx + 8) rx = bx + 8;
-        ide_add_btn(&rx, by, "Verificar", IB_VERIFY, 0x00241C0Au, CDR_C_AMBER, 0x00FCD34Du);
-        int ex0 = rx; ide_add_btn(&rx, by, "Ejecutar", IB_RUN, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE);
-        /* triangulo de "play" */
-        for (int k = 0; k < 8; k++) fb_fill_rect((uint32_t)(ex0 + 11), (uint32_t)(by + 9 + k), (uint32_t)(k < 4 ? k + 1 : 8 - k), 1, CDR_C_WHITE);
+        ide_add_btn_i(&rx, by, "Verificar", IB_VERIFY, SI_CHECK, 0, 0x00241C0Au, CDR_C_AMBER, 0x00FCD34Du);
+        ide_add_btn_i(&rx, by, "Ejecutar", IB_RUN, SI_PLAY, 0, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE);
     }
 
     int body_y = y0 + 36;
@@ -1271,7 +1294,8 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
     if (ex_w) {
         ide_ex_x = x0; ide_ex_y = body_y;
         ide_card(x0, body_y, ex_w, ed_bottom - body_y, 0x000C1220u, 0x001A2335u);
-        font_draw_string((uint32_t)(x0 + 14), (uint32_t)(body_y + 11), "EXPLORADOR", CDR_C_DIM, 1);
+        si_icon(SI_FOLDER, x0 + 21, body_y + 16, 14, 0x0060A5FAu);
+        font_draw_string((uint32_t)(x0 + 34), (uint32_t)(body_y + 11), "EXPLORADOR", CDR_C_DIM, 1);
         { char n[12]; n[0] = 0; cdr_cat_u32(n, sizeof n, (uint32_t)project_count); int nw = cdr_tw(n) + 14;
           fb_fill_rounded_rect(x0 + ex_w - nw - 12, body_y + 8, nw, 18, 9, 0x001A2335u); font_draw_string((uint32_t)(x0 + ex_w - nw - 5), (uint32_t)(body_y + 12), n, CDR_C_GRAY, 1); }
         int ry = body_y + 34; ide_ex_rows = (ed_bottom - ry - 6) / 26;
@@ -1282,12 +1306,8 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
             if (!open && ide_ex_hover == i) fb_fill_rounded_rect(x0 + 6, ry, ex_w - 12, 24, 7, 0x00121C30u);   /* PARCHE 101: resaltado al pasar el raton */
             if (ide_ex_armed == i) fb_fill_rounded_rect(x0 + 6, ry, ex_w - 12, 24, 7, 0x003A1520u);
             fb_set_clip(x0 + 8, ry, ex_w - 16, 24);
-            /* icono de archivo: hoja con esquina doblada, color segun tipo */
-            uint32_t ic = projects[i].is_gui ? CDR_C_GREEN : CDR_C_CYAN;
-            fb_fill_rounded_rect(x0 + 18, ry + 5, 11, 14, 2, ic);
-            fb_fill_rect((uint32_t)(x0 + 25), (uint32_t)(ry + 5), 4, 4, open ? 0x00172A4Au : 0x000C1220u);
-            fb_fill_rect((uint32_t)(x0 + 21), (uint32_t)(ry + 11), 5, 1, 0x000C1220u);
-            fb_fill_rect((uint32_t)(x0 + 21), (uint32_t)(ry + 14), 5, 1, 0x000C1220u);
+            /* SOMA_240_ICONOS: icono vectorial de codigo fuente; color segun lenguaje y tipo (Python ambar, ventana verde, consola cian) */
+            si_icon(SI_FILE_CODE, x0 + 24, ry + 12, 18, cdr_file_col(&projects[i], open));
             font_draw_string((uint32_t)(x0 + 38), (uint32_t)(ry + 7), projects[i].name, open ? CDR_C_WHITE : 0x00AEB9CCu, 1);
             {   /* PARCHE 094: mismo nombre en otra carpeta: muestra la carpeta */
                 int twin = 0; for (int q = 0; q < project_count; q++) if (q != i && cdr_eq(projects[q].name, projects[i].name)) twin = 1;
@@ -1317,7 +1337,7 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
         fb_fill_rounded_rect(ex + 6, body_y + 6, tw, 27, 7, 0x000B1120u);
         fb_fill_rect((uint32_t)(ex + 6), (uint32_t)(body_y + 26), (uint32_t)tw, 8, 0x000B1120u);
         fb_fill_rounded_rect(ex + 14, body_y + 6, tw - 16, 2, 1, CDR_C_CYAN);
-        fb_fill_rounded_rect(ex + 16, body_y + 14, 9, 11, 2, CDR_C_CYAN);
+        si_icon(SI_FILE_CODE, ex + 21, body_y + 19, 16, cdr_is_py(pth) ? CDR_C_AMBER : CDR_C_CYAN);
         font_draw_string((uint32_t)(ex + 32), (uint32_t)(body_y + 14), nm, CDR_C_WHITE, 1);
         if (ce_dirty()) fb_fill_rounded_rect(ex + tw - 6, body_y + 16, 8, 8, 4, CDR_C_AMBER);
         fb_set_clip(ex + tw + 14, body_y, ew - tw - 24, 33);
@@ -1333,9 +1353,10 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
     if (ide_prob_n) {
         int py0 = ed_bottom + 8;
         ide_card(x0, py0, w, prob_h, 0x00140B12u, 0x003F1A26u);
-        font_draw_string((uint32_t)(x0 + 14), (uint32_t)(py0 + 9), "PROBLEMAS", 0x00FDA4AFu, 1);
+        si_icon(SI_SEARCH, x0 + 21, py0 + 14, 13, 0x00FDA4AFu);
+        font_draw_string((uint32_t)(x0 + 34), (uint32_t)(py0 + 9), "PROBLEMAS", 0x00FDA4AFu, 1);
         { char n[12]; n[0] = 0; cdr_cat_u32(n, sizeof n, (uint32_t)ide_prob_n); int nw = cdr_tw(n) + 14;
-          fb_fill_rounded_rect(x0 + 104, py0 + 6, nw, 18, 9, 0x004C1D2Bu); font_draw_string((uint32_t)(x0 + 111), (uint32_t)(py0 + 10), n, 0x00FECDD3u, 1); }
+          fb_fill_rounded_rect(x0 + 124, py0 + 6, nw, 18, 9, 0x004C1D2Bu); font_draw_string((uint32_t)(x0 + 131), (uint32_t)(py0 + 10), n, 0x00FECDD3u, 1); }
         for (int i = 0; i < ide_prob_n; i++) {
             int py = ide_pr_y + 2 + i * 18;
             uint32_t col = (ide_prob[i][0] == 'W') ? CDR_C_AMBER : 0x00FB7185u;
@@ -1353,9 +1374,9 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
         /* insignia */
         fb_fill_rounded_rect(x0 + 8, ia_y + 8, 86, 24, 12, working ? 0x00132A4Au : 0x000F3B2Eu);
         int pulse = working ? (int)((timer_get_uptime_ms() / 120) % 6) : 0;
-        fb_fill_rounded_rect(x0 + 17, ia_y + 16, 8, 8, 4, working ? (pulse < 3 ? 0x0060A5FAu : 0x001E40AFu) : CDR_C_GREEN);
+        si_icon(SI_AUTO, x0 + 22, ia_y + 20, 14, working ? (pulse < 3 ? 0x0060A5FAu : 0x003B82F6u) : CDR_C_GREEN);
         font_draw_string((uint32_t)(x0 + 31), (uint32_t)(ia_y + 14), "SOMA IA", working ? 0x00BFDBFEu : 0x00A7F3D0u, 1);
-        int fx = x0 + 100, bw = working ? cdr_tw("Cancelar") + 24 : cdr_tw("Aplicar con IA") + 24, fw = w - 100 - bw - 18;
+        int fx = x0 + 100, bw = working ? ide_btn_w("Cancelar", SI_CLOSE, 0) : ide_btn_w("Aplicar con IA", SI_AUTO, 0), fw = w - 100 - bw - 18;
         if (ide_nb < 24) { ide_btns[ide_nb].x = fx; ide_btns[ide_nb].y = ia_y + 7; ide_btns[ide_nb].w = fw; ide_btns[ide_nb].h = 26; ide_btns[ide_nb].id = IB_IA_FIELD; ide_nb++; }
         if (working) {
             fb_fill_rounded_rect(fx, ia_y + 7, fw, 26, 8, 0x00070D16u);
@@ -1364,8 +1385,8 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
             fb_reset_clip();
         } else tf_render(&tf_ia, fx, ia_y + 7, fw, 26, ide_focus == 1, "Pide un cambio sobre este archivo: anade un boton de reset, explica y comenta el codigo...", CDR_C_WHITE);
         int bxx = fx + fw + 8;
-        if (working) ide_add_btn(&bxx, ia_y + 7, "Cancelar", IB_IA_CANCEL, 0x003A121Du, CDR_C_RED, 0x00FECDD3u);
-        else ide_add_btn(&bxx, ia_y + 7, "Aplicar con IA", IB_IA, 0x00065F46u, CDR_C_GREEN, CDR_C_WHITE);
+        if (working) ide_add_btn_i(&bxx, ia_y + 7, "Cancelar", IB_IA_CANCEL, SI_CLOSE, 0, 0x003A121Du, CDR_C_RED, 0x00FECDD3u);
+        else ide_add_btn_i(&bxx, ia_y + 7, "Aplicar con IA", IB_IA, SI_AUTO, 0, 0x00065F46u, CDR_C_GREEN, CDR_C_WHITE);
     }
 
     /* ---- barra de estado ---- */
@@ -1385,11 +1406,24 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
         const char *dl = ide_prob_ok == 1 ? "Sin errores" : ide_prob_ok == 0 ? "Con errores" : "Sin verificar";
         int dw = cdr_tw(dl) + 28;
         fb_fill_rounded_rect(x0 + 4, status_y + 3, dw, 18, 9, ide_prob_ok == 1 ? 0x000F3B2Eu : ide_prob_ok == 0 ? 0x004C1D2Bu : 0x001A2335u);
-        fb_fill_rounded_rect(x0 + 11, status_y + 9, 7, 7, 3, dot);
+        if (ide_prob_ok == 1) si_icon(SI_CHECK, x0 + 14, status_y + 12, 11, dot);
+        else if (ide_prob_ok == 0) si_icon(SI_CLOSE, x0 + 14, status_y + 12, 11, dot);
+        else fb_fill_rounded_rect(x0 + 11, status_y + 9, 7, 7, 3, dot);
         font_draw_string((uint32_t)(x0 + 22), (uint32_t)(status_y + 7), dl, ide_prob_ok == 0 ? 0x00FECDD3u : 0x00CBD5E1u, 1);
         fb_set_clip(x0 + dw + 14, status_y, w - sw - dw - 40, 24);
         font_draw_string((uint32_t)(x0 + dw + 16), (uint32_t)(status_y + 7), ide_msg[0] ? ide_msg : "Ctrl+S guardar  \xC2\xB7  Ctrl+F buscar  \xC2\xB7  Ctrl+Z deshacer  \xC2\xB7  Ctrl+E ejecutar", ide_msg[0] ? ide_msg_col : 0x0064748Bu, 1);
         fb_reset_clip();
+    }
+
+    /* SOMA_240_ICONOS: nombre del boton de solo icono bajo el raton */
+    for (int i = 0; i < ide_nb; i++) {
+        if (ide_btns[i].id != ide_hover_id || !ide_btns[i].tip) continue;
+        int tw = cdr_tw(ide_btns[i].tip) + 20, tx = ide_btns[i].x + ide_btns[i].w / 2 - tw / 2, ty = ide_btns[i].y + ide_btns[i].h + 6;
+        if (tx < x0) tx = x0;
+        fb_fill_rrect_aa(tx, ty, tw, 24, 6, 0x00020617u);
+        fb_stroke_rrect_aa(tx, ty, tw, 24, 6, 0xFF334155u);
+        font_draw_string((uint32_t)(tx + 10), (uint32_t)(ty + 7), ide_btns[i].tip, CDR_C_WHITE, 1);
+        break;
     }
 }
 
@@ -1481,11 +1515,12 @@ enum { UB_GEN = 1, UB_CANCEL, UB_RUN, UB_EDIT, UB_TPL0, UB_TPL_END = UB_TPL0 + 8
 struct ui_hit { int x, y, w, h, id; };
 static struct ui_hit ui_hits[96]; static int ui_nh;
 static void ui_reg(int x, int y, int w, int h, int id) { if (ui_nh < 96) { ui_hits[ui_nh].x = x; ui_hits[ui_nh].y = y; ui_hits[ui_nh].w = w; ui_hits[ui_nh].h = h; ui_hits[ui_nh].id = id; ui_nh++; } }
-static int ui_btn(int x, int y, const char *t, int id, uint32_t bg, uint32_t br, uint32_t tx)
-{
-    int w = cdr_tw(t) + 28;
-    cdr_draw_btn((uint32_t)x, (uint32_t)y, (uint32_t)w, 32, t, bg, br, tx);
-    ui_reg(x, y, w, 32, id);
+static int ui_btn_w(const char *t, int icon) { return cdr_tw(t) + 28 + (icon ? CDR_ICO + 7 : 0); }
+static int ui_btn_i(int x, int y, int icon, const char *t, int id, uint32_t bg, uint32_t br, uint32_t tx)
+{   /* SOMA_240_ICONOS: boton con icono vectorial */
+    int w = ui_btn_w(t, icon);
+    cdr_draw_btn_i((uint32_t)x, (uint32_t)y, (uint32_t)w, 32, icon, t, bg, br, tx, 0);
+    if (id) ui_reg(x, y, w, 32, id);
     return w;
 }
 /* texto con ajuste de linea por palabras; devuelve la y final */
@@ -1511,11 +1546,17 @@ static int ui_wrap(int x, int y, int w, const char *t, uint32_t col, int max_lin
     }
     return y;
 }
-static void ui_card(int x, int y, int w, int h, const char *title)
-{
-    fb_fill_rounded_rect(x, y, w, h, 12, 0x000C1220u);
+static void ui_card_i(int x, int y, int w, int h, int icon, uint32_t accent, const char *title)
+{   /* SOMA_240_ICONOS: tarjeta con icono en una pastilla delante del titulo */
+    fb_fill_rrect_aa(x, y, w, h, 12, 0x000C1220u);
     fb_stroke_rrect_aa(x, y, w, h, 12, 0xFF1A2335u);
-    if (title) font_draw_string((uint32_t)(x + 16), (uint32_t)(y + 14), title, CDR_C_DIM, 1);
+    int tx = x + 16;
+    if (icon) {
+        fb_fill_rrect_aa(x + 12, y + 9, 22, 22, 7, si_mix(0x000C1220u, accent, 40));
+        si_icon(icon, x + 23, y + 20, 14, accent);
+        tx = x + 42;
+    }
+    if (title) font_draw_string((uint32_t)tx, (uint32_t)(y + 14), title, CDR_C_DIM, 1);
 }
 
 /* ---- CREAR CON IA ---- */
@@ -1542,9 +1583,12 @@ static void ui_stepper(int x, int y, int w, int phase, int state)
         int err = (state == CODER_JOB_ERROR && i + 1 == phase);
         if (i < 5) fb_fill_rect((uint32_t)(cx + 12), (uint32_t)cy, (uint32_t)(step - 24), 2, done ? CDR_C_GREEN : 0x00263043u);
         uint32_t c = err ? CDR_C_RED : done ? CDR_C_GREEN : cur ? CDR_C_CYAN : 0x00263043u;
-        fb_fill_rounded_rect(cx - 11, cy - 11, 22, 22, 11, c);
-        char n[2] = { (char)('1' + i), 0 };
-        font_draw_string((uint32_t)(cx - 3), (uint32_t)(cy - 5), n, (done || cur || err) ? 0x00081018u : CDR_C_GRAY, 1);
+        /* SOMA_240_ICONOS: cada paso con su icono; los hechos con una marca */
+        static const int sic[6] = { SI_SEARCH, SI_CODE, SI_CHECK, SI_EDIT, SI_LIST, SI_SAVE };
+        if (cur) fb_fill_rrect_aa(cx - 16, cy - 16, 32, 32, 16, si_mix(0x000C1220u, c, 60));
+        fb_fill_rrect_aa(cx - 12, cy - 12, 24, 24, 12, (done || cur || err) ? c : 0x00172131u);
+        if (!(done || cur || err)) fb_stroke_rrect_aa(cx - 12, cy - 12, 24, 24, 12, 0xFF263043u);
+        si_icon(err ? SI_CLOSE : done ? SI_CHECK : sic[i], cx, cy, 13, (done || cur || err) ? 0x00081018u : CDR_C_GRAY);
         int lw = cdr_tw(lab[i]);
         font_draw_string((uint32_t)(cx - lw / 2), (uint32_t)(cy + 18), lab[i], cur ? CDR_C_WHITE : done ? 0x00A7F3D0u : CDR_C_DIM, 1);
     }
@@ -1559,42 +1603,44 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
     int lw = wide ? (w * 52) / 100 : w;
     /* tarjeta de la orden */
     int ch = 336;                                       /* SOMA_239: +36 por la fila del lenguaje */
-    ui_card(x0, y0, lw, ch, "DESCRIBE LA APLICACION");
+    ui_card_i(x0, y0, lw, ch, SI_EDIT, CDR_C_GREEN, "DESCRIBE LA APLICACION");
     tf_render(&tf_cprompt, x0 + 16, y0 + 36, lw - 32, 104, ui_focus == &tf_cprompt,
               "Ejemplo: un juego de Snake con puntuacion que se maneja con W A S D...", CDR_C_WHITE);
     /* plantillas */
     int cx = x0 + 16, cy = y0 + 152;
-    font_draw_string((uint32_t)cx, (uint32_t)(cy + 2), "Ideas:", CDR_C_DIM, 1);
-    cx += cdr_tw("Ideas:") + 10;
+    si_icon(SI_AUTO, cx + 6, cy + 6, 13, CDR_C_AMBER);
+    font_draw_string((uint32_t)cx + 18, (uint32_t)(cy + 2), "Ideas:", CDR_C_DIM, 1);
+    cx += 18 + cdr_tw("Ideas:") + 10;
     for (int i = 0; i < UI_NTPL; i++) {
         int tw = cdr_tw(ui_tpl_name[i]) + 22;
-        if (cx + tw > x0 + lw - 16) { cx = x0 + 16 + cdr_tw("Ideas:") + 10; cy += 30; }
-        fb_fill_rounded_rect(cx, cy - 4, tw, 24, 12, 0x00162036u);
+        if (cx + tw > x0 + lw - 16) { cx = x0 + 16 + 18 + cdr_tw("Ideas:") + 10; cy += 30; }
+        fb_fill_rrect_aa(cx, cy - 4, tw, 24, 12, 0x00162036u);
+        fb_stroke_rrect_aa(cx, cy - 4, tw, 24, 12, 0xFF1F2A3Du);
         font_draw_string((uint32_t)(cx + 11), (uint32_t)(cy + 2), ui_tpl_name[i], 0x00BFD3EAu, 1);
         ui_reg(cx, cy - 4, tw, 24, UB_TPL0 + i);
         cx += tw + 6;
     }
     int fy = cy + 34;
     {   /* SOMA_239_PYTHON_GRAFICO: lenguaje del programa nuevo */
-        font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 8), "Lenguaje", CDR_C_DIM, 1);
+        font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 12), "Lenguaje", CDR_C_DIM, 1);
         int lx = x0 + 86, sp = cdr_lang == CC_LANG_PYTHON;
-        lx += ui_btn(lx, fy, "SOMA-LANG", UB_LSOMA, sp ? CDR_C_PANEL : 0x00173A7Au, sp ? CDR_C_BORDER2 : 0x0060A5FAu, sp ? CDR_C_SOFT : CDR_C_WHITE) + 8;
-        lx += ui_btn(lx, fy, "Python", UB_LPY, sp ? 0x00173A7Au : CDR_C_PANEL, sp ? 0x0060A5FAu : CDR_C_BORDER2, sp ? CDR_C_WHITE : CDR_C_SOFT) + 10;
-        font_draw_string((uint32_t)lx, (uint32_t)(fy + 8), sp ? ".py: ventanas con soma.win" : ".soma: el lenguaje de SOMA", 0x00475569u, 1);
+        lx += ui_btn_i(lx, fy, sp ? SI_CODE : SI_CHECK, "SOMA-LANG", UB_LSOMA, sp ? CDR_C_PANEL : 0x00173A7Au, sp ? CDR_C_BORDER2 : 0x0060A5FAu, sp ? CDR_C_SOFT : CDR_C_WHITE) + 8;
+        lx += ui_btn_i(lx, fy, sp ? SI_CHECK : SI_TERMINAL, "Python", UB_LPY, sp ? 0x003A2A0Au : CDR_C_PANEL, sp ? CDR_C_AMBER : CDR_C_BORDER2, sp ? 0x00FDE68Au : CDR_C_SOFT) + 10;
+        font_draw_string((uint32_t)lx, (uint32_t)(fy + 12), sp ? ".py: ventanas con soma.win" : ".soma: el lenguaje de SOMA", 0x00475569u, 1);
         fy += 36;
     }
-    font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 8), "Archivo", CDR_C_DIM, 1);
+    font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 11), "Archivo", CDR_C_DIM, 1);
     tf_render(&tf_cfile, x0 + 86, fy, lw - 102 - 70, 30, ui_focus == &tf_cfile, "automatico (se deduce de la descripcion)", CDR_C_AMBER);
-    { int bw = 64; cdr_draw_btn((uint32_t)(x0 + lw - 16 - bw), (uint32_t)fy, (uint32_t)bw, 30, "Auto", CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); ui_reg(x0 + lw - 16 - bw, fy, bw, 30, UB_AUTO); }
+    { int bw = 64; cdr_draw_btn_i((uint32_t)(x0 + lw - 16 - bw), (uint32_t)fy, (uint32_t)bw, 30, SI_RESTART, "Auto", CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT, 0); ui_reg(x0 + lw - 16 - bw, fy, bw, 30, UB_AUTO); }
     int by = fy + 44, bx = x0 + 16;
     if (running) {
-        bx += ui_btn(bx, by, "Generando...", 0, 0x00122B57u, 0x0060A5FAu, 0x00BFDBFEu) + 8;
-        bx += ui_btn(bx, by, "Cancelar", UB_CANCEL, 0x003A121Du, CDR_C_RED, 0x00FECDD3u) + 8;
+        bx += ui_btn_i(bx, by, SI_TIMER, "Generando...", 0, 0x00122B57u, 0x0060A5FAu, 0x00BFDBFEu) + 8;
+        bx += ui_btn_i(bx, by, SI_CLOSE, "Cancelar", UB_CANCEL, 0x003A121Du, CDR_C_RED, 0x00FECDD3u) + 8;
     } else {
-        bx += ui_btn(bx, by, "Generar con IA", UB_GEN, 0x00065F46u, CDR_C_GREEN, CDR_C_WHITE) + 8;
+        bx += ui_btn_i(bx, by, SI_AUTO, "Generar con IA", UB_GEN, 0x00065F46u, CDR_C_GREEN, CDR_C_WHITE) + 8;
         if (sn->state == CODER_JOB_SUCCESS) {
-            bx += ui_btn(bx, by, "Probar", UB_RUN, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE) + 8;
-            bx += ui_btn(bx, by, "Abrir en el editor", UB_EDIT, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT) + 8;
+            bx += ui_btn_i(bx, by, SI_PLAY, "Probar", UB_RUN, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE) + 8;
+            bx += ui_btn_i(bx, by, SI_EDIT, "Abrir en el editor", UB_EDIT, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT) + 8;
         }
     }
     font_draw_string((uint32_t)bx + 6, (uint32_t)(by + 10), running ? "" : "Ctrl+Intro tambien genera", 0x00475569u, 1);
@@ -1602,7 +1648,7 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
 
     if (wide && y1 - (y0 + ch + 10) > 150) {                     /* consejos */
         int ty = y0 + ch + 10;
-        ui_card(x0, ty, lw, y1 - ty, "COMO PEDIRLO BIEN");
+        ui_card_i(x0, ty, lw, y1 - ty, SI_COMMENT, CDR_C_CYAN, "COMO PEDIRLO BIEN");
         static const char *const tips[] = {
             "Di QUE hace y COMO se usa: teclas, botones, que se ve en pantalla.",
             "Si es un juego, explica cuando se gana o se pierde y que puntua.",
@@ -1611,7 +1657,7 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
             "Atajos: Tab cambia de campo, Ctrl+Intro genera, doble clic selecciona una palabra." };
         int yy = ty + 42;
         for (int i = 0; i < 5 && yy + 18 < y1; i++) {
-            fb_fill_rounded_rect(x0 + 18, yy + 5, 6, 6, 3, i == 4 ? CDR_C_CYAN : CDR_C_GREEN);
+            si_icon(i == 4 ? SI_AUTO : SI_CHECK, x0 + 22, yy + 7, 12, i == 4 ? CDR_C_CYAN : CDR_C_GREEN);
             yy = ui_wrap(x0 + 34, yy, lw - 52, tips[i], 0x00AEB9CCu, 2, 17) + 8;
         }
     }
@@ -1619,7 +1665,7 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
     int px = wide ? x0 + lw + 10 : x0, pw = wide ? w - lw - 10 : w;
     int py = wide ? y0 : y0 + ch + 10, ph = y1 - py;
     if (ph < 120) return;
-    ui_card(px, py, pw, ph, "PROGRESO DEL PROGRAMADOR");
+    ui_card_i(px, py, pw, ph, SI_GAUGE, 0x0060A5FAu, "PROGRESO DEL PROGRAMADOR");
     if (sn->target_file[0]) { int tw = cdr_tw(sn->target_file); font_draw_string((uint32_t)(px + pw - tw - 16), (uint32_t)(py + 14), sn->target_file, CDR_C_AMBER, 1); }
     ui_stepper(px + 10, py + 42, pw - 20, sn->phase, sn->state);
     int ty = py + 96;
@@ -1664,7 +1710,7 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
     int x0 = (int)wx + 12, w = (int)ww - 24, y0 = (int)wy + 54, y1 = (int)(wy + wh) - 10;
     ui_tf_init(); ui_nh = 0;
     int lw = w >= 760 ? 360 : w;
-    ui_card(x0, y0, lw, y1 - y0, "PROGRAMAS (SOMA-LANG Y PYTHON)");
+    ui_card_i(x0, y0, lw, y1 - y0, SI_GRID, CDR_C_CYAN, "PROGRAMAS (SOMA-LANG Y PYTHON)");
     { char n[12]; n[0] = 0; cdr_cat_u32(n, sizeof n, (uint32_t)project_count); int nw = cdr_tw(n) + 14;
       fb_fill_rounded_rect(x0 + lw - nw - 14, y0 + 10, nw, 18, 9, 0x001A2335u); font_draw_string((uint32_t)(x0 + lw - nw - 7), (uint32_t)(y0 + 14), n, CDR_C_GRAY, 1); }
     tf_render(&tf_search, x0 + 12, y0 + 38, lw - 24, 30, ui_focus == &tf_search, "Buscar por nombre o carpeta...", CDR_C_WHITE);
@@ -1680,9 +1726,7 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
         if (ry + 38 > ui_list_y + ui_list_h) break;
         int sel = i == project_selected;
         if (sel) { fb_fill_rounded_rect(ui_list_x, ry, ui_list_w, 36, 8, 0x00172A4Au); fb_fill_rounded_rect(ui_list_x, ry + 8, 3, 20, 1, CDR_C_CYAN); }
-        uint32_t ic = projects[i].is_gui ? CDR_C_GREEN : CDR_C_CYAN;
-        fb_fill_rounded_rect(ui_list_x + 12, ry + 9, 13, 18, 2, ic);
-        fb_fill_rect((uint32_t)(ui_list_x + 21), (uint32_t)(ry + 9), 4, 4, sel ? 0x00172A4Au : 0x000C1220u);
+        si_icon(SI_FILE_CODE, ui_list_x + 19, ry + 18, 22, cdr_file_col(&projects[i], sel));
         fb_set_clip(ui_list_x + 34, ry, ui_list_w - 40, 36);
         font_draw_string((uint32_t)(ui_list_x + 36), (uint32_t)(ry + 5), projects[i].name, sel ? CDR_C_WHITE : 0x00D5DCE8u, 1);
         font_draw_string((uint32_t)(ui_list_x + 36), (uint32_t)(ry + 21), projects[i].path, 0x00566479u, 1);
@@ -1690,39 +1734,45 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
         ui_reg(ui_list_x, ry, ui_list_w, 36, UB_PROW0 + i);
         ry += 40;
     }
-    if (!vis) font_draw_string((uint32_t)(ui_list_x + 12), (uint32_t)(ui_list_y + 8), ui_search[0] ? "Ningun programa coincide." : "Aun no hay programas .soma", CDR_C_DIM, 1);
+    if (!vis) font_draw_string((uint32_t)(ui_list_x + 12), (uint32_t)(ui_list_y + 8), ui_search[0] ? "Ningun programa coincide." : "Aun no hay programas .soma ni .py", CDR_C_DIM, 1);
     if (w < 760) return;
     /* detalle */
     int dx = x0 + lw + 10, dw = w - lw - 10;
-    ui_card(dx, y0, dw, y1 - y0, "DETALLE");
-    if (project_selected < 0 || project_selected >= project_count) { font_draw_string((uint32_t)(dx + 16), (uint32_t)(y0 + 44), "Selecciona un programa de la lista.", CDR_C_DIM, 1); return; }
+    ui_card_i(dx, y0, dw, y1 - y0, SI_FILE, 0x0060A5FAu, "DETALLE");
+    if (project_selected < 0 || project_selected >= project_count) {      /* SOMA_240_ICONOS: estado vacio con icono */
+        int cy = y0 + (y1 - y0) / 2 - 40;
+        si_icon(SI_FILE_CODE, dx + dw / 2, cy, 56, 0x00334155u);
+        const char *t = "Selecciona un programa de la lista."; font_draw_string((uint32_t)(dx + dw / 2 - cdr_tw(t) / 2), (uint32_t)(cy + 44), t, CDR_C_DIM, 1);
+        t = "Desde aqui puedes ejecutarlo, abrirlo en el editor, duplicarlo, moverlo o borrarlo.";
+        font_draw_string((uint32_t)(dx + dw / 2 - cdr_tw(t) / 2), (uint32_t)(cy + 64), t, 0x00475569u, 1);
+        return; }
     struct cdr_proj *it = &projects[project_selected];
     int ty = y0 + 44;
-    fb_fill_rounded_rect(dx + 16, ty, 40, 50, 6, it->is_gui ? CDR_C_GREEN : CDR_C_CYAN);
-    fb_fill_rect((uint32_t)(dx + 44), (uint32_t)ty, 12, 12, 0x000C1220u);
-    font_draw_string((uint32_t)(dx + 70), (uint32_t)(ty + 6), it->name, CDR_C_WHITE, 1);
-    { char inf[96]; inf[0] = 0; cdr_cat(inf, sizeof inf, it->is_gui ? "Aplicacion con ventana" : "Programa de consola");
+    si_badge(dx + 16, ty, 48, cdr_is_py(it->path) ? SI_TERMINAL : it->is_gui ? SI_SCREEN : SI_FILE_CODE, cdr_file_col(it, 1));
+    font_draw_string((uint32_t)(dx + 80), (uint32_t)(ty + 10), it->name, CDR_C_WHITE, 1);
+    { char inf[96]; inf[0] = 0; cdr_cat(inf, sizeof inf, cdr_is_py(it->path) ? "Python  \xC2\xB7  " : "SOMA-LANG  \xC2\xB7  ");
+      cdr_cat(inf, sizeof inf, it->is_gui ? "Aplicacion con ventana" : "Programa de consola");
       cdr_cat(inf, sizeof inf, "  \xC2\xB7  "); cdr_cat_u32(inf, sizeof inf, it->lines); cdr_cat(inf, sizeof inf, " lineas  \xC2\xB7  ");
       cdr_fmt_size(inf + cdr_len(inf), sizeof inf - cdr_len(inf), it->size);
-      font_draw_string((uint32_t)(dx + 70), (uint32_t)(ty + 28), inf, CDR_C_GRAY, 1); }
+      font_draw_string((uint32_t)(dx + 80), (uint32_t)(ty + 30), inf, CDR_C_GRAY, 1); }
     ty += 70;
     int bx = dx + 16;
-    bx += ui_btn(bx, ty, "Ejecutar", UB_PRUN, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE) + 8;
-    bx += ui_btn(bx, ty, "Abrir en el editor", UB_PEDIT, 0x00065F46u, CDR_C_GREEN, CDR_C_WHITE) + 8;
-    bx += ui_btn(bx, ty, "Abrir en Notas", UB_PNOTES, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT) + 8;
-    bx += ui_btn(bx, ty, "Duplicar", UB_PDUP, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT) + 8;
+    bx += ui_btn_i(bx, ty, SI_PLAY, "Ejecutar", UB_PRUN, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE) + 8;
+    bx += ui_btn_i(bx, ty, SI_EDIT, "Abrir en el editor", UB_PEDIT, 0x00065F46u, CDR_C_GREEN, CDR_C_WHITE) + 8;
+    bx += ui_btn_i(bx, ty, SI_FILE, "Abrir en Notas", UB_PNOTES, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT) + 8;
+    bx += ui_btn_i(bx, ty, SI_COPY, "Duplicar", UB_PDUP, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT) + 8;
     ty += 52;
     font_draw_string((uint32_t)(dx + 16), (uint32_t)ty, "NOMBRE Y RUTA", CDR_C_DIM, 1); ty += 20;
-    { int bw = cdr_tw("Renombrar / mover") + 28;
+    { int bw = ui_btn_w("Renombrar / mover", SI_EDIT);
       tf_render(&tf_rename, dx + 16, ty, dw - 32 - bw - 8, 32, ui_focus == &tf_rename, "/workspace/nombre.soma", CDR_C_AMBER);
-      ui_btn(dx + dw - 16 - bw, ty, "Renombrar / mover", UB_PREN, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
+      ui_btn_i(dx + dw - 16 - bw, ty, SI_EDIT, "Renombrar / mover", UB_PREN, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
     ty += 44;
     font_draw_string((uint32_t)(dx + 16), (uint32_t)ty, "Edita la ruta (doble clic selecciona una palabra) y pulsa Intro o el boton.", 0x00475569u, 1);
     ty += 30;
     if (proj_del_armed == project_selected) {
-        int w1 = ui_btn(dx + 16, ty, "Si, borrar definitivamente", UB_PDELOK, 0x007F1D1Du, CDR_C_RED, CDR_C_WHITE);
-        ui_btn(dx + 24 + w1, ty, "No", UB_PDEL, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT);
-    } else ui_btn(dx + 16, ty, "Borrar", UB_PDEL, 0x002A1015u, 0x009F1239u, 0x00FDA4AFu);
+        int w1 = ui_btn_i(dx + 16, ty, SI_TRASH, "Si, borrar definitivamente", UB_PDELOK, 0x007F1D1Du, CDR_C_RED, CDR_C_WHITE);
+        ui_btn_i(dx + 24 + w1, ty, SI_CLOSE, "No", UB_PDEL, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT);
+    } else ui_btn_i(dx + 16, ty, SI_TRASH, "Borrar", UB_PDEL, 0x002A1015u, 0x009F1239u, 0x00FDA4AFu);
     ty += 46;
     if (ui_pmsg[0]) ui_wrap(dx + 16, ty, dw - 32, ui_pmsg, ui_pmsg_col, 3, 17);
 }
@@ -1734,10 +1784,10 @@ static void ui_render_log(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
     int x0 = (int)wx + 12, w = (int)ww - 24, y0 = (int)wy + 54, y1 = (int)(wy + wh) - 10;
     ui_tf_init(); ui_nh = 0;
     int lh = (y1 - y0) * 62 / 100;
-    ui_card(x0, y0, w, lh, "BITACORA DEL ULTIMO TRABAJO");
+    ui_card_i(x0, y0, w, lh, SI_LIST, 0x0060A5FAu, "BITACORA DEL ULTIMO TRABAJO");
     int bx = x0 + w - 16;
-    { int bw = cdr_tw("Copiar") + 28; bx -= bw; ui_btn(bx, y0 + 6, "Copiar", UB_LCOPY, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
-    { int bw = cdr_tw("Traza completa") + 28; bx -= bw + 8; ui_btn(bx, y0 + 6, "Traza completa", UB_LTRACE, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
+    { int bw = ui_btn_w("Copiar", SI_COPY); bx -= bw; ui_btn_i(bx, y0 + 6, SI_COPY, "Copiar", UB_LCOPY, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
+    { int bw = ui_btn_w("Traza completa", SI_LIST); bx -= bw + 8; ui_btn_i(bx, y0 + 6, SI_LIST, "Traza completa", UB_LTRACE, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT); }
     int rows = (lh - 56) / 18;
     if (ui_log_scroll > sn->log_n - rows) ui_log_scroll = sn->log_n - rows;
     if (ui_log_scroll < 0) ui_log_scroll = 0;
@@ -1753,13 +1803,19 @@ static void ui_render_log(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
         ty += 18;
     }
     fb_reset_clip();
-    if (!sn->log_n) font_draw_string((uint32_t)(x0 + 18), (uint32_t)(y0 + 48), "Todavia no hay ningun trabajo registrado.", CDR_C_DIM, 1);
+    if (!sn->log_n) {
+        int cy = y0 + lh / 2 - 20;
+        si_icon(SI_LIST, x0 + w / 2, cy, 44, 0x00334155u);
+        const char *t = "Todavia no hay ningun trabajo registrado."; font_draw_string((uint32_t)(x0 + w / 2 - cdr_tw(t) / 2), (uint32_t)(cy + 36), t, CDR_C_DIM, 1);
+        t = "Aqui aparece paso a paso lo que hace SOMA al crear o modificar un programa.";
+        font_draw_string((uint32_t)(x0 + w / 2 - cdr_tw(t) / 2), (uint32_t)(cy + 56), t, 0x00475569u, 1);
+    }
     if (sn->log_n > rows) { int th = (lh - 56) * rows / sn->log_n, tyy = y0 + 46 + (lh - 56 - th) * ui_log_scroll / (sn->log_n - rows); fb_fill_rounded_rect(x0 + w - 10, tyy, 3, th, 1, 0x00334155u); }
     /* lint */
     int ly = y0 + lh + 10;
-    ui_card(x0, ly, w, y1 - ly, "ANALISIS ESTATICO DEL ULTIMO PROGRAMA");
+    ui_card_i(x0, ly, w, y1 - ly, SI_SEARCH, CDR_C_AMBER, "ANALISIS ESTATICO DEL ULTIMO PROGRAMA");
     int yy = ly + 42;
-    if (!sn->lint_n) font_draw_string((uint32_t)(x0 + 18), (uint32_t)yy, "Sin avisos: codigo limpio.", 0x0086EFACu, 1);
+    if (!sn->lint_n) { si_icon(SI_CHECK, x0 + 24, yy + 4, 13, 0x0086EFACu); font_draw_string((uint32_t)(x0 + 38), (uint32_t)yy, "Sin avisos: codigo limpio.", 0x0086EFACu, 1); }
     for (int i = 0; i < sn->lint_n && yy + 18 < y1; i++) {
         uint32_t c = sn->lint[i][0] == 'E' ? 0x00FDA4AFu : CDR_C_AMBER;
         fb_fill_rounded_rect(x0 + 18, yy + 5, 7, 7, 3, c);
@@ -1898,12 +1954,14 @@ void coder_app_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uin
     tx = win_x + 14;
     for (int ti = 0; ti < CDR_NTABS; ti++) {             /* PARCHE 093 */
         cdr_draw_tab_btn(tx, tab_bar_y + 4, cdr_tabs[ti].w, 32, cdr_tabs[ti].t,
-                         cdr_tab_cur == cdr_tabs[ti].tab || (cdr_tabs[ti].tab == CDR_TAB_EDITOR && cdr_tab_cur == CDR_TAB_MODIFY));
+                         cdr_tab_cur == cdr_tabs[ti].tab || (cdr_tabs[ti].tab == CDR_TAB_EDITOR && cdr_tab_cur == CDR_TAB_MODIFY), cdr_tabs[ti].icon);
         tx += cdr_tabs[ti].w + 6;
     }
 
     if (win_w > 720) {
-        { fb_fill_rounded_rect((int32_t)(win_x + win_w - 170), (int32_t)(tab_bar_y + 9), 150, 22, 11, 0x00102A22u); fb_fill_rounded_rect((int32_t)(win_x + win_w - 160), (int32_t)(tab_bar_y + 17), 6, 6, 3, CDR_C_GREEN); font_draw_string(win_x + win_w - 148, tab_bar_y + 15, "SOMA-LANG + Python", 0x00A7F3D0u, 1); }
+        {   const char *cl = "SOMA-LANG + Python"; int cw = cdr_tw(cl) + 44, cx = (int)win_x + (int)win_w - 16 - cw;
+            fb_fill_rrect_aa(cx, (int32_t)(tab_bar_y + 9), cw, 22, 11, 0x00102A22u); fb_stroke_rrect_aa(cx, (int32_t)(tab_bar_y + 9), cw, 22, 11, 0x60000000u | CDR_C_GREEN);
+            si_icon(SI_CODE, cx + 17, (int)tab_bar_y + 20, 13, CDR_C_GREEN); font_draw_string((uint32_t)(cx + 30), tab_bar_y + 15, cl, 0x00A7F3D0u, 1); }
     }
 
     content_y = tab_bar_y + 42;
@@ -1990,6 +2048,11 @@ int coder_app_mouse(int32_t mx, int32_t my, int wheel, int held)
             if (ide_ex_w && mx >= ide_ex_x && mx < ide_ex_x + ide_ex_w && my >= ide_ex_y + 34 && my < ide_ex_y + 34 + ide_ex_rows * 26) {
                 hv = ide_ex_scroll + (my - ide_ex_y - 34) / 26; if (hv >= project_count) hv = -1; }
             if (hv != ide_ex_hover) { ide_ex_hover = hv; r = 1; }
+        }
+        {   int hb = 0;                                                  /* SOMA_240_ICONOS: botones de la barra bajo el raton */
+            for (int i = 0; i < ide_nb; i++) { struct ide_btn *b = &ide_btns[i];
+                if (b->id != IB_IA_FIELD && mx >= b->x && mx < b->x + b->w && my >= b->y && my < b->y + b->h) { hb = b->id; break; } }
+            if (hb != ide_hover_id) { ide_hover_id = hb; r = 1; }
         }
         return r;
     }

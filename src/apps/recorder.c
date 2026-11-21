@@ -10,13 +10,20 @@
 #include "idt.h"
 #include "console.h"
 #include "sysicon.h"     /* SOMA_210_SYSICON */
+#include "thread.h"
+#include "clipboard.h"
+#ifdef __x86_64__
+#include "voz_sys.h"     /* SOMA_241_VOZ: transcripcion de las grabaciones */
+#include "usermode.h"
+#endif
 
 #define MAXREC   48
 #define LIST_W   232
 #define ACCENT   0x00FB7185      /* SOMA_210: color de la aplicacion (el del icono del escritorio) */
 #define PLAYC    0x0038BDF8
 
-enum { B_REC = 1, B_PLAY, B_NEW, B_SAVE, B_MON, B_SRC_PREV, B_SRC_NEXT, B_AUTO, B_G_DN, B_G_UP, B_S_DN, B_S_UP, B_RATE, B_DEL, B_LIST };
+enum { B_REC = 1, B_PLAY, B_NEW, B_SAVE, B_MON, B_SRC_PREV, B_SRC_NEXT, B_AUTO, B_G_DN, B_G_UP, B_S_DN, B_S_UP, B_RATE, B_DEL, B_LIST,
+       B_VOZ, B_VZ_COPY, B_VZ_CLOSE, B_VZ_STOP };   /* SOMA_241_VOZ */
 
 struct btn { int id, x, y, w, h; };
 struct lay {
@@ -24,8 +31,8 @@ struct lay {
     int row_y, row_h, rows;             /* filas de la lista */
     int mx, mw;                         /* columna principal */
     int hdr_y, card_y, card_h, meter_y, wave_y, wave_h, tr_cy, status_y;
-    int rnd[16];                        /* radio de los botones redondos (0 = boton normal) */
-    struct btn b[16]; int nb;
+    int rnd[20];                        /* radio de los botones redondos (0 = boton normal) */
+    struct btn b[20]; int nb;
 };
 
 static const uint32_t RATES[] = { 8000, 16000, 22050, 44100, 48000 };
@@ -86,7 +93,82 @@ static void full_path(int i, char *out, uint32_t max) { uint32_t p = 0; put_s(ou
 
 void recorder_init(void) { rescan(); umsg[0] = 0; discard_armed = 0; }
 
-static void addb(struct lay *L, int id, int x, int y, int w, int h) { if (L->nb < 16) { L->b[L->nb].id = id; L->b[L->nb].x = x; L->b[L->nb].y = y; L->b[L->nb].w = w; L->b[L->nb].h = h; L->rnd[L->nb] = 0; L->nb++; } }
+/* ---- SOMA_241_VOZ: transcripcion de la grabacion elegida (voz a texto con whisper.cpp, en su propio hilo) ----
+ * El texto sale en un panel sobre la onda y se guarda junto al audio (/grabaciones/grab_N.txt). */
+static volatile int vz_state;          /* 0 nada, 1 transcribiendo, 2 hecho, 3 error */
+static int vz_show;                    /* panel visible */
+static char vz_out[6144], vz_text[4096], vz_info[160], vz_name[40], vz_path[80];
+static uint64_t vz_t0;
+#ifdef __x86_64__
+static void vz_save_txt(void)
+{
+    int e; struct bigfs *fs = bigfs_sys(&e);
+    if (!fs || !vz_text[0]) return;
+    char tp[84]; uint32_t p = 0; put_s(tp, sizeof tp, &p, vz_path);
+    if (p > 4) { tp[p - 3] = 't'; tp[p - 2] = 'x'; tp[p - 1] = 't'; }
+    uint32_t ino;
+    if (bigfs_lookup(fs, tp, &ino) >= 0) bigfs_unlink(fs, tp);
+    if (bigfs_create(fs, tp, &ino) >= 0) { (void)bigfs_write(fs, ino, 0, vz_text, slen(vz_text)); (void)bigfs_write(fs, ino, slen(vz_text), "\n", 1); }
+}
+#endif
+static void vz_thread(void *arg)
+{
+    (void)arg;
+#ifdef __x86_64__
+    int64_t code = 0;
+    int r = voz_run(vz_path, vz_out, sizeof vz_out, &code);
+    /* las lineas "[voz] ..." son informacion; el resto es el texto reconocido */
+    uint32_t tp = 0, ip = 0; vz_text[0] = 0; vz_info[0] = 0;
+    for (const char *l = vz_out; *l;) {
+        const char *e = l; while (*e && *e != '\n') e++;
+        int info = (e - l) >= 5 && l[0] == '[' && l[1] == 'v' && l[2] == 'o' && l[3] == 'z' && l[4] == ']';
+        if (info) { const char *q = l + 5; while (*q == ' ') q++; ip = 0; while (q < e && ip + 1 < sizeof vz_info) vz_info[ip++] = *q++; vz_info[ip] = 0; }
+        else if (e > l) { if (tp && tp + 1 < sizeof vz_text) vz_text[tp++] = ' '; while (l < e && tp + 1 < sizeof vz_text) vz_text[tp++] = *l++; vz_text[tp] = 0; }
+        l = *e ? e + 1 : e;
+    }
+    if (r == 0 && vz_text[0]) { vz_save_txt(); vz_state = 2; }
+    else vz_state = 3;
+#else
+    put_s(vz_info, sizeof vz_info, &(uint32_t){0}, "La transcripcion solo existe en x86_64");
+    vz_state = 3;
+#endif
+}
+static void vz_start(void)
+{
+    if (vz_state == 1) { setu("Ya se esta transcribiendo una grabacion"); return; }
+    if (sel < 0 || sel >= nrec) { setu("Elige una grabacion guardada de la lista"); return; }
+#ifdef __x86_64__
+    if (!usermode_avx2_ok()) { setu("Este procesador no tiene AVX2: no se puede transcribir"); return; }   /* SOMA_243: el modelo se instala solo */
+#endif
+    full_path(sel, vz_path, sizeof vz_path);
+    uint32_t p = 0; put_s(vz_name, sizeof vz_name, &p, names[sel]);
+    vz_text[0] = 0; vz_info[0] = 0; vz_out[0] = 0;
+    vz_state = 1; vz_show = 1; vz_t0 = timer_get_uptime_ms();
+    if (!thread_create("voz_grab", vz_thread, 0)) { vz_state = 3; put_s(vz_info, sizeof vz_info, &(uint32_t){0}, "No se pudo crear el hilo"); }
+}
+/* texto con ajuste por palabras dentro de w; devuelve la y siguiente */
+static int vz_wrap(int x, int y, int w, int maxy, const char *t, int px, uint32_t col)
+{
+    char line[256];
+    while (*t && y + 20 <= maxy) {
+        while (*t == ' ') t++;
+        uint32_t n = 0, best = 0; const char *bt = t, *q = t;
+        while (*q && n + 1 < sizeof line) {
+            line[n++] = *q; line[n] = 0;
+            if (si_text_w(line, px, 0) > w) { n--; break; }
+            q++;
+            if (*q == ' ' || !*q) { best = n; bt = q; }
+        }
+        if (!best || !*q) { best = n; bt = q; }
+        line[best] = 0;
+        si_text(x, y, 20, line, px, col, 0);
+        y += 21; t = bt;
+        if (!best) break;
+    }
+    return y;
+}
+
+static void addb(struct lay *L, int id, int x, int y, int w, int h) { if (L->nb < 20) { L->b[L->nb].id = id; L->b[L->nb].x = x; L->b[L->nb].y = y; L->b[L->nb].w = w; L->b[L->nb].h = h; L->rnd[L->nb] = 0; L->nb++; } }
 static void addr(struct lay *L, int id, int cx, int cy, int r) { addb(L, id, cx - r, cy - r, 2 * r, 2 * r + 22); L->rnd[L->nb - 1] = r; }
 
 /* SOMA_210: barra lateral con las grabaciones, cabecera, tarjeta de entrada, medidor, onda y botones de transporte redondos */
@@ -96,7 +178,7 @@ static void make_layout(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, stru
     L->lw = ww >= 700 ? LIST_W : 0;
     L->lx = (int)wx; L->ly = (int)wy; L->lh = (int)wh;
     L->row_y = (int)wy + 56; L->row_h = 34;
-    L->rows = ((int)wh - 56 - 66) / L->row_h; if (L->rows < 1) L->rows = 1;
+    L->rows = ((int)wh - 56 - 108) / L->row_h; if (L->rows < 1) L->rows = 1;   /* SOMA_241: hueco para Transcribir y Borrar */
     L->mx = (int)wx + L->lw + 20;
     L->mw = (int)wx + (int)ww - 20 - L->mx; if (L->mw < 300) L->mw = 300;
     int mx = L->mx, mw = L->mw;
@@ -123,6 +205,13 @@ static void make_layout(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, stru
     addr(L, B_MON,  cx + sp,     L->tr_cy, 24);
     addr(L, B_SAVE, cx + 2 * sp, L->tr_cy, 20);
     if (L->lw) addb(L, B_DEL, L->lx + 14, L->ly + L->lh - 50, L->lw - 28, 34);
+    if (L->lw) addb(L, B_VOZ, L->lx + 14, L->ly + L->lh - 92, L->lw - 28, 34);   /* SOMA_241_VOZ */
+    if (vz_show) {                                                                 /* botones del panel de transcripcion */
+        int by = L->wave_y + 12, bx = mx + mw - 14;
+        addb(L, B_VZ_CLOSE, bx - 34, by, 34, 30); bx -= 34 + 8;
+        if (vz_state == 1) addb(L, B_VZ_STOP, bx - 104, by, 104, 30);
+        else if (vz_state == 2) addb(L, B_VZ_COPY, bx - 96, by, 96, 30);
+    }
 }
 
 static void draw_list(const struct lay *L)
@@ -242,6 +331,32 @@ void recorder_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, 
         }
     }
 
+    /* SOMA_241_VOZ: panel de transcripcion sobre la onda */
+    if (vz_show) {
+        int y0 = L.wave_y, h0 = L.wave_h;
+        si_card(mx, y0, mw, h0, 0x000A0F18u);
+        fb_fill_rrect_aa(mx + 14, y0 + 12, 30, 30, 9, si_mix(0x000A0F18u, 0x00A78BFAu, 60));
+        si_icon(SI_COMMENT, mx + 29, y0 + 27, 18, 0x00C4B5FDu);
+        si_text(mx + 54, y0 + 8, 20, "Transcripcion", 14, SI_TXT, 1);
+        si_text_fit(mx + 54, y0 + 27, 18, vz_name, mw - 54 - 170, 11, SI_FAINT, 0);
+        int ty = y0 + 54, tb = y0 + h0 - 30;
+        if (vz_state == 1) {
+            uint32_t el = (uint32_t)((timer_get_uptime_ms() - vz_t0) / 1000);
+            char m[96]; uint32_t p = 0; put_s(m, sizeof m, &p, "Escuchando y escribiendo en espanol... ");
+            put_d(m, sizeof m, &p, el); put_s(m, sizeof m, &p, " s");
+            int ph = (int)((timer_get_uptime_ms() / 150) % 8);
+            for (int k = 0; k < 8; ++k) fb_fill_rrect_aa(mx + 18 + k * 12, ty + 6, 8, 8, 4, k == ph ? 0x00C4B5FDu : 0x00334155u);
+            si_text(mx + 124, ty, 20, m, 13, SI_DIM, 0);
+            si_text_fit(mx + 18, ty + 30, 18, "Suele tardar unos segundos (la primera vez instala el modelo). Puedes seguir usando SOMA.", mw - 36, 11, SI_FAINT, 0);
+        } else if (vz_state == 2) {
+            (void)vz_wrap(mx + 18, ty, mw - 36, tb, vz_text, 14, SI_TXT);
+        } else if (vz_state == 3) {
+            si_icon(SI_CLOSE, mx + 26, ty + 10, 14, SI_RED);
+            si_text_fit(mx + 40, ty, 20, vz_info[0] ? vz_info : "No se pudo transcribir", mw - 58, 13, 0x00FDA4AFu, 0);
+        }
+        if (vz_state == 2 && vz_info[0]) si_text_fit(mx + 18, y0 + h0 - 26, 18, vz_info, mw - 36, 11, SI_FAINT, 0);
+    }
+
     /* botones */
     for (int i = 0; i < L.nb; ++i) {
         const struct btn *b = &L.b[i];
@@ -270,6 +385,12 @@ void recorder_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, 
         case B_RATE:
             if (!na) { char l[48]; uint32_t p = 0; put_s(l, sizeof l, &p, "Calidad: "); put_s(l, sizeof l, &p, RATE_NAME[rate_i]); si_button(b->x, b->y, b->w, b->h, SI_GAUGE, l, SIB_NEUTRAL, ACCENT, in.mode == MR_REC); }
             break;
+        case B_VOZ:
+            si_button(b->x, b->y, b->w, b->h, SI_COMMENT, vz_state == 1 ? "Transcribiendo..." : "Transcribir", vz_state == 1 ? SIB_ON : SIB_ACCENT, 0x00A78BFAu, sel < 0 || sel >= nrec);
+            break;
+        case B_VZ_CLOSE: si_button(b->x, b->y, b->w, b->h, SI_CLOSE, 0, SIB_GHOST, ACCENT, 0); break;
+        case B_VZ_STOP: si_button(b->x, b->y, b->w, b->h, SI_STOP, "Detener", SIB_NEUTRAL, ACCENT, 0); break;
+        case B_VZ_COPY: si_button(b->x, b->y, b->w, b->h, SI_COPY, "Copiar", SIB_ACCENT, 0x00A78BFAu, 0); break;
         case B_DEL:
             si_button(b->x, b->y, b->w, b->h, SI_TRASH, del_armed ? "Confirmar borrado" : "Borrar", del_armed ? SIB_DANGER : SIB_NEUTRAL, ACCENT, sel < 0 || sel >= nrec);
             break;
@@ -285,7 +406,7 @@ void recorder_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, 
         else if (in.mode == MR_REC) { put_s(fb, sizeof fb, &p, "Grabando  -  saturadas "); put_d(fb, sizeof fb, &p, in.clipped); put_s(fb, sizeof fb, &p, ", perdidas "); put_d(fb, sizeof fb, &p, in.overruns); }
         else if (in.mode == MR_MON) put_s(fb, sizeof fb, &p, "Habla y mira la barra. Cambia de fuente con las flechas si no se mueve.");
         else if (in.mode == MR_PROBE) put_s(fb, sizeof fb, &p, "Probando las entradas... habla un poco.");
-        else put_s(fb, sizeof fb, &p, "Espacio grabar  -  P escuchar  -  S guardar  -  N nueva");
+        else put_s(fb, sizeof fb, &p, "Espacio grabar  -  P escuchar  -  S guardar  -  N nueva  -  T transcribir");
         fb_fill_rect((uint32_t)mx, (uint32_t)L.status_y, (uint32_t)mw, 1, SI_LINE);
         si_text_fit(mx, L.status_y + 1, 30, fb, mw, 12, (in.msg[0] || umsg[0]) ? SI_AMBER : SI_FAINT, 0);
     }
@@ -356,6 +477,14 @@ int recorder_handle_click(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint
         case B_S_UP: micrec_set_sw(in.sw_x10 + 10); break;
         case B_S_DN: micrec_set_sw(in.sw_x10 - 10); break;
         case B_RATE: if (in.mode != MR_REC) rate_i = (rate_i + 1) % 5; break;
+        case B_VOZ: vz_start(); break;
+        case B_VZ_CLOSE: if (vz_state != 1) { vz_show = 0; vz_state = 0; } else vz_show = 0; break;
+        case B_VZ_STOP:
+#ifdef __x86_64__
+            voz_stop();
+#endif
+            break;
+        case B_VZ_COPY: clip_set_text(vz_text, 0); setu("Texto copiado al portapapeles"); break;
         case B_DEL:
             if (sel < 0 || sel >= nrec) { setu("Elige una grabacion de la lista"); break; }
             if (!del_armed) { del_armed = 1; break; }
@@ -380,6 +509,7 @@ void recorder_handle_key(char c)
     else if (c == 'n' || c == 'N') { if (guard_unsaved()) { micrec_clear(); umsg[0] = 0; } }
     else if (c == 'l' || c == 'L') { if (in.mode == MR_MON) micrec_stop(); else micrec_monitor(); }
     else if (c == 'r' || c == 'R') rescan();
+    else if (c == 't' || c == 'T') vz_start();                          /* SOMA_241_VOZ */
 }
 
 int recorder_tick(void)
@@ -389,6 +519,9 @@ int recorder_tick(void)
     if (now - last_tick < 80) return 0;
     last_tick = now;
     struct micrec_info in; micrec_info(&in);
+    static int vz_last = -1;                                          /* SOMA_241_VOZ: el panel se anima mientras transcribe */
+    static uint64_t vz_tick;
+    if (vz_state != vz_last || (vz_state == 1 && vz_show && now - vz_tick >= 300)) { vz_last = vz_state; vz_tick = now; last_mode = -2; }
     int ch = in.mode != last_mode || in.level != last_level || in.ms != last_ms || in.mode == MR_PLAY || in.mode == MR_REC || in.mode == MR_PROBE;
     last_mode = in.mode; last_level = in.level; last_ms = in.ms;
     return ch;

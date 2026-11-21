@@ -68,7 +68,7 @@ struct uproc {
     int      nregions;
     int      audio;                         /* SOMA_PARCHE_020_AUDIO: este proceso tiene el flujo de audio abierto */
     int      fb;                            /* SOMA_PARCHE_021_FPU: este proceso tiene la pantalla */
-    uint8_t  fpu[512] __attribute__((aligned(16)));   /* SOMA_PARCHE_021_FPU: estado x87/MMX/SSE (FXSAVE) del proceso */
+    uint8_t  fpu[USER_FPU_BYTES] __attribute__((aligned(64)));   /* SOMA_PARCHE_021_FPU: estado x87/MMX/SSE (FXSAVE); SOMA_241_VOZ: y AVX (XSAVE) */
     uint8_t  io[16384];                     /* bufer de rebote por proceso para SYS_READ (una lectura puede ceder la CPU) */
     char    *rd_out;                        /* SOMA_239: salida redirigida a un bufer del nucleo (0 = a la consola) */
     uint32_t rd_cap, rd_len;
@@ -158,6 +158,36 @@ static inline void cpuid_leaf(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t
 
 int usermode_cpu_features(void) { return (smep_on ? 1 : 0) | (smap_on ? 2 : 0); }
 
+/* SOMA_241_VOZ: AVX para los procesos de usuario (whisper.cpp/ggml calculan con AVX2+FMA). Sin CR4.OSXSAVE y XCR0 la CPU da #UD con
+ * cualquier instruccion AVX. Con XSAVE, el estado de cada proceso (x87, SSE y la mitad alta de los YMM) se guarda con xsave64/xrstor64
+ * al cambiar de hilo en lugar de fxsave64. El nucleo no usa SIMD (-mgeneral-regs-only), asi que solo los procesos tienen ese estado.
+ * Se llama en el procesador de arranque antes de despertar a los demas (smp.c copia CR4 y XCR0 a cada nucleo). */
+static int xsave_on;                  /* 1 = se guarda con XSAVE (x87|SSE|AVX) */
+static int avx2_ok;                   /* AVX2 + FMA + F16C + BMI2 disponibles para ring 3 */
+void usermode_fpu_init(void)
+{
+    uint32_t a, b, c2, d;
+    cpuid_leaf(0, 0, &a, &b, &c2, &d);
+    uint32_t maxleaf = a;
+    cpuid_leaf(1, 0, &a, &b, &c2, &d);
+    int has_xsave = (c2 >> 26) & 1, has_avx = (c2 >> 28) & 1, has_fma = (c2 >> 12) & 1, has_f16c = (c2 >> 29) & 1;
+    if (!has_xsave || !has_avx || maxleaf < 0xD) { kprint("USERMODE: sin AVX (XSAVE/AVX no disponibles): la orden voz no funcionara\n"); return; }
+    uint64_t cr4; __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
+    __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4 | (1ULL << 18)) : "memory");              /* OSXSAVE */
+    __asm__ volatile ("xsetbv" : : "c"(0), "a"(7u), "d"(0u));                              /* XCR0 = x87 | SSE | AVX */
+    cpuid_leaf(0xD, 0, &a, &b, &c2, &d);                                                   /* b = tamano del area para XCR0 actual */
+    if (b > USER_FPU_BYTES) {                                                              /* no deberia pasar: 832 bytes con AVX */
+        __asm__ volatile ("xsetbv" : : "c"(0), "a"(3u), "d"(0u));
+        __asm__ volatile ("mov %0, %%cr4" : : "r"(cr4) : "memory");
+        kprint("USERMODE: area XSAVE demasiado grande; sin AVX\n");
+        return;
+    }
+    xsave_on = 1;
+    if (maxleaf >= 7) { cpuid_leaf(7, 0, &a, &b, &c2, &d); avx2_ok = ((b >> 5) & 1) && ((b >> 8) & 1) && has_fma && has_f16c; }
+    kprint(avx2_ok ? "USERMODE: AVX2 activo para los procesos (XSAVE)\n" : "USERMODE: AVX activo (sin AVX2: la orden voz no funcionara)\n");
+}
+int usermode_avx2_ok(void) { return xsave_on && avx2_ok; }
+
 /* SOMA_PARCHE_017_AS: SMEP (el kernel no ejecuta paginas de usuario) y SMAP (no las lee/escribe salvo
  * con stac/clac). Solo si la CPU los tiene (QEMU: -cpu qemu64,+smep,+smap). */
 static void enable_smep_smap(void)
@@ -194,7 +224,16 @@ static uint64_t user_pte_of(void *ctx, uint64_t va) { return vmm_as_get_pte(((st
 static int user_range(uint64_t p, uint64_t len, int need_write)
 {
     if (!usermode_cur) return 0;
-    return uaccess_range_ok(p, len, need_write, USER_BASE, USER_WINDOW, user_pte_of, usermode_cur);   /* PARCHE 102 */
+    if (p >= USER_BASE && p - USER_BASE < USER_WINDOW)
+        return uaccess_range_ok(p, len, need_write, USER_BASE, USER_WINDOW, user_pte_of, usermode_cur);   /* PARCHE 102 */
+    /* SOMA_241_VOZ: tambien dentro de una region del proceso (el monton grande de voz); las paginas deben estar ya presentes */
+    for (int i = 0; i < usermode_cur->nregions; ++i) {
+        const struct uregion *r = usermode_cur->regions[i];
+        uint64_t sz = (uint64_t)r->npages * 4096;
+        if (r && p >= r->va && p - r->va < sz && len <= 1u << 20)
+            return uaccess_range_ok(p, len, need_write, r->va, sz, user_pte_of, usermode_cur);
+    }
+    return 0;
 }
 static int user_range_ok(uint64_t p, uint64_t len) { return user_range(p, len, 0); }
 
@@ -768,12 +807,25 @@ int usermode_demand_fault(uint64_t cr2, uint64_t error_code)
         if (r->frames[k]) return 0;
         size_t fr, us, tot; pmm_get_stats(&fr, &us, &tot);
         if (fr <= up->reserve_frames) goto nomem;
+        uint64_t va = r->va + (uint64_t)k * 4096;
+        if (r->demand == 2) {                                   /* SOMA_241_VOZ: marco de la reserva ALTA (no accesible por identidad) */
+            uintptr_t f = pmm_alloc_frame_high();
+            if (!f) goto nomem;
+            if (vmm_as_map(up->as, va, f, r->flags) != 0) { pmm_free_frame(f); goto nomem; }
+            r->frames[k] = f; r->used++;
+            __asm__ volatile ("invlpg (%0)" : : "r"(va) : "memory");
+            /* se pone a cero a traves de la propia direccion de usuario (CR3 es el del proceso: el fallo vino de ring 3) */
+            if (smap_on) __asm__ volatile ("stac" ::: "memory");
+            uint64_t *z = (uint64_t *)va; for (int q = 0; q < 512; ++q) z[q] = 0;
+            if (smap_on) __asm__ volatile ("clac" ::: "memory");
+            return 1;
+        }
         uintptr_t f = pmm_alloc_frame();
         if (!f) goto nomem;
         uint8_t *p = (uint8_t *)f; for (size_t b = 0; b < 4096; ++b) p[b] = 0;
-        if (vmm_as_map(up->as, r->va + (uint64_t)k * 4096, f, r->flags) != 0) { pmm_free_frame(f); goto nomem; }
+        if (vmm_as_map(up->as, va, f, r->flags) != 0) { pmm_free_frame(f); goto nomem; }
         r->frames[k] = f; r->used++;
-        __asm__ volatile ("invlpg (%0)" : : "r"(r->va + (uint64_t)k * 4096) : "memory");
+        __asm__ volatile ("invlpg (%0)" : : "r"(va) : "memory");
         return 1;
     }
     return 0;
@@ -815,9 +867,14 @@ void arch_thread_switch(struct tcb *prev, struct tcb *next)
      * los procesos de usuario tienen estado que proteger. Se guarda al salir y se restaura al entrar (sin
      * conmutacion perezosa: es mas simple y los procesos son pocos). */
     struct uproc *pu = prev ? (struct uproc *)prev->uproc : 0;
-    if (pu) __asm__ volatile ("fxsave64 %0" : "=m"(*(uint8_t (*)[512])pu->fpu) : : "memory");
     struct uproc *nu = next ? (struct uproc *)next->uproc : 0;
-    if (nu) __asm__ volatile ("fxrstor64 %0" : : "m"(*(uint8_t (*)[512])nu->fpu) : "memory");
+    if (xsave_on) {                                            /* SOMA_241_VOZ: con AVX (mascara x87|SSE|AVX en EDX:EAX) */
+        if (pu) __asm__ volatile ("xsave64 %0" : "=m"(*(uint8_t (*)[USER_FPU_BYTES])pu->fpu) : "a"(7u), "d"(0u) : "memory");
+        if (nu) __asm__ volatile ("xrstor64 %0" : : "m"(*(uint8_t (*)[USER_FPU_BYTES])nu->fpu), "a"(7u), "d"(0u) : "memory");
+    } else {
+        if (pu) __asm__ volatile ("fxsave64 %0" : "=m"(*(uint8_t (*)[512])pu->fpu) : : "memory");
+        if (nu) __asm__ volatile ("fxrstor64 %0" : : "m"(*(uint8_t (*)[512])nu->fpu) : "memory");
+    }
     if (nu) {
         tss_set_rsp0(nu->kstack);
         vmm_load_as(nu->as);
@@ -876,7 +933,7 @@ static struct uproc *slot_begin(void)
             for (int k = 0; k < USER_MAX_REGIONS; ++k) up->regions[k] = 0;
             /* estado inicial de la FPU: FCW=0x037F (todas las excepciones enmascaradas, doble extendida), MXCSR=0x1F80
              * (idem SSE, redondeo al mas cercano), registros vacios: igual que tras FNINIT */
-            for (int k = 0; k < 512; ++k) up->fpu[k] = 0;
+            for (int k = 0; k < USER_FPU_BYTES; ++k) up->fpu[k] = 0;   /* SOMA_241: cabecera XSAVE a cero = estado inicial de AVX */
             up->fpu[0] = 0x7F; up->fpu[1] = 0x03;
             up->fpu[24] = 0x80; up->fpu[25] = 0x1F;
             return up;
@@ -990,6 +1047,22 @@ int usermode_exec_ex(const char *name, const void *img, size_t len, uint32_t max
         }
     }
     return exec_common(name, img, len, max_ms, 0, sp, err);
+}
+
+/* SOMA_241_VOZ: con argumentos, filtro de llamadas y UNA region (el monton grande de voz). La region es del llamante. */
+int usermode_exec_region(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, uint32_t sysmask,
+                         struct uregion *r, int *err)
+{
+    if (!r || !r->frames || r->npages == 0 || (r->va & 0xFFF)) return -11;
+    uint64_t a = r->va, b = r->va + (uint64_t)r->npages * 4096;
+    if (a < USER_BASE + USER_WINDOW || b > USER_BASE + 0x8000000000ULL || b < a) return -11;
+    if ((r->flags & VMM_FLAG_WRITABLE) && !(r->flags & VMM_FLAG_NX)) return -11;
+    struct uexec_spec sp;
+    uint8_t *z = (uint8_t *)&sp; for (size_t i = 0; i < sizeof sp; ++i) z[i] = 0;
+    sp.sysmask = sysmask;
+    sp.regions[0] = r; sp.nregions = 1;
+    sp.reserve_frames = 16384;                                     /* la region no crece si al sistema le quedarian menos de 64 MiB */
+    return exec_common(name, img, len, max_ms, args, &sp, err);
 }
 
 static int exec_common(const char *name, const void *img, size_t len, uint32_t max_ms, const char *args, const struct uexec_spec *sp, int *err)

@@ -37,6 +37,7 @@
 #include "web_fault.h"
 #if defined(__x86_64__)
 #include "web_r3.h"
+#include "voz_sys.h"   /* SOMA_241_VOZ */
 int browser_r3_wanted(void); int browser_r3_active(void);
 #endif
 #ifdef __x86_64__
@@ -743,6 +744,7 @@ static const struct command_entry cmd_table[] = {
     { "grabadora",    cmd_grabadora,    CMD_F_NORMAL, "Abre la aplicacion Grabadora (microfono: grabar, escuchar, guardar WAV)" },
     { "big",          cmd_big,          CMD_F_NORMAL, "Almacen de archivos grandes: big info|format yes|ls|mkdir|rm|mv|stat|cat|put|get|write|truncate|fsck|bench" },
     { "exec",         cmd_exec,         CMD_F_NORMAL, "Ejecuta un programa ELF de usuario (ring 3): exec [-b] /bin/hello.elf [plazo_ms]" },
+    { "voz",          cmd_voz,          CMD_F_NORMAL, "Voz a texto (whisper.cpp, espanol): voz archivo.wav | voz ultima | voz instalar | voz modelo. Opciones: -T marcas de tiempo, -l idioma, -v detalles" },
     { "python",       cmd_python,       CMD_F_NORMAL, "Python (MicroPython en ring 3; ventanas con from soma import win): python | python script.py [args] | python -c \"codigo\". Rutas relativas: /workspace" },
     { "procs",        cmd_procs,        CMD_F_NORMAL, "Lista los procesos de usuario (libera los terminados)" },
     { "usertest",     cmd_usertest,     CMD_F_NORMAL, "DEPURACION: ejecuta programas de prueba en ring 3 (syscalls, aislamiento, plazo)" },

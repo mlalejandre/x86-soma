@@ -30,3 +30,31 @@ uint32_t fwcfg_read_file(const char *name, char *out, uint32_t max)
     }
     return 0;
 }
+
+
+
+/* SOMA_241_VOZ: lectura por partes de un archivo grande (el modelo de voz en QEMU: -fw_cfg name=opt/soma/modelo,file=...).
+ * fwcfg_open selecciona el archivo y devuelve su tamano (0 si no esta); despues fwcfg_read_seq lee los bytes en orden. */
+uint32_t fwcfg_open(const char *name)
+{
+    sel(0x0000);
+    if (rd8() != 'Q' || rd8() != 'E' || rd8() != 'M' || rd8() != 'U') return 0;
+    sel(0x0019);
+    uint32_t n = rdbe32();
+    if (n > 4096) return 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t size = rdbe32(); uint16_t key = rdbe16(); (void)rdbe16();
+        char fn[56]; for (int k = 0; k < 56; ++k) fn[k] = (char)rd8();
+        fn[55] = 0;
+        int eq = 1; for (int k = 0; k < 56; ++k) { if (fn[k] != name[k]) { eq = 0; break; } if (!name[k]) break; }
+        if (!eq) continue;
+        sel(key);
+        return size;
+    }
+    return 0;
+}
+void fwcfg_read_seq(void *buf, uint32_t n)
+{
+    uint8_t *p = (uint8_t *)buf;
+    for (uint32_t k = 0; k < n; ++k) p[k] = rd8();
+}

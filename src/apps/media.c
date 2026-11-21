@@ -11,6 +11,7 @@
 #include "media.h"
 #include "fb.h"
 #include "gui_font.h"
+#include "sysicon.h"
 #include "mem.h"
 #include "thread.h"
 #include "idt.h"
@@ -507,25 +508,80 @@ void media_init(void)
     rescan();
 }
 
-/* ---- ventana ---- */
-struct lay { int lx, ly, lw, lh, vx, vy, vw, vh, py, px, pw, by, status_y; };
+/* ---- ventana ---- (SOMA_240_ICONOS: rediseno con iconos vectoriales del sistema, mismo estilo que la Grabadora) */
+#define ACCENT  0x00FB7185u
+#define LIST_W  250
+#define ROW_H   38
+enum { MB_STOP, MB_PREV, MB_BACK, MB_PLAY, MB_FWD, MB_NEXT, MB_RESCAN, MB_N };
+struct lay {
+    int lx, ly, lw, lh, row_y, rows;                 /* biblioteca */
+    int mx, mw, hdr_y, vx, vy, vw, vh;               /* cabecera y video */
+    int px, py, pw;                                  /* barra de progreso */
+    int cy, bcx[MB_N], br[MB_N], labels;             /* controles redondos */
+    int status_y;
+};
 
 static void make_layout(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, struct lay *L)
 {
-    L->lw = ww >= 700 ? 220 : (ww >= 520 ? 150 : 0);
-    L->lx = (int)wx + 8; L->ly = (int)wy + 8; L->lh = (int)wh - 16;
-    int vx0 = (int)wx + 8 + (L->lw ? L->lw + 8 : 0);
-    L->vx = vx0; L->vy = (int)wy + 8;
-    L->vw = (int)wx + (int)ww - 8 - vx0; L->vh = (int)wh - 8 - 8 - 78;
-    if (L->vh < 40) L->vh = 40;
-    if (L->vw < 40) L->vw = 40;
-    L->px = L->vx; L->pw = L->vw; L->py = L->vy + L->vh + 10;
-    L->by = L->py + 18;
-    L->status_y = L->by + 34;
+    L->lw = ww >= 760 ? LIST_W : (ww >= 600 ? 190 : 0);
+    L->lx = (int)wx; L->ly = (int)wy; L->lh = (int)wh;
+    L->row_y = (int)wy + 58; L->rows = ((int)wh - 58 - 64) / ROW_H; if (L->rows < 1) L->rows = 1;
+    L->mx = (int)wx + L->lw + 20;
+    L->mw = (int)wx + (int)ww - 20 - L->mx; if (L->mw < 240) L->mw = 240;
+    L->hdr_y = (int)wy + 16;
+    L->status_y = (int)wy + (int)wh - 30;
+    L->cy = L->status_y - 68;
+    L->py = L->cy - 70;
+    L->px = L->mx; L->pw = L->mw;
+    L->vx = L->mx; L->vy = (int)wy + 74; L->vw = L->mw;
+    L->vh = L->py - 18 - L->vy; if (L->vh < 40) L->vh = 40;
+    int cx = L->mx + L->mw / 2, sp = L->mw / 7; if (sp > 92) sp = 92; if (sp < 40) sp = 40;
+    L->labels = sp >= 80;                            /* con poco ancho solo iconos (los nombres se solaparian) */
+    static const int rr[MB_N] = { 19, 20, 22, 30, 22, 20, 19 };
+    for (int i = 0; i < MB_N; ++i) { L->bcx[i] = cx + (i - MB_PLAY) * sp; L->br[i] = rr[i]; }
 }
 
-#define BTN_W 74
-#define BTN_H 26
+static const char *base_name(const char *p) { const char *n = p; for (; *p; ++p) if (*p == '/') n = p + 1; return n; }
+static int is_active(void) { return state == ST_PLAYING || state == ST_PAUSED || state == ST_LOADING; }
+
+static void draw_library(const struct lay *L)
+{
+    fb_fill_rect((uint32_t)L->lx, (uint32_t)L->ly, (uint32_t)L->lw, (uint32_t)L->lh, SI_SIDE);
+    fb_fill_rect((uint32_t)(L->lx + L->lw - 1), (uint32_t)L->ly, 1, (uint32_t)L->lh, SI_LINE);
+    si_icon(SI_LIST, L->lx + 28, L->ly + 28, 18, ACCENT);
+    si_text(L->lx + 44, L->ly + 16, 24, "Biblioteca", 14, SI_TXT, 1);
+    if (nfiles) { char n[12]; uint32_t p = 0; put_dec(n, sizeof n, &p, (uint64_t)nfiles); si_chip(L->lx + L->lw - 18 - si_chip_w(20, n, 0), L->ly + 18, 20, n, SI_DIM, 0); }
+    if (nfiles == 0) {
+        int cy = L->row_y + 70;
+        si_icon(SI_FILM, L->lx + L->lw / 2, cy, 44, SI_FAINT);
+        si_text_c(L->lx, cy + 34, L->lw, 20, "Biblioteca vacia", 13, SI_DIM, 1);
+        si_text_c(L->lx, cy + 54, L->lw, 18, "Copia .avi o .wav con", 12, SI_FAINT, 0);
+        si_text_c(L->lx, cy + 72, L->lw, 18, "tools/bigfs.py", 12, SI_FAINT, 0);
+        return;
+    }
+    if (sel < list_scroll) list_scroll = sel;
+    if (sel >= list_scroll + L->rows) list_scroll = sel - L->rows + 1;
+    if (list_scroll < 0) list_scroll = 0;
+    for (int r = 0; r < L->rows && list_scroll + r < nfiles; ++r) {
+        int i = list_scroll + r, y = L->row_y + r * ROW_H, h = ROW_H - 4;
+        int on = i == sel, playing = is_active() && seq(cur_path, files[i].path);
+        if (on) {
+            fb_fill_rrect_aa(L->lx + 8, y, L->lw - 16, h, 8, si_mix(SI_SIDE, ACCENT, 46));
+            fb_fill_rrect_aa(L->lx + 8, y + 9, 3, h - 18, 1, ACCENT);
+        }
+        uint32_t ic = playing ? ACCENT : files[i].kind == 1 ? 0x0093C5FDu : 0x00C4B5FDu;
+        if (!on && !playing) ic = si_mix(SI_SIDE, ic, 170);
+        si_icon(playing ? (state == ST_PAUSED ? SI_PAUSE : SI_PLAY) : files[i].kind == 1 ? SI_FILM : SI_MUSIC, L->lx + 30, y + h / 2, 17, ic);
+        const char *tag = files[i].kind == 1 ? "AVI" : "WAV";
+        int tw = si_text_w(tag, 10, 1);
+        si_text_fit(L->lx + 48, y, h, base_name(files[i].path), L->lw - 48 - 26 - tw, 13, on ? 0x00FFFFFFu : 0x00CBD5E1u, on);
+        si_text_r(L->lx + L->lw - 18, y, h, tag, 10, SI_FAINT, 1);
+    }
+    if (nfiles > L->rows) {                          /* indicador de desplazamiento */
+        int th = L->rows * ROW_H * L->rows / nfiles, ty = L->row_y + (L->rows * ROW_H - th) * list_scroll / (nfiles - L->rows);
+        fb_fill_rrect_aa(L->lx + L->lw - 6, ty, 3, th, 1, SI_LINE);
+    }
+}
 
 void media_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, int focused)
 {
@@ -533,121 +589,139 @@ void media_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, int
     last_render_ms = timer_get_uptime_ms(); gui_seen = 1;
     if (!scanned) rescan();
     struct lay L; make_layout(wx, wy, ww, wh, &L);
+    fb_fill_rect(wx, wy, ww, wh, SI_WIN);
+    if (L.lw) draw_library(&L);
+    fb_set_clip(L.mx - 4, (int)wy, L.mw + 8, (int)wh);
 
-    fb_fill_rect(wx, wy, ww, wh, 0x000F172A);
-
-    /* lista de archivos */
-    if (L.lw) {
-        fb_fill_rounded_rect(L.lx, L.ly, L.lw, L.lh, 6, 0x00161F30);
-        fb_draw_rounded_rect(L.lx, L.ly, L.lw, L.lh, 6, 0x00334155);
-        font_draw_string((uint32_t)L.lx + 10, (uint32_t)L.ly + 8, "BIBLIOTECA", 0x00FB7185, 1);
-        int rows = (L.lh - 36) / 20;
-        if (rows < 1) rows = 1;
-        if (nfiles == 0) {
-            font_draw_string((uint32_t)L.lx + 10, (uint32_t)L.ly + 34, "Sin .avi ni .wav.", 0x0094A3B8, 1);
-            font_draw_string((uint32_t)L.lx + 10, (uint32_t)L.ly + 50, "Copialos con", 0x0064748B, 1);
-            font_draw_string((uint32_t)L.lx + 10, (uint32_t)L.ly + 66, "tools/bigfs.py", 0x0064748B, 1);
-        }
-        if (sel < list_scroll) list_scroll = sel;
-        if (sel >= list_scroll + rows) list_scroll = sel - rows + 1;
-        for (int r = 0; r < rows && list_scroll + r < nfiles; ++r) {
-            int i = list_scroll + r; int y = L.ly + 30 + r * 20;
-            if (i == sel) fb_fill_rounded_rect(L.lx + 4, y - 2, L.lw - 8, 18, 4, 0x00334155);
-            const char *nm = files[i].path; uint32_t l = slen(nm), k = l;
-            while (k && nm[k - 1] != '/') k--;
-            char buf[28]; uint32_t cap = (uint32_t)(L.lw - 36) / 8; if (cap > 26) cap = 26;
-            uint32_t bl = 0; for (uint32_t q = k; q < l && bl < cap; ++q) buf[bl++] = nm[q]; buf[bl] = 0;
-            int playing = (state == ST_PLAYING || state == ST_PAUSED || state == ST_LOADING) && seq(cur_path, files[i].path);
-            font_draw_string((uint32_t)L.lx + 10, (uint32_t)y + 2, playing ? ">" : (files[i].kind == 1 ? "v" : "~"), playing ? 0x00FB7185 : 0x0064748B, 1);
-            font_draw_string((uint32_t)L.lx + 24, (uint32_t)y + 2, buf, i == sel ? 0x00F8FAFC : 0x00CBD5E1, 1);
-        }
+    /* cabecera: icono de la app, archivo actual y estado */
+    {
+        const char *t = cur_path[0] && state != ST_IDLE ? base_name(cur_path) : nfiles ? base_name(files[sel < nfiles ? sel : 0].path) : "Sin archivos";
+        char sub[96]; uint32_t p = 0;
+        int wav = cur_path[0] && has_ext(cur_path, ".wav");
+        if (state == ST_ERROR || state == ST_LOADING) put_str(sub, sizeof sub, &p, wav ? "Audio WAV" : "Video AVI");
+        else if (state != ST_IDLE && cur_path[0]) { put_str(sub, sizeof sub, &p, is_audio_only ? "Audio WAV" : "Video AVI");
+            if (!is_audio_only && fw) { put_str(sub, sizeof sub, &p, "  -  "); put_dec(sub, sizeof sub, &p, fw); put_str(sub, sizeof sub, &p, " x "); put_dec(sub, sizeof sub, &p, fh); }
+            else if (is_audio_only && a_rate) { put_str(sub, sizeof sub, &p, "  -  "); put_dec(sub, sizeof sub, &p, a_rate); put_str(sub, sizeof sub, &p, " Hz"); } }
+        else put_str(sub, sizeof sub, &p, nfiles ? "Listo para reproducir" : "Copia videos .avi o audio .wav al almacen");
+        static const char *const sn[] = { "Listo", "Cargando", "Reproduciendo", "En pausa", "Terminado", "Error" };
+        static const uint32_t sc[] = { SI_DIM, 0x0093C5FDu, SI_GREEN, SI_AMBER, SI_DIM, SI_RED };
+        int cw = si_chip_w(26, sn[state], 1);
+        si_header(L.mx, L.hdr_y, L.mw - cw - 16, (state == ST_IDLE ? (nfiles && files[sel < nfiles ? sel : 0].kind == 2) : wav) ? SI_MUSIC : SI_FILM, ACCENT, t, sub);
+        si_chip(L.mx + L.mw - cw, L.hdr_y + 9, 26, sn[state], sc[state], 1);
     }
 
-    /* area de video */
-    fb_fill_rect((uint32_t)L.vx, (uint32_t)L.vy, (uint32_t)L.vw, (uint32_t)L.vh, 0x00000000);
-    fb_draw_rect((uint32_t)L.vx, (uint32_t)L.vy, (uint32_t)L.vw, (uint32_t)L.vh, 0x00334155);
+    /* escenario: video, visualizacion de audio o marcador */
+    fb_fill_rrect_aa(L.vx, L.vy, L.vw, L.vh, 12, 0x00060910u);
+    fb_stroke_rrect_aa(L.vx, L.vy, L.vw, L.vh, 12, SI_LINE);
     if (front >= 0 && fbuf[front] && fw && fh) {
-        int aw = L.vw - 4, ah = L.vh - 4;
+        int aw = L.vw - 12, ah = L.vh - 12;
         uint32_t dw = (uint32_t)aw, dh = (uint32_t)((uint64_t)aw * fh / fw);
         if (dh > (uint32_t)ah) { dh = (uint32_t)ah; dw = (uint32_t)((uint64_t)ah * fw / fh); }
         if (dw >= fw && dh >= fh && dw < fw * 2) { dw = fw; dh = fh; }      /* sin ampliar un poco: se ve nitido */
-        int dx = L.vx + 2 + (aw - (int)dw) / 2, dy = L.vy + 2 + (ah - (int)dh) / 2;
+        int dx = L.vx + 6 + (aw - (int)dw) / 2, dy = L.vy + 6 + (ah - (int)dh) / 2;
         fb_blit_scale(dx, dy, (int32_t)dw, (int32_t)dh, fbuf[front], (int32_t)fw, (int32_t)fh, (int32_t)fw);
     } else if (is_audio_only && (state == ST_PLAYING || state == ST_PAUSED) && vu_n) {
-        int bw = (L.vw - 20) / 48; if (bw < 2) bw = 2;
-        int base = L.vy + L.vh / 2;
-        for (int b = 0; b < vu_n; ++b) {
-            int h = (int)vu[b] * (L.vh / 2 - 10) / 255; if (h < 2) h = 2;
-            fb_fill_rect((uint32_t)(L.vx + 10 + b * bw), (uint32_t)(base - h), (uint32_t)(bw - 1), (uint32_t)(2 * h), 0x00FB7185);
+        si_icon(SI_MUSIC, L.vx + L.vw / 2, L.vy + L.vh / 2, L.vh / 2 < 160 ? L.vh / 2 : 160, si_mix(0x00060910u, ACCENT, 26));
+        int n = vu_n, bw = (L.vw - 40) / n; if (bw < 3) bw = 3;
+        int x0 = L.vx + (L.vw - bw * n) / 2, base = L.vy + L.vh / 2;
+        for (int b = 0; b < n; ++b) {
+            int h = (int)vu[b] * (L.vh / 2 - 18) / 255; if (h < 2) h = 2;
+            uint32_t c = si_mix(0x00A78BFAu, ACCENT, 255 * b / (n > 1 ? n - 1 : 1));
+            if (state == ST_PAUSED) c = si_mix(0x00060910u, c, 110);
+            fb_fill_rrect_aa(x0 + b * bw + 1, base - h, bw - 3 > 1 ? bw - 3 : 1, 2 * h, (bw - 3) / 2 > 0 ? (bw - 3) / 2 : 0, c);
         }
     } else {
-        const char *t = state == ST_LOADING ? "Cargando..." : (state == ST_ERROR ? "Error" : "SOMA Media");
-        font_draw_string((uint32_t)(L.vx + L.vw / 2 - (int)slen(t) * 4), (uint32_t)(L.vy + L.vh / 2 - 8), t, 0x0064748B, 1);
+        int cx = L.vx + L.vw / 2, cy = L.vy + L.vh / 2 - 14, r = L.vh / 6; if (r > 44) r = 44; if (r < 16) r = 16;
+        if (state == ST_ERROR) { si_icon(SI_CLOSE, cx, cy, r * 2, si_mix(0x00060910u, SI_RED, 170)); si_text_c(L.vx, cy + r + 10, L.vw, 22, msg[0] ? msg : "No se pudo abrir el archivo", 13, 0x00FDA4AFu, 1); }
+        else if (state == ST_LOADING) { si_icon(SI_TIMER, cx, cy, r * 2, 0x0093C5FDu); si_text_c(L.vx, cy + r + 10, L.vw, 22, "Cargando...", 14, SI_DIM, 1); }
+        else if (state == ST_ENDED) {
+            fb_fill_rrect_aa(cx - r, cy - r, 2 * r, 2 * r, r, si_mix(0x00060910u, SI_GREEN, 34));
+            si_icon(SI_CHECK, cx, cy, r, si_mix(0x00060910u, SI_GREEN, 210));
+            si_text_c(L.vx, cy + r + 12, L.vw, 24, "Reproduccion terminada", 16, SI_TXT, 1);
+            si_text_c(L.vx, cy + r + 36, L.vw, 20, "Pulsa Reproducir para empezar de nuevo o elige otro archivo", 12, SI_FAINT, 0);
+        } else {
+            fb_fill_rrect_aa(cx - r, cy - r, 2 * r, 2 * r, r, si_mix(0x00060910u, ACCENT, 40));
+            si_icon(SI_PLAY, cx + r / 10, cy, r, si_mix(0x00060910u, ACCENT, 200));
+            si_text_c(L.vx, cy + r + 12, L.vw, 24, "SOMA Media", 16, SI_TXT, 1);
+            si_text_c(L.vx, cy + r + 36, L.vw, 20, nfiles ? "Elige un video o una cancion de la biblioteca" : "La biblioteca esta vacia", 12, SI_FAINT, 0);
+        }
     }
 
-    /* progreso */
-    fb_fill_rounded_rect(L.px, L.py, L.pw, 8, 3, 0x001E293B);
-    uint64_t pu = pos_us, du = dur_us;
+    /* progreso con tirador y tiempos */
+    uint64_t pu = pos_us, du = dur_us; if (pu > du && du) pu = du;
+    fb_fill_rrect_aa(L.px, L.py - 3, L.pw, 6, 3, SI_LINE);
     if (du) {
-        int fillw = (int)((uint64_t)L.pw * (pu > du ? du : pu) / du);
-        if (fillw > 0) fb_fill_rounded_rect(L.px, L.py, fillw < 6 ? 6 : fillw, 8, 3, 0x00FB7185);
+        int fx = (int)((uint64_t)L.pw * pu / du);
+        if (fx > 0) fb_fill_rrect_aa(L.px, L.py - 3, fx < 6 ? 6 : fx, 6, 3, ACCENT);
+        int kx = L.px + fx; if (kx < L.px + 7) kx = L.px + 7; if (kx > L.px + L.pw - 7) kx = L.px + L.pw - 7;
+        fb_fill_rrect_aa(kx - 7, L.py - 7, 14, 14, 7, 0x00FFFFFFu);
+        fb_fill_rrect_aa(kx - 3, L.py - 3, 6, 6, 3, ACCENT);
     }
+    { char a[16], b[16]; fmt_time(a, pu); fmt_time(b, du);
+      si_text(L.px, L.py + 10, 18, a, 12, SI_DIM, 1); si_text_r(L.px + L.pw, L.py + 10, 18, du ? b : "--:--", 12, SI_FAINT, 0); }
 
-    /* botones */
-    int bx = L.px;
-    const char *pl = state == ST_PLAYING ? "PAUSA" : "PLAY";
-    fb_fill_rounded_rect(bx, L.by, BTN_W, BTN_H, 5, 0x00BE123C); fb_draw_rounded_rect(bx, L.by, BTN_W, BTN_H, 5, 0x00FB7185);
-    font_draw_string((uint32_t)(bx + BTN_W / 2 - (int)slen(pl) * 4), (uint32_t)L.by + 9, pl, 0x00FFFFFF, 1);
-    bx += BTN_W + 8;
-    static const char *const lab[3] = { "STOP", "-10s", "+10s" };
-    for (int b = 0; b < 3; ++b) {
-        fb_fill_rounded_rect(bx, L.by, 56, BTN_H, 5, 0x001E293B); fb_draw_rounded_rect(bx, L.by, 56, BTN_H, 5, 0x0064748B);
-        font_draw_string((uint32_t)(bx + 28 - (int)slen(lab[b]) * 4), (uint32_t)L.by + 9, lab[b], 0x00F8FAFC, 1);
-        bx += 64;
+    /* controles */
+    {
+        int act = is_active(), playing = state == ST_PLAYING;
+        static const char *const lb[MB_N] = { "Detener", "Anterior", "-10 s", "", "+10 s", "Siguiente", "Recargar" };
+        static const int ic[MB_N] = { SI_STOP, SI_SKIP_PREV, SI_REWIND, SI_PLAY, SI_FFWD, SI_SKIP_NEXT, SI_RESTART };
+        for (int i = 0; i < MB_N; ++i) {
+            int cx = L.bcx[i], r = L.br[i];
+            if (cx - r < L.mx - 4 || cx + r > L.mx + L.mw + 4) continue;
+            if (i == MB_PLAY) {
+                si_round(cx, L.cy, r, playing ? SI_PAUSE : SI_PLAY, SIB_ON, ACCENT, nfiles == 0);
+                if (L.labels) si_text_c(cx - 60, L.cy + 38, 120, 16, playing ? "Pausa" : "Reproducir", 12, nfiles ? SI_TXT : SI_FAINT, 1);
+                continue;
+            }
+            int dis = (i == MB_STOP && !act) || ((i == MB_BACK || i == MB_FWD) && !act) || ((i == MB_PREV || i == MB_NEXT) && nfiles < 2);
+            si_round(cx, L.cy, r, ic[i], i == MB_RESCAN ? SIB_GHOST : SIB_NEUTRAL, ACCENT, dis);
+            if (L.labels) si_text_c(cx - 50, L.cy + 38, 100, 16, lb[i], 12, dis ? SI_FAINT : SI_DIM, 0);   /* misma linea base para todos */
+        }
     }
-    char tb[16], tb2[16]; fmt_time(tb, pu); fmt_time(tb2, du);
-    char tt[16]; uint32_t p = 0; put_str(tt, sizeof tt, &p, tb); put_str(tt, sizeof tt, &p, du ? " / " : ""); if (du) put_str(tt, sizeof tt, &p, tb2);
-    font_draw_string((uint32_t)(L.px + L.pw - (int)slen(tt) * 8), (uint32_t)L.by + 9, tt, 0x00CBD5E1, 1);
 
     /* linea de estado */
-    char sl[128]; p = 0;
-    if (msg[0]) put_str(sl, sizeof sl, &p, msg);
-    else if (state == ST_PLAYING || state == ST_PAUSED || state == ST_ENDED) {
-        put_str(sl, sizeof sl, &p, state == ST_PAUSED ? "Pausa  " : (state == ST_ENDED ? "Fin  " : ""));
-        if (!is_audio_only) { put_dec(sl, sizeof sl, &p, st_shown); put_str(sl, sizeof sl, &p, " fotogramas, "); put_dec(sl, sizeof sl, &p, st_dropped); put_str(sl, sizeof sl, &p, " saltados, retraso max "); put_dec(sl, sizeof sl, &p, st_late_ms); put_str(sl, sizeof sl, &p, " ms"); }
-        else { put_str(sl, sizeof sl, &p, "audio "); put_dec(sl, sizeof sl, &p, a_rate); put_str(sl, sizeof sl, &p, " Hz"); }
-        put_str(sl, sizeof sl, &p, ", huecos de audio "); put_dec(sl, sizeof sl, &p, st_gaps);
-    } else put_str(sl, sizeof sl, &p, "Elige un archivo de la biblioteca (clic) y pulsa PLAY. Teclas: espacio, s, ',' '.', n, p");
-    uint32_t maxc = (ww - 16) / 8; if (p > maxc) sl[maxc] = 0;
-    font_draw_string((uint32_t)L.px, (uint32_t)L.status_y, sl, msg[0] && state == ST_ERROR ? 0x00F87171 : 0x0094A3B8, 1);
+    {
+        char sl[128]; uint32_t p = 0; uint32_t col = SI_FAINT;
+        if (msg[0]) { put_str(sl, sizeof sl, &p, msg); col = state == ST_ERROR ? 0x00FDA4AFu : SI_DIM; }
+        else if (state == ST_PLAYING || state == ST_PAUSED || state == ST_ENDED) {
+            if (!is_audio_only) { put_dec(sl, sizeof sl, &p, st_shown); put_str(sl, sizeof sl, &p, " fotogramas  -  "); put_dec(sl, sizeof sl, &p, st_dropped); put_str(sl, sizeof sl, &p, " saltados  -  retraso max "); put_dec(sl, sizeof sl, &p, st_late_ms); put_str(sl, sizeof sl, &p, " ms  -  "); }
+            put_str(sl, sizeof sl, &p, "huecos de audio "); put_dec(sl, sizeof sl, &p, st_gaps);
+        } else put_str(sl, sizeof sl, &p, "Espacio reproducir/pausa  -  S detener  -  , y . saltar 10 s  -  N / P siguiente y anterior");
+        fb_fill_rect((uint32_t)L.mx, (uint32_t)(L.status_y - 6), (uint32_t)L.mw, 1, SI_LINE);
+        si_text_fit(L.mx, L.status_y, 22, sl, L.mw, 11, col, 0);
+    }
+    fb_reset_clip();
 }
 
 static int inside(int32_t x, int32_t y, int rx, int ry, int rw, int rh) { return x >= rx && x < rx + rw && y >= ry && y < ry + rh; }
+static int in_round(int32_t x, int32_t y, int cx, int cy, int r) { int dx = x - cx, dy = y - cy; r += 4; return dx * dx + dy * dy <= r * r; }
 
 int media_handle_click(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh)
 {
     struct lay L; make_layout(wx, wy, ww, wh, &L);
-    if (L.lw && inside(mx, my, L.lx, L.ly + 28, L.lw, L.lh - 28)) {
-        int i = list_scroll + (my - (L.ly + 30)) / 20;
-        if (my >= L.ly + 28 && i >= 0 && i < nfiles) {
-            sel = i;
-            media_play(files[i].path);
+    if (L.lw && inside(mx, my, L.lx, L.row_y, L.lw, L.rows * ROW_H)) {
+        int i = list_scroll + (my - L.row_y) / ROW_H;
+        if (i >= 0 && i < nfiles) { sel = i; media_play(files[i].path); }
+        return 0;
+    }
+    for (int i = 0; i < MB_N; ++i) {
+        if (L.bcx[i] - L.br[i] < L.mx - 4 || L.bcx[i] + L.br[i] > L.mx + L.mw + 4) continue;
+        if (!in_round(mx, my, L.bcx[i], L.cy, L.br[i])) continue;
+        switch (i) {
+        case MB_PLAY:
+            if (state == ST_PLAYING || state == ST_PAUSED) media_pause_toggle();
+            else if (nfiles) media_play(files[sel].path);
+            break;
+        case MB_STOP: media_stop(); break;
+        case MB_BACK: media_seek_rel(-10); break;
+        case MB_FWD:  media_seek_rel(10); break;
+        case MB_PREV: if (nfiles) { sel = (sel + nfiles - 1) % nfiles; media_play(files[sel].path); } break;
+        case MB_NEXT: if (nfiles) { sel = (sel + 1) % nfiles; media_play(files[sel].path); } break;
+        case MB_RESCAN: rescan(); break;
         }
         return 0;
     }
-    int bx = L.px;
-    if (inside(mx, my, bx, L.by, BTN_W, BTN_H)) {
-        if (state == ST_PLAYING || state == ST_PAUSED) media_pause_toggle();
-        else if (nfiles) media_play(files[sel].path);
-        return 0;
-    }
-    bx += BTN_W + 8;
-    if (inside(mx, my, bx, L.by, 56, BTN_H)) { media_stop(); return 0; }
-    bx += 64;
-    if (inside(mx, my, bx, L.by, 56, BTN_H)) { media_seek_rel(-10); return 0; }
-    bx += 64;
-    if (inside(mx, my, bx, L.by, 56, BTN_H)) { media_seek_rel(10); return 0; }
-    if (dur_us && inside(mx, my, L.px, L.py - 6, L.pw, 20)) {
+    if (dur_us && inside(mx, my, L.px, L.py - 10, L.pw, 20)) {
         uint64_t t = dur_us * (uint64_t)(mx - L.px) / (uint64_t)L.pw;
         if (thread_alive) cmd_seek_us = (int64_t)t;
         return 0;
