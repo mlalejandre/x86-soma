@@ -355,6 +355,18 @@ static void her_draw_user_zone(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
             her_draw_cell((int32_t)(tx + k * 9u), (int32_t)ty,
                           cell, 0x00475569u, 1);
         }
+        {   /* SOMA_256: aviso de que Esc detiene lo que esta en marcha */
+            const char *hs = 0;
+#if defined(__x86_64__)
+            if (voz_speaking()) hs = "Esc detiene la lectura en voz alta";
+#endif
+            if (!hs && her_agent_busy) hs = "Esc detiene la mision";
+            if (hs) {
+                uint32_t hn = 0; while (hs[hn]) hn++;
+                uint32_t hx = (cur_w > hn * 9u) ? (cur_w - hn * 9u) / 2u : 0u;
+                for (uint32_t k = 0; k < hn; ++k) her_draw_cell((int32_t)(hx + k * 9u), (int32_t)(ty + 14u), (uint16_t)(uint8_t)hs[k], 0x00334155u, 1);
+            }
+        }
     } else if (current_app == APP_DESKTOP && !her_vortex_closing) {
         /* Prompt interactivo listo para escribir al agente */
         uint32_t ty = (orb_cy > 170u) ? orb_cy - 146u : 20u;
@@ -379,6 +391,7 @@ static void her_draw_user_zone(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
 static void her_draw_agent_zone(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
 {
     if (her_icons_visible || her_text_suppressed_by_dock) return;
+    if (her_pr_dibuja(cur_w, cur_h, orb_cy)) return;   /* SOMA_259_ORBE: prompter con formato y barra de fases (src/ui/gui_prompter.c) */
     her_bufs_ensure();
     if (her_ans_len == 0 && her_thk_len == 0) return;
     if (cur_w < 200u) return;

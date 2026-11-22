@@ -46,4 +46,18 @@ void llm_trace_tag(const char *tag);
 /* Suite de verificacion HTTP + LLM. */
 void net_run_llm_test(void);
 
+/* SOMA_260_LLM_TAM: tamanos del dialogo con el modelo (/etc/llm_limites.conf, orden llm-limites). src/agent/llm_limites.inc */
+#define LLM_TAM_CONTEXTO_MIN 4096u
+#define LLM_TAM_CONTEXTO_MAX 4000000u
+#define LLM_TAM_SALIDA_MAX 65536u
+struct llm_tam {
+    uint32_t contexto, salida, salida_fijada;          /* lo que elige el usuario (contexto 0 = como antes) */
+    uint32_t prompt, historial, herramienta, paso;     /* agente: prompt, historial de pasos, salida de una orden, lo que ve de ella */
+    uint32_t directa, texto, http, peticion;           /* respuesta directa (prompt), texto de una respuesta, cuerpo HTTP, peticion */
+};
+const struct llm_tam *llm_tam(void);
+void llm_tam_calcula(struct llm_tam *t);
+int  llm_tam_fija(uint32_t contexto, uint32_t salida);  /* 0 = guardado */
+extern int llm_recortada;                               /* la ultima respuesta no cabia y se recorto (con aviso al final) */
+
 #endif

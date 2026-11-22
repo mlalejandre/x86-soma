@@ -233,6 +233,12 @@ void si_icon(int icon, int32_t cx, int32_t cy, int32_t size, uint32_t rgb)
     case SI_LOOP:   { static const int8_t a[] = { 38, 7, 44, 13, 38, 19 }, b[] = { 10, 29, 4, 35, 10, 41 };
                       L(9, 24, 9, 17); L(9, 17, 16, 13); L(16, 13, 39, 13); P(a, 3); L(39, 24, 39, 31); L(39, 31, 32, 35); L(32, 35, 9, 35); P(b, 3); break; }
     case SI_TERMINAL: B(4, 7, 44, 41, 5, 0); L(12, 17, 19, 24); L(19, 24, 12, 31); L(23, 32, 34, 32); break;
+    /* SOMA_254 */
+    case SI_SPARK:  { static const int8_t g[] = { 22, 5, 26, 19, 40, 23, 26, 27, 22, 41, 18, 27, 4, 23, 18, 19 }; P(g, 8); L(39, 5, 39, 13); L(35, 9, 43, 9); break; }
+    case SI_SEND:   L(5, 22, 43, 5); L(43, 5, 31, 43); L(31, 43, 22, 28); L(22, 28, 5, 22); L(22, 28, 43, 5); break;
+    /* SOMA_255 */
+    case SI_CUT:    O(14, 36, 6, M_FULL); O(34, 36, 6, M_FULL); L(18, 31, 36, 6); L(30, 31, 12, 6); break;
+    case SI_PASTE:  B(8, 10, 40, 43, 5, 0); B(17, 5, 31, 14, 3, 0); L(16, 26, 32, 26); L(16, 34, 28, 34); break;
     default: break;
     }
 }

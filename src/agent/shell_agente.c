@@ -35,6 +35,10 @@ static int cmd_mayordomo(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* SOMA_253_LCM: orden 'lcm' (el traductor vive en agent.c) */
+int lcm_cmd(const char *args, char *out, uint32_t max);
+static int cmd_lcm(const char *args, char *out_buf, uint32_t max_out) { return lcm_cmd(args ? args : "", out_buf, max_out); }
+
 static int cmd_agent(const char *args, char *out_buf, uint32_t max_out)
 {
     (void)out_buf; (void)max_out;
@@ -77,13 +81,14 @@ static int cmd_llm(const char *args, char *out_buf, uint32_t max_out)
         kprint("Uso: llm <mensaje>\n");
         return 1;
     }
-    char *reply = (char *)kmalloc(16384);
+    uint32_t rcap = llm_tam()->texto;                    /* SOMA_260_LLM_TAM: antes 16 KB */
+    char *reply = (char *)kmalloc(rcap);
     if (!reply) {
         kprint("llm: sin memoria.\n");
         return 1;
     }
     kprint("Consultando a nail-35b...\n");
-    if (llm_chat(args, reply, 16384, 35000)) {
+    if (llm_chat(args, reply, rcap, 35000)) {
         kprint("\n[nail-35b]: "); kprint(reply); kprint("\n\n");
         uint32_t pos = 0; soma_str_put(out_buf, max_out, &pos, reply);
     } else {

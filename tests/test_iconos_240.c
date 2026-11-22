@@ -79,9 +79,9 @@ int main(void)
     /* los nuevos del parche 240: reproductor y editor */
     static const int nuevos[] = { SI_MUSIC, SI_FILM, SI_REWIND, SI_FFWD, SI_SKIP_PREV, SI_SKIP_NEXT, SI_LIST, SI_CODE, SI_UNDO, SI_REDO,
         SI_SEARCH, SI_REPLACE, SI_GOTO, SI_COMMENT, SI_FILE, SI_FILE_CODE, SI_DISK, SI_EDIT, SI_GRID, SI_COPY, SI_CLOSE, SI_SPEAKER_OFF,
-        SI_LOOP, SI_TERMINAL };
-    CHECK(sizeof nuevos / sizeof nuevos[0] == 24, "24 iconos nuevos");
-    CHECK(nuevos[23] == SI_COUNT - 1, "SI_TERMINAL es el ultimo");
+        SI_LOOP, SI_TERMINAL, SI_SPARK, SI_SEND, SI_CUT, SI_PASTE };
+    CHECK(sizeof nuevos / sizeof nuevos[0] == 28, "24 iconos nuevos de SOMA_240, 2 de SOMA_254 y 2 de SOMA_255");
+    CHECK(nuevos[27] == SI_COUNT - 1 && nuevos[23] == SI_TERMINAL, "SI_PASTE es el ultimo");
     /* simetria esperada: avanzar y retroceder son espejo uno del otro (mismo numero de pixeles) */
     int l1, l2;
     draw(SI_REWIND, 48, &l1, &a, &b, &c, &d); draw(SI_FFWD, 48, &l2, &a, &b, &c, &d);

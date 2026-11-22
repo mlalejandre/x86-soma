@@ -37,6 +37,10 @@ src/core/wpa.c
 src/core/ccmp.c
 src/agent/agent_policy.h
 src/agent/agent.c
+src/agent/lcm_ordenes.inc   # SOMA_253_LCM
+src/agent/lcm_ordenes_pesos.inc   # SOMA_253_LCM
+src/agent/lcm_soma.inc   # SOMA_257_LCM
+src/agent/lcm_ordenes_shell.inc   # SOMA_258_LCM
 src/agent/shell.c
 src/net/net.c
 src/net/httpd.c

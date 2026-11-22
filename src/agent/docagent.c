@@ -235,6 +235,11 @@ void docagent_slug(const char *t, char *out, int max)
 #define REPLY_MAX   (160u * 1024u)
 #define DIR_DOCS    "/workspace/docs/"
 #define LLM_TIMEOUT 300000u
+/* SOMA_262_PUBLICAR: con llm-limites, el prompt y las notas crecen con el contexto y la respuesta con la salida. Sin
+ * configurar nada, los tamanos de antes (8 KB, 3000 caracteres, 160 KB). g_rmax se fija al pedir la memoria. */
+static uint32_t g_rmax = REPLY_MAX;
+static uint32_t doc_rmax(void) { uint32_t t = llm_tam()->texto; return t > REPLY_MAX ? t : REPLY_MAX; }
+static uint32_t doc_pmax(void) { const struct llm_tam *t = llm_tam(); return t->contexto && t->directa > 8192u ? t->directa : 8192u; }
 
 static void (*g_prog)(const char *);
 void docagent_set_progress(void (*cb)(const char *msg)) { g_prog = cb; }
@@ -355,7 +360,7 @@ static int review_round(const char *mission, char *doc, uint32_t *dlen_, int *is
     char m[64]; uint32_t q = 0; put(m, sizeof m, &q, s.n ? "Revisando las paginas con vision (ronda " : "Revisando la maquetacion (ronda "); putn(m, sizeof m, &q, round); put(m, sizeof m, &q, ")...");
     prog(m);
     llm_trace_tag("documento/revision");
-    int ok = llm_chat_ex(SYS_REVIEW, prompt, im, s.n, 16000, reply, REPLY_MAX, LLM_TIMEOUT);
+    int ok = llm_chat_ex(SYS_REVIEW, prompt, im, s.n, 16000, reply, g_rmax, LLM_TIMEOUT);
     if (ok == -2 && s.n) {                                          /* el modelo no ve imagenes: misma revision sin ellas */
         prog("El modelo no admite imagenes: reviso solo con el informe de la maquetacion");
         p = 0; put(prompt, cap, &p, "");                           /* se reconstruye sin la frase de las paginas */
@@ -363,7 +368,7 @@ static int review_round(const char *mission, char *doc, uint32_t *dlen_, int *is
         put(prompt, cap, &p, "\n\nMAQUETACION: "); putn(prompt, cap, &p, np); put(prompt, cap, &p, " paginas.\n");
         put(prompt, cap, &p, nchk ? "INFORME AUTOMATICO:\n" : "INFORME AUTOMATICO: sin problemas medibles.\n"); if (nchk) put(prompt, cap, &p, chk);
         put(prompt, cap, &p, "\n(No puedes ver las paginas: juzga por el informe y el codigo.)\n\nDOCUMENTO:\n"); put(prompt, cap, &p, doc);
-        ok = llm_chat_ex(SYS_REVIEW, prompt, 0, 0, 16000, reply, REPLY_MAX, LLM_TIMEOUT);
+        ok = llm_chat_ex(SYS_REVIEW, prompt, 0, 0, 16000, reply, g_rmax, LLM_TIMEOUT);
     }
     shots_free(&s);
     kfree(prompt);
@@ -482,24 +487,26 @@ int docagent_run(const char *mission, char *out, uint32_t max, char *path_out, u
     uint32_t op = 0; if (max) out[0] = 0;
     if (path_out && path_max) path_out[0] = 0;
     int ki = kind_index(mission);
-    char *reply = (char *)kmalloc(REPLY_MAX);
+    g_rmax = doc_rmax(); const uint32_t PM = doc_pmax();              /* SOMA_262_PUBLICAR */
+    char *reply = (char *)kmalloc(g_rmax);
     char *doc = (char *)kmalloc(DOC_MAX);
-    char *prompt = (char *)kmalloc(8192);
+    char *prompt = (char *)kmalloc(PM);
     static char log[6144]; uint32_t lp = 0; log[0] = 0;
     if (!reply || !doc || !prompt) { put(out, max, &op, "Sin memoria para el maquetador"); goto fin0; }
     {
         char hoy[48]; today(hoy, sizeof hoy);
         uint32_t p = 0;
-        put(prompt, 8192, &p, "PETICION DEL USUARIO:\n"); put(prompt, 8192, &p, mission);
-        put(prompt, 8192, &p, "\n\nTIPO DE DOCUMENTO Y RECETA: "); put(prompt, 8192, &p, KINDS[ki].recipe);
-        if (hoy[0]) { put(prompt, 8192, &p, "\n\nFECHA DE HOY: "); put(prompt, 8192, &p, hoy); }
+        put(prompt, PM, &p, "PETICION DEL USUARIO:\n"); put(prompt, PM, &p, mission);
+        put(prompt, PM, &p, "\n\nTIPO DE DOCUMENTO Y RECETA: "); put(prompt, PM, &p, KINDS[ki].recipe);
+        if (hoy[0]) { put(prompt, PM, &p, "\n\nFECHA DE HOY: "); put(prompt, PM, &p, hoy); }
         extern int agent_in_delegation(void);
         { uint32_t bn = 0; char *bb = agent_in_delegation() ? vfs_read_alloc("/agent/blackboard.txt", &bn) : 0;   /* notas del buscador (solo si se lo delego) SOMA_251 */
-          if (bb) { if (bn > 3000) bb[3000] = 0; put(prompt, 8192, &p, "\n\nNOTAS DE INVESTIGACION (usalas si vienen al caso; no copies basura):\n"); put(prompt, 8192, &p, bb); kfree(bb); } }
-        put(prompt, 8192, &p, "\n\nEscribe ahora el documento completo.");
+          if (bb) { uint32_t nmax = PM > 8192u ? PM / 3u : 3000u; if (bn > nmax) bb[nmax] = 0;   /* SOMA_262_PUBLICAR: antes 3000 siempre */
+                    put(prompt, PM, &p, "\n\nNOTAS DE INVESTIGACION (usalas si vienen al caso; no copies basura):\n"); put(prompt, PM, &p, bb); kfree(bb); } }
+        put(prompt, PM, &p, "\n\nEscribe ahora el documento completo.");
         prog("Redactando y maquetando el documento...");
         llm_trace_tag("documento/redaccion");
-        int ok = llm_chat_ex(SYS_DOC, prompt, 0, 0, 16000, reply, REPLY_MAX, LLM_TIMEOUT);
+        int ok = llm_chat_ex(SYS_DOC, prompt, 0, 0, 16000, reply, g_rmax, LLM_TIMEOUT);
         if (ok != 1) { put(out, max, &op, "El modelo no ha respondido: "); put(out, max, &op, llm_last_error); goto fin0; }
     }
     int is_tex = 0;
@@ -545,7 +552,8 @@ int docagent_review(const char *path, const char *wishes, char *out, uint32_t ma
     uint32_t op = 0; if (max) out[0] = 0;
     uint32_t n = 0; char *src = vfs_read_alloc(path, &n);
     if (!src) { put(out, max, &op, "No encuentro "); put(out, max, &op, path); return 0; }
-    char *doc = (char *)kmalloc(DOC_MAX), *reply = (char *)kmalloc(REPLY_MAX);
+    g_rmax = doc_rmax();                                             /* SOMA_262_PUBLICAR */
+    char *doc = (char *)kmalloc(DOC_MAX), *reply = (char *)kmalloc(g_rmax);
     if (!doc || !reply || n + 1 > DOC_MAX) { put(out, max, &op, n + 1 > DOC_MAX ? "Documento demasiado grande para revisarlo" : "Sin memoria"); goto fin; }
     for (uint32_t i = 0; i < n; i++) doc[i] = src[i];
     doc[n] = 0;

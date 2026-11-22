@@ -462,6 +462,7 @@ int voz_voice_install(char *msg, uint32_t cap)
 }
 
 /* Lee el texto en voz alta (sincrono). Con out, la salida del programa va ahi; sin out, a la consola. */
+static volatile int g_sp_cancel, g_sp_proc;                /* SOMA_256: parar durante la preparacion / el proceso de lectura esta en marcha */
 int voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap)
 {
     uint32_t p = 0;
@@ -496,8 +497,12 @@ int voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap)
     if (g_tts.hablante > 0 && g_tts.hablante < voz_voice_speakers(voice)) { sput(args, sizeof args, &q, " -S "); sdec(args, sizeof args, &q, (uint64_t)g_tts.hablante); }
     sput(args, sizeof args, &q, " /voz/leer.txt");
     if (q + 2 >= sizeof args) { if (out) sput(out, cap, &p, "[habla] el nombre de la voz es demasiado largo\n"); return -3; }
+    if (g_sp_cancel) { g_sp_cancel = 0; if (out) sput(out, cap, &p, "[habla] detenido\n"); return -4; }   /* SOMA_256: paro antes de que empezara */
     int64_t code = 0;
-    return run_proc(args, heap_mib, out, cap, &code);
+    g_sp_proc = 1;
+    int rr = run_proc(args, heap_mib, out, cap, &code);
+    g_sp_proc = 0; g_sp_cancel = 0;
+    return rr;
 }
 
 static char g_sp_out[2048];
@@ -518,6 +523,7 @@ static void speak_thread(void *arg)
         if (!g_sp_msg[0]) { uint32_t k = 0; sput(g_sp_msg, sizeof g_sp_msg, &k, "No se pudo leer el texto"); }
     }
     if (g_sp_text) { kfree(g_sp_text); g_sp_text = 0; }
+    g_sp_cancel = 0;
     g_sp_state = 0; g_sp_ver++;
 }
 
@@ -530,12 +536,13 @@ int voz_speak_start(const char *text, uint32_t len)
     if (!t) return -12;
     for (uint32_t i = 0; i < len; ++i) t[i] = text[i];
     t[len] = 0;
-    g_sp_text = t; g_sp_len = len; g_sp_msg[0] = 0;
+    g_sp_text = t; g_sp_len = len; g_sp_msg[0] = 0; g_sp_cancel = 0;
     g_sp_state = 1; g_sp_ver++;
     if (!thread_create("habla", speak_thread, 0)) { kfree(t); g_sp_text = 0; g_sp_state = 0; g_sp_ver++; return -11; }
     return 0;
 }
-void voz_speak_stop(void) { if (g_sp_state) voz_stop(); }
+void voz_speak_stop(void) { if (g_sp_state || g_sp_proc) { g_sp_cancel = 1; voz_stop(); } }   /* SOMA_256: tambien durante la preparacion y la orden habla */
+int voz_speaking(void) { return g_sp_state || g_sp_proc; }
 int voz_speak_state(void) { return g_sp_state; }
 uint32_t voz_speak_ver(void) { return g_sp_ver; }
 const char *voz_speak_msg(void) { return g_sp_msg; }

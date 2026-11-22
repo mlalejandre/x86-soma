@@ -45,7 +45,8 @@ GRUB_FILE = i686-elf-grub-file
 endif
 endif
 ifdef SOMA_MAC_NO_TOOLCHAIN
-ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
+# SOMA_263_ARREGLO: + pruebas-lcm (pruebas del anfitrion: no necesitan el compilador cruzado; make test la llama)
+ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
 $(error macOS: el compilador del sistema (Apple clang) no puede generar el nucleo x86_64. Opcion 1: brew install x86_64-elf-gcc x86_64-elf-binutils x86_64-elf-grub xorriso  (y repetir make). Opcion 2 (solo Docker): make docker-make ARCH=$(ARCH) PLATFORM=$(PLATFORM) EXTRA_CFLAGS='$(EXTRA_CFLAGS)')
 endif
 endif
@@ -232,6 +233,29 @@ $(BUILD)/user/python.elf: $(PY_SRCS) $(PY_LIBM) src/user/python.c src/user/pytho
 	set -e; for f in $(PY_LIBM); do $(CC) $(PY_CFLAGS) -w -I$(PY_DIR)/libm_dbl/include -c $$f -o $(BUILD)/user/python/m_$$(basename $$f .c).o; done
 	$(CC) $(PY_CFLAGS) -c src/user/python.c -o $(BUILD)/user/python/soma_python.o
 	$(CC) $(PY_CFLAGS) -Wl,-T,src/user/user.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax $(BUILD)/user/python/*.o -lgcc -o $@
+# SOMA_252_VIDEO_NATIVO: reproductor de video nativo (MP4: H.264 + AAC) como proceso de ring 3. Decodificadores de terceros con
+# licencia Apache 2.0: third_party/libavc (H.264, el de Android) y third_party/libxaac (AAC). Va dentro del nucleo (vplay_sys.c).
+VP_AVC = third_party/libavc
+VP_XAAC = third_party/libxaac
+VP_AVC_SRCS = $(wildcard $(VP_AVC)/common/*.c) $(wildcard $(VP_AVC)/decoder/*.c)
+VP_XAAC_SRCS = $(wildcard $(VP_XAAC)/common/*.c) $(wildcard $(VP_XAAC)/decoder/*.c) $(wildcard $(VP_XAAC)/decoder/drc_src/*.c) $(wildcard $(VP_XAAC)/decoder/generic/*.c)
+VP_CFLAGS = $(filter-out -mgeneral-regs-only -Isrc/core -Wall -Wextra,$(USER_CFLAGS)) -msse2 -mfpmath=sse -fno-math-errno -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -DNDEBUG
+VP_AVC_INC = -I$(VP_AVC)/common -I$(VP_AVC)/decoder -DX86
+VP_XAAC_INC = -I$(VP_XAAC)/common -I$(VP_XAAC)/decoder -I$(VP_XAAC)/decoder/drc_src
+$(BUILD)/user/vplay.elf: $(VP_AVC_SRCS) $(VP_XAAC_SRCS) $(wildcard $(VP_AVC)/*/*.h) $(wildcard $(VP_XAAC)/*/*.h) $(wildcard $(VP_XAAC)/decoder/*/*.h) $(wildcard src/user/vplay/*) \
+		src/user/ulib.h src/user/user.ld $(PY_LIBM) | $(BUILD)
+	rm -rf $(BUILD)/user/vplay && mkdir -p $(BUILD)/user/vplay
+	set -e; for f in $(VP_AVC_SRCS); do $(CC) $(VP_CFLAGS) $(VP_AVC_INC) -w -c $$f -o $(BUILD)/user/vplay/avc_$$(basename $$f .c).o; done
+	set -e; for f in $(VP_XAAC_SRCS); do $(CC) $(VP_CFLAGS) $(VP_XAAC_INC) -w -c $$f -o $(BUILD)/user/vplay/xa_$$(basename $$f .c).o; done
+	set -e; for f in $(PY_LIBM); do $(CC) $(VP_CFLAGS) -w -I$(PY_DIR)/libm_dbl/include -c $$f -o $(BUILD)/user/vplay/m_$$(basename $$f .c).o; done
+	$(CC) $(VP_CFLAGS) -Wall -Wextra $(VP_AVC_INC) -c src/user/vplay/vp_vdec.c -o $(BUILD)/user/vplay/vp_vdec.o
+	$(CC) $(VP_CFLAGS) -Wall -Wextra $(VP_XAAC_INC) -c src/user/vplay/vp_adec.c -o $(BUILD)/user/vplay/vp_adec.o
+	$(CC) $(VP_CFLAGS) -Wall -Wextra -Werror -c src/user/vplay/vp_core.c -o $(BUILD)/user/vplay/vp_core.o
+	$(CC) $(VP_CFLAGS) -Wall -Wextra -Werror -fno-builtin -c src/user/vplay/vp_libc.c -o $(BUILD)/user/vplay/vp_libc.o
+	$(CC) $(VP_CFLAGS) -Wl,-T,src/user/user.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax $(BUILD)/user/vplay/*.o -lgcc -o $@
+$(BUILD)/vplayprog.o: $(BUILD)/user/vplay.elf
+	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../vplayprog.o vplay.elf
+OBJS_ARCH += $(BUILD)/vplayprog.o $(BUILD)/vplay_sys.o
 $(BUILD)/pyprog.o: $(BUILD)/user/python.elf
 	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../pyprog.o python.elf
 OBJS_ARCH += $(BUILD)/pyprog.o
@@ -279,6 +303,7 @@ endif
 OBJS_CORE += $(BUILD)/elf.o $(BUILD)/audio.o $(BUILD)/wav.o $(BUILD)/audio_sys.o $(BUILD)/micrec.o $(BUILD)/uvc.o $(BUILD)/avi_wr.o $(BUILD)/camera.o $(BUILD)/jpeg_enc.o $(BUILD)/scrcap_dsp.o $(BUILD)/scrcap.o
 # SOMA_PARCHE_023_MEDIA: reproductor multimedia de la GUI
 OBJS_CORE += $(BUILD)/avi.o $(BUILD)/media.o      # PARCHE 139: jpeg.o solo en aarch64 (en x86_64 vive en imgdec.elf)
+OBJS_CORE += $(BUILD)/yt_https.o   # SOMA_252_VIDEO_NATIVO: cliente HTTPS que lee el video segun llega
 OBJS_CORE += $(BUILD)/youtube.o                   # SOMA_250_YOUTUBE: aplicacion YouTube (el video lo convierte tools/yt_service.py)
 # SOMA_PARCHE_024_TERM: emulador de terminal de la GUI
 OBJS_CORE += $(BUILD)/term_core.o $(BUILD)/term_ui.o
@@ -376,8 +401,13 @@ $(BUILD)/%.o: src/apps/%.c $(HEADERS) | $(BUILD)
 $(BUILD)/%.o: src/lang/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/gui.o: src/ui/gui_vortice.c src/ui/gui_cosmos.c src/ui/gui_iconos.c src/ui/gui_ventanas.c src/ui/gui_agente.c src/ui/gui_orbe_fx.c src/ui/gui_fotograma.c src/ui/gui_minimizar.c src/ui/gui_lang.c src/ui/gui_abrir.c src/ui/gui_orbe_frente.c   # SOMA_234_GUI_PARTIDO: gui.c los incluye
+$(BUILD)/youtube.o: src/apps/youtube_ia.c src/apps/youtube_nativo.c src/apps/yt_proto.h src/apps/yt_inner.h src/user/vplay/vp_abi.h   # youtube.c incluye la parte de IA (251) y la nativa (253)
+$(BUILD)/gui.o: src/ui/gui_vortice.c src/ui/gui_cosmos.c src/ui/gui_iconos.c src/ui/gui_ventanas.c src/ui/gui_agente.c src/ui/gui_orbe_fx.c src/ui/gui_fotograma.c src/ui/gui_minimizar.c src/ui/gui_lang.c src/ui/gui_abrir.c src/ui/gui_orbe_frente.c src/ui/gui_prompter.c   # SOMA_234_GUI_PARTIDO: gui.c los incluye (SOMA_259_ORBE: + gui_prompter.c)
 $(BUILD)/shell.o: $(wildcard src/agent/shell_*.c)    # SOMA_233_SHELL_PARTIDO: shell.c incluye sus ordenes por temas
+$(BUILD)/agent.o: $(wildcard src/agent/lcm_*.inc)    # SOMA_257_LCM: agent.c incluye el LCM (modelo y pegamento en .inc)
+$(BUILD)/shell.o: src/agent/lcm_ordenes_shell.inc    # SOMA_258_LCM: shell.c incluye cerrar y contiene
+$(BUILD)/shell.o: src/agent/llm_limites_shell.inc    # SOMA_260_LLM_TAM
+$(BUILD)/llm.o: src/agent/llm_limites.inc            # SOMA_260_LLM_TAM
 $(BUILD)/%.o: src/agent/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -486,6 +516,7 @@ fuzz-hw:
 
 test:
 	$(MAKE) browser-boundary-test
+	$(MAKE) pruebas-lcm   # SOMA_262_PUBLICAR
 	@mkdir -p build/tests
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_lexer.c src/lang/lexer.c -o build/tests/test_lexer
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_sbuf.c -o build/tests/test_sbuf
@@ -532,6 +563,9 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_avi.c src/core/avi.c -o build/tests/test_avi
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_termcore.c src/apps/term_core.c -o build/tests/test_termcore
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_youtube_250.c -o build/tests/test_youtube_250   # SOMA_250_YOUTUBE
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_youtube_ia_251.c -o build/tests/test_youtube_ia_251   # SOMA_251_YOUTUBE_IA
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_mp4_252.c -o build/tests/test_mp4_252   # SOMA_252_VIDEO_NATIVO
+	$(HOST_CC) $(TEST_CFLAGS) -DYT_HTTPS_PURE_ONLY tests/test_yt_inner_252.c src/apps/yt_https.c -o build/tests/test_yt_inner_252
 	./build/tests/test_lexer
 	./build/tests/test_sbuf
 	./build/tests/test_lang
@@ -683,6 +717,11 @@ test:
 	./build/tests/test_youtube_250
 	$(HOST_CC) -O2 -Wall -Wextra -Isrc/core tests/avicheck_250.c src/core/avi.c src/core/jpeg.c -o build/tests/avicheck_250
 	python3 tests/test_yt_service_250.py build/tests/avicheck_250
+	./build/tests/test_youtube_ia_251
+	python3 tests/test_yt_service_251.py
+	./build/tests/test_mp4_252
+	./build/tests/test_yt_inner_252
+	HOST_CC="$(HOST_CC)" python3 tests/test_vplay_252.py
 	python3 tests/test_wavcheck.py
 	python3 tests/test_fpcheck.py
 	python3 tests/test_srcfs_pack.py
@@ -780,3 +819,21 @@ browser-boundary-test:
 	./build/tests/test_browser_boundary_0
 	$(HOST_CC) -std=gnu11 -O1 -Wall -Wextra -Werror -DSOMA_BROWSER_NET_TEST=1 -DSOMA_BROWSER_NET_RING3=1 -Isrc -Isrc/core -Isrc/apps tests/test_browser_boundary.c -o build/tests/test_browser_boundary_1
 	./build/tests/test_browser_boundary_1
+
+# SOMA_262_PUBLICAR: pruebas en el anfitrion del LCM (253-258), el orbe (259) y los tamanos del LLM (260). Unos segundos y sin
+# Docker; las pasa subir_github.py antes de subir y forman parte de make test (y de la CI).
+LCM_TEST_CFLAGS = -std=gnu11 -g -Wall -Wextra -Wno-unused-function -fsanitize=address,undefined -fno-sanitize-recover=undefined $(if $(filter 1,$(STRICT)),-Werror)
+pruebas-lcm:
+	@mkdir -p build/tests
+	$(HOST_CC) $(LCM_TEST_CFLAGS) -O2 -Isrc/agent tests/test_lcm_ordenes_253.c -o build/tests/test_lcm_ordenes_253
+	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_lcm_257.c -o build/tests/test_lcm_257
+	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_lcm_258_ordenes.c -o build/tests/test_lcm_258_ordenes
+	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/ui tests/test_orbe_259.c -o build/tests/test_orbe_259
+	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_llm_tam_260.c -o build/tests/test_llm_tam_260
+	$(HOST_CC) -ffreestanding -mgeneral-regs-only -O2 -Wall -Wextra -Werror -Wno-unused-function -Isrc/agent -c tests/test_lcm_257_nucleo.c -o build/tests/lcm_nucleo_257.o
+	$(HOST_CC) -ffreestanding -mgeneral-regs-only -O2 -Wall -Wextra -Werror -Wno-unused-function -Isrc/ui -Isrc/apps -c tests/test_orbe_259_nucleo.c -o build/tests/orbe_nucleo_259.o
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_lcm_ordenes_253
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_lcm_257
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_lcm_258_ordenes
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_orbe_259
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_llm_tam_260

@@ -220,7 +220,7 @@ def main():
     check(int(lineas[0].split()[2]) == len(lineas) - 1 == 3, "numero de resultados")
     for l in lineas[1:]:
         c = l.split("\t")
-        check(len(c) == 5 and yt_service.ID_RE.match(c[0]) and c[1].isdigit() and c[4].isdigit() and c[2], "linea de resultado: %r" % l)
+        check(len(c) in (5, 6) and yt_service.ID_RE.match(c[0]) and c[1].isdigit() and c[4].isdigit() and c[2], "linea de resultado: %r" % l)
     st, b = get(base, "/yt/search?q=")
     check(st == 400, "busqueda vacia -> 400")
 

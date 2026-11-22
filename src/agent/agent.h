@@ -21,6 +21,7 @@ int delegate_cmd(const char *args, char *out_buf, uint32_t max_out);
 extern char agent_resume_mission[512];
 extern char agent_resume_name[32];
 extern int  agent_resume_pending;
-extern char agent_last_response[8192];
+#define AGENT_RESP_MAX (384u * 1024u)                /* SOMA_260_LLM_TAM: antes 8 KB (unos 2000 tokens) */
+extern char agent_last_response[AGENT_RESP_MAX];
 
 #endif

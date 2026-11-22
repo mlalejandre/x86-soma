@@ -295,7 +295,8 @@ __attribute__((unused)) static void button(int x, int y, int w, const char *t, i
 #define PAGE_SONIDO  7     /* SOMA_250_TTS */
 #define PAGE_SISTEMA 8
 #define PAGE_ACERCA  9
-#define NITEMS 10
+#define NITEMS 11       /* SOMA_257_LCM: + LCM */
+#define PAGE_LCM 10     /* SOMA_257_LCM */
 static struct llm_conf g_ia;                          /* copia de trabajo; se guarda con "Guardar y probar" */
 static char g_ia_f[4][LLM_KEY_MAX];                   /* lo que se esta escribiendo: servidor, modelo, clave y (SOMA_196) clave del lanzador */
 static const int IA_FMAX[4] = { LLM_BASE_MAX - 1, LLM_MODEL_MAX - 1, LLM_KEY_MAX - 1, LLM_KEY_MAX - 1 };
@@ -720,7 +721,7 @@ static int sb_y(const struct sl *L, int i) { return L->y + (sb_step(L) < 40 ? 52
 static void render_sidebar(const struct sl *L)
 {
     tx(L->x + 18, L->y + 14, 30, "Ajustes", 18, KC_TXT, 1);
-    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de" };   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
+    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de", "LCM" };   /* SOMA_257_LCM */   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
     for (int i = 0; i < NITEMS; i++) {
         int st = sb_step(L), ih = st - 6, iy = sb_y(L, i), on = i == g_page;
         if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, ih, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + ih / 2 - 9, 3, 18, 1, KC_ACC); }
@@ -734,6 +735,7 @@ static void render_sidebar(const struct sl *L)
         else if (i == PAGE_VOZ) { fb_stroke_rrect_aa(ix - 3, icy - 9, 7, 12, 3, ic); fb_stroke_rrect_aa(ix - 7, icy - 3, 15, 9, 4, ic); fb_fill_rect((uint32_t)ix, (uint32_t)(icy + 6), 1, 4, ic & 0xFFFFFF); }   /* microfono */
         else if (i == PAGE_SONIDO) { fb_fill_rect((uint32_t)(ix - 8), (uint32_t)(icy - 3), 4, 6, ic & 0xFFFFFF); fb_line_aa((ix - 4) * 16, (icy - 3) * 16, (ix + 1) * 16, (icy - 8) * 16, 22, ic); fb_line_aa((ix + 1) * 16, (icy - 8) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_line_aa((ix - 4) * 16, (icy + 3) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_stroke_rrect_aa(ix + 3, icy - 4, 6, 8, 4, ic); }   /* altavoz */
         else if (i == PAGE_SISTEMA) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
+        else if (i == PAGE_LCM) { fb_stroke_rrect_aa(ix - 8, icy - 7, 16, 14, 5, ic); tx(ix - 4, iy, ih, "L", 11, ic & 0xFFFFFF, 1); }   /* SOMA_257_LCM */
         else { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 1, 2, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 5, 2, 2, ic & 0xFFFFFF); }
         tx(L->x + 46, iy, ih, items[i], 13, on ? 0x00FFFFFF : KC_DIM, on);
     }
@@ -1592,6 +1594,108 @@ static int click_sonido(const struct sl *L, int32_t mx, int32_t my)
     return 0;
 }
 
+/* ================================================================ SOMA_257_LCM: pagina LCM (el traductor de peticiones) */
+int  lcm_cfg_get(int que);                 /* src/agent/lcm_soma.inc */
+void lcm_cfg_set(int que, int v);
+int  lcm_prueba(const char *frase, char *o, uint32_t cap);
+int  lcm_aprendido_n(void);
+int  lcm_aprendido_linea(int i, char *o, uint32_t cap);
+void lcm_olvida(int i);
+void lcm_estadistica(uint32_t *v, int n);
+static char g_lcm_f[120], g_lcm_res[400];
+static int g_lcm_focus;
+static const int LCM_UMB[4] = { 60, 70, 80, 90 };
+struct lcml { int c1_y, c1_h, s1_y, s2_y, c2_y, c2_h, s3_y, c3_y, c3_h, f_y, c4_y, c4_h, b_x, b_y, c5_y, c5_h, s4_y; };   /* SOMA_259_ORBE: + s4_y */
+static void lcm_lay(const struct sl *L, struct lcml *A)
+{
+    A->c1_y = L->y + 84; A->c1_h = 278; A->s1_y = A->c1_y + 54; A->s2_y = A->c1_y + 136; A->s4_y = A->c1_y + 218;   /* SOMA_259_ORBE: + letra del orbe */
+    A->c2_y = A->c1_y + A->c1_h + 12; A->c2_h = 110; A->s3_y = A->c2_y + 62;
+    A->c3_y = A->c2_y + A->c2_h + 12; A->c3_h = 150; A->f_y = A->c3_y + 50;
+    int n = lcm_aprendido_n(); int filas = n < 1 ? 1 : (n > 8 ? 8 : n);
+    A->c4_y = A->c3_y + A->c3_h + 12; A->c4_h = 64 + filas * 20; A->b_x = L->cx + L->cw - 150; A->b_y = A->c4_y + 12;
+    A->c5_y = A->c4_y + A->c4_h + 12; A->c5_h = 74;
+}
+static void lcm_wrap2(int x, int y, int w, const char *s, uint32_t col)       /* hasta dos lineas */
+{
+    char a[200]; int n = 0, cut = 0, i = 0;
+    for (; s[i] && n < 199; i++) { a[n++] = s[i]; a[n] = 0; if (tw(a, 12, 0) > w) { while (n > 0 && a[n - 1] != ' ') { n--; i--; } cut = 1; break; } }
+    a[n] = 0; tx(x, y, 22, a, 12, col, 0);
+    if (cut) { const char *r = s + i + 1; while (*r == ' ') r++; char b[200]; int m = 0; while (r[m] && m < 199) { b[m] = r[m]; m++; b[m] = 0; if (tw(b, 12, 0) > w) { m -= 3; if (m < 0) m = 0; b[m] = 0; s_cat(b, "...", 200); break; } } tx(x, y + 20, 22, b, 12, col, 0); }
+}
+static void render_lcm(const struct sl *L)
+{
+    char b[200]; struct lcml A; lcm_lay(L, &A);
+    tx(L->cx, L->y + 18, 30, "LCM: SOMA entiende lo que le pides", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "Un modelo pequeno, dentro del nucleo, convierte tus frases en ordenes. Lo que no entiende va al modelo de lenguaje.", 12, KC_DIM, 0);
+    card(L->cx, A.c1_y, L->cw, A.c1_h);
+    b[0] = 0; s_cat(b, "Traductor", sizeof b);
+    tx(L->cx + 20, A.c1_y + 14, 22, b, 14, KC_TXT, 1);
+    b[0] = 0;
+    if (!lcm_cfg_get(3)) s_cat(b, "El modelo no es valido: esta desactivado.", sizeof b);
+    else { s_num(b, sizeof b, lcm_cfg_get(5)); s_cat(b, " ordenes que sabe hacer. Si se apaga, todo va como antes (mayordomo y LLM).", sizeof b); }
+    tx(L->cx + 20, A.c1_y + 32, 18, b, 11, KC_DIM, 0);
+    static const char *const onoff[2] = { "Apagado", "Encendido" };
+    seg(L->cx + 20, A.s1_y, L->seg_w, 2, lcm_cfg_get(0) ? 1 : 0, onoff);
+    tx(L->cx + 20, A.s2_y - 28, 22, "Respuestas: naturales para la voz (una frase) o tecnicas (la orden y su salida)", 12, KC_TXT, 0);
+    static const char *const voz[2] = { "Tecnicas", "Naturales (voz)" };
+    seg(L->cx + 20, A.s2_y, L->seg_w, 2, lcm_cfg_get(1) ? 1 : 0, voz);
+    tx(L->cx + 20, A.s4_y - 28, 22, "Letra de las respuestas en el orbe (se desplazan con el raton o la rueda)", 12, KC_TXT, 0);   /* SOMA_259_ORBE */
+    static const char *const letra[3] = { "Compacta", "Mediana", "Grande" };
+    seg(L->cx + 20, A.s4_y, L->seg_w, 3, lcm_cfg_get(6), letra);
+    card(L->cx, A.c2_y, L->cw, A.c2_h);
+    tx(L->cx + 20, A.c2_y + 14, 22, "Seguridad", 14, KC_TXT, 1);
+    tx(L->cx + 20, A.c2_y + 34, 18, "Cuanto mas alta, menos veces actua solo y menos se equivoca. Lo que borra, mueve o apaga siempre pregunta.", 11, KC_DIM, 0);
+    static const char *const um[4] = { "60 %", "70 % (normal)", "80 %", "90 %" };
+    int u = lcm_cfg_get(2), su = 1; for (int k = 0; k < 4; k++) if (u == LCM_UMB[k]) su = k;
+    seg(L->cx + 20, A.s3_y, L->seg_w, 4, su, um);
+    card(L->cx, A.c3_y, L->cw, A.c3_h);
+    tx(L->cx + 20, A.c3_y + 14, 22, "Probar una frase (no se ejecuta nada)", 14, KC_TXT, 1);
+    fb_fill_rounded_rect(L->cx + 20, A.f_y, L->cw - 40, 32, 8, g_lcm_focus ? 0x00222E44 : 0x000C1119);
+    b[0] = 0; s_cat(b, g_lcm_f[0] ? g_lcm_f : (g_lcm_focus ? "" : "Pulsa aqui y escribe, p. ej.: borra el archivo notas.txt"), sizeof b);
+    if (g_lcm_focus) s_cat(b, "_", sizeof b);
+    tx(L->cx + 30, A.f_y + 2, 28, b, 12, g_lcm_f[0] || g_lcm_focus ? KC_TXT : KC_DIM, 0);
+    lcm_wrap2(L->cx + 20, A.f_y + 44, L->cw - 40, g_lcm_res[0] ? g_lcm_res : "Pulsa Intro para ver que haria.", g_lcm_res[0] ? KC_TXT : KC_DIM);
+    card(L->cx, A.c4_y, L->cw, A.c4_h);
+    int n = lcm_aprendido_n();
+    b[0] = 0; s_cat(b, "Aprendido de tus correcciones (", sizeof b); s_num(b, sizeof b, n); s_cat(b, ")", sizeof b);
+    tx(L->cx + 20, A.c4_y + 14, 22, b, 14, KC_TXT, 1);
+    if (n) { fb_fill_rounded_rect(A.b_x, A.b_y, 130, 30, 8, 0x00283449); tx(A.b_x + (130 - tw("Olvidar todo", 12, 1)) / 2, A.b_y + 1, 28, "Olvidar todo", 12, 0x00FFFFFF, 1); }
+    if (!n) tx(L->cx + 20, A.c4_y + 44, 20, "Nada aun. Si se equivoca, dile \"no era eso\" y escribele la orden buena.", 12, KC_DIM, 0);
+    for (int i = 0; i < n && i < 8; i++) { char l[340]; if (lcm_aprendido_linea(n - 1 - i, l, sizeof l)) tx(L->cx + 20, A.c4_y + 48 + i * 20, 20, l, 12, KC_TXT, 0); }
+    card(L->cx, A.c5_y, L->cw, A.c5_h);
+    tx(L->cx + 20, A.c5_y + 14, 22, "Desde que se encendio el equipo", 14, KC_TXT, 1);
+    uint32_t st[6] = { 0 }; lcm_estadistica(st, 6);
+    b[0] = 0; s_num(b, sizeof b, (int)st[0]); s_cat(b, " ordenes, ", sizeof b); s_num(b, sizeof b, (int)st[5]); s_cat(b, " de charla, ", sizeof b);
+    s_num(b, sizeof b, (int)(st[1] + st[2])); s_cat(b, " al LLM, ", sizeof b); s_num(b, sizeof b, (int)st[3]); s_cat(b, " confirmadas, ", sizeof b);
+    s_num(b, sizeof b, (int)st[4]); s_cat(b, " canceladas", sizeof b);
+    tx(L->cx + 20, A.c5_y + 40, 22, b, 12, KC_DIM, 0);
+}
+static int click_lcm(const struct sl *L, int32_t mx, int32_t my)
+{
+    struct lcml A; lcm_lay(L, &A);
+    int in_seg = mx >= L->cx + 20 && mx < L->cx + 20 + L->seg_w;
+    if (in_seg && my >= A.s1_y && my < A.s1_y + 32) { lcm_cfg_set(0, seg_index(L, mx, 2)); return 1; }
+    if (in_seg && my >= A.s2_y && my < A.s2_y + 32) { lcm_cfg_set(1, seg_index(L, mx, 2)); return 1; }
+    if (in_seg && my >= A.s4_y && my < A.s4_y + 32) { lcm_cfg_set(6, seg_index(L, mx, 3)); return 1; }   /* SOMA_259_ORBE */
+    if (in_seg && my >= A.s3_y && my < A.s3_y + 32) { lcm_cfg_set(2, LCM_UMB[seg_index(L, mx, 4)]); return 1; }
+    if (mx >= L->cx + 20 && mx < L->cx + L->cw - 20 && my >= A.f_y && my < A.f_y + 32) { g_lcm_focus = 1; return 1; }
+    if (lcm_aprendido_n() && mx >= A.b_x && mx < A.b_x + 130 && my >= A.b_y && my < A.b_y + 30) { lcm_olvida(-1); return 1; }
+    if (g_lcm_focus) { g_lcm_focus = 0; return 1; }
+    return 0;
+}
+static int key_lcm(char c)
+{
+    if (!g_lcm_focus) return 0;
+    int n = s_len(g_lcm_f);
+    if (c == 8 || c == 127) { if (n) { n--; while (n > 0 && ((unsigned char)g_lcm_f[n] & 0xC0) == 0x80) n--; g_lcm_f[n] = 0; } return 1; }
+    if (c == '\n' || c == '\r') { if (g_lcm_f[0]) lcm_prueba(g_lcm_f, g_lcm_res, sizeof g_lcm_res); return 1; }
+    if (c == 27) { g_lcm_focus = 0; return 1; }
+    if (((unsigned char)c >= 32 && (unsigned char)c != 127) && n + 1 < (int)sizeof g_lcm_f) { g_lcm_f[n] = c; g_lcm_f[n + 1] = 0; return 1; }
+    return 0;
+}
+void settings_goto_lcm(void) { g_page = PAGE_LCM; }
+/* SOMA_257_LCM fin */
+
 #define NPAGES NITEMS
 static int g_sc[NPAGES], g_sc_max[NPAGES], g_sdrag;           /* SOMA_227_IMAGEN: desplazamiento por pagina */
 static int sc_page(void) { return g_page >= 0 && g_page < NPAGES ? g_page : 0; }
@@ -1622,6 +1726,7 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     case PAGE_SONIDO:   render_sonido(&C); break;       /* SOMA_250_TTS */
     case PAGE_SISTEMA:  render_sistema(&C); break;
     case PAGE_ACERCA:   render_acerca(&C); break;
+    case PAGE_LCM:      render_lcm(&C); break;          /* SOMA_257_LCM */
     default:            render_apariencia(&C); break;
     }
     g_clon = 0; (fb_reset_clip)();
@@ -1722,6 +1827,7 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     if (g_page == PAGE_SISTEMA) return click_sistema(&L, mx, my);      /* SOMA_226_SISTEMA */
     if (g_page == PAGE_VOZ) return click_voz(&L, mx, my);              /* SOMA_246_VOZ_MODELOS */
     if (g_page == PAGE_SONIDO) return click_sonido(&L, mx, my);        /* SOMA_250_TTS */
+    if (g_page == PAGE_LCM) return click_lcm(&L, mx, my);              /* SOMA_257_LCM */
     if (my >= L.sl_y - 6 && my < L.sl_y + 26 && mx >= L.sl_x - 12 && mx < L.sl_x + L.sl_w + 12) { g_drag = 1; int c = set_opacity_from(&L, mx); if (c) save(); return c; }
     if (mx >= L.tg_x && mx < L.tg_x + 44 && my >= L.tg_y && my < L.tg_y + 24) { g_active_opaque = !g_active_opaque; save(); return 1; }
     if (click_reset(&L, mx, my, L.reset_y)) return 1;
@@ -1768,6 +1874,7 @@ int settings_handle_key(char c)
 {
     if (g_dd_open != DD_NONE) { if (c == 27) { g_dd_open = DD_NONE; return 1; } return 0; }   /* SOMA_250_TTS */
     if (g_page == PAGE_IA) return key_ia(c);                            /* SOMA_195 */
+    if (g_page == PAGE_LCM) return key_lcm(c);                          /* SOMA_257_LCM */
     if (g_page == 1) {                                                  /* SOMA_175C: contrasena de la WiFi */
         if (!g_pw_focus) return 0;
         if (c == 8 || c == 127) { if (g_pw_len) g_pw[--g_pw_len] = 0; return 0; }

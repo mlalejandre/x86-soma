@@ -64,3 +64,4 @@ int  llm_proto_launcher_status(const char *json, char *state, uint32_t smax, cha
 /* 1 si la URL base es http(s) hacia este equipo o una red privada (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, localhost, *.local) */
 int  llm_base_is_private(const char *base);
 #endif
+extern uint32_t llm_proto_max_tokens;                 /* SOMA_260_LLM_TAM: max_tokens de llm_proto_chat (8192 como antes; lo fija llm.c) */

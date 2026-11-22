@@ -204,6 +204,8 @@ static int prep(const struct llm_conf *c, struct llm_http *h, int need_model)
     h->headers[b.n] = 0;
     return b.over ? LLM_P_TOOBIG : LLM_P_OK;
 }
+uint32_t llm_proto_max_tokens = 8192;                  /* SOMA_260_LLM_TAM */
+static void sb_u(struct sb *b, uint32_t v);
 int llm_proto_chat(const struct llm_conf *c, const char *prompt, int json_mode, char *body, uint32_t max, struct llm_http *h)
 {
     int r = prep(c, h, 1); if (r != LLM_P_OK) return r;
@@ -213,19 +215,19 @@ int llm_proto_chat(const struct llm_conf *c, const char *prompt, int json_mode, 
     sb_s(&u, c->base[p]);
     if (p == LLM_CLAUDE) {
         sb_s(&u, "/v1/messages");
-        sb_s(&b, "{\"model\":\""); sb_json(&b, c->model[p]); sb_s(&b, "\",\"max_tokens\":8192,\"system\":\""); sb_json(&b, SYS_PROMPT); if (json_mode) sb_json(&b, SYS_JSON);
+        sb_s(&b, "{\"model\":\""); sb_json(&b, c->model[p]); sb_s(&b, "\",\"max_tokens\":"); sb_u(&b, llm_proto_max_tokens); sb_s(&b, ",\"system\":\""); sb_json(&b, SYS_PROMPT); if (json_mode) sb_json(&b, SYS_JSON);
         sb_s(&b, "\",\"messages\":[{\"role\":\"user\",\"content\":\""); sb_json(&b, prompt); sb_s(&b, "\"}]}");
     } else if (p == LLM_GEMINI) {
         sb_s(&u, "/v1beta/models/"); sb_s(&u, starts(c->model[p], "models/") ? c->model[p] + 7 : c->model[p]); sb_s(&u, ":generateContent");
         sb_s(&b, "{\"systemInstruction\":{\"parts\":[{\"text\":\""); sb_json(&b, SYS_PROMPT); if (json_mode) sb_json(&b, SYS_JSON);
         sb_s(&b, "\"}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\""); sb_json(&b, prompt);
-        sb_s(&b, "\"}]}],\"generationConfig\":{\"maxOutputTokens\":8192"); if (json_mode) sb_s(&b, ",\"responseMimeType\":\"application/json\""); sb_s(&b, "}}");
+        sb_s(&b, "\"}]}],\"generationConfig\":{\"maxOutputTokens\":"); sb_u(&b, llm_proto_max_tokens); if (json_mode) sb_s(&b, ",\"responseMimeType\":\"application/json\""); sb_s(&b, "}}");
     } else {
         sb_s(&u, "/v1/chat/completions");
         sb_s(&b, "{\"model\":\""); sb_json(&b, c->model[p]); sb_s(&b, "\",\"messages\":[{\"role\":\"system\",\"content\":\""); sb_json(&b, SYS_PROMPT); if (json_mode && p == LLM_OPENAI) sb_json(&b, SYS_JSON);
         sb_s(&b, "\"},{\"role\":\"user\",\"content\":\""); sb_json(&b, prompt); sb_s(&b, "\"}]");
-        if (p == LLM_OPENAI) { if (json_mode) sb_s(&b, ",\"response_format\":{\"type\":\"json_object\"}"); sb_s(&b, ",\"max_completion_tokens\":8192}"); }
-        else { if (json_mode) sb_s(&b, LOCAL_JSON_FMT); sb_s(&b, ",\"temperature\":0.2,\"max_tokens\":8192}"); }
+        if (p == LLM_OPENAI) { if (json_mode) sb_s(&b, ",\"response_format\":{\"type\":\"json_object\"}"); sb_s(&b, ",\"max_completion_tokens\":"); sb_u(&b, llm_proto_max_tokens); sb_c(&b, '}'); }
+        else { if (json_mode) sb_s(&b, LOCAL_JSON_FMT); sb_s(&b, ",\"temperature\":0.2,\"max_tokens\":"); sb_u(&b, llm_proto_max_tokens); sb_c(&b, '}'); }
     }
     h->url[u.n] = 0; body[b.n] = 0;
     if (u.over) return LLM_P_BADURL;

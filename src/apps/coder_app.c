@@ -56,7 +56,7 @@ static void cdr_txt(uint32_t x, uint32_t y, const char *s, uint32_t col, int sca
 extern uint64_t timer_get_uptime_ms(void);
 
 #define CDR_MAX_PROJECTS 64
-#define CDR_SRC_MAX      16384
+#define CDR_SRC_MAX      32768   /* SOMA_262_PUBLICAR: como CC_SRC_MAX (antes 16 KB: no se podian modificar programas mayores) */
 #define CDR_LOG_N        40   /* PARCHE 099 */
 #define CDR_LOG_LEN      120
 #define CDR_LINT_N       6

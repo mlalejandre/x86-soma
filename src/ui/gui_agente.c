@@ -83,6 +83,36 @@ static void agent_turn_finish(void)
 int gui_is_running(void) { return g_gui_loop_on; }   /* PARCHE 097 */
 int gui_agent_busy(void) { return g_agent_thr_on; }
 
+/* SOMA_256: detener la mision en marcha. El hilo del agente se mata (thread_kill cierra sus conexiones TCP y suelta sus cerrojos; el
+ * cambio de hilo es cooperativo, asi que no queda a medias dentro del montón) y el bucle principal cierra el turno como si hubiera
+ * terminado, con el mensaje "Mision detenida.". Si estaba hablando (habla texto) se para primero la lectura. Solo desde el hilo de la GUI.
+ * Pierde los buferes de trabajo del agente (~200 KiB) y puede dejar a medias un archivo que estuviera escribiendo. */
+int gui_agent_cancel(void)
+{
+    if (!g_agent_thr_on) return 0;
+    if (!g_agent_thr_done) {
+#if defined(__x86_64__)
+        if (voz_speaking()) { voz_speak_stop(); for (int i = 0; i < 400 && voz_speaking(); i++) thread_sleep(1); }
+#endif
+        (void)thread_kill(g_agent_tid);
+        g_gui_req = 0; g_gui_grant = 0; g_gui_depth = 0;               /* si estaba pidiendo la pantalla, el bucle no debe esperarle */
+        const char *m = "Mision detenida.";
+        uint32_t k = 0; while (m[k] && k + 1 < sizeof agent_last_response) { agent_last_response[k] = m[k]; k++; }
+        agent_last_response[k] = '\0';
+        g_agent_thr_done = 1;
+    }
+    return 1;
+}
+/* Esc: para la lectura en voz alta si suena; si no, y con el escritorio / el orbe en foco, la mision del agente. 1 = lo ha usado. */
+static int her_stop_escape(int agent_ok)
+{
+#if defined(__x86_64__)
+    if (voz_speaking()) { voz_speak_stop(); clip_toast("Lectura detenida"); return 1; }
+#endif
+    if (agent_ok && g_agent_thr_on) { gui_agent_cancel(); clip_toast("Mision detenida"); return 1; }
+    return 0;
+}
+
 /* SOMA_175B3: ordenes lentas del terminal (wifi buscar, wifi arrancar; con el 175C wifi conectar y desconectar) en un hilo aparte. Antes se ejecutaban en el hilo de
  * la GUI y el escritorio se quedaba congelado los segundos que dura la busqueda. Su salida se captura en ese hilo y se
  * muestra en el terminal al terminar; mientras, el sistema sigue respondiendo. Una a la vez. */

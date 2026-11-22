@@ -5,6 +5,7 @@
 #include "coder_app.h"
 #include "docagent.h"   /* SOMA_248_DOC */
 #include "agent_ruta.h"  /* SOMA_251_RUTAS */
+#include "lcm_ordenes.inc"   /* SOMA_253_LCM: traductor del LCM (solo enteros) */
 #include "rtc.h"
 #include "console.h"
 #include "llm.h"
@@ -104,7 +105,7 @@ static char agent_state_buf[4096];
 static char resume_history_stash[4096];
 char agent_resume_mission[512];
 char agent_resume_name[32];
-char agent_last_response[8192] = {0};
+char agent_last_response[AGENT_RESP_MAX] = {0};   /* SOMA_260_LLM_TAM */
 int  agent_resume_pending = 0;
 static int agent_patch_attempts = 0;
 static int delegation_depth = 0;
@@ -1405,6 +1406,8 @@ static int mayordomo_try_command(const char *mission)
 }
 
 
+#include "lcm_soma.inc"   /* SOMA_257_LCM: el LCM en el agente (charla, voz natural, correcciones; sustituye al pegamento del 253) */
+
 static void mayordomo_run(const char *mission)
 {
     while (*mission == ' ' || *mission == '\t') ++mission;
@@ -1414,6 +1417,7 @@ static void mayordomo_run(const char *mission)
     }
     agent_refresh_knowledge();
     if (mayordomo_try_command(mission)) return;
+    if (lcm_mayordomo(mission)) return;      /* SOMA_253_LCM: una orden clara la arma el LCM */
     if (mayordomo_try_catalog(mission)) return;
     if (mayordomo_try_skill(mission)) return;
 
@@ -1715,23 +1719,24 @@ static int direct_answer(const struct agent_profile *agent, const char *mission)
         "organizada; si es una pregunta, contestala. No uses JSON ni bloques de codigo salvo que te pidan codigo. "
         "Si para responder BIEN necesitas datos actuales de internet, leer o cambiar archivos del equipo, ejecutar programas u "
         "ordenes del sistema, o informacion del propio equipo, responde exactamente " AR_TOOLS_MARK " y nada mas.";
-    char *prompt = (char *)kmalloc(8192), *reply = (char *)kmalloc(32768);
+    const uint32_t PC = llm_tam()->directa, RC = llm_tam()->texto;   /* SOMA_260_LLM_TAM: antes 8 KB y 32 KB */
+    char *prompt = (char *)kmalloc(PC + 1), *reply = (char *)kmalloc(RC + 1);
     if (!prompt || !reply) { if (prompt) kfree(prompt); if (reply) kfree(reply); return 0; }
     uint32_t pl = 0;
     struct rtc_time t; rtc_get_datetime(&t);
-    fb_puts(prompt, 8192, &pl, "FECHA: "); fb_put_dec(prompt, 8192, &pl, t.year); fb_putc(prompt, 8192, &pl, '-');
-    if (t.month < 10) fb_putc(prompt, 8192, &pl, '0');
-    fb_put_dec(prompt, 8192, &pl, t.month); fb_putc(prompt, 8192, &pl, '-');
-    if (t.day < 10) fb_putc(prompt, 8192, &pl, '0');
-    fb_put_dec(prompt, 8192, &pl, t.day); fb_puts(prompt, 8192, &pl, "\n");
+    fb_puts(prompt, PC, &pl, "FECHA: "); fb_put_dec(prompt, PC, &pl, t.year); fb_putc(prompt, PC, &pl, '-');
+    if (t.month < 10) fb_putc(prompt, PC, &pl, '0');
+    fb_put_dec(prompt, PC, &pl, t.month); fb_putc(prompt, PC, &pl, '-');
+    if (t.day < 10) fb_putc(prompt, PC, &pl, '0');
+    fb_put_dec(prompt, PC, &pl, t.day); fb_puts(prompt, PC, &pl, "\n");
     stm_load_into_prompt(agent, prompt, 6144, &pl);                      /* lo ultimo que se hablo ("ahora en ingles", "mas corto"...) */
-    fb_puts(prompt, 8192, &pl, "\nPETICION DEL USUARIO:\n");
-    fb_puts(prompt, 8192, &pl, mission);
-    prompt[pl < 8192 ? pl : 8191] = 0;
+    fb_puts(prompt, PC, &pl, "\nPETICION DEL USUARIO:\n");
+    fb_puts(prompt, PC, &pl, mission);
+    prompt[pl < PC ? pl : PC - 1] = 0;
     gui_thought_update("Respondiendo directamente...");
     kprint("\n\033[1;36m[SOMA] Respuesta directa (una llamada al modelo, sin herramientas)\033[0m\n");
     llm_trace_tag("directa");
-    int ok = llm_chat_ex(SYS_DIRECTO, prompt, 0, 0, 6000, reply, 32768, 300000);
+    int ok = llm_chat_ex(SYS_DIRECTO, prompt, 0, 0, 6000, reply, RC, 300000);
     kfree(prompt);
     if (ok != 1) {
         uint32_t p = 0; agent_last_response[0] = 0;
@@ -1809,22 +1814,27 @@ void agent_run(const char *agent_name, const char *mission)
     const char *requested_agent = agent_name ? agent_name : "soma";
     if (str_eq_ci(requested_agent, "maquetador") || (str_eq_ci(requested_agent, "soma") && docagent_should_handle(mission))) {   /* SOMA_248_DOC */
         while (*mission == ' ') mission++;
-        if (*mission) { maquetador_run(mission); return; }
+        if (*mission) { gui_fase("documento"); maquetador_run(mission); return; }   /* SOMA_259_ORBE */
     }
     if (str_eq_ci(requested_agent, "mayordomo")) {
+        gui_fase("mayordomo");                           /* SOMA_259_ORBE */
         mayordomo_run(mission);
         return;
     }
     /* SOMA_251_RUTAS: el programador antes que el Mayordomo ("crea un programa..." acababa ensenando la RAM) */
     if (str_eq_ci(requested_agent, "coder") || (str_eq_ci(requested_agent, "soma") && programador_should_handle(mission))) {
         while (*mission == ' ') mission++;
-        if (*mission) { programador_run(mission); return; }
+        if (*mission) { gui_fase("programador"); programador_run(mission); return; }   /* SOMA_259_ORBE */
     }
-    if (str_eq_ci(requested_agent, "soma") && mayordomo_should_handle(mission)) {
+    int lcm_v = str_eq_ci(requested_agent, "soma") ? lcm_soma(mission) : LCM_SIGUE;   /* SOMA_253_LCM */
+    if (lcm_v == LCM_HECHO) return;
+    if (((lcm_v == LCM_SIGUE && mayordomo_should_handle(mission)) || (lcm_v == LCM_DUDA_LLM && mayordomo_is_catalog_query(mission)))
+        && str_eq_ci(requested_agent, "soma")) {
         agent_run("mayordomo", mission);
         return;
     }
     const struct agent_profile *agent = resolve_agent(requested_agent);
+    gui_fase(agent->name);                               /* SOMA_259_ORBE: otro agente (soma no cuenta) */
     if (delegation_depth < MAX_DELEGATION_DEPTH + 2) g_deleg_chain[delegation_depth] = agent->name;   /* SOMA_251_RUTAS */
     /* SOMA_251_RUTAS: respuesta directa. Conversacion, redacciones, explicaciones, traducciones...: UNA llamada al modelo, sin JSON
      * ni herramientas. Si el modelo dice que necesita herramientas (AR_TOOLS_MARK), se sigue por el bucle de siempre. */
@@ -1840,14 +1850,17 @@ void agent_run(const char *agent_name, const char *mission)
     }
 
     /* Asignación dinámica para soportar delegación y respuestas completas sin truncamiento */
-    char *agent_prompt_buf  = (char *)kmalloc(32768);
-    char *agent_reply_buf   = (char *)kmalloc(32768);
-    char *tool_feedback_buf = (char *)kmalloc(16384);
-    char *history_buf       = (char *)kmalloc(16384);
-    char *th                = (char *)kmalloc(32768);
-    char *cmd_f             = (char *)kmalloc(32768);
+    /* SOMA_260_LLM_TAM: tamanos segun /etc/llm_limites.conf (llm-limites); sin archivo, los de siempre */
+    const struct llm_tam *T_ = llm_tam();
+    const uint32_t TP = T_->prompt, TR = T_->texto, TT = T_->herramienta, TH = T_->historial, TPASO = T_->paso;
+    char *agent_prompt_buf  = (char *)kmalloc(TP + 64);
+    char *agent_reply_buf   = (char *)kmalloc(TR + 1);
+    char *tool_feedback_buf = (char *)kmalloc(TT + 1);
+    char *history_buf       = (char *)kmalloc(TH + 64);
+    char *th                = (char *)kmalloc(TR + 1);
+    char *cmd_f             = (char *)kmalloc(TR + 1);
     char *patch_f           = (char *)kmalloc(8192);
-    char *verdict           = (char *)kmalloc(32768);
+    char *verdict           = (char *)kmalloc(TR + 1);
 
     if (!agent_prompt_buf || !agent_reply_buf || !tool_feedback_buf || !history_buf ||
         !th || !cmd_f || !patch_f || !verdict) {
@@ -1893,7 +1906,7 @@ void agent_run(const char *agent_name, const char *mission)
     uint32_t hist_len = 0;
     if (agent_resume_pending == 1) {
         agent_resume_pending = 0;
-        fb_puts(history_buf, 8192, &hist_len, resume_history_stash);
+        fb_puts(history_buf, TH, &hist_len, resume_history_stash);
     } else {
         history_buf[0] = '\0';
     }
@@ -1915,9 +1928,9 @@ void agent_run(const char *agent_name, const char *mission)
 
         /* SOMA_251_RUTAS: primero lo que no cambia (identidad, herramientas, reglas) y al final la mision y el historial: el servidor
          * reutiliza el prompt ya procesado de una mision a otra (antes la mision iba al principio y se procesaba todo cada vez) */
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "IDENTIDAD: ");
-        fb_puts(agent_prompt_buf, 16384, &ap_len, agent->role_desc);
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "\nEntorno: SOMA OS Bare-Metal (" MYOS_ARCH_NAME ") | RamFS en /.\n\n");
+        fb_puts(agent_prompt_buf, TP, &ap_len, "IDENTIDAD: ");
+        fb_puts(agent_prompt_buf, TP, &ap_len, agent->role_desc);
+        fb_puts(agent_prompt_buf, TP, &ap_len, "\nEntorno: SOMA OS Bare-Metal (" MYOS_ARCH_NAME ") | RamFS en /.\n\n");
 
         const char *p_ctx = "HERRAMIENTAS BARE-METAL DISPONIBLES:\n"
                             "  delegate <agente> \"<mision>\"  Delega a mayordomo, buscador o maquetador.\n"
@@ -1951,7 +1964,7 @@ void agent_run(const char *agent_name, const char *mission)
                             "2) ARCHIVOS DE USUARIO: Los documentos y notas personales del usuario se encuentran en '/mis_archivos/'.\n"
                             "3) Si la mision pide expresamente guardar el resultado en un archivo, SOMA guarda el texto de verdict por ti: no repitas el texto en un write.\n" /*PL7_SOMA_PROMPT SOMA_251_RUTAS*/
                             "4) Solo emite action='final' cuando TODOS los objetivos de la mision esten completamente cumplidos en el hardware.\n";
-        fb_puts(agent_prompt_buf, 16384, &ap_len, p_ctx);
+        fb_puts(agent_prompt_buf, TP, &ap_len, p_ctx);
         /* SOMA_CODER_DYNAMIC_GATE_V3 */
         /* SOMA_CODER_CONTEXT_INJECTION: Inyectar el codigo actual del archivo al Coder */
         if (str_eq_ci(agent->name, "coder") && ap_len < 12000) {
@@ -1974,37 +1987,37 @@ void agent_run(const char *agent_name, const char *mission)
                     if (ex_r > 0) {
                         uint32_t lim, k;
                         ex_buf[ex_r] = '\0';
-                        fb_puts(agent_prompt_buf, 16384, &ap_len, "\n[CODIGO ACTUAL EN ");
-                        fb_puts(agent_prompt_buf, 16384, &ap_len, target_p);
-                        fb_puts(agent_prompt_buf, 16384, &ap_len, " (Base para modificar)]:\n");
+                        fb_puts(agent_prompt_buf, TP, &ap_len, "\n[CODIGO ACTUAL EN ");
+                        fb_puts(agent_prompt_buf, TP, &ap_len, target_p);
+                        fb_puts(agent_prompt_buf, TP, &ap_len, " (Base para modificar)]:\n");
                         lim = (ex_r > 1800) ? 1800 : (uint32_t)ex_r;
-                        for (k = 0; k < lim && ap_len < 16384 - 2400; ++k)
+                        for (k = 0; k < lim && ap_len < TP - 2400; ++k)
                             agent_prompt_buf[ap_len++] = ex_buf[k];
-                        if (ex_r > 1800) fb_puts(agent_prompt_buf, 16384, &ap_len, "\n[EXTRACTO INCOMPLETO: no copiar como programa completo; solo contexto parcial]\n");
-                        fb_puts(agent_prompt_buf, 16384, &ap_len, "\n");
+                        if (ex_r > 1800) fb_puts(agent_prompt_buf, TP, &ap_len, "\n[EXTRACTO INCOMPLETO: no copiar como programa completo; solo contexto parcial]\n");
+                        fb_puts(agent_prompt_buf, TP, &ap_len, "\n");
                     }
                     kfree(ex_buf);
                 }
             }
         }
 
-        inject_agent_memory(agent, agent_prompt_buf, 16384, &ap_len);
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "\nFECHA ACTUAL DEL SISTEMA: ");
-        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_y);
-        fb_putc(agent_prompt_buf, 16384, &ap_len, '-');
-        if (cur_mo < 10) fb_putc(agent_prompt_buf, 16384, &ap_len, '0');
-        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_mo);
-        fb_putc(agent_prompt_buf, 16384, &ap_len, '-');
-        if (cur_d < 10) fb_putc(agent_prompt_buf, 16384, &ap_len, '0');
-        fb_put_dec(agent_prompt_buf, 16384, &ap_len, cur_d);
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "\n\nMISION DEL USUARIO: '");
-        { const char *p_mval = mission; while (*p_mval && ap_len < 16384 - 2400) agent_prompt_buf[ap_len++] = *p_mval++; }
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "'.\n");
+        inject_agent_memory(agent, agent_prompt_buf, TP, &ap_len);
+        fb_puts(agent_prompt_buf, TP, &ap_len, "\nFECHA ACTUAL DEL SISTEMA: ");
+        fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_y);
+        fb_putc(agent_prompt_buf, TP, &ap_len, '-');
+        if (cur_mo < 10) fb_putc(agent_prompt_buf, TP, &ap_len, '0');
+        fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_mo);
+        fb_putc(agent_prompt_buf, TP, &ap_len, '-');
+        if (cur_d < 10) fb_putc(agent_prompt_buf, TP, &ap_len, '0');
+        fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_d);
+        fb_puts(agent_prompt_buf, TP, &ap_len, "\n\nMISION DEL USUARIO: '");
+        { const char *p_mval = mission; while (*p_mval && ap_len < TP - 2400) agent_prompt_buf[ap_len++] = *p_mval++; }
+        fb_puts(agent_prompt_buf, TP, &ap_len, "'.\n");
 
         if (hist_len > 0) {
             const char *h_hdr = "\nAcciones ya ejecutadas en pasos anteriores (los cuerpos de write se omiten):\n";
             uint32_t hist_start = 0;
-            while (*h_hdr && ap_len < 16384 - 1) agent_prompt_buf[ap_len++] = *h_hdr++;
+            while (*h_hdr && ap_len < TP - 1) agent_prompt_buf[ap_len++] = *h_hdr++;
             /* El historial completo permanece para auditoría; al LLM solo se le pasan
              * los últimos ~2600 caracteres para que los errores recientes no se pierdan
              * detrás de códigos antiguos y evitar el crecimiento exponencial del prompt. */
@@ -2012,19 +2025,19 @@ void agent_run(const char *agent_name, const char *mission)
                 hist_start = hist_len - 2600u;
                 while (hist_start < hist_len && history_buf[hist_start] != '\n') hist_start++;
                 if (hist_start < hist_len) hist_start++;
-                fb_puts(agent_prompt_buf, 16384, &ap_len, "[historial Coder reducido a los pasos recientes]\n");
+                fb_puts(agent_prompt_buf, TP, &ap_len, "[historial Coder reducido a los pasos recientes]\n");
             }
-            for (uint32_t h = hist_start; h < hist_len && ap_len < 16384 - 600; ++h) {
+            for (uint32_t h = hist_start; h < hist_len && ap_len < TP - 600; ++h) {
                 agent_prompt_buf[ap_len++] = history_buf[h];
             }
         }
 
         const char *p_rules = "\nInstruccion: Devuelve solo un JSON valido. Para Coder, thought debe ser un resumen operativo de 1-2 frases; no repitas el codigo en thought. cmd debe contener una sola accion concreta y el contenido completo solo dentro de write.";
-        while (*p_rules && ap_len < 16384 - 1) agent_prompt_buf[ap_len++] = *p_rules++;
+        while (*p_rules && ap_len < TP - 1) agent_prompt_buf[ap_len++] = *p_rules++;
         agent_prompt_buf[ap_len] = '\0';
 
         { char tg[40]; uint32_t tq = 0; fb_puts(tg, sizeof tg, &tq, agent->name); fb_puts(tg, sizeof tg, &tq, "/paso "); fb_put_dec(tg, sizeof tg, &tq, (uint64_t)step); llm_trace_tag(tg); }
-        if (!llm_chat_json(agent_prompt_buf, agent_reply_buf, 32768, 240000)) {   /* SOMA_251_RUTAS: 60 s cortaban textos largos */
+        if (!llm_chat_json(agent_prompt_buf, agent_reply_buf, TR, 240000)) {   /* SOMA_251_RUTAS: 60 s cortaban textos largos */
             kprint("Error en comunicacion estructurada con el agente.\n");
             llm_down = 1;
             break;
@@ -2034,7 +2047,7 @@ void agent_run(const char *agent_name, const char *mission)
         if (!llmfix_json_complete(agent_reply_buf)) {
             const char *why = "LLM-TRUNCATED-JSON: respuesta incompleta o JSON desequilibrado; no se ejecuto ninguna accion. Reintenta con un JSON mas corto y una unica accion.";
             llmfix_save_debug("/tmp/llm_respuesta_incompleta.json", agent_reply_buf);
-            history_add_note(history_buf, &hist_len, 8192, step, why);
+            history_add_note(history_buf, &hist_len, TH, step, why);
             kprint("\n[LLM TRUNCADO]: JSON incompleto; respuesta guardada en /tmp/llm_respuesta_incompleta.json. Accion no ejecutada.\n");
             if (llmfix_count(history_buf, "LLM-TRUNCATED-") >= 3) {
                 const char *fail = "[LLM RESPUESTA INCOMPLETA] Tres respuestas llegaron truncadas o como JSON invalido. No se ejecuto la accion parcial. Revisa /tmp/llm_respuesta_incompleta.json y la capa HTTP del cliente LLM.";
@@ -2054,10 +2067,10 @@ void agent_run(const char *agent_name, const char *mission)
         act[0] = '\0'; th[0] = '\0'; cmd_f[0] = '\0'; patch_f[0] = '\0'; verdict[0] = '\0';
 
         llm_json_get(agent_reply_buf, "action", act, sizeof(act));
-        llm_json_get(agent_reply_buf, "thought", th, 32768);
-        llm_json_get(agent_reply_buf, "cmd", cmd_f, 32768);
+        llm_json_get(agent_reply_buf, "thought", th, TR);
+        llm_json_get(agent_reply_buf, "cmd", cmd_f, TR);
         llm_json_get(agent_reply_buf, "patch", patch_f, 8192);
-        llm_json_get(agent_reply_buf, "verdict", verdict, 32768);
+        llm_json_get(agent_reply_buf, "verdict", verdict, TR);
 
 
         /* Una respuesta JSON puede estar completa y contener un programa cortado.
@@ -2066,7 +2079,7 @@ void agent_run(const char *agent_name, const char *mission)
             !llmfix_soma_write_complete(cmd_f)) {
             const char *why = "LLM-TRUNCATED-CODE: write .soma incompleto (comillas o delimitadores sin cerrar, o placeholder). No se escribio. Reenvia el programa completo en una sola accion write; reduce thought y no incluyas explicaciones.";
             llmfix_save_debug("/tmp/llm_comando_write_rechazado.txt", cmd_f);
-            history_add_note(history_buf, &hist_len, 8192, step, why);
+            history_add_note(history_buf, &hist_len, TH, step, why);
             kprint("\n[LLM TRUNCADO]: bloqueada escritura .soma incompleta; diagnostico en /tmp/llm_comando_write_rechazado.txt.\n");
             if (llmfix_count(history_buf, "LLM-TRUNCATED-") >= 3) {
                 const char *fail = "[CODER NO VERIFICADO] Tres respuestas generaron JSON/codigo incompleto. Ningun write parcial adicional se ejecutara. Revisa /tmp/llm_comando_write_rechazado.txt y el cliente HTTP LLM.";
@@ -2123,7 +2136,7 @@ void agent_run(const char *agent_name, const char *mission)
                 if (is_c_src && !is_workspace) {
                     if (is_patch_target_protected(tf)) {
                         kprint("\n[SEGURIDAD KERNEL] Modificacion denegada: Subsistema protegido.\n");
-                        history_add_note(history_buf, &hist_len, 8192, step, "tu parche fue rechazado: los subsistemas del core estan PROTEGIDOS.");
+                        history_add_note(history_buf, &hist_len, TH, step, "tu parche fue rechazado: los subsistemas del core estan PROTEGIDOS.");
                         continue;
                     }
                     kprint("\n[AGENTE AUTONOMO]: Parche de kernel C emitido. Enviando al host...\n");
@@ -2140,7 +2153,7 @@ void agent_run(const char *agent_name, const char *mission)
                 }
             }
             kprint("\n[AVISO KERNEL]: 'patch' interceptado. Los archivos en RamFS (/workspace/) deben crearse con 'write'.\n");
-            history_add_note(history_buf, &hist_len, 8192, step, "RECHAZADO: 'patch' es exclusivo para codigo del kernel (src/*.c). Para crear o editar archivos en RamFS o /workspace/ DEBES usar action='tool' con 'write <ruta> \"<contenido>\"'.");
+            history_add_note(history_buf, &hist_len, TH, step, "RECHAZADO: 'patch' es exclusivo para codigo del kernel (src/*.c). Para crear o editar archivos en RamFS o /workspace/ DEBES usar action='tool' con 'write <ruta> \"<contenido>\"'.");
             continue;
         }
 
@@ -2172,7 +2185,7 @@ void agent_run(const char *agent_name, const char *mission)
 
                 if (!coder_extract_soma_target(clean_cmd, auto_target, sizeof(auto_target))) {
                     kprint("\n>> [GUARDIA CODER]: Ruta .soma no valida; no se ejecutara ni compilara esa ruta.\n");
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "AUTO-COMPILE-ERROR: ruta de write rechazada. Usa una ruta .soma absoluta dentro de /workspace o /apps.");
                     continue;
                 }
@@ -2181,12 +2194,12 @@ void agent_run(const char *agent_name, const char *mission)
                 fb_puts(auto_cmd, sizeof(auto_cmd), &acp, "compile ");
                 fb_puts(auto_cmd, sizeof(auto_cmd), &acp, auto_target);
                 tool_feedback_buf[0] = '\0';
-                dispatch_agent_command(auto_cmd, tool_feedback_buf, 16384);
-                coder_record_auto_result(history_buf, &hist_len, 8192, step, auto_cmd, tool_feedback_buf);
+                dispatch_agent_command(auto_cmd, tool_feedback_buf, TT);
+                coder_record_auto_result(history_buf, &hist_len, TH, step, auto_cmd, tool_feedback_buf);
                 vfs_write("/tmp/last_tool.log", tool_feedback_buf, coder_text_len(tool_feedback_buf));
 
                 if (!coder_compile_output_ok(tool_feedback_buf)) {
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "AUTO-COMPILE-ERROR: la version previamente escrita no compila o la salida es ambigua. La siguiente write se permite como reparacion; corrige el diagnostico concreto y vuelve a compilar.");
                     if (coder_count_marker(history_buf, "AUTO-COMPILE-ERROR") >= 3) {
                         const char *failure_summary = "[CODER NO VERIFICADO] Se agotaron la creacion inicial y dos reparaciones: el archivo sigue sin una compilacion confirmada. No se declara exito. Revisa /tmp/last_tool.log y el ultimo diagnostico del compilador.";
@@ -2209,12 +2222,12 @@ void agent_run(const char *agent_name, const char *mission)
                 fb_puts(auto_cmd, sizeof(auto_cmd), &acp, "lint ");
                 fb_puts(auto_cmd, sizeof(auto_cmd), &acp, auto_target);
                 tool_feedback_buf[0] = '\0';
-                dispatch_agent_command(auto_cmd, tool_feedback_buf, 16384);
-                coder_record_auto_result(history_buf, &hist_len, 8192, step, auto_cmd, tool_feedback_buf);
+                dispatch_agent_command(auto_cmd, tool_feedback_buf, TT);
+                coder_record_auto_result(history_buf, &hist_len, TH, step, auto_cmd, tool_feedback_buf);
                 vfs_write("/tmp/last_tool.log", tool_feedback_buf, coder_text_len(tool_feedback_buf));
                 if (find_substr(tool_feedback_buf, "E:") || find_substr(tool_feedback_buf, "Placeholder '...'") ||
                     find_substr(tool_feedback_buf, "Codigo vacio")) {
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "AUTO-LINT-ERROR: lint detecto uno o mas errores graves. La siguiente write se permite como reparacion dirigida; elimina placeholders y resuelve los avisos E: antes de volver a compilar.");
                     kprint("\n>> [GUARDIA CODER]: Lint detecto errores graves; se habilita reparacion dirigida.\n");
                     continue;
@@ -2225,11 +2238,11 @@ void agent_run(const char *agent_name, const char *mission)
                 fb_puts(auto_cmd, sizeof(auto_cmd), &acp, "app ");
                 fb_puts(auto_cmd, sizeof(auto_cmd), &acp, auto_target);
                 tool_feedback_buf[0] = '\0';
-                dispatch_agent_command(auto_cmd, tool_feedback_buf, 16384);
-                coder_record_auto_result(history_buf, &hist_len, 8192, step, auto_cmd, tool_feedback_buf);
+                dispatch_agent_command(auto_cmd, tool_feedback_buf, TT);
+                coder_record_auto_result(history_buf, &hist_len, TH, step, auto_cmd, tool_feedback_buf);
                 vfs_write("/tmp/last_tool.log", tool_feedback_buf, coder_text_len(tool_feedback_buf));
                 if (!coder_app_output_started(tool_feedback_buf)) {
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "AUTO-APP-ERROR: compile y lint pasaron pero no se confirmo el lanzamiento. No afirmes exito; inspecciona el resultado y corrige la causa concreta antes de otra escritura.");
                     kprint("\n>> [GUARDIA CODER]: No se pudo confirmar el lanzamiento; se permite una reparacion dirigida.\n");
                     continue;
@@ -2254,7 +2267,7 @@ void agent_run(const char *agent_name, const char *mission)
             kprint("\033[0m\n");
 
             tool_feedback_buf[0] = '\0';
-            dispatch_agent_command(clean_cmd, tool_feedback_buf, 16384);
+            dispatch_agent_command(clean_cmd, tool_feedback_buf, TT);
 
             if (clean_cmd[0] == 'w' && clean_cmd[1] == 'r' && clean_cmd[2] == 'i') {
                 const char *wp = clean_cmd + 5;
@@ -2285,23 +2298,23 @@ void agent_run(const char *agent_name, const char *mission)
             while (tool_feedback_buf[fb_len]) fb_len++;
             vfs_write("/tmp/last_tool.log", tool_feedback_buf, fb_len);
 
-            fb_puts(history_buf, 8192, &hist_len, "- Paso ");
-fb_put_dec(history_buf, 8192, &hist_len, (uint64_t)step);
-fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
-            history_append_command(history_buf, 8192, &hist_len, clean_cmd);
-            fb_puts(history_buf, 8192, &hist_len, "' -> Resultado: '");
+            fb_puts(history_buf, TH, &hist_len, "- Paso ");
+fb_put_dec(history_buf, TH, &hist_len, (uint64_t)step);
+fb_puts(history_buf, TH, &hist_len, ": ejecutaste '");
+            history_append_command(history_buf, TH, &hist_len, clean_cmd);
+            fb_puts(history_buf, TH, &hist_len, "' -> Resultado: '");
 
-            if (fb_len > 450) {
-                for (uint32_t k = 0; k < 400 && hist_len < 8192 - 200; ++k) {
+            if (fb_len > TPASO) {                               /* SOMA_260_LLM_TAM: antes el modelo veia 400 caracteres */
+                for (uint32_t k = 0; k < TPASO - 50 && hist_len < TH - 200; ++k) {
                     history_buf[hist_len++] = tool_feedback_buf[k];
                 }
-                fb_puts(history_buf, 8192, &hist_len, " [... salida resumida; completa en /tmp/last_tool.log ...]");
+                fb_puts(history_buf, TH, &hist_len, " [... salida resumida; completa en /tmp/last_tool.log ...]");
             } else {
-                for (uint32_t k = 0; k < fb_len && hist_len < 8192 - 30; ++k) {
+                for (uint32_t k = 0; k < fb_len && hist_len < TH - 30; ++k) {
                     history_buf[hist_len++] = tool_feedback_buf[k];
                 }
             }
-            fb_puts(history_buf, 8192, &hist_len, "'\n");
+            fb_puts(history_buf, TH, &hist_len, "'\n");
             history_buf[hist_len] = '\0';
             continue;
         }
@@ -2316,7 +2329,7 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                 if (coder_mode && clean_cmd[0] == 'w' && clean_cmd[1] == 'r' &&
                     clean_cmd[2] == 'i' && clean_cmd[3] == 't' && clean_cmd[4] == 'e' &&
                     clean_cmd[5] == ' ' && find_substr(clean_cmd, ".soma")) {
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "RECHAZADO: no combines write y final. Ejecuta write como accion tool separada, luego compile y app.");
                     continue;
                 }
@@ -2324,7 +2337,7 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                 kprint(clean_cmd);
                 kprint("\033[0m\n");
                 tool_feedback_buf[0] = '\0';
-                dispatch_agent_command(clean_cmd, tool_feedback_buf, 16384);
+                dispatch_agent_command(clean_cmd, tool_feedback_buf, TT);
 
                 if (clean_cmd[0] == 'w' && clean_cmd[1] == 'r' && clean_cmd[2] == 'i') {
                     const char *wp = clean_cmd + 5;
@@ -2370,18 +2383,18 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                 if (!write_seen || !compile_seen || !compile_success ||
                     write_seen > compile_seen || compile_seen > compile_success) {
                     kprint("\n>> [GUARDIA CODER]: Falta una compilacion correcta registrada.\n");
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "RECHAZADO: ejecuta compile y espera el resultado COMPILE OK antes de finalizar.");
                     continue;
                 }
                 if (!app_seen || app_seen < write_seen || app_seen < compile_success || app_seen < compile_seen) {
                     kprint("\n>> [GUARDIA CODER]: Falta lanzar app despues de compilar.\n");
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "RECHAZADO: tras COMPILE OK ejecuta app <ruta.soma> una vez y espera confirmacion de lanzamiento.");
                     continue;
                 }
                 if (!launch_seen || launch_seen < app_seen) {
-                    history_add_note(history_buf, &hist_len, 8192, step,
+                    history_add_note(history_buf, &hist_len, TH, step,
                         "RECHAZADO: app no tiene confirmacion de lanzamiento/ejecucion en el historial; comprueba su resultado real.");
                     continue;
                 }
@@ -2402,14 +2415,14 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                     int r_code = vfs_read(target_soma, chk_code, sizeof(chk_code) - 1);
                     if (r_code <= 0) {
                         kprint("\n>> [GUARDIA CODER]: Bloqueada finalizacion. Archivo vacio o no escrito.\n");
-                        history_add_note(history_buf, &hist_len, 8192, step, "RECHAZADO: El archivo no fue escrito o contiene un placeholder vacio. Debes escribir el codigo SOMA-LANG COMPLETO con 'write'.");
+                        history_add_note(history_buf, &hist_len, TH, step, "RECHAZADO: El archivo no fue escrito o contiene un placeholder vacio. Debes escribir el codigo SOMA-LANG COMPLETO con 'write'.");
                         continue;
                     }
                     chk_code[r_code] = '\0';
 
                     if (find_substr(chk_code, "...") != 0 && r_code < 30) {
                         kprint("\n>> [GUARDIA CODER]: Bloqueada finalizacion. El archivo contiene solo '...'.\n");
-                        history_add_note(history_buf, &hist_len, 8192, step, "RECHAZADO: Escribiste un placeholder '...'. Escribe el programa completo real con logica de ventanas y botones.");
+                        history_add_note(history_buf, &hist_len, TH, step, "RECHAZADO: Escribiste un placeholder '...'. Escribe el programa completo real con logica de ventanas y botones.");
                         continue;
                     }
 
@@ -2432,7 +2445,7 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                         fb_puts(rej_buf, sizeof(rej_buf), &rp, c_tok);
                         fb_puts(rej_buf, sizeof(rej_buf), &rp, "'). Corrige el codigo usando 'write' y verifica con 'compile'.");
 
-                        history_add_note(history_buf, &hist_len, 8192, step, rej_buf);
+                        history_add_note(history_buf, &hist_len, TH, step, rej_buf);
                         continue;
                     }
 
@@ -2448,7 +2461,7 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
                                 "RECHAZADO: lint detectó errores graves; corrige el archivo completo. ");
                         if (li < (int)chk_lint.count)
                             fb_puts(lint_rej, sizeof(lint_rej), &lp, chk_lint.msg[li]);
-                        history_add_note(history_buf, &hist_len, 8192, step, lint_rej);
+                        history_add_note(history_buf, &hist_len, TH, step, lint_rej);
                         kprint("\n>> [GUARDIA CODER]: Bloqueada finalización. Lint detectó errores graves.\n");
                         continue;
                     }
@@ -2505,7 +2518,7 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
             break;
         }
 
-        history_add_note(history_buf, &hist_len, 8192, step, "formato JSON no reconocido.");
+        history_add_note(history_buf, &hist_len, TH, step, "formato JSON no reconocido.");
     }
 
     if (!finished && coder_mode) {
@@ -2531,17 +2544,17 @@ fb_puts(history_buf, 8192, &hist_len, ": ejecutaste '");
         kprint("\n>> [SOMA AGENT]: Sintetizando dictamen con la informacion disponible...\n");
         llm_trace_tag("resumen final");
         ap_len = 0;
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "MISION: '");
+        fb_puts(agent_prompt_buf, TP, &ap_len, "MISION: '");
         const char *pm = mission;
-        while (*pm && ap_len < 16384 - 2200) agent_prompt_buf[ap_len++] = *pm++;
-        fb_puts(agent_prompt_buf, 16384, &ap_len, "'\n\nHistorial de acciones previas:\n");
-        for (uint32_t h = 0; h < hist_len && ap_len < 16384 - 800; ++h) {
+        while (*pm && ap_len < TP - 2200) agent_prompt_buf[ap_len++] = *pm++;
+        fb_puts(agent_prompt_buf, TP, &ap_len, "'\n\nHistorial de acciones previas:\n");
+        for (uint32_t h = 0; h < hist_len && ap_len < TP - 800; ++h) {
             agent_prompt_buf[ap_len++] = history_buf[h];
         }
-        fb_puts(agent_prompt_buf, 16384, &ap_len,
+        fb_puts(agent_prompt_buf, TP, &ap_len,
                 "\nInstruccion: Responde de forma veraz y directa al usuario basandote estrictamente en los hechos ejecutados.");
 
-        if (llm_chat(agent_prompt_buf, agent_reply_buf, 32768, 45000)) {
+        if (llm_chat(agent_prompt_buf, agent_reply_buf, TR, 45000)) {
             kprint("\n\033[1;32m===============================================================\033[0m\n");
             kprint(" \033[1;32m[");
             kprint(agent->name);

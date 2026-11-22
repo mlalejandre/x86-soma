@@ -1,0 +1,1629 @@
+{
+ "ordenes": [
+  {
+   "nombre": "vm",
+   "funcion": "cmd_lang_vm",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Test y estado de la maquina virtual SOMA-VM",
+   "uso": ""
+  },
+  {
+   "nombre": "programa",
+   "funcion": "cmd_programa",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Crea o modifica un programa con IA (SOMA-LANG o Python): programa [archivo.soma|archivo.py] <mision>  (\"en Python\" elige Python)",
+   "uso": ""
+  },
+  {
+   "nombre": "coderlog",
+   "funcion": "cmd_coderlog",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Detalle del ultimo trabajo del programador (coderlog todo = con respuestas)",
+   "uso": ""
+  },
+  {
+   "nombre": "studio",
+   "funcion": "cmd_studio",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Abre SOMA Studio (editor de codigo) [archivo]",
+   "uso": ""
+  },
+  {
+   "nombre": "coder",
+   "funcion": "cmd_lang_coder",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Agente programador autonomo SOMA",
+   "uso": ""
+  },
+  {
+   "nombre": "run",
+   "funcion": "cmd_lang_run",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ejecuta un script o tokeniza codigo .soma",
+   "uso": ""
+  },
+  {
+   "nombre": "app",
+   "funcion": "cmd_lang_run",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lanza una aplicacion SOMA-LANG (.soma) en ventana",
+   "uso": ""
+  },
+  {
+   "nombre": "compile",
+   "funcion": "cmd_compile",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Verifica y compila sintaxis de un script .soma sin ejecutar",
+   "uso": ""
+  },
+  {
+   "nombre": "lint",
+   "funcion": "cmd_lang_lint",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Analisis estatico de codigo SOMA-LANG (anti-Python, placeholders, bucles)",
+   "uso": ""
+  },
+  {
+   "nombre": "check",
+   "funcion": "cmd_compile",
+   "flags": "CMD_F_ALIAS | CMD_F_SAFE",
+   "ayuda": "Alias de compile",
+   "uso": ""
+  },
+  {
+   "nombre": "history",
+   "funcion": "cmd_history",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra el historial persistente de comandos",
+   "uso": ""
+  },
+  {
+   "nombre": "source",
+   "funcion": "cmd_source",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ejecuta un script de comandos por lotes (.sh)",
+   "uso": ""
+  },
+  {
+   "nombre": "sh",
+   "funcion": "cmd_source",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de source",
+   "uso": ""
+  },
+  {
+   "nombre": "help",
+   "funcion": "cmd_help",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ayuda por categorias: help [categoria|comando|texto|all|agentes]",
+   "uso": "help [categoria | comando | texto | all | agentes]"
+  },
+  {
+   "nombre": "somafetch",
+   "funcion": "cmd_somafetch",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ficha del sistema y telemetria en arte ASCII",
+   "uso": ""
+  },
+  {
+   "nombre": "neofetch",
+   "funcion": "cmd_somafetch",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de somafetch",
+   "uso": ""
+  },
+  {
+   "nombre": "fetch",
+   "funcion": "cmd_somafetch",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de somafetch",
+   "uso": ""
+  },
+  {
+   "nombre": "creador",
+   "funcion": "cmd_creador",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra informacion de la autoría de SOMA",
+   "uso": ""
+  },
+  {
+   "nombre": "status",
+   "funcion": "cmd_status",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra estado basico de red e IP",
+   "uso": ""
+  },
+  {
+   "nombre": "uptime",
+   "funcion": "cmd_uptime",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra el tiempo de actividad del kernel",
+   "uso": ""
+  },
+  {
+   "nombre": "hw",
+   "funcion": "cmd_hw",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Hardware: ACPI (x86), arbol de dispositivos (ARM) y PCI; hw -v anade capacidades MSI/MSI-X/PCIe",
+   "uso": ""
+  },
+  {
+   "nombre": "apic",
+   "funcion": "cmd_apic",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Estado del LAPIC/IOAPIC (x86_64); apic test | apic route test|on|off: autotest del LAPIC y enrutado de IRQ por el IOAPIC",
+   "uso": ""
+  },
+  {
+   "nombre": "ahci",
+   "funcion": "cmd_ahci",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Controlador SATA AHCI (x86_64): info del disco; ahci test (E/S en el disco de prueba QEMU) | ahci read <lba>",
+   "uso": ""
+  },
+  {
+   "nombre": "nvme",
+   "funcion": "cmd_nvme",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Controlador NVMe (x86_64): info del disco; nvme test (E/S en el disco de prueba QEMU) | nvme read <lba>",
+   "uso": ""
+  },
+  {
+   "nombre": "usb",
+   "funcion": "cmd_usb",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "USB xHCI (x86_64 y Pi 5): enumera los dispositivos; usb hid [on|off|status] teclado/raton USB; usb msc disco USB",
+   "uso": ""
+  },
+  {
+   "nombre": "fat",
+   "funcion": "cmd_fat",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lee discos FAT12/16/32 (solo lectura): fat | fat ls <dev> [ruta] | fat cat <dev> <ruta> | fat get <dev> <ruta> <destino>",
+   "uso": ""
+  },
+  {
+   "nombre": "blk",
+   "funcion": "cmd_blk",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Discos (virtio/AHCI/NVMe): blk | blk read <dev> <lba> | blk copy <o> <lba> <d> <lba> <n> | blk test",
+   "uso": ""
+  },
+  {
+   "nombre": "ram",
+   "funcion": "cmd_ram",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Memoria RAM: total/usada/libre, barra y heap (-s resumen, -v desglose; alias: free)",
+   "uso": "ram [-s | -v | base | reset]   (-s resumen, -v desglose, base/reset: medir una app)"
+  },
+  {
+   "nombre": "date",
+   "funcion": "cmd_date",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Fecha y hora real UTC desde el reloj CMOS RTC",
+   "uso": ""
+  },
+  {
+   "nombre": "sysinfo",
+   "funcion": "cmd_sysinfo",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Resumen del sistema: uptime, RAM, almacenamiento, hilos y red",
+   "uso": ""
+  },
+  {
+   "nombre": "sys",
+   "funcion": "cmd_sysinfo",
+   "flags": "CMD_F_ALIAS | CMD_F_SAFE",
+   "ayuda": "Alias de sysinfo",
+   "uso": ""
+  },
+  {
+   "nombre": "whoami",
+   "funcion": "cmd_whoami",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra el usuario actual",
+   "uso": ""
+  },
+  {
+   "nombre": "hostname",
+   "funcion": "cmd_hostname",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra el nombre del equipo",
+   "uso": ""
+  },
+  {
+   "nombre": "uname",
+   "funcion": "cmd_uname",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Version y arquitectura de SOMA (uname -a: completo)",
+   "uso": "uname [-a]"
+  },
+  {
+   "nombre": "clear",
+   "funcion": "cmd_clear",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Limpia el buffer de pantalla VGA",
+   "uso": ""
+  },
+  {
+   "nombre": "cls",
+   "funcion": "cmd_clear",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de clear",
+   "uso": ""
+  },
+  {
+   "nombre": "env",
+   "funcion": "cmd_env",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra variables de entorno activas",
+   "uso": ""
+  },
+  {
+   "nombre": "export",
+   "funcion": "cmd_export",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Define o modifica una variable de entorno (VAR=val)",
+   "uso": ""
+  },
+  {
+   "nombre": "unset",
+   "funcion": "cmd_unset",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Elimina una variable de entorno activa",
+   "uso": ""
+  },
+  {
+   "nombre": "test_suite",
+   "funcion": "cmd_test_suite",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Suite integral de auto-test y no-regresion (9 fases)",
+   "uso": ""
+  },
+  {
+   "nombre": "test",
+   "funcion": "cmd_test_suite",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de test_suite",
+   "uso": ""
+  },
+  {
+   "nombre": "mem",
+   "funcion": "cmd_mem",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Inspeccion fisica de CR0, CR3, CR4 y paginacion",
+   "uso": ""
+  },
+  {
+   "nombre": "free",
+   "funcion": "cmd_ram",
+   "flags": "CMD_F_ALIAS | CMD_F_SAFE",
+   "ayuda": "Alias de ram",
+   "uso": ""
+  },
+  {
+   "nombre": "df",
+   "funcion": "cmd_df",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Capacidad de almacenamiento y estado de RamFS",
+   "uso": ""
+  },
+  {
+   "nombre": "stats",
+   "funcion": "cmd_stats",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Estadisticas de paquetes y bytes VirtIO-NET",
+   "uso": ""
+  },
+  {
+   "nombre": "heap",
+   "funcion": "cmd_heap",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Telemetria y auto-test del KHeap dinamico",
+   "uso": ""
+  },
+  {
+   "nombre": "pmmbench",
+   "funcion": "cmd_pmmbench",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: compara el asignador de marcos nuevo con el escaneo antiguo",
+   "uso": ""
+  },
+  {
+   "nombre": "oomtest",
+   "funcion": "cmd_oomtest",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: carga de procesos con memoria agotada en cada punto (sin fugas ni cuelgues)",
+   "uso": ""
+  },
+  {
+   "nombre": "usfuzz",
+   "funcion": "cmd_usfuzz",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: fuzzing hostil de syscalls desde ring 3: usfuzz [procesos] [syscalls por proceso] [semilla]",
+   "uso": ""
+  },
+  {
+   "nombre": "demo_ai",
+   "funcion": "cmd_demo_ai",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEMO: la IA escribe un programa, las pruebas detectan sus fallos y los corrige (demo_ai vivo = con el LLM real)",
+   "uso": ""
+  },
+  {
+   "nombre": "fscrash",
+   "funcion": "cmd_fscrash",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: simula cortes de energia al guardar y comprueba que ningun archivo queda a medias",
+   "uso": ""
+  },
+  {
+   "nombre": "fscheck",
+   "funcion": "cmd_fscheck",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Comprueba el disco del VFS: cabeceras y CRC de cada archivo",
+   "uso": ""
+  },
+  {
+   "nombre": "conctest",
+   "funcion": "cmd_conctest",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: prueba de estres de concurrencia (6 hilos: mutex, heap y VFS)",
+   "uso": ""
+  },
+  {
+   "nombre": "deadlock",
+   "funcion": "cmd_deadlock",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: provoca un interbloqueo de dos hilos para probar su deteccion",
+   "uso": ""
+  },
+  {
+   "nombre": "mutex",
+   "funcion": "cmd_mutex",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Estado de los mutex del kernel: propietario, esperando, interbloqueos",
+   "uso": ""
+  },
+  {
+   "nombre": "audio",
+   "funcion": "cmd_audio",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Audio: audio info|tone [hz] [ms]|test|play <ruta.wav>|stop|vol N|stat",
+   "uso": ""
+  },
+  {
+   "nombre": "mic",
+   "funcion": "cmd_mic",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Microfono: mic info|fuentes|fuente N|ganancia N|sw N|nivel [s]|grabar [s] [Hz]|parar|reproducir|guardar [ruta]|cargar ruta|borrar [ruta]|probar|nodos|verbo nid verbo payload",
+   "uso": ""
+  },
+  {
+   "nombre": "cam",
+   "funcion": "cmd_cam",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Camara web: cam info|estado|iniciar [AnchoxAlto] [fps]|parar|foto [ruta]|video [segundos]|abrir",
+   "uso": ""
+  },
+  {
+   "nombre": "captura",
+   "funcion": "cmd_captura",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Captura de pantalla: captura estado|foto|video [s]|audio [s]|av [s]|iniciar video|audio|av|parar|fps N|escala N|abrir",
+   "uso": ""
+  },
+  {
+   "nombre": "cap",
+   "funcion": "cmd_captura",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Igual que captura",
+   "uso": ""
+  },
+  {
+   "nombre": "camara",
+   "funcion": "cmd_camara",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Abre la aplicacion Camara (vista previa, foto JPEG y video AVI con audio)",
+   "uso": ""
+  },
+  {
+   "nombre": "grabadora",
+   "funcion": "cmd_grabadora",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Abre la aplicacion Grabadora (microfono: grabar, escuchar, guardar WAV)",
+   "uso": ""
+  },
+  {
+   "nombre": "big",
+   "funcion": "cmd_big",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Almacen de archivos grandes: big info|format yes|ls|mkdir|rm|mv|stat|cat|put|get|write|truncate|fsck|bench",
+   "uso": ""
+  },
+  {
+   "nombre": "exec",
+   "funcion": "cmd_exec",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Ejecuta un programa ELF de usuario (ring 3): exec [-b] /bin/hello.elf [plazo_ms]",
+   "uso": ""
+  },
+  {
+   "nombre": "habla",
+   "funcion": "cmd_habla",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Texto a voz (voz de Piper): habla texto | habla instalar | habla parar | habla (estado)",
+   "uso": ""
+  },
+  {
+   "nombre": "voz",
+   "funcion": "cmd_voz",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Voz a texto (whisper.cpp, espanol): voz archivo.wav | voz ultima | voz instalar | voz modelo. Opciones: -T marcas de tiempo, -l idioma, -v detalles",
+   "uso": ""
+  },
+  {
+   "nombre": "python",
+   "funcion": "cmd_python",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Python (MicroPython en ring 3; ventanas con from soma import win): python | python script.py [args] | python -c \"codigo\". Rutas relativas: /workspace",
+   "uso": ""
+  },
+  {
+   "nombre": "procs",
+   "funcion": "cmd_procs",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Lista los procesos de usuario (libera los terminados)",
+   "uso": ""
+  },
+  {
+   "nombre": "usertest",
+   "funcion": "cmd_usertest",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: ejecuta programas de prueba en ring 3 (syscalls, aislamiento, plazo)",
+   "uso": ""
+  },
+  {
+   "nombre": "fbverify",
+   "funcion": "cmd_fbverify",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: fbverify on|off — verifica el dano del renderizado",
+   "uso": ""
+  },
+  {
+   "nombre": "watchdog",
+   "funcion": "cmd_watchdog",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Estado del vigilante (aviso si ningun hilo cede la CPU en 5 s)",
+   "uso": ""
+  },
+  {
+   "nombre": "crash",
+   "funcion": "cmd_crash",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: provoca un panic con backtrace (detiene el sistema)",
+   "uso": ""
+  },
+  {
+   "nombre": "hang",
+   "funcion": "cmd_hang",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: hang [seg] retiene la CPU para probar el vigilante",
+   "uso": ""
+  },
+  {
+   "nombre": "pmm",
+   "funcion": "cmd_pmm",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Telemetria y auto-test del PMM bitmap allocator",
+   "uso": ""
+  },
+  {
+   "nombre": "vmm",
+   "funcion": "cmd_vmm",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Verificacion de tablas de paginas MMU 4 KiB",
+   "uso": ""
+  },
+  {
+   "nombre": "pci",
+   "funcion": "cmd_pci",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Escaneo completo del bus PCI y BAR0 I/O",
+   "uso": ""
+  },
+  {
+   "nombre": "tls",
+   "funcion": "cmd_tls",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "HTTPS directo (TLS 1.3 propio, certificado verificado): tls <url> | tls estado",
+   "uso": ""
+  },
+  {
+   "nombre": "wifi",
+   "funcion": "cmd_wifi",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "WiFi: T480s (Intel 8265): wifi | buscar | conectar <red> [clave] | desconectar | guardadas | olvidar | registro. Pi 5: wifi | prueba | sondear | nucleos | firmware | log | mux | rd | wr",
+   "uso": ""
+  },
+  {
+   "nombre": "placa",
+   "funcion": "cmd_placa",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Modelo de Raspberry Pi, memoria y revision (segun el firmware)",
+   "uso": ""
+  },
+  {
+   "nombre": "cpus",
+   "funcion": "cmd_cpus",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Nucleos del procesador: cpus | cpus prueba (velocidad en paralelo) | cpus 1 | cpus todos",
+   "uso": ""
+  },
+  {
+   "nombre": "dhcp",
+   "funcion": "cmd_dhcp",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Pide IP, mascara, puerta de enlace y DNS al router por DHCP",
+   "uso": ""
+  },
+  {
+   "nombre": "netif",
+   "funcion": "cmd_netif",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Interfaces de red: netif | netif usar <eth0|wlan0|virtio0>",
+   "uso": ""
+  },
+  {
+   "nombre": "wpa",
+   "funcion": "cmd_wpa",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "WPA2: wpa (autoprueba de la criptografia) | wpa psk <ssid> <clave>",
+   "uso": ""
+  },
+  {
+   "nombre": "llm-config",
+   "funcion": "cmd_llm_config",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Modelo de lenguaje: llm-config | proveedor <local|openai|claude|gemini> | servidor | modelo | clave | modelos | probar",
+   "uso": ""
+  },
+  {
+   "nombre": "navegador-aislado",
+   "funcion": "cmd_nav_aislado",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Motor del navegador en un proceso de ring 3: navegador-aislado | on | off",
+   "uso": ""
+  },
+  {
+   "nombre": "webr3",
+   "funcion": "cmd_webr3",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: carga una URL con el motor del navegador en ring 3 (sin interfaz)",
+   "uso": ""
+  },
+  {
+   "nombre": "membench",
+   "funcion": "cmd_membench",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "DEPURACION: coste de memcpy/memset/memmove/memcmp por tamano",
+   "uso": ""
+  },
+  {
+   "nombre": "agente_red",
+   "funcion": "cmd_agente_red",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Destinos de red de los agentes: agente_red | abierto|procedencia|cerrado | permitir <dominio> | quitar <dominio>",
+   "uso": ""
+  },
+  {
+   "nombre": "rng",
+   "funcion": "cmd_rng",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Generador aleatorio del nucleo: fuentes (RDSEED/RDRAND), siembras y autoprueba",
+   "uso": ""
+  },
+  {
+   "nombre": "memprot",
+   "funcion": "cmd_memprot",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Proteccion de memoria del nucleo: que es ejecutable (solo .text) y estado de la pagina 0",
+   "uso": ""
+  },
+  {
+   "nombre": "fan",
+   "funcion": "cmd_fan",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ventilador de la Pi 5: fan | fan on | fan off | fan inv",
+   "uso": ""
+  },
+  {
+   "nombre": "hdmi",
+   "funcion": "cmd_hdmi",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Framebuffer HDMI (Pi 5): resolucion, bits, pitch, direccion; 'hdmi swap' cambia rojo/azul",
+   "uso": ""
+  },
+  {
+   "nombre": "eth",
+   "funcion": "cmd_eth",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ethernet del RP1 (Pi 5): velocidad y duplex negociados, tramas",
+   "uso": ""
+  },
+  {
+   "nombre": "gpio",
+   "funcion": "cmd_gpio",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "GPIO del RP1 (Pi 5): gpio | gpio N | gpio N in|out|0|1|toggle|up|down|nopull",
+   "uso": ""
+  },
+  {
+   "nombre": "arp",
+   "funcion": "cmd_arp",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Tabla de cache de resolucion dinamica ARP",
+   "uso": ""
+  },
+  {
+   "nombre": "sbx",
+   "funcion": "cmd_sbx",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Servicios aislados en ring 3 (decodificadores de imagen): estadisticas; 'sbx test' = pruebas",
+   "uso": ""
+  },
+  {
+   "nombre": "stacks",
+   "funcion": "cmd_stacks",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Uso maximo de pila de cada hilo (marca de agua); avisa de los que rozan el limite",
+   "uso": ""
+  },
+  {
+   "nombre": "ps",
+   "funcion": "cmd_ps",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Tabla de hilos de kernel, demonios y ticks CPU",
+   "uso": ""
+  },
+  {
+   "nombre": "threads",
+   "funcion": "cmd_threads",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Supervision de KThreads y stacks virtuales",
+   "uso": ""
+  },
+  {
+   "nombre": "spawn",
+   "funcion": "cmd_spawn",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lanza un comando como hilo en segundo plano",
+   "uso": "spawn <comando>   (segundo plano; log en /tmp/job_<TID>.log)"
+  },
+  {
+   "nombre": "bg",
+   "funcion": "cmd_spawn",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de spawn",
+   "uso": ""
+  },
+  {
+   "nombre": "kill",
+   "funcion": "cmd_kill",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Termina un hilo en segundo plano (TID > 3)",
+   "uso": "kill <TID>"
+  },
+  {
+   "nombre": "sleep",
+   "funcion": "cmd_sleep",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Suspende la CPU con HLT durante N milisegundos",
+   "uso": ""
+  },
+  {
+   "nombre": "time",
+   "funcion": "cmd_time",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Mide milisegundos y ciclos TSC de un comando",
+   "uso": ""
+  },
+  {
+   "nombre": "reboot",
+   "funcion": "cmd_reboot",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Reinicia fisicamente el equipo (8042 reset)",
+   "uso": ""
+  },
+  {
+   "nombre": "poweroff",
+   "funcion": "cmd_poweroff",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Apaga el sistema limpiamente via ACPI",
+   "uso": ""
+  },
+  {
+   "nombre": "shutdown",
+   "funcion": "cmd_poweroff",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de poweroff",
+   "uso": ""
+  },
+  {
+   "nombre": "halt",
+   "funcion": "cmd_halt",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Sincroniza discos y detiene la CPU (HLT)",
+   "uso": ""
+  },
+  {
+   "nombre": "ls",
+   "funcion": "cmd_ls",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lista archivos persistentes del RamFS",
+   "uso": "ls [-a] [ruta]"
+  },
+  {
+   "nombre": "cat",
+   "funcion": "cmd_cat",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra el contenido de un archivo",
+   "uso": ""
+  },
+  {
+   "nombre": "write",
+   "funcion": "cmd_write",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Crea o sobrescribe un archivo en RamFS",
+   "uso": "write <ruta> \\\"<texto>\\\"   (\\\\n = salto de linea)"
+  },
+  {
+   "nombre": "rm",
+   "funcion": "cmd_rm",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Elimina un archivo del RamFS",
+   "uso": ""
+  },
+  {
+   "nombre": "cp",
+   "funcion": "cmd_cp",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Copia un archivo a una nueva ruta",
+   "uso": "cp <origen> <destino>"
+  },
+  {
+   "nombre": "mv",
+   "funcion": "cmd_mv",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Mueve o renombra un archivo en RamFS",
+   "uso": "mv <origen> <destino>"
+  },
+  {
+   "nombre": "touch",
+   "funcion": "cmd_touch",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Crea un archivo vacio si no existe",
+   "uso": ""
+  },
+  {
+   "nombre": "tree",
+   "funcion": "cmd_tree",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra la jerarquia de archivos en arbol",
+   "uso": ""
+  },
+  {
+   "nombre": "head",
+   "funcion": "cmd_head",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra las primeras N lineas de un archivo",
+   "uso": "head [-n N] <archivo>"
+  },
+  {
+   "nombre": "tail",
+   "funcion": "cmd_tail",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra las ultimas N lineas de un archivo",
+   "uso": "tail [-n N] <archivo>"
+  },
+  {
+   "nombre": "wc",
+   "funcion": "cmd_wc",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Cuenta lineas, palabras y bytes de un archivo",
+   "uso": ""
+  },
+  {
+   "nombre": "grep",
+   "funcion": "cmd_grep",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Busca patrones de texto dentro de un archivo",
+   "uso": "grep [-i] [-l] <patron> [archivo]   (sin archivo busca en todo el RamFS)"
+  },
+  {
+   "nombre": "echo",
+   "funcion": "cmd_echo",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Imprime texto en consola o con redireccion",
+   "uso": ""
+  },
+  {
+   "nombre": "nano",
+   "funcion": "cmd_nano",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Editor de texto visual interactivo en 80x25",
+   "uso": ""
+  },
+  {
+   "nombre": "edit",
+   "funcion": "cmd_nano",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de nano",
+   "uso": ""
+  },
+  {
+   "nombre": "hexdump",
+   "funcion": "cmd_hexdump",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Volcado canonico hexadecimal y ASCII de archivo",
+   "uso": ""
+  },
+  {
+   "nombre": "xxd",
+   "funcion": "cmd_hexdump",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de hexdump",
+   "uso": ""
+  },
+  {
+   "nombre": "find",
+   "funcion": "cmd_find",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Busca archivos por nombre: find <texto> [ruta] [-a]",
+   "uso": "find <texto> [ruta] [-a]   (-a incluye ocultos y de sistema)"
+  },
+  {
+   "nombre": "mkdir",
+   "funcion": "cmd_mkdir",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Crea un directorio (agentes: solo en /workspace y /mis_archivos)",
+   "uso": "mkdir <ruta>   (relativa a /workspace si no empieza por /)"
+  },
+  {
+   "nombre": "rmdir",
+   "funcion": "cmd_rmdir",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Elimina un directorio vacio",
+   "uso": "rmdir <ruta>   (solo directorios vacios)"
+  },
+  {
+   "nombre": "stat",
+   "funcion": "cmd_stat",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Metadatos de un archivo: tamano, tipo, lineas y persistencia",
+   "uso": "stat <archivo>"
+  },
+  {
+   "nombre": "du",
+   "funcion": "cmd_du",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Uso de disco por archivo y total (du [ruta] [-a])",
+   "uso": "du [ruta] [-a]"
+  },
+  {
+   "nombre": "sort",
+   "funcion": "cmd_sort",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ordena lineas (-r inverso, -n numerico); admite tuberias",
+   "uso": "sort [-r] [-n] [archivo]   o   <comando> | sort"
+  },
+  {
+   "nombre": "uniq",
+   "funcion": "cmd_uniq",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Quita lineas repetidas consecutivas (-c cuenta); admite tuberias",
+   "uso": "uniq [-c] [archivo]   o   <comando> | uniq"
+  },
+  {
+   "nombre": "checkpoint",
+   "funcion": "cmd_checkpoint",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Guarda snapshot persistente en virtio-blk (LBA 4096)",
+   "uso": ""
+  },
+  {
+   "nombre": "fs-backup",
+   "funcion": "cmd_checkpoint",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de checkpoint",
+   "uso": ""
+  },
+  {
+   "nombre": "rollback",
+   "funcion": "cmd_rollback",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Restaura RamFS desde el snapshot fisico",
+   "uso": ""
+  },
+  {
+   "nombre": "fs-restore",
+   "funcion": "cmd_rollback",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de rollback",
+   "uso": ""
+  },
+  {
+   "nombre": "fs-sync",
+   "funcion": "cmd_fs_sync",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Fuerza sincronizacion de inodos sucios a disco",
+   "uso": ""
+  },
+  {
+   "nombre": "fs-format",
+   "funcion": "cmd_fs_format",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Formatea RamFS restaurando imagen de fabrica",
+   "uso": ""
+  },
+  {
+   "nombre": "sector_read",
+   "funcion": "cmd_sector_read",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lectura fisica directa de sector LBA de 512 B",
+   "uso": ""
+  },
+  {
+   "nombre": "sector_r",
+   "funcion": "cmd_sector_read",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de sector_read",
+   "uso": ""
+  },
+  {
+   "nombre": "sector_write",
+   "funcion": "cmd_sector_write",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Escritura fisica directa en sector LBA de usuario",
+   "uso": ""
+  },
+  {
+   "nombre": "sector_w",
+   "funcion": "cmd_sector_write",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de sector_write",
+   "uso": ""
+  },
+  {
+   "nombre": "httpd",
+   "funcion": "cmd_httpd",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Servidor web HTTP (puerto 80 / localhost:8090): httpd | httpd on | httpd off",
+   "uso": ""
+  },
+  {
+   "nombre": "ping",
+   "funcion": "cmd_ping",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Envia peticiones ICMP Echo a una IP destino",
+   "uso": ""
+  },
+  {
+   "nombre": "dns",
+   "funcion": "cmd_dns",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Resolucion dinamica de nombres de dominio DNS",
+   "uso": ""
+  },
+  {
+   "nombre": "curl",
+   "funcion": "cmd_curl",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Cliente HTTP/1.1 con resolucion y cabeceras",
+   "uso": "curl <url> | curl <host> [puerto] [ruta]"
+  },
+  {
+   "nombre": "search",
+   "funcion": "cmd_search",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Busqueda web DuckDuckGo Instant Answer",
+   "uso": "search <consulta>"
+  },
+  {
+   "nombre": "ddg",
+   "funcion": "cmd_search",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de search",
+   "uso": ""
+  },
+  {
+   "nombre": "soma",
+   "funcion": "cmd_soma",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Invoca al Agente Central SOMA con memoria episódica",
+   "uso": ""
+  },
+  {
+   "nombre": "buscador",
+   "funcion": "cmd_buscador",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Invoca al Agente Buscador (Web & System Research)",
+   "uso": ""
+  },
+  {
+   "nombre": "agent",
+   "funcion": "cmd_agent",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Despacha misiones a agentes (soma, buscador, etc.)",
+   "uso": ""
+  },
+  {
+   "nombre": "mayordomo",
+   "funcion": "cmd_mayordomo",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Agente directo para operaciones del sistema",
+   "uso": "mayordomo <tarea>   p. ej. 'muestra la RAM', 'que procesos hay', 'ayuda ram'"
+  },
+  {
+   "nombre": "delegate",
+   "funcion": "delegate_cmd",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Delega una sub-mision especializada a otro agente",
+   "uso": "delegate <agente> \\\"<mision>\\\""
+  },
+  {
+   "nombre": "myos",
+   "funcion": "cmd_soma",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de soma",
+   "uso": ""
+  },
+  {
+   "nombre": "mem_tree",
+   "funcion": "mem_tree_cmd",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra la jerarquia de temas del arbol de memoria",
+   "uso": ""
+  },
+  {
+   "nombre": "mem_read",
+   "funcion": "mem_read_cmd",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lee un nodo tematico del arbol de memoria",
+   "uso": ""
+  },
+  {
+   "nombre": "mem_write",
+   "funcion": "mem_write_cmd",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Escribe o actualiza un nodo en el arbol de memoria",
+   "uso": ""
+  },
+  {
+   "nombre": "mem_search",
+   "funcion": "mem_search_cmd",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Busca conceptos o palabras clave en el arbol de memoria",
+   "uso": "mem_search <palabras clave>"
+  },
+  {
+   "nombre": "bm25",
+   "funcion": "mem_search_cmd",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de mem_search (motor BM25)",
+   "uso": ""
+  },
+  {
+   "nombre": "health",
+   "funcion": "cmd_health",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Verifica estado del servidor LLM local (/health)",
+   "uso": ""
+  },
+  {
+   "nombre": "llm",
+   "funcion": "cmd_llm",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Consulta libre en lenguaje natural a nail-35b",
+   "uso": ""
+  },
+  {
+   "nombre": "llm-diag",
+   "funcion": "cmd_llm_diag",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Diagnostico holistico del kernel mediante IA",
+   "uso": ""
+  },
+  {
+   "nombre": "src_ls",
+   "funcion": "cmd_src_ls",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lista archivos fuente del kernel empaquetados",
+   "uso": ""
+  },
+  {
+   "nombre": "src_cat",
+   "funcion": "cmd_src_cat",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra un fragmento de codigo fuente desde offset",
+   "uso": ""
+  },
+  {
+   "nombre": "src_grep",
+   "funcion": "cmd_src_grep",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Busca cadenas en los fuentes con linea y offset",
+   "uso": ""
+  },
+  {
+   "nombre": "view",
+   "funcion": "cmd_view",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Inspecciona y visualiza archivos de imagen (BMP/PPM)",
+   "uso": ""
+  },
+  {
+   "nombre": "cursor",
+   "funcion": "cmd_cursor",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra o cambia el puntero activo del raton (arrow|crosshair|hand)",
+   "uso": "cursor [nombre | id]"
+  },
+  {
+   "nombre": "font",
+   "funcion": "cmd_font",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Muestra o cambia la fuente tipografica activa (classic|modern)",
+   "uso": "font [nombre | id]"
+  },
+  {
+   "nombre": "terminal",
+   "funcion": "cmd_terminal",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Abre la ventana del terminal de la GUI (barra de desplazamiento, seleccion, copiar/pegar, zoom)",
+   "uso": ""
+  },
+  {
+   "nombre": "media",
+   "funcion": "cmd_media",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Reproductor multimedia (video AVI y audio WAV del almacen BIGFS): media gui|list|play|pause|stop|seek|status",
+   "uso": ""
+  },
+  {
+   "nombre": "youtube",
+   "funcion": "cmd_youtube",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | modo nativo|servicio | mp4 <direccion> | ia on|off | ver N | transcribir | subtitulos | resumen | pregunta <texto> | idioma X | minutos N | contexto N | estado",
+   "uso": ""
+  },
+  {
+   "nombre": "monitor",
+   "funcion": "cmd_monitor",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware",
+   "uso": ""
+  },
+  {
+   "nombre": "imagen",
+   "funcion": "cmd_imagen",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)",
+   "uso": ""
+  },
+  {
+   "nombre": "pdf",
+   "funcion": "cmd_pdf",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Lector de PDF: pdf [archivo.pdf]",
+   "uso": ""
+  },
+  {
+   "nombre": "traza",
+   "funcion": "cmd_traza",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Tiempos y tokens de las ultimas llamadas al modelo (/agent/traza.txt)",
+   "uso": ""
+  },
+  {
+   "nombre": "documento",
+   "funcion": "cmd_documento",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Documentos profesionales con IA: documento <peticion> | exportar <ruta> [pdf|html|png] | revisar <ruta> | abrir <ruta>",
+   "uso": ""
+  },
+  {
+   "nombre": "suma",
+   "funcion": "cmd_suma",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Tamano y CRC-32 de un archivo: suma <archivo>",
+   "uso": ""
+  },
+  {
+   "nombre": "descargar",
+   "funcion": "cmd_descargar",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Descarga una URL a un archivo: descargar <url> [archivo] (sin limite de 16 KiB)",
+   "uso": ""
+  },
+  {
+   "nombre": "pantalla",
+   "funcion": "cmd_pantalla",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Pantalla y arranque: Multiboot, UEFI/BIOS, framebuffer del firmware, ACPI (portatil T480s)",
+   "uso": ""
+  },
+  {
+   "nombre": "teclado",
+   "funcion": "cmd_teclado",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Teclado y trackpad PS/2 (portatil T480s): estado y distribucion (teclado es|us)",
+   "uso": ""
+  },
+  {
+   "nombre": "ramtest",
+   "funcion": "cmd_ramtest",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Comprueba la memoria alta: ramtest [MiB] (reserva, escribe, verifica y libera; por defecto 1024)",
+   "uso": ""
+  },
+  {
+   "nombre": "irq",
+   "funcion": "cmd_irq",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Interrupciones: modo PIC/APIC, reloj, rutas del IOAPIC y contadores",
+   "uso": ""
+  },
+  {
+   "nombre": "bateria",
+   "funcion": "cmd_bateria",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Bateria (carga, autonomia, salud), cargador y tapa por ACPI",
+   "uso": ""
+  },
+  {
+   "nombre": "escritorio",
+   "funcion": "cmd_escritorio",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Escritorio: escritorio reiniciar devuelve iconos y gadget a su sitio | escritorio prueba [n] abre y cierra n veces cada aplicacion y mira la memoria",
+   "uso": ""
+  },
+  {
+   "nombre": "orbe",
+   "funcion": "cmd_orbe",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Orbe del escritorio: coste de cada parte del fotograma y fps | orbe prueba (identico con 1 y con todos los nucleos)",
+   "uso": ""
+  },
+  {
+   "nombre": "energia",
+   "funcion": "cmd_energia",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Procesador: perfil (rendimiento/equilibrado/ahorro), temperatura, frecuencia real y consumo",
+   "uso": ""
+  },
+  {
+   "nombre": "brillo",
+   "funcion": "cmd_brillo",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Brillo de la pantalla y teclas Fn del ThinkPad: brillo | brillo 0-100 | brillo + | brillo -",
+   "uso": ""
+  },
+  {
+   "nombre": "trackpad",
+   "funcion": "cmd_trackpad",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Trackpad del portatil: gestos (dos dedos), toque, desplazamiento natural, velocidad",
+   "uso": ""
+  },
+  {
+   "nombre": "red",
+   "funcion": "cmd_red",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Conexion de red: cable Ethernet, movil por USB, direccion IP y estado de las tarjetas",
+   "uso": ""
+  },
+  {
+   "nombre": "acpi",
+   "funcion": "cmd_acpi",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Firmware ACPI (uACPI): estado, EC, eventos y dispositivos (bateria, tapa, botones): acpi | acpi todos",
+   "uso": ""
+  },
+  {
+   "nombre": "informe",
+   "funcion": "cmd_informe",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Informe de arranque y hardware para compartir: lo guarda en INFORME.TXT del pendrive y /informe.txt (informe ver lo muestra)",
+   "uso": ""
+  },
+  {
+   "nombre": "disco",
+   "funcion": "cmd_disco",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Donde se guardan los archivos: particion SOMADATA del pendrive, virtio o solo RAM (disco sync)",
+   "uso": ""
+  },
+  {
+   "nombre": "dmesg",
+   "funcion": "cmd_dmesg",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Registro del nucleo desde el arranque: dmesg [N lineas | texto a buscar]",
+   "uso": ""
+  },
+  {
+   "nombre": "navegador",
+   "funcion": "cmd_navegador",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Navegador web: navegador [url] (boton derecho sobre una imagen: Guardar imagen como...)",
+   "uso": ""
+  },
+  {
+   "nombre": "ajustes",
+   "funcion": "cmd_ajustes",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Ajustes de la interfaz: transparencia de las ventanas y fuente",
+   "uso": ""
+  },
+  {
+   "nombre": "latex",
+   "funcion": "cmd_latex",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Maquetador LaTeX: latex [archivo.tex] (formulas, secciones, tablas; vista Documento/Fuente)",
+   "uso": ""
+  },
+  {
+   "nombre": "paint",
+   "funcion": "cmd_paint",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Editor de dibujo: lienzo hasta 640x480, zoom, deshacer y guardado PNG",
+   "uso": ""
+  },
+  {
+   "nombre": "memview",
+   "funcion": "cmd_memview",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Visor visual interactivo del arbol de memoria de agentes (GUI)",
+   "uso": ""
+  },
+  {
+   "nombre": "agentmem",
+   "funcion": "cmd_memview",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de memview",
+   "uso": ""
+  },
+  {
+   "nombre": "vsoma",
+   "funcion": "cmd_vsoma",
+   "flags": "CMD_F_SAFE",
+   "ayuda": "Inicia la interfaz grafica HD (1280x720, 32 bpp, 16.7M colores)",
+   "uso": ""
+  },
+  {
+   "nombre": "gui",
+   "funcion": "cmd_vsoma",
+   "flags": "CMD_F_ALIAS",
+   "ayuda": "Alias de vsoma",
+   "uso": ""
+  },
+  {
+   "nombre": "hpatch",
+   "funcion": "cmd_hpatch",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Prueba del buzon de parches y Singularity Loop",
+   "uso": ""
+  },
+  {
+   "nombre": "panic",
+   "funcion": "cmd_panic",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Dispara excepciones de CPU para verificar IDT/TSS: panic | div | ud | nulo | nx (los dos ultimos: protecciones del parche 192)",
+   "uso": ""
+  },
+  {
+   "nombre": "agent_sim",
+   "funcion": "cmd_agent_sim",
+   "flags": "CMD_F_NORMAL",
+   "ayuda": "Ejecuta un comando bajo la politica del Agente (pruebas de seguridad)",
+   "uso": ""
+  }
+ ],
+ "mayordomo_habilidades": [
+  {
+   "claves": [
+    "arbol de memoria",
+    "memoria estructurada",
+    "memoria de los agentes",
+    "memoria cognitiva"
+   ],
+   "orden": "mem_tree"
+  },
+  {
+   "claves": [
+    "estado del sistema",
+    "resumen del sistema",
+    "informacion del sistema",
+    "info del sistema",
+    "diagnostico general",
+    "panorama general",
+    "como esta el sistema",
+    "como va el sistema"
+   ],
+   "orden": "sysinfo"
+  },
+  {
+   "claves": [
+    "procesos",
+    "proceso ",
+    "hilos",
+    "threads",
+    "tareas en segundo plano",
+    "tabla de hilos"
+   ],
+   "orden": "ps"
+  },
+  {
+   "claves": [
+    "uptime",
+    "tiempo encendido",
+    "tiempo de actividad",
+    "cuanto lleva encendido",
+    "cuanto tiempo lleva"
+   ],
+   "orden": "uptime"
+  },
+  {
+   "claves": [
+    "fecha",
+    "que hora es",
+    "hora del sistema",
+    "que dia es"
+   ],
+   "orden": "date"
+  },
+  {
+   "claves": [
+    "variables de entorno",
+    "variables del sistema"
+   ],
+   "orden": "env"
+  },
+  {
+   "claves": [
+    "dispositivos pci",
+    "bus pci",
+    "dispositivos conectados",
+    "hardware pci"
+   ],
+   "orden": "pci"
+  },
+  {
+   "claves": [
+    "tabla arp",
+    "cache arp"
+   ],
+   "orden": "arp"
+  },
+  {
+   "claves": [
+    "estadisticas de red",
+    "trafico de red",
+    "paquetes de red"
+   ],
+   "orden": "stats"
+  },
+  {
+   "claves": [
+    "la red",
+    "conectividad",
+    "direccion ip",
+    "tarjeta de red",
+    "configuracion de red"
+   ],
+   "orden": "status"
+  },
+  {
+   "claves": [
+    "servidor llm",
+    "estado del llm",
+    "modelo de lenguaje"
+   ],
+   "orden": "health"
+  },
+  {
+   "claves": [
+    "suite de pruebas",
+    "autotest",
+    "integridad del sistema",
+    "verifica el sistema",
+    "pruebas del sistema"
+   ],
+   "orden": "test_suite"
+  },
+  {
+   "claves": [
+    "registros de la cpu",
+    "paginacion",
+    "cr0",
+    "cr3",
+    "cr4",
+    "modo largo",
+    "estado de la cpu"
+   ],
+   "orden": "mem"
+  },
+  {
+   "claves": [
+    "arbol de archivos",
+    "estructura de archivos",
+    "arbol del disco",
+    "arbol de directorios"
+   ],
+   "orden": "tree"
+  },
+  {
+   "claves": [
+    "historial de comandos",
+    "historial"
+   ],
+   "orden": "history"
+  },
+  {
+   "claves": [
+    "codigo fuente",
+    "fuentes del kernel",
+    "archivos fuente"
+   ],
+   "orden": "src_ls"
+  },
+  {
+   "claves": [
+    "fuentes tipograficas",
+    "tipografias",
+    "fuentes disponibles"
+   ],
+   "orden": "font"
+  },
+  {
+   "claves": [
+    "punteros del raton",
+    "cursores del raton"
+   ],
+   "orden": "cursor"
+  },
+  {
+   "claves": [
+    "haz un checkpoint",
+    "crea un checkpoint",
+    "guarda un checkpoint",
+    "copia de seguridad del sistema de archivos"
+   ],
+   "orden": "checkpoint"
+  },
+  {
+   "claves": [
+    "sincroniza el disco",
+    "sincroniza los archivos",
+    "fs-sync",
+    "vuelca a disco"
+   ],
+   "orden": "fs-sync"
+  },
+  {
+   "claves": [
+    "ficha del sistema",
+    "somafetch"
+   ],
+   "orden": "somafetch"
+  },
+  {
+   "claves": [
+    "cuanto ocupan",
+    "uso del disco por archivo",
+    "que archivos ocupan"
+   ],
+   "orden": "du"
+  }
+ ]
+}

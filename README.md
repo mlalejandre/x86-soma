@@ -177,6 +177,9 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
 - Dock Orbital Dinámico: Los iconos orbitan alrededor del vórtice central y pueden ser absorbidos hacia el horizonte de sucesos mediante física en coma fija (16.8).
 - Gestor Multiventana Flotante: Mueve, redimensiona interactivamente por los bordes (drag & resize), apila en profundidad Z y conmuta entre ventanas abiertas.
 - Motor Tipográfico e Iconográfico Vectorial: Renderizado de curvas de Bézier y máscaras antialiasing de 8 sub-muestras por píxel (formato TrueType TTF sin librerías externas), junto a una colección de iconos vectoriales procedurales.
+- Respuestas del orbe como un teleprompter: zona fija bajo el orbe con letra fija (Ajustes → LCM), que sube sola mientras
+  se escribe y se recorre moviendo el ratón arriba y abajo o con la rueda; negrita, cursiva, subrayado, código, listas y
+  fórmulas (`$...$`). Entre el orbe y la respuesta, una barra de fases con iconos dice qué está haciendo SOMA.
 
 ---
 
@@ -206,6 +209,7 @@ SOMA elige el camino más corto para cada petición (ver *Cómo decide SOMA el c
 
 - soma: orquestador. Responde directamente con una sola llamada al modelo cuando no hacen falta herramientas; si las necesita,
   usa un bucle ReAct (Reason + Act) con herramientas y delegación (como mucho dos niveles, nunca en sí mismo).
+- LCM: traductor de frases a órdenes dentro del núcleo, sin el modelo de lenguaje (ver *LCM*); también la charla corta.
 - mayordomo: agente operativo determinista y sin modelo: RAM, disco, archivos, carpetas y órdenes del sistema.
 - programador: crea y modifica programas SOMA-LANG y Python (compila, comprueba y, con modelos multimodales, revisa la ventana).
 - buscador: investigación web (Wikipedia y DuckDuckGo por HTTPS) y búsqueda en la memoria interna (BM25).
@@ -339,8 +343,10 @@ La pantalla se abre en el navegador (http://localhost:6080/) y la consola serie 
     │   ├── ui/             # Escritorio Her-Aura, compositor 2D y consola
     │   ├── apps/           # Browser, Paint, Notepad, File Manager, MemView, Layout
     │   ├── fonts/          # Rasterizador vectorial TrueType e iconos
-    │   └── agent/          # Agentes ReAct, integración LLM y shell
+    │   └── agent/          # Agentes ReAct, integración LLM, shell y LCM (lcm_*.inc)
     ├── tools/pi5/          # Pi 5 emulada (QEMU raspi5b + RP1 simulado) y generador de la SD
+    ├── tools/lcm_ordenes/  # LCM: entrenar, medir y exportar el traductor
+    ├── tools/exporta_para_claude.py   # .txt para preparar un parche con Claude
     ├── tests/              # Pruebas en el host (ASAN/UBSAN) de las capas puras
     └── docs/               # ESTABILIDAD.md (historial de parches), navegador, diseño
 
@@ -514,17 +520,62 @@ Cómo funciona:
   su ventana y un "diseñador de interfaces" la critica; si propone cambios, el programador hace una ronda de mejora (solo se
   queda si compila). La captura queda en `/agent/coder_captura.png`.
 
+<!-- SOMA_262_PUBLICAR: LCM y llm-limites -->
+## 🗣️ LCM: SOMA entiende lo que le pides (sin el modelo de lenguaje)
+
+El **LCM** es un traductor pequeño que vive dentro del núcleo: convierte lo que dices o escribes al orbe en una orden del terminal,
+en milisegundos, sin conexión y sin gastar el modelo de lenguaje. Es una red BiLSTM en enteros (dos modelos que votan) entrenada
+para SOMA; el entrenamiento y las medidas están en `tools/lcm_ordenes/` y en [github.com/mlalejandre/LCM](https://github.com/mlalejandre/LCM).
+
+```
+soma borra el archivo notas.txt                     → rm notas.txt (pregunta antes)
+soma ¿serías tan amable de decirme qué archivos contienen la palabra casa?   → contiene casa
+soma cierra el navegador                            → cerrar navegador
+soma qué hora es                                    → «Son las cinco y diez.»
+soma hola, ¿cómo estás?                             → charla, sin el modelo de lenguaje
+```
+
+- **98 órdenes** y muchas formas de pedirlas (directas, indirectas o educadas). En un examen a ciegas: 79 % exactas,
+  2 % equivocadas y ninguna peligrosa. Lo que **borra, mueve, mata o apaga siempre pregunta** antes («sí» / «no»).
+- **Lo que no entiende sigue su camino de siempre** (mayordomo o modelo de lenguaje); si duda, también.
+- **Respuestas para la voz**: una frase natural («Son las cinco y diez») en vez de la salida del terminal; se puede
+  cambiar a técnicas.
+- **Aprende de tus correcciones**: si se equivoca, dile «no era eso» y escríbele la orden buena.
+- **Ajustes → LCM**: encender o apagar, voz natural o técnica, umbral de seguridad, probar una frase sin ejecutarla, lo aprendido
+  y la letra de las respuestas del orbe. En el terminal: `lcm <frase>` (qué haría, sin ejecutar), `lcm estado`, `lcm apagar`.
+
+## 📏 Modelos con contexto grande: `llm-limites`
+
+Por defecto SOMA habla con el modelo con tamaños prudentes (prompt del agente de 16 KB, de cada orden el modelo ve 450
+caracteres). Si tu modelo admite un contexto grande, díselo y SOMA lo aprovecha:
+
+```
+llm-limites contexto 250000     la ventana de contexto de tu modelo (con llama.cpp, como mucho el -c del servidor)
+llm-limites salida 16000        cuánto puede escribir de una vez (no pases del máximo del modelo)
+llm-limites                     enseña los tamaños
+llm-limites como-antes          vuelve a los de siempre
+```
+
+Con 250 000 tokens el agente le manda hasta 700 KB de prompt y 29 000 caracteres de cada orden ejecutada. Las respuestas finales
+pueden ocupar 384 KB, y si algo no cabe termina con «[... respuesta recortada ...]» en vez de cortarse en silencio. El maquetador
+y el programador también lo usan. Se guarda en `/etc/llm_limites.conf`.
+
 ## ⚡ Cómo decide SOMA el camino de una petición
 
 1. **Documento con formato** (PDF, maquetar, presentación, revista, paper...) → Maquetador.
 2. **Programa** (crea/haz + app, programa, juego, calculadora...) → Programador.
-3. **Operación del sistema** (RAM, disco, archivos, carpetas...) → Mayordomo, sin el modelo.
-4. **Conversación, redacción, explicación, traducción** → **respuesta directa**: una sola llamada al modelo.
-5. **Lo demás** (internet, datos actuales, archivos, ejecutar) → agente con herramientas (`search` busca en Wikipedia y DuckDuckGo).
+3. **Una orden o una charla corta dicha con palabras** («borra notas.txt», «qué hora es», «hola») → **LCM**, sin el
+   modelo de lenguaje (ver *LCM*). Lo que borra, mueve o apaga pregunta antes; si duda, sigue al paso siguiente.
+4. **Operación del sistema** (RAM, disco, archivos, carpetas...) → Mayordomo, sin el modelo.
+5. **Conversación, redacción, explicación, traducción** → **respuesta directa**: una sola llamada al modelo.
+6. **Lo demás** (internet, datos actuales, archivos, ejecutar) → agente con herramientas (`search` busca en Wikipedia y DuckDuckGo).
 
 Las palabras se comparan completas, sin mayúsculas ni tildes. Si pides guardar («guárdalo», «en notas.txt»), SOMA guarda el
 texto ya escrito. `traza` enseña el tiempo y los tokens de las últimas llamadas al modelo (`/agent/traza.txt`): si algo tarda,
 ahí se ve si es el modelo (y si razona en oculto) o el camino.
+
+Mientras trabaja, el orbe enseña una **barra de fases** con iconos (LCM, mayordomo, búsqueda, documento, programador,
+orden, pensando, escribiendo, voz, hecho): se ve por qué camino ha ido cada petición.
 
 ## 🧾 Exportar el proyecto en texto
 
@@ -541,6 +592,16 @@ python3 exportar_txt.py --cambiados           # solo lo que cambió desde la úl
 ```
 
 Los archivos quedan en `exportacion/` (no se sube al repositorio).
+
+Para preparar un parche con Claude hay otro exportador, más corto y centrado en una conversación:
+
+```
+python3 tools/exporta_para_claude.py                 # lo cambiado desde el último commit
+python3 tools/exporta_para_claude.py --tema lcm      # un tema (--temas los lista: lcm, voz, orbe, llm, maquetador...)
+python3 tools/exporta_para_claude.py --funcion lang_compile src/ui/gui.c
+```
+
+Crea `para_claude_FECHA.txt` con el estado del repositorio, los parches aplicados y los archivos pedidos (sin claves ni binarios).
 
 ## 📄 Licencia
 

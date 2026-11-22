@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define YT_MAX_ITEMS   16
+#define YT_MAX_ITEMS   24
 #define YT_ID_LEN      11
 #define YT_PORT        8097
 
@@ -21,6 +21,7 @@ struct yt_item {
     char title[128];
     char channel[52];
     uint32_t views;
+    char desc[200];                 /* SOMA_251: principio de la descripcion ("" si el servicio no la da) */
 };
 
 static inline uint32_t yt_slen(const char *s) { uint32_t n = 0; while (s && s[n]) n++; return n; }
@@ -86,8 +87,8 @@ static inline int yt_parse_results(const char *b, uint32_t len, struct yt_item *
     while (p < len && n < max) {
         uint32_t e = p;
         while (e < len && b[e] != '\n') e++;
-        const char *f[5]; uint32_t fl[5]; int nf = 0; uint32_t s = p;
-        for (uint32_t i = p; i <= e && nf < 5; ++i) {
+        const char *f[6]; uint32_t fl[6]; int nf = 0; uint32_t s = p;
+        for (uint32_t i = p; i <= e && nf < 6; ++i) {
             if (i == e || b[i] == '\t') { f[nf] = b + s; fl[nf] = i - s; nf++; s = i + 1; }
         }
         if (nf >= 3 && fl[0] == YT_ID_LEN) {
@@ -102,6 +103,11 @@ static inline int yt_parse_results(const char *b, uint32_t len, struct yt_item *
                 if (nf > 3) for (uint32_t i = 0; i < fl[3] && k + 1 < sizeof it->channel; ++i) { char c = f[3][i]; it->channel[k++] = (unsigned char)c < 32 ? ' ' : c; }
                 it->channel[k] = 0;
                 it->views = nf > 4 ? yt_num(f[4], fl[4], 0) : 0;
+                k = 0;
+                if (nf > 5) for (uint32_t i = 0; i < fl[5] && k + 1 < sizeof it->desc; ++i) { char c = f[5][i]; it->desc[k++] = (unsigned char)c < 32 ? ' ' : c; }
+                while (k && ((unsigned char)it->desc[k - 1] & 0xC0) == 0x80) k--;      /* no dejar un caracter UTF-8 a medias */
+                if (k && k + 2 >= sizeof it->desc && (unsigned char)it->desc[k - 1] >= 0xC0) k--;
+                it->desc[k] = 0;
                 if (!it->title[0]) yt_scopy(it->title, sizeof it->title, "(sin titulo)");
                 n++;
             }
@@ -176,11 +182,25 @@ struct yt_conf {
     char key[48];                   /* clave compartida con el servicio ("" = sin clave) */
     int height;                     /* 240, 360 o 480 */
     int fps;                        /* 10..30 */
+    int ai;                         /* SOMA_251: 1 = la caja de busqueda entiende lenguaje natural (pasa por el LLM) */
+    char lang[8];                   /* idioma para whisper y los subtitulos: "auto", "es", "en"... */
+    int max_min;                    /* minutos de audio que se transcriben como mucho (1..120) */
+    int ctx;                        /* caracteres de transcripcion que se le pasan al LLM (2000..120000) */
+    int native;                     /* SOMA_252: 1 = SOMA habla con YouTube directamente y decodifica el video (sin servicio externo) */
+    char api[96];                   /* SOMA_252: "" = https://www.youtube.com; otra base (http://equipo:puerto) solo para pruebas o un espejo propio */
 };
 static inline int yt_height_ok(int h) { return h == 240 || h == 360 || h == 480; }
+/* "auto" o un codigo de idioma de 2 o 3 letras minusculas */
+static inline int yt_lang_ok(const char *v)
+{
+    if (yt_seq(v, "auto")) return 1;
+    int n = 0; while (v[n]) { if (v[n] < 'a' || v[n] > 'z') return 0; n++; }
+    return n == 2 || n == 3;
+}
 static inline void yt_conf_default(struct yt_conf *c)
 {
     c->host[0] = 0; c->port = YT_PORT; c->key[0] = 0; c->height = 360; c->fps = 15;
+    c->ai = 1; c->lang[0] = 'a'; c->lang[1] = 'u'; c->lang[2] = 't'; c->lang[3] = 'o'; c->lang[4] = 0; c->max_min = 20; c->ctx = 16000; c->native = 1; c->api[0] = 0;
 }
 static inline void yt_conf_parse(const char *t, uint32_t len, struct yt_conf *c)
 {
@@ -199,6 +219,12 @@ static inline void yt_conf_parse(const char *t, uint32_t len, struct yt_conf *c)
             else if (yt_seq(k, "clave")) yt_scopy(c->key, sizeof c->key, v);
             else if (yt_seq(k, "calidad")) { int h = (int)yt_num(v, vn, 0); if (yt_height_ok(h)) c->height = h; }
             else if (yt_seq(k, "fps")) { int f = (int)yt_num(v, vn, 0); if (f >= 10 && f <= 30) c->fps = f; }
+            else if (yt_seq(k, "modo")) c->native = !yt_seq(v, "servicio");
+            else if (yt_seq(k, "api")) { if ((yt_starts(v, "http://") || yt_starts(v, "https://")) && vn < sizeof c->api) yt_scopy(c->api, sizeof c->api, v); else c->api[0] = 0; }
+            else if (yt_seq(k, "ia")) c->ai = v[0] != '0';
+            else if (yt_seq(k, "idioma")) { if (yt_lang_ok(v)) yt_scopy(c->lang, sizeof c->lang, v); }
+            else if (yt_seq(k, "minutos")) { int m = (int)yt_num(v, vn, 0); if (m >= 1 && m <= 120) c->max_min = m; }
+            else if (yt_seq(k, "contexto")) { uint32_t x = yt_num(v, vn, 0); if (x >= 2000 && x <= 120000) c->ctx = (int)x; }
         }
         p = e + 1;
     }
@@ -209,7 +235,13 @@ static inline uint32_t yt_conf_format(const struct yt_conf *c, char *o, uint32_t
     if (c->host[0]) { yt_put(o, max, &p, "servidor="); yt_put(o, max, &p, c->host); yt_put(o, max, &p, ":"); yt_put_dec(o, max, &p, c->port); yt_put(o, max, &p, "\n"); }
     if (c->key[0]) { yt_put(o, max, &p, "clave="); yt_put(o, max, &p, c->key); yt_put(o, max, &p, "\n"); }
     yt_put(o, max, &p, "calidad="); yt_put_dec(o, max, &p, (uint64_t)c->height);
-    yt_put(o, max, &p, "\nfps="); yt_put_dec(o, max, &p, (uint64_t)c->fps); yt_put(o, max, &p, "\n");
+    yt_put(o, max, &p, "\nfps="); yt_put_dec(o, max, &p, (uint64_t)c->fps);
+    yt_put(o, max, &p, "\nia="); yt_put(o, max, &p, c->ai ? "1" : "0");
+    yt_put(o, max, &p, "\nidioma="); yt_put(o, max, &p, c->lang);
+    yt_put(o, max, &p, "\nminutos="); yt_put_dec(o, max, &p, (uint64_t)c->max_min);
+    yt_put(o, max, &p, "\ncontexto="); yt_put_dec(o, max, &p, (uint64_t)c->ctx);
+    yt_put(o, max, &p, "\nmodo="); yt_put(o, max, &p, c->native ? "nativo" : "servicio"); yt_put(o, max, &p, "\n");
+    if (c->api[0]) { yt_put(o, max, &p, "api="); yt_put(o, max, &p, c->api); yt_put(o, max, &p, "\n"); }
     return p;
 }
 
@@ -344,6 +376,277 @@ static inline uint64_t yt_ring_trim(struct yt_ring *r, uint64_t now_ms)
     uint64_t freed = nb - r->base;
     r->base = nb;
     return freed;
+}
+
+/* ================================================================== SOMA_251: buscador con IA, descripcion, transcripcion y preguntas
+ * Todo lo de aqui es logica pura (se prueba en el host con tests/test_youtube_ia_251.c). */
+#define YT_AI_QMAX   3              /* busquedas que puede proponer el LLM para una peticion */
+#define YT_AI_QLEN   96
+
+static inline void yt_path_info(char *o, uint32_t max, const struct yt_conf *c, const char *id)
+{
+    uint32_t p = 0;
+    yt_put(o, max, &p, "/yt/info?id="); yt_put(o, max, &p, id);
+    yt_path_key(o, max, &p, c);
+}
+/* audio del video en WAV de 16 kHz mono (lo que come whisper); max_s = segundos como mucho */
+static inline void yt_path_audio(char *o, uint32_t max, const struct yt_conf *c, const char *id, uint32_t max_s)
+{
+    uint32_t p = 0;
+    yt_put(o, max, &p, "/yt/audio?id="); yt_put(o, max, &p, id);
+    yt_put(o, max, &p, "&max="); yt_put_dec(o, max, &p, max_s);
+    yt_path_key(o, max, &p, c);
+}
+static inline void yt_path_subs(char *o, uint32_t max, const struct yt_conf *c, const char *id)
+{
+    uint32_t p = 0;
+    yt_put(o, max, &p, "/yt/subs?id="); yt_put(o, max, &p, id);
+    yt_put(o, max, &p, "&l="); yt_put(o, max, &p, c->lang);
+    yt_path_key(o, max, &p, c);
+}
+/* donde se guarda la transcripcion de un video en el almacen BIGFS */
+static inline void yt_txt_path(char *o, uint32_t max, const char *id)
+{
+    uint32_t p = 0;
+    yt_put(o, max, &p, "/yt_"); yt_put(o, max, &p, id); yt_put(o, max, &p, ".txt");
+}
+
+/* Content-Length de unas cabeceras HTTP ya completas (head_len = desplazamiento del cuerpo). 0 si no viene. */
+static inline uint64_t yt_http_clen(const char *b, uint32_t head_len)
+{
+    static const char k[] = "content-length:";
+    for (uint32_t i = 0; i + 15 < head_len; ++i) {
+        if (i && b[i - 1] != '\n') continue;
+        uint32_t j = 0;
+        while (j < 15) { char c = b[i + j]; if (c >= 'A' && c <= 'Z') c = (char)(c + 32); if (c != k[j]) break; j++; }
+        if (j < 15) continue;
+        uint32_t q = i + 15; while (q < head_len && b[q] == ' ') q++;
+        uint64_t v = 0; while (q < head_len && b[q] >= '0' && b[q] <= '9') { v = v * 10 + (uint64_t)(b[q] - '0'); q++; }
+        return v;
+    }
+    return 0;
+}
+
+/* Respuesta de /yt/info:  "SOMAYT 1 info\n", lineas "campo\tvalor", una linea vacia y la descripcion (varias lineas). */
+struct yt_info {
+    char date[12];                  /* aaaa-mm-dd o "" */
+    char subs[48];                  /* idiomas con subtitulos ("es,en") o "" */
+    uint32_t dur, views;
+    uint32_t desc_off, desc_len;    /* la descripcion, dentro del cuerpo */
+};
+static inline int yt_parse_info(const char *b, uint32_t len, struct yt_info *o)
+{
+    o->date[0] = 0; o->subs[0] = 0; o->dur = o->views = 0; o->desc_off = len; o->desc_len = 0;
+    if (len < 14 || !yt_starts(b, "SOMAYT ")) return 0;
+    uint32_t p = 0;
+    while (p < len && b[p] != '\n') p++;
+    if (p < 4 || !(b[p - 4] == 'i' && b[p - 3] == 'n' && b[p - 2] == 'f' && b[p - 1] == 'o')) return 0;
+    p++;
+    while (p < len) {
+        uint32_t e = p; while (e < len && b[e] != '\n') e++;
+        if (e == p) { p = e + 1; break; }                        /* linea vacia: lo demas es la descripcion */
+        uint32_t t = p; while (t < e && b[t] != '\t') t++;
+        if (t < e) {
+            char k[12]; uint32_t kn = 0; for (uint32_t i = p; i < t && kn + 1 < sizeof k; ++i) k[kn++] = b[i];
+            k[kn] = 0;
+            const char *v = b + t + 1; uint32_t vn = e - t - 1;
+            if (yt_seq(k, "duracion")) o->dur = yt_num(v, vn, 0);
+            else if (yt_seq(k, "vistas")) o->views = yt_num(v, vn, 0);
+            else if (yt_seq(k, "fecha")) { uint32_t i = 0; for (; i < vn && i + 1 < sizeof o->date; ++i) o->date[i] = v[i]; o->date[i] = 0; }
+            else if (yt_seq(k, "subs")) { uint32_t i = 0; for (; i < vn && i + 1 < sizeof o->subs; ++i) o->subs[i] = v[i]; o->subs[i] = 0; }
+        }
+        p = e + 1;
+    }
+    if (p > len) p = len;
+    o->desc_off = p; o->desc_len = len - p;
+    while (o->desc_len && (b[o->desc_off + o->desc_len - 1] == '\n' || b[o->desc_off + o->desc_len - 1] == ' ')) o->desc_len--;
+    return 1;
+}
+
+/* Deja un texto (respuesta del LLM, transcripcion) como lo pueden pintar las fuentes de SOMA: sin marcas de Markdown, sin
+ * emoji ni letras fuera del alfabeto latino, comillas y rayas tipograficas pasadas a ASCII y como mucho una linea en blanco
+ * seguida. En el sitio (nunca crece). Devuelve la longitud. */
+static inline uint32_t yt_plain(char *s)
+{
+    uint32_t i = 0, o = 0; int bol = 1, nl = 2;
+    while (s[i]) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) {
+            i++;
+            if (c == '\r') continue;
+            if (c == '\n') { while (o && s[o - 1] == ' ') o--; if (nl < 2) { s[o++] = '\n'; nl++; } bol = 1; continue; }
+            if (c < 32 || c == 127) c = ' ';
+            if (c == '`') continue;
+            if (bol && c == '*' && s[i] == ' ') c = '-';                                                    /* "* punto" -> "- punto" */
+            if (c == '*' && (s[i] == '*' || (o && s[o - 1] != ' ' && !bol) || (s[i] && s[i] != ' '))) {       /* **negrita** y *cursiva* */
+                if (s[i] == '*') i++;
+                continue;
+            }
+            if (bol && c == '#') { while (s[i] == '#') i++; while (s[i] == ' ') i++; continue; }                /* ## titulo */
+            if (bol && c == ' ') continue;
+            if (c == ' ' && o && s[o - 1] == ' ') continue;
+            s[o++] = (char)c; bol = 0; nl = 0;
+            continue;
+        }
+        uint32_t cp = 0; int n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1, ok = n > 1;
+        cp = n == 4 ? (c & 7u) : n == 3 ? (c & 15u) : (c & 31u);
+        for (int k = 1; k < n && ok; ++k) { unsigned char d = (unsigned char)s[i + (uint32_t)k]; if ((d & 0xC0) != 0x80) ok = 0; else cp = (cp << 6) | (d & 63u); }
+        if (!ok) { i++; continue; }                               /* byte suelto: no es UTF-8 */
+        const char *r = 0;
+        if (cp == 0xA0) r = " ";
+        else if (cp == 0x2018 || cp == 0x2019) r = "'";
+        else if (cp == 0x201C || cp == 0x201D || cp == 0xAB || cp == 0xBB) r = "\"";
+        else if (cp == 0x2013 || cp == 0x2014 || cp == 0x2022) r = "-";
+        else if (cp == 0x2026) r = "...";
+        if (r) {
+            if (!(bol && r[0] == ' ')) { while (*r) s[o++] = *r++; bol = 0; nl = 0; }
+        } else if (cp < 0x250) { for (int k = 0; k < n; ++k) s[o++] = s[i + (uint32_t)k]; bol = 0; nl = 0; }
+        i += (uint32_t)n;
+    }
+    while (o && (s[o - 1] == '\n' || s[o - 1] == ' ')) o--;
+    s[o] = 0;
+    return o;
+}
+
+/* De la respuesta del LLM a "que busco en YouTube": hasta YT_AI_QMAX busquedas. Acepta una por linea (con o sin numeros,
+ * guiones o comillas), separadas por ';' o una lista JSON. Devuelve cuantas. */
+static inline int yt_ai_add(char q[][YT_AI_QLEN], int n, const char *a, uint32_t len)
+{
+    while (len && (*a == ' ' || *a == '\t')) { a++; len--; }
+    for (;;) {                                                    /* "1." "2)" "-" "*" delante */
+        uint32_t d = 0; while (d < len && a[d] >= '0' && a[d] <= '9') d++;
+        if (d && d <= 2 && d < len && (a[d] == '.' || a[d] == ')' || a[d] == ':')) { a += d + 1; len -= d + 1; }
+        else if (len && (*a == '-' || *a == '*' || *a == '>') ) { a++; len--; }
+        else break;
+        while (len && *a == ' ') { a++; len--; }
+    }
+    while (len && (a[len - 1] == ' ' || a[len - 1] == '\r' || a[len - 1] == '.' || a[len - 1] == ',' || a[len - 1] == ';' || a[len - 1] == '*')) len--;
+    while (len >= 2 && (*a == '"' || *a == '\'') && a[len - 1] == *a) { a++; len -= 2; }
+    while (len && *a == ' ') { a++; len--; }
+    if (len < 2 || len >= YT_AI_QLEN || n >= YT_AI_QMAX || a[len - 1] == ':') return n;
+    for (int i = 0; i < n; ++i) {                                 /* repetida */
+        uint32_t k = 0; while (k < len && q[i][k] == a[k]) k++;
+        if (k == len && !q[i][k]) return n;
+    }
+    for (uint32_t k = 0; k < len; ++k) q[n][k] = (unsigned char)a[k] < 32 ? ' ' : a[k];
+    q[n][len] = 0;
+    return n + 1;
+}
+static inline int yt_ai_queries(const char *r, char q[][YT_AI_QLEN])
+{
+    int n = 0;
+    while (*r == ' ' || *r == '\n' || *r == '\r' || *r == '`') r++;
+    if (yt_starts(r, "json")) r += 4;
+    while (*r == ' ' || *r == '\n' || *r == '\r') r++;
+    if (*r == '[' || *r == '{') {                                 /* JSON: las cadenas que no son nombres de campo */
+        while (*r && n < YT_AI_QMAX) {
+            while (*r && *r != '"') r++;
+            if (!*r) break;
+            const char *a = ++r;
+            while (*r && *r != '"') { if (*r == '\\' && r[1]) r++; r++; }
+            if (!*r) break;
+            const char *e = r++;
+            const char *f = r; while (*f == ' ') f++;
+            if (*f != ':') n = yt_ai_add(q, n, a, (uint32_t)(e - a));
+        }
+        return n;
+    }
+    int lines = 0; for (const char *t = r; *t; ++t) if (*t == '\n') lines++;
+    char sep = lines ? '\n' : ';';
+    while (*r && n < YT_AI_QMAX) {
+        const char *e = r; while (*e && *e != sep) e++;
+        n = yt_ai_add(q, n, r, (uint32_t)(e - r));
+        r = *e ? e + 1 : e;
+    }
+    return n;
+}
+
+/* Une resultados de varias busquedas sin repetir videos. Devuelve el total. */
+static inline int yt_merge(struct yt_item *dst, int n, int max, const struct yt_item *src, int m)
+{
+    for (int i = 0; i < m && n < max; ++i) {
+        int dup = 0;
+        for (int k = 0; k < n && !dup; ++k) dup = yt_seq(dst[k].id, src[i].id);
+        if (!dup) dst[n++] = src[i];
+    }
+    return n;
+}
+
+/* Recorta un texto largo para el contexto del LLM: si no cabe en "budget", se quedan dos tercios del principio y un
+ * tercio del final con una marca en medio (cortando por espacios). Devuelve lo escrito (sin el 0 final). */
+static inline uint32_t yt_clip_ctx(char *dst, uint32_t cap, const char *src, uint32_t len, uint32_t budget)
+{
+    static const char mark[] = "\n[... parte central omitida ...]\n";
+    uint32_t p = 0;
+    if (!cap) return 0;
+    if (budget + 1 > cap) budget = cap - 1;
+    if (len <= budget) { for (uint32_t i = 0; i < len; ++i) dst[p++] = src[i]; dst[p] = 0; return p; }
+    uint32_t ml = sizeof mark - 1;
+    if (budget < ml + 64) { for (uint32_t i = 0; i < budget; ++i) dst[p++] = src[i]; dst[p] = 0; return p; }
+    uint32_t room = budget - ml, head = room * 2 / 3, tail = room - head;
+    uint32_t h = head; while (h > head - 40 && src[h] != ' ' && src[h] != '\n') h--;
+    if (src[h] != ' ' && src[h] != '\n') { h = head; while (h && ((unsigned char)src[h] & 0xC0) == 0x80) h--; }
+    uint32_t t = len - tail; while (t < len - tail + 40 && src[t] != ' ' && src[t] != '\n') t++;
+    if (src[t] != ' ' && src[t] != '\n') { t = len - tail; while (t < len && ((unsigned char)src[t] & 0xC0) == 0x80) t++; }
+    for (uint32_t i = 0; i < h; ++i) dst[p++] = src[i];
+    for (uint32_t i = 0; i < ml; ++i) dst[p++] = mark[i];
+    for (uint32_t i = t; i < len && p + 1 < cap; ++i) dst[p++] = src[i];
+    dst[p] = 0;
+    return p;
+}
+
+/* Salida de whisper (voz_run -T): las lineas "[voz] ..." son informacion; el resto, el texto reconocido, una linea por
+ * segmento con su tiempo delante: "[MM:SS.cc -> MM:SS.cc] texto". Deja en out parrafos "[m:ss] texto" (uno cada ~20 s de
+ * video, como los subtitulos del servicio) y en info la ultima linea de informacion. Las lineas sin tiempo se unen tal cual. */
+static inline uint32_t yt_voz_text(const char *raw, char *out, uint32_t cap, char *info, uint32_t icap)
+{
+    uint32_t tp = 0; int have_mark = 0; uint32_t mark_s = 0;
+    if (cap) out[0] = 0;
+    if (icap) info[0] = 0;
+    for (const char *l = raw; *l;) {
+        const char *e = l; while (*e && *e != '\n') e++;
+        if (e - l >= 5 && l[0] == '[' && l[1] == 'v' && l[2] == 'o' && l[3] == 'z' && l[4] == ']') {
+            const char *q = l + 5; while (*q == ' ') q++;
+            uint32_t ip = 0; while (q < e && ip + 1 < icap) info[ip++] = *q++;
+            if (icap) info[ip] = 0;
+        } else {
+            int stamped = 0; uint32_t sec = 0;
+            if (*l == '[') {                                      /* [MM:SS.cc -> ...] */
+                uint32_t u1 = 0, u2 = 0; uint32_t mm = yt_num(l + 1, (uint32_t)(e - l - 1), &u1);
+                if (u1 && l[1 + u1] == ':') {
+                    uint32_t ss = yt_num(l + 2 + u1, 2, &u2);
+                    const char *c = l + 2 + u1 + u2; while (c < e && *c != ']') c++;
+                    if (u2 == 2 && c < e) { stamped = 1; sec = mm * 60 + ss; l = c + 1; }
+                }
+            }
+            while (l < e && (*l == ' ' || *l == '\r')) l++;
+            if (e > l) {
+                if (stamped && (!have_mark || sec >= mark_s + 20)) {
+                    char m[20]; uint32_t mp = 0;
+                    m[mp++] = '[';
+                    if (sec >= 3600) { yt_put_dec(m, sizeof m, &mp, sec / 3600); m[mp++] = ':'; m[mp++] = (char)('0' + sec / 60 % 60 / 10); m[mp++] = (char)('0' + sec / 60 % 60 % 10); }
+                    else yt_put_dec(m, sizeof m, &mp, sec / 60);
+                    m[mp++] = ':'; m[mp++] = (char)('0' + sec % 60 / 10); m[mp++] = (char)('0' + sec % 60 % 10); m[mp++] = ']'; m[mp++] = ' '; m[mp] = 0;
+                    if (tp && tp + 1 < cap) out[tp++] = '\n';
+                    for (uint32_t i = 0; i < mp && tp + 1 < cap; ++i) out[tp++] = m[i];
+                    have_mark = 1; mark_s = sec;
+                } else if (tp && tp + 1 < cap) out[tp++] = ' ';
+                while (l < e && tp + 1 < cap) { if (*l != '\r') out[tp++] = *l; l++; }
+                if (cap) out[tp] = 0;
+            }
+        }
+        l = *e ? e + 1 : e;
+    }
+    return tp;
+}
+
+/* Cabecera RIFF/WAVE valida al principio de un archivo: 1 y la frecuencia. */
+static inline int yt_wav_head(const uint8_t *b, uint32_t n, uint32_t *rate)
+{
+    if (n < 44 || !(b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' && b[8] == 'W' && b[9] == 'A' && b[10] == 'V' && b[11] == 'E')) return 0;
+    if (!(b[12] == 'f' && b[13] == 'm' && b[14] == 't' && b[15] == ' ')) return 0;
+    if (rate) *rate = (uint32_t)b[24] | ((uint32_t)b[25] << 8) | ((uint32_t)b[26] << 16) | ((uint32_t)b[27] << 24);
+    return 1;
 }
 
 #endif

@@ -9,6 +9,9 @@
 #include "gui.h"
 #include "web_font.h"
 #include "settings.h"
+#include "sysicon.h"      /* SOMA_255: iconos vectoriales y botones */
+#include "textfield.h"    /* SOMA_255: campo de la barra de busqueda */
+int keyboard_last_mods(void);
 
 /* SOMA_PARCHE_028_UI: el raton llega por eventos reales de la GUI (notepad_handle_click / notepad_mouse). Antes se
  * consultaban mouse_get_x()/mouse_get_y(), que en este kernel son los valores fijos de relleno de la maquina virtual
@@ -53,6 +56,8 @@ static int np_hover_btn = -1;
 #define NC_SEL       0x00214E86
 #define NC_CURLINE   0x00121722
 #define NC_HOVER     0x00232C3F
+#define NC_MATCH     0x00544411   /* SOMA_255: coincidencias de la busqueda */
+#define NP_FIND_H    36
 
 /* -------------------------------------------------------------------------
  * MENU CONTEXTUAL FLOTANTE (clic derecho)
@@ -61,9 +66,12 @@ static int np_hover_btn = -1;
 #define CTX_ITEM_H  26
 #define CTX_SEP_H   9
 #define CTX_PAD     6
-enum { MI_CUT = 0, MI_COPY, MI_PASTE, MI_DEL, MI_ALL, MI_LINE, MI_OPEN, MI_SAVE, MI_BROWSER, MI_SPEAK };
+enum { MI_CUT = 0, MI_COPY, MI_PASTE, MI_DEL, MI_ALL, MI_LINE, MI_OPEN, MI_SAVE, MI_BROWSER, MI_SPEAK, MI_UNDO, MI_REDO, MI_FIND };
 struct np_mi { const char *label; const char *key; int id; };
 static const struct np_mi np_menu[] = {
+    { "Deshacer",             "Ctrl+Z", MI_UNDO },
+    { "Rehacer",              "Ctrl+Mayús+Z", MI_REDO },
+    { 0, 0, -1 },
     { "Cortar",               "Ctrl+X", MI_CUT },
     { "Copiar",               "Ctrl+C", MI_COPY },
     { "Pegar",                "Ctrl+V", MI_PASTE },
@@ -71,6 +79,7 @@ static const struct np_mi np_menu[] = {
     { 0, 0, -1 },
     { "Seleccionar todo",     "Ctrl+A", MI_ALL },
     { "Seleccionar l\xC3\xADnea", 0,    MI_LINE },
+    { "Buscar...",            "Ctrl+F", MI_FIND },
     { 0, 0, -1 },
     { "Abrir archivo...",     "Ctrl+O", MI_OPEN },
     { "Guardar",              "Ctrl+S", MI_SAVE },
@@ -104,6 +113,11 @@ static char ram_buf[4096];
  * dialogo de abrir/guardar...) vive en una instancia; la GUI elige la de cada ventana con notepad_select() antes de dibujarla
  * o de pasarle eventos. Elegir es cambiar un puntero: no se copia el texto. La instancia 1 usa la memoria estatica de siempre;
  * las demas se reservan al abrir la ventana y se liberan al cerrarla. */
+/* SOMA_255: historial de deshacer/rehacer. Cada registro es una insercion o un borrado de un tramo de texto; las teclas
+ * seguidas se funden en un solo registro (una palabra = un paso) y reemplazar una seleccion deshace de una vez. */
+#define UH_MAX   192
+#define UH_POOL  24576
+struct uh_rec { uint32_t pos, len, off; uint8_t kind, link; };   /* kind 0 = insercion, 1 = borrado; link = se deshace junto al anterior */
 struct np_inst {
     char np_text[NP_MAX_SIZE];
     uint32_t np_len, np_cursor;
@@ -132,6 +146,9 @@ struct np_inst {
     uint64_t dlg_last_click;
     uint32_t np_cols_last;
     int np_named;                      /* 1 = la ruta es la de un archivo abierto o guardado */
+    struct uh_rec uh[UH_MAX]; uint32_t uh_n, uh_tot, uh_pool; int uh_link_next;
+    uint8_t uh_data[UH_POOL];
+    int find_open, find_focus; char fq[64]; struct tfield fq_tf;
 };
 #define NP_INST_MAX 8
 static struct np_inst np_inst1 = {
@@ -183,6 +200,16 @@ static struct np_inst *NP = &np_inst1;
 #define dlg_last_click (NP->dlg_last_click)
 #define np_cols_last (NP->np_cols_last)
 #define np_named (NP->np_named)
+#define np_uh (NP->uh)
+#define np_uh_n (NP->uh_n)
+#define np_uh_tot (NP->uh_tot)
+#define np_uh_pool (NP->uh_pool)
+#define np_uh_link_next (NP->uh_link_next)
+#define np_uh_data (NP->uh_data)
+#define np_find_open (NP->find_open)
+#define np_find_focus (NP->find_focus)
+#define np_fq (NP->fq)
+#define np_fq_tf (NP->fq_tf)
 
 /* -------------------------------------------------------------------------
  * Utilidades de Cadena y Codificación UTF-8
@@ -397,6 +424,7 @@ void notepad_init(void) {
     np_dead_key = 0;
     np_utf8_lead = 0;
     np_ctx_open = 0;
+    np_uh_n = np_uh_tot = np_uh_pool = 0; np_uh_link_next = 0; np_find_open = 0; np_find_focus = 0;   /* SOMA_255 */
     dlg_mode = NP_DLG_NONE;
     np_text[0] = '\0';
     str_copy(np_status, "Nuevo documento", sizeof(np_status));
@@ -419,7 +447,32 @@ void notepad_load_file(const char *path) {
     }
 }
 
+/* SOMA_255: "Guardar como": el cuadro de archivos con el nombre actual */
+static void np_saveas_dialog(void)
+{
+    dlg_mode = NP_DLG_SAVE_AS;
+    str_copy(dlg_filename, get_filename_part(np_path), sizeof(dlg_filename));
+    dlg_filename_len = str_len(dlg_filename);
+    dlg_open_documents_folder();
+}
+/* SOMA_255: "Nuevo" ya no deja la ruta del documento anterior (guardar sobrescribia el archivo viejo sin avisar) y,
+ * si hay cambios sin guardar, pide pulsar otra vez para descartarlos */
+static uint64_t np_new_t;
+static void np_new_doc(void)
+{
+    uint64_t now = timer_get_uptime_ms();
+    if (np_dirty && !np_live && (np_new_t == 0 || now - np_new_t > 4000)) {
+        np_new_t = now;
+        str_copy(np_status, "Hay cambios sin guardar: repite para descartarlos", sizeof(np_status));
+        return;
+    }
+    np_new_t = 0;
+    notepad_init();
+    str_copy(np_path, "/workspace/notas.txt", sizeof(np_path));
+    str_copy(np_status, "Documento nuevo", sizeof(np_status));
+}
 static int notepad_save(void) {
+    if (!np_named) { np_saveas_dialog(); return 0; }          /* SOMA_255: sin nombre aun: se pregunta donde guardar */
     if (vfs_write(np_path, np_text, np_len) >= 0) {
         np_dirty = 0;
         str_copy(np_status, "Guardado con exito", sizeof(np_status));
@@ -431,7 +484,7 @@ static int notepad_save(void) {
 }
 
 void notepad_open_in_browser(const char *path) {
-    if (np_dirty) notepad_save();
+    if (np_dirty && !notepad_save()) return;
     const char *target = (path && *path) ? path : np_path;
     if (gui_open_browser) {
         gui_open_browser(target);
@@ -459,10 +512,133 @@ static int np_has_sel(void) {
     return hi > lo;
 }
 
+/* ---- SOMA_255: deshacer / rehacer ---- */
+static int np_uh_quiet;
+static void np_delete_range(uint32_t lo, uint32_t hi);
+static void np_insert_bytes(const char *s, uint32_t n);
+static void np_uh_push(int kind, uint32_t pos, const char *s, uint32_t n)
+{
+    if (np_uh_quiet || n == 0) return;
+    if (np_uh_n < np_uh_tot) {                                   /* un cambio nuevo descarta lo que quedaba por rehacer */
+        np_uh_tot = np_uh_n;
+        np_uh_pool = np_uh_n ? np_uh[np_uh_n - 1].off + np_uh[np_uh_n - 1].len : 0;
+    }
+    int link = np_uh_link_next; np_uh_link_next = 0;
+    if (np_uh_n > 0 && !link) {
+        struct uh_rec *l = &np_uh[np_uh_n - 1];
+        uint8_t *d = np_uh_data + l->off;
+        if (l->kind == kind && l->len + n <= 64 && np_uh_pool + n <= UH_POOL && !l->link) {
+            if (kind == 0 && pos == l->pos + l->len && s[0] != '\n' && d[l->len - 1] != '\n' && !(s[0] == ' ' && d[l->len - 1] != ' ')) {
+                for (uint32_t i = 0; i < n; i++) d[l->len + i] = (uint8_t)s[i];
+                l->len += n; np_uh_pool += n; np_uh_tot = np_uh_n; return;
+            }
+            if (kind == 1 && pos == l->pos) {                     /* Supr seguido */
+                for (uint32_t i = 0; i < n; i++) d[l->len + i] = (uint8_t)s[i];
+                l->len += n; np_uh_pool += n; np_uh_tot = np_uh_n; return;
+            }
+            if (kind == 1 && pos + n == l->pos) {                 /* Retroceso seguido: lo borrado va delante */
+                for (uint32_t i = l->len; i > 0; i--) d[i - 1 + n] = d[i - 1];
+                for (uint32_t i = 0; i < n; i++) d[i] = (uint8_t)s[i];
+                l->pos = pos; l->len += n; np_uh_pool += n; np_uh_tot = np_uh_n; return;
+            }
+        }
+    }
+    if (n > UH_POOL) { np_uh_n = np_uh_tot = np_uh_pool = 0; return; }
+    if (np_uh_n >= UH_MAX || np_uh_pool + n > UH_POOL) { np_uh_n = np_uh_tot = np_uh_pool = 0; link = 0; }   /* lleno: se empieza de nuevo */
+    struct uh_rec *r = &np_uh[np_uh_n++];
+    r->kind = (uint8_t)kind; r->pos = pos; r->len = n; r->off = np_uh_pool; r->link = (uint8_t)link;
+    for (uint32_t i = 0; i < n; i++) np_uh_data[np_uh_pool + i] = (uint8_t)s[i];
+    np_uh_pool += n; np_uh_tot = np_uh_n;
+}
+static int np_undo(void)
+{
+    if (np_uh_n == 0) { str_copy(np_status, "Nada que deshacer", sizeof(np_status)); return 0; }
+    np_uh_quiet = 1;
+    for (;;) {
+        struct uh_rec *r = &np_uh[--np_uh_n];
+        np_sel = -1;
+        if (r->kind == 0) np_delete_range(r->pos, r->pos + r->len);
+        else { np_cursor = r->pos; np_insert_bytes((const char *)np_uh_data + r->off, r->len); }
+        if (!r->link || np_uh_n == 0) break;
+    }
+    np_uh_quiet = 0; np_sel = -1; np_follow = 1; np_goal_col = -1; np_dirty = 1;
+    str_copy(np_status, "Deshecho", sizeof(np_status));
+    return 1;
+}
+static int np_redo(void)
+{
+    if (np_uh_n >= np_uh_tot) { str_copy(np_status, "Nada que rehacer", sizeof(np_status)); return 0; }
+    np_uh_quiet = 1;
+    do {
+        struct uh_rec *r = &np_uh[np_uh_n++];
+        np_sel = -1;
+        if (r->kind == 0) { np_cursor = r->pos; np_insert_bytes((const char *)np_uh_data + r->off, r->len); }
+        else np_delete_range(r->pos, r->pos + r->len);
+    } while (np_uh_n < np_uh_tot && np_uh[np_uh_n].link);
+    np_uh_quiet = 0; np_sel = -1; np_follow = 1; np_goal_col = -1; np_dirty = 1;
+    str_copy(np_status, "Rehecho", sizeof(np_status));
+    return 1;
+}
+
+/* ---- SOMA_255: busqueda (sin distinguir mayusculas en ASCII) ---- */
+static int np_ci(char a) { return (a >= 'A' && a <= 'Z') ? a + 32 : a; }
+static int np_match_at(uint32_t i, const char *q, uint32_t ql)
+{
+    if (ql == 0 || i + ql > np_len) return 0;
+    for (uint32_t k = 0; k < ql; k++) if (np_ci(np_text[i + k]) != np_ci(q[k])) return 0;
+    return 1;
+}
+static void np_find_open_bar(void)
+{
+    if (np_fq_tf.buf != np_fq) tf_init(&np_fq_tf, np_fq, sizeof np_fq, 0);
+    uint32_t lo, hi;
+    np_sel_range(&lo, &hi);
+    if (hi > lo && hi - lo < sizeof np_fq) {                      /* la seleccion de una linea es la busqueda inicial */
+        char tmp[64]; uint32_t k = 0; int ok = 1;
+        for (uint32_t i = lo; i < hi; i++) { if (np_text[i] == '\n') { ok = 0; break; } tmp[k++] = np_text[i]; }
+        tmp[k] = '\0';
+        if (ok) tf_set(&np_fq_tf, tmp);
+    }
+    np_find_open = 1; np_find_focus = 1;
+    tf_select_all(&np_fq_tf);
+}
+static void np_find_close(void) { np_find_open = 0; np_find_focus = 0; }
+static int np_find_next(int dir, int incl)
+{
+    uint32_t ql = str_len(np_fq);
+    if (!np_find_open || ql == 0) return 0;
+    if (np_len < ql) { str_copy(np_status, "Sin resultados", sizeof(np_status)); return 0; }
+    uint32_t lo, hi, n = np_len - ql + 1;
+    np_sel_range(&lo, &hi);
+    uint32_t start = dir > 0 ? (incl ? lo : hi) : (lo > 0 ? lo - 1 : n - 1);
+    start %= n;
+    for (uint32_t t = 0; t < n; t++) {
+        uint32_t i = dir > 0 ? (start + t) % n : (start + n - (t % n)) % n;
+        if (!np_match_at(i, np_fq, ql)) continue;
+        np_sel = (int)i; np_cursor = i + ql; np_follow = 1; np_goal_col = -1;
+        if (dir > 0 ? i < start : i > start) str_copy(np_status, "Vuelta al principio del documento", sizeof(np_status));
+        else str_copy(np_status, "Coincidencia encontrada", sizeof(np_status));
+        return 1;
+    }
+    str_copy(np_status, "Sin resultados", sizeof(np_status));
+    return 0;
+}
+static void np_find_count(int *tot, int *idx)
+{
+    uint32_t ql = str_len(np_fq), lo, hi;
+    *tot = 0; *idx = 0;
+    if (ql == 0) return;
+    np_sel_range(&lo, &hi);
+    for (uint32_t i = 0; i + ql <= np_len; ) {
+        if (np_match_at(i, np_fq, ql)) { (*tot)++; if (hi - lo == ql && i == lo) *idx = *tot; i += ql; }
+        else i++;
+    }
+}
 static void np_delete_range(uint32_t lo, uint32_t hi) {
     if (hi > np_len) hi = np_len;
     if (lo >= hi) return;
     uint32_t d = hi - lo;
+    np_uh_push(1, lo, np_text + lo, d);
     for (uint32_t i = lo; i + d <= np_len; ++i) np_text[i] = np_text[i + d];
     np_len -= d;
     np_cursor = lo;
@@ -476,13 +652,15 @@ static void np_insert_bytes(const char *s, uint32_t n) {
         uint32_t lo, hi;
         np_sel_range(&lo, &hi);
         np_delete_range(lo, hi);
+        if (!np_uh_quiet) np_uh_link_next = 1;      /* SOMA_255: reemplazar la seleccion se deshace de una vez */
     }
     np_sel = -1;
     if (np_cursor > np_len) np_cursor = np_len;
     if (np_len + n > NP_MAX_SIZE - 2) {
         n = (NP_MAX_SIZE - 2 > np_len) ? (NP_MAX_SIZE - 2 - np_len) : 0;
     }
-    if (n == 0) return;
+    if (n == 0) { np_uh_link_next = 0; return; }
+    np_uh_push(0, np_cursor, s, n);
 
     for (uint32_t i = np_len + n; i >= np_cursor + n; --i) {
         np_text[i] = np_text[i - n];
@@ -524,6 +702,7 @@ static void np_move(uint32_t pos, int extend) {
 struct np_geo {
     int32_t x, y, w, h;                 /* ventana (zona de la aplicacion) */
     int32_t crumb_y;                    /* tira con la ruta del archivo */
+    int32_t find_y;                     /* SOMA_255: barra de busqueda (si esta abierta) */
     int32_t ed_x, ed_y, ed_w, ed_h;     /* editor: margen de numeros + texto + barra de desplazamiento */
     int32_t tx_x, tx_w;                 /* columna 0 del texto y ancho util */
     int32_t sb_x;                       /* barra de desplazamiento */
@@ -535,7 +714,8 @@ static void np_geo_of(struct np_geo *g, uint32_t win_x, uint32_t win_y, uint32_t
 {
     g->x = (int32_t)win_x; g->y = (int32_t)win_y; g->w = (int32_t)win_w; g->h = (int32_t)win_h;
     g->crumb_y = g->y + NP_TOOLBAR_H;
-    g->ed_x = g->x; g->ed_y = g->crumb_y + NP_CRUMB_H; g->ed_w = g->w;
+    g->find_y = g->crumb_y + NP_CRUMB_H;
+    g->ed_x = g->x; g->ed_y = g->find_y + (np_find_open ? NP_FIND_H : 0); g->ed_w = g->w;
     g->st_y = g->y + g->h - NP_STATUS_H;
     g->ed_h = g->st_y - g->ed_y; if (g->ed_h < NP_LINE_H) g->ed_h = NP_LINE_H;
     g->tx_x = g->ed_x + NP_GUTTER_W + NP_PAD_X;
@@ -823,97 +1003,77 @@ static void render_file_dialog(uint32_t win_x, uint32_t win_y, uint32_t win_w, u
     uint32_t dw = 560, dh = 360;
     uint32_t dx = win_x + (win_w > dw ? (win_w - dw) / 2 : 10);
     uint32_t dy = win_y + (win_h > dh ? (win_h - dh) / 2 : 10);
+    int32_t mx = np_mx, my = np_my;
 
+    /* SOMA_255: mismo aspecto que el resto (iconos vectoriales, texto suavizado); las zonas de clic no cambian */
     fb_draw_shadow((int32_t)dx, (int32_t)dy, (int32_t)dw, (int32_t)dh, 8, 22, 8, 0xB0000000u);
-    fb_fill_rounded_rect(dx, dy, dw, dh, 8, 0x00131722);
-    fb_draw_rounded_rect(dx, dy, dw, dh, 8, 0x00334155);
+    fb_fill_rounded_rect(dx, dy, dw, dh, 10, 0x00131722);
+    fb_stroke_rrect_aa((int32_t)dx, (int32_t)dy, (int32_t)dw, (int32_t)dh, 10, 0xFF334155u);
 
-    /* Barra de título del modal */
-    fb_fill_rounded_rect(dx, dy, dw, 34, 8, 0x001A2030);
-    fb_draw_line(dx, dy + 34, dx + dw, dy + 34, 0x002D3748);
-    const char *title = (dlg_mode == NP_DLG_OPEN) ? "ABRIR ARCHIVO" : "GUARDAR ARCHIVO COMO";
-    font_draw_string(dx + 16, dy + 9, title, 0x0038BDF8, 1);
-    font_draw_string(dx + dw - 24, dy + 9, "X", 0x0094A3B8, 1);
+    fb_fill_rounded_rect(dx, dy, dw, 34, 10, 0x001A2030);
+    fb_fill_rect(dx + 1, dy + 26, dw - 2, 8, 0x001A2030);
+    fb_fill_rect(dx, dy + 34, dw, 1, 0x002D3748);
+    si_icon(dlg_mode == NP_DLG_OPEN ? SI_FOLDER : SI_DISK, (int32_t)dx + 22, (int32_t)dy + 17, 16, 0x0038BDF8);
+    si_text((int32_t)dx + 38, (int32_t)dy, 34, dlg_mode == NP_DLG_OPEN ? "Abrir archivo" : "Guardar archivo como", 13, SI_TXT, 1);
+    int xhot = mx >= (int32_t)(dx + dw - 30) && mx <= (int32_t)(dx + dw - 10) && my >= (int32_t)(dy + 4) && my <= (int32_t)(dy + 26);
+    if (xhot) fb_fill_rounded_rect(dx + dw - 30, dy + 6, 22, 22, 6, 0x00B91C1C);
+    si_icon(SI_CLOSE, (int32_t)dx + (int32_t)dw - 19, (int32_t)dy + 17, 12, xhot ? 0x00FFFFFF : 0x0094A3B8);
 
-    /* Panel Izquierdo: LUGARES */
+    /* Lugares */
     uint32_t pw = 128;
     fb_fill_rect(dx + 2, dy + 35, pw, dh - 37 - 52, 0x000F121C);
-    fb_draw_line(dx + pw + 2, dy + 35, dx + pw + 2, dy + dh - 52, 0x00262E3D);
-
-    font_draw_string(dx + 12, dy + 44, "LUGARES", 0x0064748B, 1);
-    int is_doc = str_eq(dlg_folder, "/documentos");
-    int is_ws  = str_eq(dlg_folder, "/workspace");
-    int is_mf  = str_eq(dlg_folder, "/mis_archivos");
-    int is_rt  = str_eq(dlg_folder, "/");
-
-    /* 1. Documentos (por defecto) */
-    if (is_doc) {
-        fb_fill_rounded_rect(dx + 6, dy + 62, pw - 8, 24, 4, 0x001D2D44);
-        fb_fill_rect(dx + 6, dy + 64, 3, 20, 0x0038BDF8);
+    fb_fill_rect(dx + pw + 2, dy + 35, 1, dh - 35 - 52, 0x00262E3D);
+    si_text((int32_t)dx + 14, (int32_t)dy + 38, 22, "LUGARES", 10, SI_FAINT, 1);
+    static const char *const pl_name[4] = { "Documentos", "Workspace", "Mis archivos", "Raíz ( / )" };
+    static const char *const pl_path[4] = { "/documentos", "/workspace", "/mis_archivos", "/" };
+    for (int k = 0; k < 4; k++) {
+        int32_t py = (int32_t)dy + 62 + 28 * k;
+        int cur = str_eq(dlg_folder, pl_path[k]);
+        int hov = mx >= (int32_t)(dx + 6) && mx <= (int32_t)(dx + pw) && my >= py && my <= py + 24;
+        if (cur) { fb_fill_rounded_rect(dx + 6, (uint32_t)py, pw - 8, 24, 5, 0x001D2D44); fb_fill_rrect_aa((int32_t)dx + 6, py + 5, 3, 14, 1, 0xFF38BDF8u); }
+        else if (hov) fb_fill_rounded_rect(dx + 6, (uint32_t)py, pw - 8, 24, 5, NC_HOVER);
+        si_icon(k == 3 ? SI_DISK : SI_FOLDER, (int32_t)dx + 22, py + 12, 14, cur ? 0x0038BDF8 : 0x0094A3B8);
+        si_text((int32_t)dx + 36, py, 24, pl_name[k], 12, cur ? 0x0038BDF8 : 0x00CBD5E1, 0);
     }
-    font_draw_string(dx + 14, dy + 67, "Documentos", is_doc ? 0x0038BDF8 : 0x00CBD5E1, 1);
 
-    /* 2. Workspace */
-    if (is_ws) {
-        fb_fill_rounded_rect(dx + 6, dy + 90, pw - 8, 24, 4, 0x001D2D44);
-        fb_fill_rect(dx + 6, dy + 92, 3, 20, 0x0038BDF8);
-    }
-    font_draw_string(dx + 14, dy + 95, "Workspace", is_ws ? 0x0038BDF8 : 0x00CBD5E1, 1);
-
-    /* 3. Mis Archivos */
-    if (is_mf) {
-        fb_fill_rounded_rect(dx + 6, dy + 118, pw - 8, 24, 4, 0x001D2D44);
-        fb_fill_rect(dx + 6, dy + 120, 3, 20, 0x0038BDF8);
-    }
-    font_draw_string(dx + 14, dy + 123, "Mis Archivos", is_mf ? 0x0038BDF8 : 0x00CBD5E1, 1);
-
-    /* 4. Raíz */
-    if (is_rt) {
-        fb_fill_rounded_rect(dx + 6, dy + 146, pw - 8, 24, 4, 0x001D2D44);
-        fb_fill_rect(dx + 6, dy + 148, 3, 20, 0x0038BDF8);
-    }
-    font_draw_string(dx + 14, dy + 151, "Raiz ( / )", is_rt ? 0x0038BDF8 : 0x00CBD5E1, 1);
-
-    /* Panel Derecho: Lista de Archivos */
+    /* Lista */
     uint32_t fx = dx + pw + 10;
     uint32_t fw = dw - pw - 20;
-
-    /* Barra de carpeta actual */
-    fb_fill_rounded_rect(fx, dy + 42, fw, 26, 4, 0x000B0E16);
-    fb_draw_rounded_rect(fx, dy + 42, fw, 26, 4, 0x00242E40);
-    font_draw_string(fx + 8, dy + 47, "Ruta:", 0x0064748B, 1);
-    font_draw_string(fx + 52, dy + 47, dlg_folder, 0x00F8FAFC, 1);
+    fb_fill_rounded_rect(fx, dy + 42, fw, 26, 6, 0x000B0E16);
+    fb_stroke_rrect_aa((int32_t)fx, (int32_t)dy + 42, (int32_t)fw, 26, 6, 0xFF242E40u);
+    si_icon(SI_FOLDER, (int32_t)fx + 17, (int32_t)dy + 55, 14, 0x0064748B);
+    si_text_fit((int32_t)fx + 32, (int32_t)dy + 42, 26, dlg_folder, (int32_t)fw - 44, 12, 0x00F8FAFC, 0);
 
     uint32_t list_y = dy + 74;
     uint32_t list_h = 176;
     fb_fill_rect(fx, list_y, fw, list_h, 0x000A0D15);
-    fb_draw_rect(fx, list_y, fw, list_h, 0x001E2738);
+    fb_stroke_rrect_aa((int32_t)fx, (int32_t)list_y, (int32_t)fw, (int32_t)list_h, 3, 0xFF1E2738u);
 
-    /* Filas de archivos (vis_rows = 8 filas de 22px) */
     uint32_t vis_rows = list_h / 22;
+    if (dlg_item_count == 0) si_text_c((int32_t)fx, (int32_t)list_y, (int32_t)fw, (int32_t)list_h, "Esta carpeta está vacía", 12, SI_FAINT, 0);
     for (uint32_t r = 0; r < vis_rows; ++r) {
         int idx = dlg_scroll + (int)r;
         if (idx >= dlg_item_count) break;
         uint32_t ry = list_y + r * 22;
         int is_sel = (idx == dlg_sel_idx);
-
-        if (is_sel) {
-            fb_fill_rect(fx + 1, ry, fw - 16, 22, 0x001D4ED8);
-        } else if (r & 1) {
-            fb_fill_rect(fx + 1, ry, fw - 16, 22, 0x000E121E);
+        int hov = mx >= (int32_t)fx && mx < (int32_t)(fx + fw - 16) && my >= (int32_t)ry && my < (int32_t)ry + 22;
+        if (is_sel) fb_fill_rect(fx + 1, ry, fw - 16, 22, 0x001D4ED8);
+        else if (hov) fb_fill_rect(fx + 1, ry, fw - 16, 22, 0x00172033);
+        si_icon(dlg_items[idx].is_dir ? SI_FOLDER : SI_FILE, (int32_t)fx + 18, (int32_t)ry + 11, 14, dlg_items[idx].is_dir ? 0x00FBBF24 : 0x0038BDF8);
+        si_text_fit((int32_t)fx + 34, (int32_t)ry, 22, dlg_items[idx].name, (int32_t)fw - 140, 12, is_sel ? 0x00FFFFFF : 0x00E2E8F0, 0);
+        if (!dlg_items[idx].is_dir) {
+            char sz[24], nb[12];
+            sz[0] = '\0';
+            if (dlg_items[idx].size >= 1024) { u32_to_str(dlg_items[idx].size / 1024, nb); ap(sz, sizeof sz, nb); ap(sz, sizeof sz, " KB"); }
+            else { u32_to_str(dlg_items[idx].size, nb); ap(sz, sizeof sz, nb); ap(sz, sizeof sz, " B"); }
+            si_text_r((int32_t)(fx + fw - 24), (int32_t)ry, 22, sz, 11, is_sel ? 0x00D6E9FF : 0x00677489, 0);
         }
-
-        font_draw_string(fx + 8, ry + 4, dlg_items[idx].is_dir ? "[DIR]" : "[TXT]",
-                         dlg_items[idx].is_dir ? 0x00F59E0B : 0x0038BDF8, 1);
-        font_draw_string(fx + 58, ry + 4, dlg_items[idx].name, is_sel ? 0x00FFFFFF : 0x00E2E8F0, 1);
     }
 
-    /* BARRA DE DESPLAZAMIENTO VISUAL (Scrollbar) EN EL MODAL */
     uint32_t sb_x = fx + fw - 11;
     uint32_t sb_y = list_y + 3;
     uint32_t sb_w = 6;
     uint32_t sb_h = list_h - 6;
-
     fb_fill_rounded_rect(sb_x, sb_y, sb_w, sb_h, 3, 0x000F131C);
     if (dlg_item_count > (int)vis_rows) {
         uint32_t thumb_h = (vis_rows * sb_h) / (uint32_t)dlg_item_count;
@@ -926,43 +1086,26 @@ static void render_file_dialog(uint32_t win_x, uint32_t win_y, uint32_t win_w, u
         fb_fill_rounded_rect(sb_x, sb_y, sb_w, sb_h, 3, 0x00242E40);
     }
 
-    /* Pie: Entrada de Nombre con botón [ ✕ ] y cursor parpadeante */
+    /* Pie */
     uint32_t by = dy + dh - 52;
-    fb_draw_line(dx, by - 4, dx + dw, by - 4, 0x00232B3A);
+    fb_fill_rect(dx + 1, by - 4, dw - 2, 1, 0x00232B3A);
+    si_text((int32_t)dx + 16, (int32_t)by + 8, 26, "Archivo", 12, 0x0094A3B8, 0);
+    uint32_t in_box_x = dx + 84, in_box_y = by + 8, in_box_w = 230, in_box_h = 26;
+    fb_fill_rounded_rect(in_box_x, in_box_y, in_box_w, in_box_h, 6, 0x00090C14);
+    fb_stroke_rrect_aa((int32_t)in_box_x, (int32_t)in_box_y, (int32_t)in_box_w, (int32_t)in_box_h, 6, 0xFF38BDF8u);
+    si_text_fit((int32_t)in_box_x + 9, (int32_t)in_box_y, (int32_t)in_box_h, dlg_filename, (int32_t)in_box_w - 36, 12, 0x00FFFFFF, 0);
+    int32_t caret_x = (int32_t)in_box_x + 9 + si_text_w(dlg_filename, 12, 0);
+    if (caret_x < (int32_t)(in_box_x + in_box_w - 26) && ((timer_get_uptime_ms() / 400) & 1) == 0)
+        fb_fill_rect((uint32_t)caret_x, in_box_y + 5, 2, 16, 0x0038BDF8);
+    si_icon(SI_CLOSE, (int32_t)(in_box_x + in_box_w - 13), (int32_t)in_box_y + 13, 10, 0x0064748B);
 
-    font_draw_string(dx + 16, by + 12, "Archivo:", 0x0094A3B8, 1);
-
-    uint32_t in_box_x = dx + 84;
-    uint32_t in_box_y = by + 8;
-    uint32_t in_box_w = 230;
-    uint32_t in_box_h = 26;
-
-    fb_fill_rounded_rect(in_box_x, in_box_y, in_box_w, in_box_h, 4, 0x00090C14);
-    fb_draw_rounded_rect(in_box_x, in_box_y, in_box_w, in_box_h, 4, 0x0038BDF8);
-
-    /* Texto y cursor de edición */
-    font_draw_string(in_box_x + 8, in_box_y + 5, dlg_filename, 0x00FFFFFF, 1);
-    uint32_t caret_x = in_box_x + 8 + dlg_filename_len * 8;
-    if (caret_x < in_box_x + in_box_w - 22) {
-        if (((timer_get_uptime_ms() / 400) & 1) == 0) {
-            fb_fill_rect(caret_x, in_box_y + 4, 2, 16, 0x0038BDF8);
-        }
-    }
-
-    /* Botón [ ✕ ] para vaciar el nombre con un clic */
-    font_draw_string(in_box_x + in_box_w - 18, in_box_y + 5, "x", 0x0064748B, 1);
-
-    /* Botones de acción */
     uint32_t btn_main_x = dx + dw - 225;
-    fb_fill_rounded_rect(btn_main_x, by + 8, 105, 26, 4, 0x000284C7);
-    fb_draw_rounded_rect(btn_main_x, by + 8, 105, 26, 4, 0x0038BDF8);
-    font_draw_string(btn_main_x + (dlg_mode == NP_DLG_OPEN ? 28 : 20), by + 13,
-                     dlg_mode == NP_DLG_OPEN ? "Abrir" : "Guardar", 0x00FFFFFF, 1);
-
+    int hm = mx >= (int32_t)btn_main_x && mx <= (int32_t)(btn_main_x + 105) && my >= (int32_t)(by + 8) && my <= (int32_t)(by + 34);
+    si_button((int32_t)btn_main_x, (int32_t)by + 8, 105, 26, dlg_mode == NP_DLG_OPEN ? SI_FOLDER : SI_SAVE, dlg_mode == NP_DLG_OPEN ? "Abrir" : "Guardar",
+              SIB_ACCENT, hm ? 0x0060A5FA : 0x003B82F6, 0);
     uint32_t btn_can_x = dx + dw - 110;
-    fb_fill_rounded_rect(btn_can_x, by + 8, 95, 26, 4, 0x00222738);
-    fb_draw_rounded_rect(btn_can_x, by + 8, 95, 26, 4, 0x003B445B);
-    font_draw_string(btn_can_x + 16, by + 13, "Cancelar", 0x00E2E8F0, 1);
+    int hc = mx >= (int32_t)btn_can_x && mx <= (int32_t)(btn_can_x + 95) && my >= (int32_t)(by + 8) && my <= (int32_t)(by + 34);
+    si_button((int32_t)btn_can_x, (int32_t)by + 8, 95, 26, SI_NONE, "Cancelar", hc ? SIB_NEUTRAL : SIB_GHOST, NC_ACCENT, 0);
 }
 
 /* -------------------------------------------------------------------------
@@ -1003,8 +1146,13 @@ static void np_draw_cp(int32_t x, int32_t y, const uint8_t *s, uint32_t len, uin
 /* -------------------------------------------------------------------------
  * Barra de herramientas (una sola tabla para dibujar y para pulsar)
  * ------------------------------------------------------------------------- */
-enum { NB_NEW = 0, NB_OPEN, NB_SAVE, NB_SAVEAS, NB_CUT, NB_COPY, NB_PASTE, NB_SPEAK, NB_BROWSER, NB_COUNT };
-static const char *const np_btn_label[NB_COUNT] = { "Nuevo", "Abrir", "Guardar", "Guardar como", "Cortar", "Copiar", "Pegar", "Leer en voz alta", "Ver en navegador" };
+enum { NB_NEW = 0, NB_OPEN, NB_SAVE, NB_SAVEAS, NB_UNDO, NB_REDO, NB_CUT, NB_COPY, NB_PASTE, NB_FIND, NB_BROWSER, NB_SPEAK, NB_COUNT };
+static const char *const np_btn_label[NB_COUNT] = { "Nuevo", "Abrir", "Guardar", "Guardar como", "Deshacer", "Rehacer", "Cortar", "Copiar", "Pegar", "Buscar", "Ver en navegador", "Leer en voz alta" };
+static const uint8_t np_btn_icon[NB_COUNT] = { SI_NEW, SI_FOLDER, SI_SAVE, SI_DISK, SI_UNDO, SI_REDO, SI_CUT, SI_COPY, SI_PASTE, SI_SEARCH, SI_SCREEN, SI_SPEAKER };
+static const char *const np_btn_hint[NB_COUNT] = {
+    "Empezar un documento nuevo", "Abrir un archivo (Ctrl+O)", "Guardar los cambios (Ctrl+S)", "Guardar con otro nombre (Ctrl+Mayús+S)",
+    "Deshacer el último cambio (Ctrl+Z)", "Rehacer (Ctrl+Mayús+Z)", "Cortar la selección o la línea (Ctrl+X)", "Copiar la selección o todo (Ctrl+C)",
+    "Pegar del portapapeles (Ctrl+V)", "Buscar en el texto (Ctrl+F)", "Guardar y abrir en el navegador (Ctrl+B)", "Leer el texto en voz alta" };
 /* SOMA_247_HABLA: lectura en voz alta (texto a voz con una voz de Piper; solo x86_64) */
 #if defined(__x86_64__)
 #include "voz_sys.h"
@@ -1012,7 +1160,18 @@ static int np_speaking(void) { return voz_speak_state(); }
 #else
 static int np_speaking(void) { return 0; }
 #endif
-static const char *np_label(int i) { return (i == NB_SPEAK && np_speaking()) ? "Parar lectura" : np_btn_label[i]; }
+__attribute__((unused)) static const char *np_label(int i) { return (i == NB_SPEAK && np_speaking()) ? "Parar lectura" : np_btn_label[i]; }
+static int np_btn_enabled(int i)
+{
+    switch (i) {
+    case NB_UNDO: return np_uh_n > 0;
+    case NB_REDO: return np_uh_n < np_uh_tot;
+    case NB_PASTE: { uint32_t n = 0; const char *t = clip_text(&n); return t && n > 0; }
+    default: return 1;
+    }
+}
+#define NP_LABELS(g) ((g)->w >= 700)       /* ancho suficiente: Nuevo/Abrir/Guardar llevan texto; si no, solo icono */
+static int np_btn_sep(int i) { return i == NB_UNDO || i == NB_CUT || i == NB_FIND || i == NB_BROWSER; }
 struct np_geo;
 struct np_rect;
 static void np_speak_rect(const struct np_geo *g, struct np_rect *r);
@@ -1023,8 +1182,8 @@ static void np_btn_rects(const struct np_geo *g, struct np_rect *r)
     int32_t x = g->x + 10, y = g->y + 6, h = NP_TOOLBAR_H - 12, right = g->x + g->w - 8;
     for (int i = 0; i < NB_COUNT; ++i) {
         if (i == NB_SPEAK) { r[i].x = r[i].w = 0; r[i].y = y; r[i].h = h; continue; }   /* va en la tira de la ruta (siempre cabe) */
-        if (i == NB_CUT || i == NB_BROWSER) x += 11;                 /* separador de grupo */
-        int32_t w = np_tw(np_btn_label[i], 12) + 22;
+        if (np_btn_sep(i)) x += 11;                                  /* separador de grupo */
+        int32_t w = (NP_LABELS(g) && i <= NB_SAVE) ? np_tw(np_btn_label[i], 12) + 46 : 34;
         r[i].y = y; r[i].h = h;
         if (x + w > right) { r[i].x = 0; r[i].w = 0; x = right + 1; continue; }   /* no cabe: se oculta (sigue en el menu) */
         r[i].x = x; r[i].w = w;
@@ -1061,6 +1220,8 @@ static int np_menu_enabled(int id)
     case MI_CUT: case MI_COPY: case MI_DEL: return np_has_sel();
     case MI_PASTE: { uint32_t n = 0; const char *t = clip_text(&n); return t && n > 0; }
     case MI_ALL: case MI_LINE: return np_len > 0;
+    case MI_UNDO: return np_uh_n > 0;
+    case MI_REDO: return np_uh_n < np_uh_tot;
     default: return 1;
     }
 }
@@ -1081,6 +1242,15 @@ static int np_menu_inside(int32_t mx, int32_t my)
     return np_ctx_open && mx >= np_ctx_x && mx < np_ctx_x + CTX_W && my >= np_ctx_y && my < np_ctx_y + np_ctx_height();
 }
 
+static int np_menu_icon(int id)
+{
+    switch (id) {
+    case MI_CUT: return SI_CUT; case MI_COPY: return SI_COPY; case MI_PASTE: return SI_PASTE; case MI_DEL: return SI_TRASH;
+    case MI_ALL: case MI_LINE: return SI_LIST; case MI_OPEN: return SI_FOLDER; case MI_SAVE: return SI_SAVE;
+    case MI_BROWSER: return SI_SCREEN; case MI_SPEAK: return SI_SPEAKER; case MI_UNDO: return SI_UNDO; case MI_REDO: return SI_REDO;
+    case MI_FIND: return SI_SEARCH; default: return SI_NONE;
+    }
+}
 static void render_context_menu(void)
 {
     if (!np_ctx_open) return;
@@ -1101,7 +1271,8 @@ static void render_context_menu(void)
         if (hot) fb_fill_rounded_rect(mx + 5, y, mw - 10, CTX_ITEM_H, 6, 0x000B6BCB);
         uint32_t col = !en ? 0x0056627A : (hot ? 0x00FFFFFF : 0x00E2E8F0);
         uint32_t kcol = !en ? 0x00434E63 : (hot ? 0x00D6E9FF : 0x007B8AA3);
-        np_tx(mx + 16, y, CTX_ITEM_H, it->label, 13, col, 0);
+        si_icon(np_menu_icon(it->id), mx + 23, y + CTX_ITEM_H / 2, 15, !en ? 0x0056627A : (hot ? 0x00FFFFFF : 0x0094A3B8));
+        np_tx(mx + 40, y, CTX_ITEM_H, it->label, 13, col, 0);
         if (it->key) np_tx(mx + mw - 16 - np_tw(it->key, 12), y, CTX_ITEM_H, it->key, 12, kcol, 0);
         y += CTX_ITEM_H;
     }
@@ -1110,6 +1281,48 @@ static void render_context_menu(void)
 /* -------------------------------------------------------------------------
  * Ventana principal
  * ------------------------------------------------------------------------- */
+/* SOMA_255: barra de busqueda */
+struct np_frects { int32_t fx, fy, fw, fh, cnt_x, prev_x, next_x, close_x, by, bw, bh; };
+static void np_find_rects(const struct np_geo *g, struct np_frects *f)
+{
+    f->fy = g->find_y + 6; f->fh = 24; f->fx = g->x + 14;
+    f->fw = g->w >= 560 ? 240 : (g->w - 190 > 90 ? g->w - 190 : 90);
+    f->bw = 28; f->bh = 24; f->by = f->fy;
+    f->close_x = g->x + g->w - 8 - f->bw; f->next_x = f->close_x - 30; f->prev_x = f->next_x - 30;
+    f->cnt_x = f->fx + f->fw + 14;
+}
+static int np_find_hit(const struct np_geo *g, int32_t mx, int32_t my)       /* 1 campo, 2 anterior, 3 siguiente, 4 cerrar */
+{
+    struct np_frects f; np_find_rects(g, &f);
+    if (my < f.by || my >= f.by + f.bh) return 0;
+    if (mx >= f.fx && mx < f.fx + f.fw) return 1;
+    if (mx >= f.prev_x && mx < f.prev_x + f.bw) return 2;
+    if (mx >= f.next_x && mx < f.next_x + f.bw) return 3;
+    if (mx >= f.close_x && mx < f.close_x + f.bw) return 4;
+    return 0;
+}
+static void np_render_find(const struct np_geo *g)
+{
+    if (!np_find_open) return;
+    struct np_frects f; np_find_rects(g, &f);
+    fb_fill_rect(g->x, g->find_y, g->w, NP_FIND_H, NC_BAR2);
+    fb_fill_rect(g->x, g->find_y + NP_FIND_H - 1, g->w, 1, NC_LINE);
+    tf_render(&np_fq_tf, f.fx, f.fy, f.fw, f.fh, np_find_focus && dlg_mode == NP_DLG_NONE, "Buscar en el documento", NC_TXT);
+    int tot, idx; char cnt[40], nb[12];
+    np_find_count(&tot, &idx);
+    cnt[0] = '\0';
+    uint32_t col = NC_DIM;
+    if (str_len(np_fq) == 0) { /* nada */ }
+    else if (tot == 0) { str_copy(cnt, "Sin resultados", sizeof cnt); col = 0x00F87171; }
+    else { if (idx) { u32_to_str((uint32_t)idx, nb); ap(cnt, sizeof cnt, nb); ap(cnt, sizeof cnt, " de "); } u32_to_str((uint32_t)tot, nb); ap(cnt, sizeof cnt, nb); if (!idx) ap(cnt, sizeof cnt, tot == 1 ? " coincidencia" : " coincidencias"); }
+    if (f.cnt_x + np_tw(cnt, 12) < f.prev_x - 6) np_tx(f.cnt_x, g->find_y, NP_FIND_H, cnt, 12, col, 0);
+    int on = !np_ctx_open && dlg_mode == NP_DLG_NONE;
+    int hv = on ? np_find_hit(g, np_mx, np_my) : 0;
+    si_button(f.prev_x, f.by, f.bw, f.bh, SI_PREV, "", hv == 2 ? SIB_NEUTRAL : SIB_GHOST, NC_ACCENT, 0);
+    si_button(f.next_x, f.by, f.bw, f.bh, SI_NEXT, "", hv == 3 ? SIB_NEUTRAL : SIB_GHOST, NC_ACCENT, 0);
+    si_button(f.close_x, f.by, f.bw, f.bh, SI_CLOSE, "", hv == 4 ? SIB_DANGER : SIB_GHOST, NC_ACCENT, 0);
+}
+
 static void np_chevron(int32_t x, int32_t cy, uint32_t argb)
 {
     fb_line_aa(x * 16, (cy - 4) * 16, (x + 4) * 16, cy * 16, 20, argb);
@@ -1159,14 +1372,15 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
         np_btn_rects(&g, r);
         for (int i = 0; i < NB_COUNT; ++i) {
             if (r[i].w <= 0) continue;
-            if (i == NB_CUT || i == NB_BROWSER) fb_fill_rect((uint32_t)(r[i].x - 8), (uint32_t)(r[i].y + 6), 1, (uint32_t)(r[i].h - 12), 0x002B3547);
-            int hot = (i == np_hover_btn) && !np_ctx_open && dlg_mode == NP_DLG_NONE;
-            int primary = (i == NB_SAVE && np_dirty);
-            uint32_t fg = 0x00CBD5E1;
-            if (primary) { fb_fill_rounded_rect(r[i].x, r[i].y, r[i].w, r[i].h, 7, hot ? 0x000E7FD6 : 0x000B6BCB); fg = 0x00FFFFFF; }
-            else if (hot) { fb_fill_rounded_rect(r[i].x, r[i].y, r[i].w, r[i].h, 7, NC_HOVER); fg = 0x00FFFFFF; }
-            if (i == NB_BROWSER && !primary) fg = hot ? 0x00FFFFFF : NC_ACCENT;
-            np_tx(r[i].x + 11, r[i].y, r[i].h, np_label(i), 12, fg, 0);
+            if (np_btn_sep(i)) fb_fill_rect((uint32_t)(r[i].x - 8), (uint32_t)(r[i].y + 6), 1, (uint32_t)(r[i].h - 12), 0x002B3547);
+            int en = np_btn_enabled(i);
+            int hot = en && (i == np_hover_btn) && !np_ctx_open && dlg_mode == NP_DLG_NONE;
+            int kind = SIB_GHOST;
+            uint32_t acc = NC_ACCENT;
+            if (i == NB_SAVE && np_dirty) { kind = SIB_ACCENT; acc = hot ? 0x0060A5FA : 0x003B82F6; }
+            else if (i == NB_FIND && np_find_open) kind = SIB_ON;
+            else if (hot) kind = SIB_NEUTRAL;
+            si_button(r[i].x, r[i].y, r[i].w, r[i].h, np_btn_icon[i], (NP_LABELS(&g) && i <= NB_SAVE) ? np_btn_label[i] : "", kind, acc, !en);
         }
     }
 
@@ -1176,7 +1390,8 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     fb_fill_rect(win_x, (uint32_t)(g.crumb_y + NP_CRUMB_H - 1), win_w, 1, NC_LINE);
     {
         fb_set_clip(g.x, g.crumb_y, g.w, NP_CRUMB_H);
-        int32_t cx = g.x + 14, cy = g.crumb_y + NP_CRUMB_H / 2;
+        int32_t cx = g.x + 34, cy = g.crumb_y + NP_CRUMB_H / 2;
+        si_icon(SI_FILE, g.x + 21, cy, 15, np_dirty ? 0x00FBBF24 : 0x0073819A);
         const char *p = np_path;
         char seg[64];
         while (*p) {
@@ -1197,16 +1412,13 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
             struct np_rect b; np_speak_rect(&g, &b);
             int on = np_speaking(), hot = np_mx >= b.x && np_mx < b.x + b.w && np_my >= b.y && np_my < b.y + b.h;
             fb_fill_rounded_rect(b.x, b.y, b.w, b.h, 9, on ? (hot ? 0x00B91C1C : 0x007F1D1D) : (hot ? NC_HOVER : 0x00182133));
-            int32_t ix = b.x + 10, iy = b.y + b.h / 2;                     /* altavoz */
-            uint32_t ic = on ? 0xFFFFFFFFu : 0xFF7DD3FCu;
-            fb_fill_rrect_aa(ix, iy - 3, 4, 6, 1, ic);
-            for (int k = 0; k < 4; k++) fb_fill_rect((uint32_t)(ix + 4 + k), (uint32_t)(iy - 2 - k), 1, (uint32_t)(4 + 2 * k), ic & 0xFFFFFF);
-            if (on) { fb_fill_rect((uint32_t)(ix + 11), (uint32_t)(iy - 3), 2, 6, 0x00FFFFFF); fb_fill_rect((uint32_t)(ix + 14), (uint32_t)(iy - 3), 2, 6, 0x00FFFFFF); }
-            else for (int k = 0; k < 2; k++) fb_stroke_rrect_aa(ix + 6 + 3 * k, iy - 3 - 2 * k, 6 + 2 * k, 6 + 4 * k, 3 + k, (ic & 0x00FFFFFFu) | 0x90000000u);
-            np_tx(b.x + 34, b.y, b.h, np_label(NB_SPEAK), 11, on ? 0x00FFFFFF : 0x00BAE6FD, 0);
+            si_icon(on ? SI_STOP : SI_SPEAKER, b.x + 15, b.y + b.h / 2, 13, on ? 0x00FFFFFF : 0x007DD3FC);
+            np_tx(b.x + 29, b.y, b.h, np_label(NB_SPEAK), 11, on ? 0x00FFFFFF : 0x00BAE6FD, 0);
         }
 #endif
     }
+
+    np_render_find(&g);
 
     /* 3. Editor */
     fb_fill_rect((uint32_t)g.ed_x, (uint32_t)g.ed_y, (uint32_t)g.ed_w, (uint32_t)g.ed_h, NC_BG);
@@ -1222,6 +1434,7 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     for (uint32_t k = 0; k < np_rows[first] && k < np_len; ++k) if (np_text[k] == '\n') line_no++;
     uint32_t cur_line_start = np_line_start(cur);
 
+    uint32_t fql = np_find_open ? str_len(np_fq) : 0;
     fb_set_clip(g.ed_x, g.ed_y, g.ed_w - NP_SB_W, g.ed_h);
     for (uint32_t r = first; r < np_nrows; ++r) {
         int32_t y = top + (int32_t)r * NP_LINE_H;
@@ -1260,12 +1473,16 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
         }
 
         /* texto */
-        uint32_t col = 0;
+        uint32_t col = 0, mend = 0;
+        if (fql) for (uint32_t j = rs >= fql ? rs - (fql - 1) : 0; j < rs; j++) if (np_match_at(j, np_fq, fql)) mend = j + fql;   /* SOMA_255 */
         for (uint32_t i = rs; i < re; ) {
             uint32_t st = np_step(i), a = np_adv((uint8_t)np_text[i], col);
             int is_sel = (i >= sel_lo && i < sel_hi);
+            if (fql && i >= mend && np_match_at(i, np_fq, fql)) mend = i + fql;
+            int is_m = i < mend && !is_sel;
+            if (is_m) fb_fill_rect((uint32_t)(g.tx_x + (int32_t)col * NP_CELL_W), (uint32_t)(y + 1), a * NP_CELL_W, NP_LINE_H - 2, NC_MATCH);
             np_draw_cp(g.tx_x + (int32_t)col * NP_CELL_W, y, (const uint8_t *)&np_text[i], st,
-                       is_sel ? 0x00FFFFFF : NC_TXT, is_sel ? NC_SEL : NC_BG, &g);
+                       is_sel ? 0x00FFFFFF : NC_TXT, is_sel ? NC_SEL : (is_m ? NC_MATCH : NC_BG), &g);
             col += a; i += st;
         }
 
@@ -1275,6 +1492,7 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
             fb_fill_rect((uint32_t)(cx - 1), (uint32_t)(y + 1), 2, NP_LINE_H - 2, NC_ACCENT);
         }
     }
+    if (np_len == 0) np_tx(g.tx_x + 14, g.ed_y + NP_PAD_Y, NP_LINE_H, "Empieza a escribir, o abre un archivo con Ctrl+O", 12, 0x00475569, 0);   /* SOMA_255 */
     fb_reset_clip();
 
     /* barra de desplazamiento */
@@ -1290,7 +1508,7 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     fb_fill_rect(win_x, (uint32_t)g.st_y, win_w, 1, NC_LINE);
     {
         uint32_t led = np_dirty ? 0xFFF59E0Bu : 0xFF10B981u;
-        if (np_live) led = 0xFF38BDF8u;
+        if (np_live || np_hover_btn >= 0) led = 0xFF38BDF8u;
         fb_fill_rrect_aa(g.x + 14, g.st_y + NP_STATUS_H / 2 - 4, 8, 8, 4, led);
 
         /* derecha: linea, columna y tamano */
@@ -1306,7 +1524,7 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
         }
         ap(info, sizeof(info), "L\xC3\xADn "); u32_to_str(ln, nb); ap(info, sizeof(info), nb);
         ap(info, sizeof(info), ", Col "); u32_to_str(colc, nb); ap(info, sizeof(info), nb);
-        ap(info, sizeof(info), "   "); u32_to_str(np_len, nb); ap(info, sizeof(info), nb); ap(info, sizeof(info), " B");
+        ap(info, sizeof(info), "   "); u32_to_str(np_len, nb); ap(info, sizeof(info), nb); ap(info, sizeof(info), " B   UTF-8");
         int iw = np_tw(info, 12);
         int32_t ix = g.x + g.w - 14 - iw;
         if (ix > g.x + 120) np_tx(ix, g.st_y, NP_STATUS_H, info, 12, NC_DIM, 0);
@@ -1315,6 +1533,7 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
         char full_status[80];
         str_copy(full_status, np_status, sizeof(full_status));
         if (np_dead_key == 1) str_copy(full_status, "Acento activo (pulsa vocal)", sizeof(full_status));
+        if (np_hover_btn >= 0 && np_hover_btn < NB_COUNT) str_copy(full_status, np_btn_hint[np_hover_btn], sizeof(full_status));   /* SOMA_255: ayuda del boton */
         fb_set_clip(g.x, g.st_y, ix - 12 - g.x, NP_STATUS_H);
         np_tx(g.x + 30, g.st_y, NP_STATUS_H, full_status, 12, NC_DIM, 0);
         fb_reset_clip();
@@ -1349,15 +1568,13 @@ static void np_speak_toggle(void)
 static void np_btn_exec(int b)
 {
     switch (b) {
-    case NB_NEW:    notepad_init(); break;
+    case NB_NEW:    np_new_doc(); break;
+    case NB_UNDO:   np_undo(); break;
+    case NB_REDO:   np_redo(); break;
+    case NB_FIND:   if (np_find_open) np_find_close(); else np_find_open_bar(); break;
     case NB_OPEN:   dlg_mode = NP_DLG_OPEN; dlg_open_documents_folder(); break;
     case NB_SAVE:   notepad_save(); break;
-    case NB_SAVEAS:
-        dlg_mode = NP_DLG_SAVE_AS;
-        str_copy(dlg_filename, get_filename_part(np_path), sizeof(dlg_filename));
-        dlg_filename_len = str_len(dlg_filename);
-        dlg_open_documents_folder();
-        break;
+    case NB_SAVEAS: np_saveas_dialog(); break;
     case NB_CUT:    notepad_clip_op(CLIP_OP_CUT); break;
     case NB_COPY:   notepad_clip_op(CLIP_OP_COPY); break;
     case NB_PASTE:  notepad_clip_op(CLIP_OP_PASTE); break;
@@ -1380,6 +1597,9 @@ static void np_menu_exec(int id)
     case MI_SAVE:  notepad_save(); break;
     case MI_BROWSER: notepad_open_in_browser(np_path); break;
     case MI_SPEAK: np_speak_toggle(); break;
+    case MI_UNDO:  np_undo(); break;
+    case MI_REDO:  np_redo(); break;
+    case MI_FIND:  np_find_open_bar(); break;
     default: break;
     }
 }
@@ -1536,9 +1756,18 @@ int notepad_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y,
     /* Barra de herramientas */
     {
         int b = np_btn_hit(&g, mx, my);
-        if (b >= 0) { np_btn_exec(b); return 1; }
+        if (b >= 0) { if (np_btn_enabled(b)) np_btn_exec(b); return 1; }
+    }
+    if (np_find_open && my >= g.find_y && my < g.find_y + NP_FIND_H && mx >= g.x && mx < g.x + g.w) {   /* SOMA_255: barra de busqueda */
+        int h = np_find_hit(&g, mx, my);
+        if (h == 1) { np_find_focus = 1; tf_press(&np_fq_tf, mx, my, keyboard_shift_held()); }
+        else if (h == 2) np_find_next(-1, 0);
+        else if (h == 3) np_find_next(1, 0);
+        else if (h == 4) np_find_close();
+        return 1;
     }
     if (my < g.ed_y || my >= g.ed_y + g.ed_h || mx < g.ed_x || mx >= g.ed_x + g.ed_w) return 0;
+    np_find_focus = 0;                                  /* el foco vuelve al texto */
 
     /* Barra de desplazamiento: arrastrar el tirador o saltar una pagina */
     if (mx >= g.sb_x - 2) {
@@ -1664,6 +1893,7 @@ int notepad_mouse(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32
         return 1;
     }
 
+    if (np_find_open && np_find_focus && tf_drag(&np_fq_tf, mx, my, left_held)) redraw = 1;     /* SOMA_255 */
     if (release) {
         if (np_dragging || np_sb_drag) redraw = 1;
         np_dragging = 0; np_sb_drag = 0;
@@ -1689,6 +1919,7 @@ int notepad_mouse(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32
 int notepad_escape(void) {
     if (np_ctx_open) { np_ctx_open = 0; np_ctx_hover = -1; return 1; }
     if (dlg_mode != NP_DLG_NONE) { dlg_mode = NP_DLG_NONE; return 1; }
+    if (np_find_open) { np_find_close(); return 1; }        /* SOMA_255 */
     return 0;
 }
 
@@ -1739,8 +1970,9 @@ void notepad_handle_key(char c) {
 
         /* Borrar caracteres (Backspace, DEL y Supr) */
         if (c == '\b' || (uint8_t)c == 127 || c == 4) {
-            if (dlg_filename_len > 0) {
-                dlg_filename[--dlg_filename_len] = '\0';
+            if (dlg_filename_len > 0) {                 /* SOMA_255: quita un caracter UTF-8 entero */
+                uint32_t pv = utf8_prev(dlg_filename, dlg_filename_len);
+                dlg_filename_len = pv; dlg_filename[pv] = '\0';
             }
             return;
         }
@@ -1753,7 +1985,7 @@ void notepad_handle_key(char c) {
         }
 
         /* Escritura de caracteres en el nombre de archivo */
-        if ((uint8_t)c >= 32 && (uint8_t)c <= 126 && c != '/' && c != '\\' && dlg_filename_len < sizeof(dlg_filename) - 5) {
+        if ((((uint8_t)c >= 32 && (uint8_t)c <= 126) || (uint8_t)c >= 0x80) && c != '/' && c != '\\' && dlg_filename_len < sizeof(dlg_filename) - 5) {
             dlg_filename[dlg_filename_len++] = c;
             dlg_filename[dlg_filename_len] = '\0';
             return;
@@ -1766,6 +1998,20 @@ void notepad_handle_key(char c) {
     np_follow = 1;
     np_caret_t = timer_get_uptime_ms();
     if (np_ctx_open) { np_ctx_open = 0; np_ctx_hover = -1; if (c == 27) return; }   /* SOMA_PARCHE_028_UI */
+    if (np_find_open && np_find_focus) {                          /* SOMA_255: teclas para la barra de busqueda */
+        int keep = ctrl && (c == 's' || c == 'S' || c == 19 || c == 'o' || c == 'O' || c == 15 || c == 'b' || c == 'B' || c == 'z' || c == 'Z' || c == 'y' || c == 'Y');
+        if (!keep) {
+            int md = keyboard_last_mods(), fshift = shift || (md & 2), fctrl = ctrl || (md & 1);
+            if (c == 27) { np_find_close(); return; }
+            if (fctrl && (c == 'f' || c == 'F' || c == 6)) { tf_select_all(&np_fq_tf); return; }
+            int r = tf_key(&np_fq_tf, c, fctrl, fshift);
+            if (r == TF_ENTER) np_find_next(fshift ? -1 : 1, 0);
+            else if (r == TF_EDIT) np_find_next(1, 1);
+            else if (r == TF_ESC) np_find_close();
+            else if (r == TF_TAB) np_find_focus = 0;
+            return;
+        }
+    }
     if (c != 16 && c != 14) np_goal_col = -1;
 
     if (np_cursor > np_len) np_cursor = np_len;
@@ -1774,7 +2020,10 @@ void notepad_handle_key(char c) {
     if (ctrl) {
         np_dead_key = 0;
         np_utf8_lead = 0;
-        if (c == 's' || c == 'S' || c == 19) { notepad_save(); return; }
+        if (c == 's' || c == 'S' || c == 19) { if (shift) np_saveas_dialog(); else notepad_save(); return; }
+        if (c == 'z' || c == 'Z' || c == 26) { if (shift) np_redo(); else np_undo(); return; }      /* SOMA_255 */
+        if (c == 'y' || c == 'Y' || c == 25) { np_redo(); return; }
+        if (c == 'f' || c == 'F' || c == 6) { np_find_open_bar(); return; }     /* Ctrl+F llega como el codigo 6 (el mismo de la flecha derecha) */
         if (c == 'o' || c == 'O' || c == 15) { dlg_mode = NP_DLG_OPEN; dlg_open_documents_folder(); return; }
         if (c == 'b' || c == 'B') { notepad_open_in_browser(np_path); return; }
         if (c == 'c' || c == 'C' || c == 3)  { notepad_clip_op(CLIP_OP_COPY); return; }
@@ -1920,6 +2169,7 @@ void notepad_handle_key(char c) {
  * ------------------------------------------------------------------------- */
 int notepad_clip_op(int op) {
     char msg[64];
+    if (np_find_open && np_find_focus) { tf_clip(&np_fq_tf, op); if (op == CLIP_OP_PASTE) np_find_next(1, 1); return 1; }   /* SOMA_255 */
     if (op == CLIP_OP_PASTE) {
         uint32_t n = 0;
         const char *t = clip_text(&n);
@@ -1975,6 +2225,7 @@ void notepad_live_begin(const char *path, const char *data, uint32_t len) {
     np_live = 1;
     np_follow = 1;
     np_dirty = 0;
+    np_uh_n = np_uh_tot = np_uh_pool = 0; np_uh_link_next = 0;
     str_copy(np_status, "SOMA escribiendo en vivo...", sizeof(np_status));
 }
 
@@ -2001,6 +2252,7 @@ void notepad_live_end(void) {
     np_live_src = 0;
     np_cursor = np_len;
     np_dirty = 0;
+    np_uh_n = np_uh_tot = np_uh_pool = 0; np_uh_link_next = 0;
     str_copy(np_status, "Archivo generado por SOMA", sizeof(np_status));
 }
 
@@ -2049,6 +2301,16 @@ void notepad_live_end(void) {
 #undef dlg_last_click
 #undef np_cols_last
 #undef np_named
+#undef np_uh
+#undef np_uh_n
+#undef np_uh_tot
+#undef np_uh_pool
+#undef np_uh_link_next
+#undef np_uh_data
+#undef np_find_open
+#undef np_find_focus
+#undef np_fq
+#undef np_fq_tf
 /* SOMA_211_NOTAS: instancias */
 static void np_inst_defaults(struct np_inst *p)
 {

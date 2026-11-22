@@ -66,3 +66,9 @@ voces/
 *.wav
 *.pdf
 .soma_parches/
+
+# SOMA_262_PUBLICAR: respaldos de los parches de un solo archivo (los usa --revertir; tienen copias de archivos antiguos)
+# y lo preparado para Claude. Son locales.
+.parche_*_respaldo/
+para_claude*.txt
+exporta_soma_*.py

@@ -785,6 +785,7 @@ static int cmd_ajustes(const char *args, char *out_buf, uint32_t max_out)
     while (args && *args == ' ') args++;
     if (args && args[0] == 'v' && args[1] == 'o' && args[2] == 'z') { void settings_goto_voz(void); settings_goto_voz(); }   /* SOMA_246: "ajustes voz" */
     if (args && args[0] == 's' && args[1] == 'o' && args[2] == 'n') { void settings_goto_sonido(void); settings_goto_sonido(); }   /* SOMA_250: "ajustes sonido" */
+    if (args && args[0] == 'l' && args[1] == 'c' && args[2] == 'm') { void settings_goto_lcm(void); settings_goto_lcm(); }     /* SOMA_257_LCM: "ajustes lcm" */
     gui_open_settings();
     soma_str_put(out_buf, max_out, &p, "Ajustes abiertos.");
     return 1;
@@ -827,9 +828,11 @@ static int cmd_youtube(const char *args, char *out_buf, uint32_t max_out)
 {
     while (*args == ' ') args++;
     if (out_buf && max_out) out_buf[0] = 0;
-    if (youtube_command(args, out_buf, max_out)) return 1;
+    int r = youtube_command(args, out_buf, max_out);
+    if (r == 1) return 1;
+    if (r == 2) args = "";                                       /* SOMA_252: "youtube mp4 <direccion>": abrir la ventana sin buscar */
     gui_open_youtube(args);
-    uint32_t p = 0; soma_str_put(out_buf, max_out, &p, *args ? "YouTube abierto: buscando." : "YouTube abierto.");
+    uint32_t p = 0; soma_str_put(out_buf, max_out, &p, r == 2 ? "YouTube abierto: reproduciendo." : *args ? "YouTube abierto: buscando." : "YouTube abierto.");
     return 1;
 }
 
@@ -1074,3 +1077,64 @@ static int cmd_cursor(const char *args, char *out_buf, uint32_t max_out)
     }
     return 1;
 }
+
+/* SOMA_257_LCM: frases para la voz con datos que las ordenes 'bateria' y 'energia' solo escriben en pantalla. Las usa el LCM
+ * (src/agent/lcm_soma.inc) cuando la peticion la decide el; la orden escrita en el terminal sigue igual. */
+static uint32_t lcm_voz_vuelta;
+static void lcm_voz_min(char *o, uint32_t cap, uint32_t *p, uint32_t min)
+{
+    uint32_t h = min / 60, m = min % 60;
+    if (h) { if (h == 1) soma_str_put(o, cap, p, "una hora"); else { soma_str_put_dec(o, cap, p, h); soma_str_put(o, cap, p, " horas"); } }
+    if (h && m) soma_str_put(o, cap, p, " y ");
+    if (m || !h) { soma_str_put_dec(o, cap, p, m); soma_str_put(o, cap, p, m == 1 ? " minuto" : " minutos"); }
+}
+int lcm_voz_bateria(char *o, uint32_t cap);
+int lcm_voz_bateria(char *o, uint32_t cap)
+{
+    uint32_t p = 0; o[0] = 0; ++lcm_voz_vuelta;
+    const struct acpi_sys_info *a = acpi_sys_info();
+    if (!a->active) { soma_str_put(o, cap, &p, "No puedo leer la batería en este equipo."); return 1; }
+    acpi_power_refresh_now();
+    struct acpi_power_state ps; acpi_power_state(&ps);
+    if (!a->nbat) { soma_str_put(o, cap, &p, ps.ac == 1 ? "Este equipo no tiene batería; está enchufado a la corriente." : "No encuentro ninguna batería."); return 1; }
+    if (ps.percent == 0xFFFFFFFF) { soma_str_put(o, cap, &p, "No sé cuánta batería queda."); return 1; }
+    uint32_t v = lcm_voz_vuelta % 3;
+    if (ps.charging) {
+        soma_str_put(o, cap, &p, v == 0 ? "Está cargando: va por el " : v == 1 ? "Cargando, ya tiene un " : "Se está cargando; ahora mismo está al ");
+        soma_str_put_dec(o, cap, &p, ps.percent); soma_str_put(o, cap, &p, " por ciento");
+        if (ps.minutes != 0xFFFFFFFF && ps.minutes) { soma_str_put(o, cap, &p, ". Estará llena en "); lcm_voz_min(o, cap, &p, ps.minutes); }
+        soma_str_put(o, cap, &p, ".");
+    } else if (ps.discharging) {
+        if (ps.percent < 15) { soma_str_put(o, cap, &p, "Ojo, solo queda un "); soma_str_put_dec(o, cap, &p, ps.percent); soma_str_put(o, cap, &p, " por ciento. Conviene enchufarlo"); }
+        else {
+            soma_str_put(o, cap, &p, v == 0 ? "Te queda un " : v == 1 ? "Queda un " : "Tienes un ");
+            soma_str_put_dec(o, cap, &p, ps.percent); soma_str_put(o, cap, &p, v == 2 ? " por ciento de batería" : " por ciento");
+        }
+        if (ps.minutes != 0xFFFFFFFF && ps.minutes) { soma_str_put(o, cap, &p, ps.percent < 15 ? "; aguanta " : ", unas "); lcm_voz_min(o, cap, &p, ps.minutes); }
+        soma_str_put(o, cap, &p, ".");
+    } else {
+        soma_str_put(o, cap, &p, "La batería está al "); soma_str_put_dec(o, cap, &p, ps.percent); soma_str_put(o, cap, &p, " por ciento");
+        soma_str_put(o, cap, &p, ps.ac == 1 ? " y el cargador está enchufado." : ".");
+    }
+    return 1;
+}
+int lcm_voz_energia(char *o, uint32_t cap);
+int lcm_voz_energia(char *o, uint32_t cap)
+{
+    uint32_t p = 0; o[0] = 0; ++lcm_voz_vuelta;
+    const struct cpupower_info *ci = cpupower_info();
+    struct cpupower_sample sm;
+    int hay = cpupower_measure(&sm, 300) == 0 && sm.pkg_temp > -1000;
+    if (hay) {
+        int t = sm.pkg_temp;
+        soma_str_put(o, cap, &p, t >= 85 ? "Cuidado: el procesador está muy caliente, a " : (lcm_voz_vuelta & 1) ? "El procesador está a " : "Ahora mismo el procesador va a ");
+        soma_str_put_dec(o, cap, &p, (uint32_t)t); soma_str_put(o, cap, &p, " grados");
+        soma_str_put(o, cap, &p, t >= 85 ? "" : t >= 70 ? ", algo caliente" : t <= 50 ? ", fresquito" : "");
+        soma_str_put(o, cap, &p, ", en modo "); soma_str_put(o, cap, &p, cpupower_profile_name(ci->profile)); soma_str_put(o, cap, &p, ".");
+    } else {
+        soma_str_put(o, cap, &p, "El procesador está en modo "); soma_str_put(o, cap, &p, cpupower_profile_name(ci->profile));
+        soma_str_put(o, cap, &p, "; no puedo leer su temperatura.");
+    }
+    return 1;
+}
+/* SOMA_257_LCM fin */

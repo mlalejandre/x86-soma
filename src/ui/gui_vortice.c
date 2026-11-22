@@ -368,6 +368,9 @@ static void her_reveal_step(void)
     }
 }
 
+/* SOMA_259_ORBE: src/ui/gui_prompter.c (gui.c lo incluye despues de este archivo) */
+static void her_pr_turno(void); static void her_pr_fin(const char *resp); static void her_pr_pensamiento(const char *t);
+static void her_pr_stream_ini(void); static void her_pr_stream(const char *c);
 static void her_begin_turn(const char *q)
 {
     her_bufs_ensure();
@@ -380,6 +383,7 @@ static void her_begin_turn(const char *q)
     if (voz_speak_state()) voz_speak_stop();           /* SOMA_250_TTS: pregunta nueva: se deja de leer la respuesta anterior */
 #endif
     her_text_suppressed_by_dock = 0;
+    her_pr_turno();                                    /* SOMA_259_ORBE */
 }
 
 static void her_finish_turn(const char *resp)
@@ -407,6 +411,7 @@ static void her_finish_turn(const char *resp)
 #if defined(__x86_64__)
     if (*ans) (void)voz_speak_reply(ans);              /* SOMA_250_TTS: el orbe lee su respuesta (Ajustes > Voz) */
 #endif
+    her_pr_fin(resp);                                  /* SOMA_259_ORBE */
 }
 
 void gui_thought_update(const char *txt)
@@ -416,6 +421,7 @@ void gui_thought_update(const char *txt)
     if (!txt || !her_agent_busy) return;
     her_thk_reveal = 0; her_thk_len = 0;
     her_thk_len = her_text_cells(txt, her_thk, HER_THK_MAX);
+    her_pr_pensamiento(txt);                           /* SOMA_259_ORBE */
 }
 
 static struct her_u8 her_stream_dec = { 0, 0 };
@@ -425,11 +431,13 @@ void gui_stream_begin(void)
     her_bufs_ensure();
     her_ans_len = 0; her_ans_reveal = 0;
     her_stream_dec.cp = 0; her_stream_dec.need = 0;
+    her_pr_stream_ini();                               /* SOMA_259_ORBE */
 }
 
 void gui_stream_push(const char *chunk)
 {
     if (!chunk) return;
+    her_pr_stream(chunk);                              /* SOMA_259_ORBE */
     for (uint32_t i = 0; chunk[i] && her_ans_len < HER_ANS_MAX; ++i) {
         uint16_t cell;
         if (her_u8_feed(&her_stream_dec, (uint8_t)chunk[i], &cell))

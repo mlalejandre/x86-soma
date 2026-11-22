@@ -6,6 +6,7 @@
  *   - la ventana (hilo del escritorio): dibuja, atiende raton y teclado y decide que se pide;
  *   - hilo ytnet: busquedas y miniaturas (peticiones cortas al servicio);
  *   - hilo ytstream: recibe el video y lo mete en la ventana de memoria (yt_ring) de la que lee el reproductor;
+ *   - hilos ytia e ytnl (SOMA_251, youtube_ia.c): LLM, ficha, sonido para whisper y subtitulos;
  *   - hilo mediad (media.c): decodifica y sincroniza; aqui solo se le pide el ultimo fotograma (media_frame).
  * Saltar es pedir el video otra vez desde otro segundo: el servicio lo vuelve a emitir desde ahi. */
 #include "youtube.h"
@@ -23,6 +24,14 @@
 #include "tcp.h"
 #include "web_img.h"
 #include "media.h"
+#include "llm.h"            /* SOMA_251: buscador con IA, resumen y preguntas */
+#include "llm_proto.h"
+#include "bigfs.h"
+#include "bigfs_glue.h"
+#include "clipboard.h"
+#ifdef __x86_64__
+#include "voz_sys.h"        /* SOMA_251: transcripcion con whisper */
+#endif
 
 extern int keyboard_ctrl_held(void);
 extern int keyboard_shift_held(void);
@@ -33,7 +42,7 @@ extern int keyboard_last_mods(void);
 #define CONF_PATH   "/etc/secreto/youtube.conf"
 #define RING_BLOCKS 16                      /* 16 MiB de video en memoria (unos 25 s a 360p) */
 #define UI_GONE_MS  4000u                   /* sin ventana durante tanto tiempo: se corta la descarga */
-#define NET_CAP     65536u
+#define NET_CAP_250 65536u
 
 enum { V_BROWSE = 0, V_WATCH };
 enum { NS_IDLE = 0, NS_SEARCH, NS_THUMBS, NS_ERROR };
@@ -58,6 +67,7 @@ static char last_query[160];
 static volatile int net_alive, net_state;
 static volatile uint32_t net_req, net_done;
 static char net_query[160], net_err[160];
+static char net_queries[YT_AI_QMAX][YT_AI_QLEN]; static int net_nq;        /* SOMA_251: una busqueda puede ser varias (las propone el LLM) */
 static struct yt_item stage[YT_MAX_ITEMS]; static volatile int stage_n; static volatile uint32_t stage_gen; static volatile int stage_ready;
 static uint8_t *netbuf;
 
@@ -78,6 +88,12 @@ static uint32_t last_pos;                            /* ultima posicion conocida
 static int held; static uint32_t held_t;             /* parado a la espera de que el usuario pulse reproducir */
 static uint32_t ended_gen;
 static uint32_t last_sig;
+
+/* --- SOMA_251: panel lateral con pestanas y caja de preguntas */
+enum { T_NEXT = 0, T_INFO, T_TEXT, T_AI, T_COUNT };
+static int tab;
+static struct tfield tfq; static char qbuf[300]; static int tfq_ready, q_focus;
+static int info_scroll, tx_scroll, chat_scroll, chat_follow = 1, tx_y0;
 
 static uint64_t ms(void) { return timer_get_uptime_ms(); }
 
@@ -136,18 +152,18 @@ static void y_errtext(char *o, uint32_t max, const char *body, uint32_t n, int s
     if (!p) { yt_put(o, max, &p, "El servicio ha respondido con el error "); yt_put_dec(o, max, &p, (uint64_t)status); }
 }
 /* GET completo en netbuf. Devuelve el estado HTTP (cuerpo en *body, *len) o <0. Se abandona si cambia *gen. */
-static int y_get(const char *path, char **body, uint32_t *len, uint32_t timeout_ms, const volatile uint32_t *gen, uint32_t my, char *err, uint32_t emax)
+static int y_get_buf(uint8_t *nb, uint32_t ncap, const char *path, char **body, uint32_t *len, uint32_t timeout_ms, const volatile uint32_t *gen, uint32_t my, char *err, uint32_t emax)
 {
     uint32_t ep = 0; err[0] = 0;
     int h = y_connect(err, emax);
     if (h < 0) return -1;
     if (y_send_get(h, path) != 0) { tcp_close(h); yt_put(err, emax, &ep, "No se pudo enviar la peticion al servicio"); return -1; }
     uint32_t total = 0; uint64_t t_start = ms(); int r = 0;
-    while (total < NET_CAP - 1) {
+    while (total < ncap - 1) {
         if (*gen != my) { r = -2; break; }
         if (ms() - t_start > timeout_ms) { r = -3; break; }
-        uint32_t room = NET_CAP - 1 - total;
-        int n = tcp_recv(h, netbuf + total, (uint16_t)(room > 16384 ? 16384 : room), 60);
+        uint32_t room = ncap - 1 - total;
+        int n = tcp_recv(h, nb + total, (uint16_t)(room > 16384 ? 16384 : room), 60);
         if (n > 0) total += (uint32_t)n;
         else if (n == TCP_EOF || n == TCP_ERR) break;
     }
@@ -155,15 +171,24 @@ static int y_get(const char *path, char **body, uint32_t *len, uint32_t timeout_
     if (r == -2) return -2;
     if (r == -3) { yt_put(err, emax, &ep, "El servicio YouTube no responde (tiempo agotado)"); return -1; }
     int status = 0; uint32_t off = 0;
-    if (yt_http_head((const char *)netbuf, total, &status, &off) != 1) { yt_put(err, emax, &ep, "Respuesta no valida del servicio YouTube"); return -1; }
-    netbuf[total] = 0;
-    *body = (char *)netbuf + off; *len = total - off;
+    if (yt_http_head((const char *)nb, total, &status, &off) != 1) { yt_put(err, emax, &ep, "Respuesta no valida del servicio YouTube"); return -1; }
+    nb[total] = 0;
+    *body = (char *)nb + off; *len = total - off;
     if (status != 200) y_errtext(err, emax, *body, *len > 150 ? 150 : *len, status);
     return status;
+}
+static int y_get(const char *path, char **body, uint32_t *len, uint32_t timeout_ms, const volatile uint32_t *gen, uint32_t my, char *err, uint32_t emax)
+{
+    return y_get_buf(netbuf, NET_CAP_250, path, body, len, timeout_ms, gen, my, err, emax);
 }
 
 /* ================================================================== hilo ytnet: busquedas y miniaturas */
 static int ui_gone(void) { return ms() - ui_seen_ms > UI_GONE_MS; }
+
+/* SOMA_252: modo nativo (youtube_nativo.c, incluido mas abajo) */
+static int native_mode(void);
+static int nat_search(const char *q, struct yt_item *out, int max, const volatile uint32_t *gen, uint32_t my, char *err, uint32_t emax);
+static int nat_thumb(const char *id, uint8_t *buf, uint32_t cap, uint32_t *len, const volatile uint32_t *gen, uint32_t my);
 
 static void ytnet_main(void *arg)
 {
@@ -175,16 +200,36 @@ static void ytnet_main(void *arg)
             thread_sleep(20); continue;
         }
         uint32_t g = net_req;
-        char q[160]; yt_scopy(q, sizeof q, net_query);
+        static char qs[YT_AI_QMAX][YT_AI_QLEN]; static struct yt_item part[YT_AI_QMAX][12]; int pn[YT_AI_QMAX];
+        int nq = net_nq > 0 ? (net_nq > YT_AI_QMAX ? YT_AI_QMAX : net_nq) : 1;
+        if (net_nq > 0) for (int i = 0; i < nq; ++i) yt_scopy(qs[i], YT_AI_QLEN, net_queries[i]);
+        else yt_scopy(qs[0], YT_AI_QLEN, net_query);
         char path[900], err[160]; char *body; uint32_t len = 0;
         net_state = NS_SEARCH;
-        yt_path_search(path, sizeof path, &conf, q, 12);
-        int st = y_get(path, &body, &len, 70000u, &net_req, g, err, sizeof err);
-        if (st == -2) continue;                                  /* ha llegado otra busqueda */
-        int n = st == 200 ? yt_parse_results(body, len, stage, YT_MAX_ITEMS) : -1;
+        int st = 0, n = -1, bad = 0, gone = 0; char first_err[160]; first_err[0] = 0;
+        for (int k = 0; k < nq && !gone; ++k) {                  /* SOMA_251: una peticion por busqueda; luego se intercalan */
+            pn[k] = 0;
+            yt_path_search(path, sizeof path, &conf, nq == 1 && net_nq <= 0 ? net_query : qs[k], nq == 1 ? 12 : 8);
+            int m;
+            if (native_mode()) {                                 /* SOMA_252: se le pregunta a YouTube directamente */
+                m = nat_search(nq == 1 && net_nq <= 0 ? net_query : qs[k], part[k], nq == 1 ? 12 : 8, &net_req, g, err, sizeof err);
+                if (m == -2) { gone = 1; break; }
+                st = m >= 0 ? 200 : 0;
+            } else {
+            st = y_get(path, &body, &len, 70000u, &net_req, g, err, sizeof err);
+            if (st == -2) { gone = 1; break; }
+            m = st == 200 ? yt_parse_results(body, len, part[k], 12) : -1;
+            }
+            if (m < 0) { bad++; if (!first_err[0]) yt_scopy(first_err, sizeof first_err, st == 200 ? "El servicio YouTube ha respondido algo inesperado" : err); }
+            else pn[k] = m;
+        }
+        if (gone) continue;                                      /* ha llegado otra busqueda */
+        if (bad < nq) {
+            n = 0;
+            for (int r = 0; r < 12; ++r) for (int k = 0; k < nq; ++k) if (r < pn[k]) n = yt_merge(stage, n, YT_MAX_ITEMS, &part[k][r], 1);
+        }
         if (n < 0) {
-            if (st == 200) yt_scopy(net_err, sizeof net_err, "El servicio YouTube ha respondido algo inesperado");
-            else yt_scopy(net_err, sizeof net_err, err);
+            yt_scopy(net_err, sizeof net_err, first_err);
             net_state = NS_ERROR; net_done = g; idle_since = ms();
             continue;
         }
@@ -193,7 +238,8 @@ static void ytnet_main(void *arg)
         for (int i = 0; i < n && net_req == g && !ui_gone(); ++i) {
             char id[YT_ID_LEN + 1]; yt_scopy(id, sizeof id, stage[i].id);
             yt_path_thumb(path, sizeof path, &conf, id);
-            st = y_get(path, &body, &len, 15000u, &net_req, g, err, sizeof err);
+            if (native_mode()) { body = (char *)netbuf; st = nat_thumb(id, netbuf, NET_CAP_250, &len, &net_req, g); }
+            else st = y_get(path, &body, &len, 15000u, &net_req, g, err, sizeof err);
             if (st != 200 || len < 64) continue;
             struct wimg im; im.px = 0; im.delay = 0; im.w = im.h = im.nw = im.nh = im.frames = 0;
             if (wi_decode_fit((const uint8_t *)body, len, &im, 256, 144) != 0 || !im.px || im.w <= 0 || im.h <= 0) { wi_free(&im); continue; }
@@ -238,11 +284,20 @@ static void media_release(void)                      /* el reproductor deja de l
 }
 static void str_fail(uint32_t g, const char *m) { yt_scopy(str_err, sizeof str_err, m); str_errgen = g; }
 
+#ifdef __x86_64__
+#define SOMA_ARCH_252 "x86_64"
+#else
+#define SOMA_ARCH_252 "otra"
+#endif
+#include "youtube_nativo.c"  /* SOMA_252 */
+
 static void stream_job(uint32_t g)
 {
     char id[YT_ID_LEN + 1], title[128], path[400], err[160];
     yt_scopy(id, sizeof id, str_id); yt_scopy(title, sizeof title, str_title);
     uint32_t t = str_t;
+    if (native_mode() || yt_seq(id, NAT_DIRECT_ID)) { ring_eof = 1; native_job(g, id, t); return; }      /* SOMA_252: sin servicio externo */
+    nat_stop();
     media_release();
     ring_eof = 1; str_bytes = 0;
     if (!id[0]) return;                                          /* "parar": solo habia que soltar el flujo */
@@ -335,9 +390,11 @@ static void ytstream_main(void *arg)
 static void threads_up(void)
 {
     ui_seen_ms = ms();
-    if (!netbuf) netbuf = (uint8_t *)kmalloc(NET_CAP);
+    if (!netbuf) netbuf = (uint8_t *)kmalloc(NET_CAP_250);
     if (!rxtmp) rxtmp = (uint8_t *)kmalloc(16384);
 }
+#include "youtube_ia.c"     /* SOMA_251 */
+
 static void stream_request(const char *id, uint32_t t, const char *title)
 {
     threads_up();
@@ -345,24 +402,28 @@ static void stream_request(const char *id, uint32_t t, const char *title)
     yt_scopy(str_id, sizeof str_id, id); yt_scopy(str_title, sizeof str_title, title); str_t = t;
     str_req++;
     if (media_stream_busy()) media_stop();                       /* lo que sonaba se calla ya, sin esperar al hilo del video */
+    nat_stop();
     if (!str_alive) { str_alive = 1; if (!thread_create("ytstream", ytstream_main, 0)) { str_alive = 0; yt_scopy(note, sizeof note, "No se pudo crear el hilo del video"); } }
 }
 static void play_at(uint32_t t)
 {
     if (!now_it.id[0]) return;
     if (now_it.dur && t >= now_it.dur) t = now_it.dur > 2 ? now_it.dur - 2 : 0;
-    t0 = t; last_pos = t; held = 0; note[0] = 0;
+    if (pl_seek_live(t)) { t0 = 0; last_pos = t; held = 0; note[0] = 0; ended_gen = str_req - 1; return; }      /* SOMA_252: el nativo salta sin volver a pedir el video */
+    t0 = native_mode() || yt_seq(now_it.id, NAT_DIRECT_ID) ? 0 : t; last_pos = t; held = 0; note[0] = 0;
     stream_request(now_it.id, t, now_it.title);
 }
 static void play_item(int i)
 {
     if (i < 0 || i >= nitems) return;
     now_it = items[i]; cur_idx = i; view = V_WATCH; tf_focus = 0; side_scroll = 0;
+    ia_video_reset(now_it.id); info_scroll = tx_scroll = chat_scroll = 0; chat_follow = 1;
+    if (tab != T_NEXT && vd_state == 0 && ia_next == J_NONE) (void)ia_start(J_INFO, 0, 0);
     play_at(0);
 }
 static void stop_playback(void)
 {
-    if (str_alive && (str_done != str_req || media_stream_busy())) stream_request("", 0, "");
+    if (str_alive && (str_done != str_req || media_stream_busy() || nat_on)) stream_request("", 0, "");
     held = 0; now_it.id[0] = 0; cur_idx = -1;
 }
 static void do_search(const char *q)
@@ -377,9 +438,37 @@ static void do_search(const char *q)
         return;
     }
     if (yt_starts(q, "clave ")) { yt_scopy(conf.key, sizeof conf.key, q + 6); conf_save(); yt_scopy(note, sizeof note, "Clave guardada."); return; }
+    if (yt_seq(q, "modo nativo") || yt_seq(q, "modo servicio")) {                                   /* SOMA_252 */
+        conf.native = q[5] == 'n'; conf_save(); stop_playback();
+        yt_scopy(note, sizeof note, conf.native ? "Modo nativo: SOMA habla con YouTube directamente (360p)." : "Modo servicio: el video lo prepara tools/yt_service.py en otro equipo.");
+        return;
+    }
+    if (yt_seq(q, "ia on") || yt_seq(q, "ia off")) {             /* SOMA_251 */
+        conf.ai = q[4] == 'n'; conf_save();
+        yt_scopy(note, sizeof note, conf.ai ? "Buscador con IA activado: describe lo que quieres ver." : "Buscador con IA desactivado: se busca el texto tal cual.");
+        return;
+    }
     threads_up();
     if (!netbuf) { yt_scopy(note, sizeof note, "Sin memoria"); return; }
-    yt_scopy(net_query, sizeof net_query, q); yt_scopy(last_query, sizeof last_query, q);
+    if (conf.ai) {                                               /* SOMA_251: el texto pasa antes por el LLM (hilo ytia) */
+        yt_scopy(last_query, sizeof last_query, q); note[0] = 0;
+        ai_state = AI_THINK; ai_nq = 0; ai_sum[0] = 0; yt_scopy(ai_ask, sizeof ai_ask, q);
+        nl_start(q);
+        view = V_BROWSE; scroll_px = 0;
+        return;
+    }
+    if (nl_run) nl_cancel = 1;
+    ai_state = AI_OFF;
+    search_launch(0, 0, q);
+}
+/* Lanza la busqueda en el hilo ytnet: el texto tal cual (n == 0) o las n busquedas que ha propuesto el LLM. */
+static void search_launch(const char q[][YT_AI_QLEN], int n, const char *shown)
+{
+    threads_up();
+    if (!netbuf) { yt_scopy(note, sizeof note, "Sin memoria"); return; }
+    net_nq = n > YT_AI_QMAX ? YT_AI_QMAX : n;
+    for (int i = 0; i < net_nq; ++i) yt_scopy(net_queries[i], YT_AI_QLEN, q[i]);
+    yt_scopy(net_query, sizeof net_query, shown); yt_scopy(last_query, sizeof last_query, shown);
     note[0] = 0; net_state = NS_SEARCH;
     net_req++;
     if (!net_alive) { net_alive = 1; if (!thread_create("ytnet", ytnet_main, 0)) { net_alive = 0; net_state = NS_ERROR; yt_scopy(net_err, sizeof net_err, "No se pudo crear el hilo de red"); } }
@@ -431,10 +520,10 @@ int youtube_tick(void)
     ui_seen_ms = t;
     int ch = 0;
     if (stage_ready) { adopt_results(); ch = 1; }
-    struct media_info mi; media_get_info(&mi);
+    struct media_info mi; pl_get_info(&mi);
     int ph = phase_of(&mi);
     if (now_it.id[0] && !held) {
-        media_keepalive();
+        if (!nat_on) media_keepalive();
         if (ph == PH_PLAY) {
             uint32_t p = t0 + (uint32_t)(mi.pos_us / 1000000u);
             if (now_it.dur && p > now_it.dur) p = now_it.dur;
@@ -444,7 +533,7 @@ int youtube_tick(void)
             uint32_t p = t0 + (uint32_t)(mi.pos_us / 1000000u);
             if (now_it.dur && p + 4 < now_it.dur) {              /* se ha cortado antes del final (red o servicio) */
                 held = 1; held_t = p; yt_scopy(note, sizeof note, "El video se ha interrumpido. Pulsa reproducir para continuar.");
-            } else if (cur_idx >= 0 && cur_idx + 1 < nitems) play_item(cur_idx + 1);
+            } else if (cur_idx >= 0 && cur_idx + 1 < nitems && tab == T_NEXT && !ia_busy()) play_item(cur_idx + 1);   /* SOMA_251: leyendo la ficha, el texto o la IA de este video no se salta al siguiente */
             else { held = 1; held_t = 0; last_pos = now_it.dur; }
         } else if (str_live == str_req && str_errgen != str_req && !mi.stream) {
             /* el reproductor ya no tiene nuestro video: la ventana estuvo oculta (se para solo) o lo ha tomado SOMA Media */
@@ -453,6 +542,8 @@ int youtube_tick(void)
         ph = phase_of(&mi);
     }
     uint32_t sig = mi.frames * 131u + (uint32_t)ph * 7u + last_pos * 13u + (uint32_t)net_state * 3u + thumbs_seq * 17u + (uint32_t)mi.paused * 5u + (uint32_t)mi.buffering * 11u;
+    sig += ia_seq * 19u + (uint32_t)ai_state * 23u;
+    if (ia_busy()) sig += (uint32_t)(t / 350u) * 1013u;
     if (ph == PH_LOADING || net_state == NS_SEARCH || mi.buffering) sig += (uint32_t)(t / 350u) * 1009u;   /* puntos animados */
     if (sig != last_sig) { last_sig = sig; ch = 1; }
     return ch;
@@ -471,25 +562,114 @@ struct ylay {
     int cy, bcx[5], br[5];                           /* anterior, -10, reproducir, +10, siguiente */
     int ty, tw;                                      /* titulo */
     int sx, sy, sw, sh, row_h;                       /* lista lateral */
+    /* SOMA_251 */
+    int ai_x, ai_w;                                  /* interruptor "IA" de la barra */
+    int ban_y, ban_h, ban_lines;                     /* tarjeta de la busqueda con IA (0 = no hay) */
+    int desc_h;                                      /* alto extra de las tarjetas con descripcion */
+    int ly, lh;                                      /* contenido del panel lateral, bajo las pestanas */
+    int tb_w;                                        /* ancho de cada pestana */
+    int bt_y, bt_h, bt_w;                            /* botones del panel (Texto: dos; IA: uno) */
+    int qf_x, qf_y, qf_w, qf_h, qs_cx, qs_cy;        /* caja de preguntas y su boton */
 };
 #define BAR_H 64
+static void clip_push(int32_t c[4], int x, int y, int w, int h);
+static void clip_pop(const int32_t c[4]);
+/* ---- SOMA_251: texto largo ajustado al ancho, con las lineas calculadas una sola vez por version del texto */
+struct wline { uint32_t off; uint16_t len; uint8_t kind; };
+struct wrapc { const char *src; uint32_t ver; int w, px, n, cap; struct wline *l; };
+static struct wline wl_ban[16], wl_desc[700], wl_tx[4200], wl_chat[800];
+static struct wrapc wc_ban = { 0, 0, 0, 0, 0, 16, wl_ban }, wc_desc = { 0, 0, 0, 0, 0, 700, wl_desc }, wc_tx = { 0, 0, 0, 0, 0, 4200, wl_tx }, wc_chat = { 0, 0, 0, 0, 0, 800, wl_chat };
+
+static void wrap_build(struct wrapc *c, const char *s, uint32_t ver, int w, int px)
+{
+    if (c->src == s && c->ver == ver && c->w == w && c->px == px) return;
+    c->src = s; c->ver = ver; c->w = w; c->px = px; c->n = 0;
+    uint32_t p = 0;
+    while (s[p] && c->n < c->cap) {
+        uint32_t e = p; while (s[e] && s[e] != '\n') e++;
+        uint8_t kind = 0;
+        if (p < e && (unsigned char)s[p] < 4) kind = (uint8_t)s[p++];
+        int bold = kind == 1 || kind == 2;
+        if (p == e) { c->l[c->n].off = p; c->l[c->n].len = 0; c->l[c->n].kind = kind; c->n++; }
+        while (p < e && c->n < c->cap) {
+            while (p < e && s[p] == ' ') p++;
+            if (p >= e) break;
+            char b[240]; uint32_t fit = p, i = p;
+            for (;;) {
+                uint32_t j = i; while (j < e && s[j] == ' ') j++;
+                while (j < e && s[j] != ' ') j++;
+                if (j - p >= sizeof b - 1) { if (fit == p) fit = p + sizeof b - 2; break; }
+                uint32_t k = 0; for (uint32_t q = p; q < j; ++q) b[k++] = s[q];
+                b[k] = 0;
+                if (si_text_w(b, px, bold) > w) {
+                    if (fit == p) {                              /* una sola palabra mas ancha que la linea: se parte */
+                        while (k > 1) { k--; while (k > 1 && ((unsigned char)b[k] & 0xC0) == 0x80) k--; b[k] = 0; if (si_text_w(b, px, bold) <= w) break; }
+                        fit = p + k;
+                    }
+                    break;
+                }
+                fit = j; i = j;
+                if (j >= e) break;
+            }
+            while (fit > p && fit < e && ((unsigned char)s[fit] & 0xC0) == 0x80) fit--;
+            if (fit == p) fit = p + 1;
+            c->l[c->n].off = p; c->l[c->n].len = (uint16_t)(fit - p); c->l[c->n].kind = kind; c->n++;
+            p = fit;
+        }
+        p = s[e] ? e + 1 : e;
+    }
+}
+/* Pinta las lineas visibles en [y, y+h) desplazadas scroll pixeles. */
+static void wrap_draw(const struct wrapc *c, int x, int y, int h, int scroll, int lh, uint32_t col)
+{
+    int32_t cl[4]; clip_push(cl, x - 2, y, c->w + 6, h);
+    int first = scroll / lh; if (first < 0) first = 0;
+    for (int i = first; i < c->n; ++i) {
+        int ly = y + i * lh - scroll;
+        if (ly >= y + h) break;
+        if (!c->l[i].len) continue;
+        char b[244]; uint32_t n = c->l[i].len; if (n > sizeof b - 1) n = sizeof b - 1;
+        for (uint32_t k = 0; k < n; ++k) b[k] = c->src[c->l[i].off + k];
+        b[n] = 0;
+        uint8_t kd = c->l[i].kind;
+        si_text(x, ly, lh, b, c->px, kd == 1 ? 0x007CC4FFu : kd == 2 ? SI_TXT : kd == 3 ? 0x00FDA4AFu : col, kd == 1 || kd == 2);
+    }
+    clip_pop(cl);
+}
+static int wrap_clamp(const struct wrapc *c, int h, int lh, int *scroll)
+{
+    int maxs = c->n * lh - h; if (maxs < 0) maxs = 0;
+    if (*scroll > maxs) *scroll = maxs;
+    if (*scroll < 0) *scroll = 0;
+    return maxs;
+}
+static int any_desc(void) { for (int i = 0; i < nitems; ++i) if (items[i].desc[0]) return 1; return 0; }
+
 static void make_layout(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, struct ylay *L)
 {
     L->x = (int)wx; L->y = (int)wy; L->w = (int)ww; L->h = (int)wh;
     L->back_w = view == V_WATCH ? 44 : 0;
-    char qs[8]; uint32_t qp = 0; yt_put_dec(qs, sizeof qs, &qp, (uint64_t)conf.height); yt_put(qs, sizeof qs, &qp, "p");
+    char qs[8]; uint32_t qp = 0; yt_put_dec(qs, sizeof qs, &qp, (uint64_t)(native_mode() ? 360 : conf.height)); yt_put(qs, sizeof qs, &qp, "p");
     L->q_w = si_chip_w(26, qs, 0); L->q_h = 26; L->q_x = L->x + L->w - 20 - L->q_w; L->q_y = L->y + 19;
     int left = L->x + 20 + L->back_w + (L->w >= 700 ? 150 : 52);
-    L->sb_r = 17; L->sb_cx = L->q_x - 16 - L->sb_r; L->sb_cy = L->y + 32;
+    L->ai_w = si_chip_w(26, "IA", 1); L->ai_x = L->q_x - 8 - L->ai_w;
+    L->sb_r = 17; L->sb_cx = L->ai_x - 16 - L->sb_r; L->sb_cy = L->y + 32;
     L->sf_x = left; L->sf_y = L->y + 17; L->sf_h = 30; L->sf_w = L->sb_cx - L->sb_r - 10 - left;
     if (L->sf_w > 560) { L->sf_x += (L->sf_w - 560) / 2; L->sf_w = 560; L->sb_cx = L->sf_x + L->sf_w + 10 + L->sb_r; }
     if (L->sf_w < 60) L->sf_w = 60;
     /* cuadricula */
-    L->gap = 16; L->gx = L->x + 20; L->gy = L->y + BAR_H + 34; L->gw = L->w - 40; L->gh = L->y + L->h - L->gy;
+    L->gap = 16; L->gx = L->x + 20; L->gw = L->w - 40;
     if (L->gw < 120) L->gw = 120;
+    L->ban_y = L->y + BAR_H + 30; L->ban_h = 0; L->ban_lines = 0;
+    if (ai_state != AI_OFF && view == V_BROWSE) {                /* SOMA_251: la tarjeta de la busqueda con IA */
+        if (ai_sum[0]) { wrap_build(&wc_ban, ai_sum, ai_ver, L->gw - 28, 12); L->ban_lines = wc_ban.n > 7 ? 7 : wc_ban.n; }
+        L->ban_h = 34 + (L->ban_lines ? L->ban_lines * 17 + 10 : 0);
+    }
+    L->gy = L->y + BAR_H + 34 + (L->ban_h ? L->ban_h + 10 : 0); L->gh = L->y + L->h - L->gy;
     L->cols = (L->gw + L->gap) / (228 + L->gap); if (L->cols < 1) L->cols = 1;
     L->card_w = (L->gw - L->gap * (L->cols - 1)) / L->cols;
-    L->th_h = L->card_w * 9 / 16; L->card_h = L->th_h + 66;
+    L->desc_h = any_desc() ? 34 : 0;
+    L->th_h = L->card_w * 9 / 16; L->card_h = L->th_h + 66 + L->desc_h;
     /* viendo un video */
     L->sw = L->w >= 920 ? 320 : (L->w >= 760 ? 250 : 0);
     int lw = L->w - 40 - (L->sw ? L->sw + 18 : 0);
@@ -504,6 +684,9 @@ static void make_layout(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, stru
     L->bcx[0] = L->bcx[3] + 18 + 18 + 16; L->bcx[4] = L->bcx[0] + 16 + 10 + 16;
     L->ty = L->cy + 34; L->tw = L->vw;
     L->sx = L->x + L->w - 20 - L->sw; L->sy = L->y + BAR_H + 4; L->sh = L->y + L->h - L->sy - 8; L->row_h = 78;
+    L->ly = L->sy + 36; L->lh = L->sh - 36; L->tb_w = L->sw / T_COUNT;
+    L->bt_y = L->ly; L->bt_h = 28; L->bt_w = (L->sw - 8) / 2;
+    L->qf_h = 30; L->qf_x = L->sx; L->qf_y = L->sy + L->sh - L->qf_h - 2; L->qf_w = L->sw - 40; L->qs_cx = L->sx + L->sw - 16; L->qs_cy = L->qf_y + 15;
 }
 
 static void clip_push(int32_t c[4], int x, int y, int w, int h)
@@ -570,39 +753,69 @@ static void draw_bar(const struct ylay *L)
     fb_fill_rrect_aa(x, L->y + 20, 34, 24, 7, YT_RED);                       /* la insignia: rectangulo rojo con el triangulo */
     si_icon(SI_PLAY, x + 18, L->y + 32, 13, 0x00FFFFFFu);
     if (L->w >= 700) si_text(x + 42, L->y + 18, 28, "YouTube", 18, SI_TXT, 1);
-    tf_render(&tf, L->sf_x, L->sf_y, L->sf_w, L->sf_h, tf_focus, "Buscar en YouTube", SI_TXT);
+    tf_render(&tf, L->sf_x, L->sf_y, L->sf_w, L->sf_h, tf_focus, conf.ai ? "Describe lo que quieres ver (IA)" : "Buscar en YouTube", SI_TXT);
+    si_chip(L->ai_x, L->q_y, L->q_h, "IA", conf.ai ? 0x007CC4FFu : SI_FAINT, 1);
     si_round(L->sb_cx, L->sb_cy, L->sb_r, SI_SEARCH, SIB_NEUTRAL, YT_RED, 0);
-    char qs[8]; uint32_t qp = 0; yt_put_dec(qs, sizeof qs, &qp, (uint64_t)conf.height); yt_put(qs, sizeof qs, &qp, "p");
+    char qs[8]; uint32_t qp = 0; yt_put_dec(qs, sizeof qs, &qp, (uint64_t)(native_mode() ? 360 : conf.height)); yt_put(qs, sizeof qs, &qp, "p");
     si_chip(L->q_x, L->q_y, L->q_h, qs, SI_DIM, 0);
+}
+
+/* SOMA_251: tarjeta de la busqueda con IA: que se ha buscado y el resumen de lo encontrado */
+static void draw_banner(const struct ylay *L)
+{
+    fb_fill_rrect_aa(L->gx, L->ban_y, L->gw, L->ban_h, 10, SI_CARD);
+    fb_fill_rrect_aa(L->gx + 10, L->ban_y + 8, 26, 18, 5, 0x007CC4FFu);
+    si_text_c(L->gx + 10, L->ban_y + 8, 26, 18, "IA", 11, 0x00081018u, 1);
+    char t[420]; uint32_t p = 0; uint32_t col = SI_DIM;
+    if (ai_state == AI_THINK) { yt_put(t, sizeof t, &p, "Pensando que buscar"); yt_put(t, sizeof t, &p, dots()); }
+    else if (ai_state == AI_PLAIN) { yt_put(t, sizeof t, &p, "Sin IA ("); yt_put(t, sizeof t, &p, ai_why); yt_put(t, sizeof t, &p, "): se ha buscado el texto tal cual"); col = SI_AMBER; }
+    else {
+        yt_put(t, sizeof t, &p, ai_state == AI_SEARCH ? "Buscando: " : "Busquedas: ");
+        for (int i = 0; i < ai_nq; ++i) { if (i) yt_put(t, sizeof t, &p, "  -  "); yt_put(t, sizeof t, &p, ai_q[i]); }
+        if (ai_state == AI_SUMMING) { yt_put(t, sizeof t, &p, "   (resumiendo lo encontrado"); yt_put(t, sizeof t, &p, dots()); yt_put(t, sizeof t, &p, ")"); }
+        else if (ai_state == AI_DONE && !ai_sum[0] && ai_why[0]) { yt_put(t, sizeof t, &p, "   (sin resumen: "); yt_put(t, sizeof t, &p, ai_why); yt_put(t, sizeof t, &p, ")"); }
+    }
+    si_text_fit(L->gx + 44, L->ban_y + 6, 22, t, L->gw - 56, 12, col, 0);
+    if (L->ban_lines) wrap_draw(&wc_ban, L->gx + 14, L->ban_y + 32, L->ban_lines * 17, 0, 17, SI_TXT);
 }
 
 static void draw_browse(const struct ylay *L)
 {
     /* linea de estado bajo la barra */
     char st[220]; uint32_t p = 0; uint32_t col = SI_DIM;
-    if (net_state == NS_SEARCH) { yt_put(st, sizeof st, &p, "Buscando \""); yt_put(st, sizeof st, &p, last_query); yt_put(st, sizeof st, &p, "\""); yt_put(st, sizeof st, &p, dots()); }
+    if (ai_state == AI_THINK) st[0] = 0;
+    else if (net_state == NS_SEARCH) { yt_put(st, sizeof st, &p, "Buscando \""); yt_put(st, sizeof st, &p, last_query); yt_put(st, sizeof st, &p, "\""); yt_put(st, sizeof st, &p, dots()); }
     else if (net_state == NS_ERROR) { yt_put(st, sizeof st, &p, net_err); col = 0x00FDA4AFu; }
     else if (note[0]) yt_put(st, sizeof st, &p, note);
     else if (nitems) { yt_put_dec(st, sizeof st, &p, (uint64_t)nitems); yt_put(st, sizeof st, &p, " resultados de \""); yt_put(st, sizeof st, &p, last_query); yt_put(st, sizeof st, &p, "\""); }
     else st[0] = 0;
     si_text_fit(L->gx, L->y + BAR_H + 6, 22, st, L->gw, 12, col, 0);
+    if (L->ban_h) draw_banner(L);
 
     if (!nitems) {
         int cx = L->x + L->w / 2, cy = L->gy + L->gh / 2 - 60; if (cy < L->gy + 40) cy = L->gy + 40;
         fb_fill_rrect_aa(cx - 46, cy - 32, 92, 64, 18, si_mix(SI_WIN, YT_RED, net_state == NS_ERROR ? 40 : 200));
         si_icon(net_state == NS_ERROR ? SI_CLOSE : SI_PLAY, cx + (net_state == NS_ERROR ? 0 : 3), cy, 30, 0x00FFFFFFu);
-        if (net_state == NS_ERROR) {
+        if (net_state == NS_ERROR && native_mode()) {            /* SOMA_252: sin servicio de por medio */
+            si_text_c(L->x, cy + 46, L->w, 24, "No se puede hablar con YouTube", 16, SI_TXT, 1);
+            si_text_c(L->x, cy + 76, L->w, 20, "Comprueba que SOMA tiene red (Ajustes > Redes) y que la fecha y la hora son correctas.", 12, SI_DIM, 0);
+            si_text_c(L->x, cy + 96, L->w, 20, "Si el mensaje de arriba habla de un cambio en YouTube, hace falta actualizar SOMA.", 12, SI_DIM, 0);
+            si_text_c(L->x, cy + 120, L->w, 20, "Alternativa: el servicio en otro equipo (escribe en la caja:  modo servicio).", 12, SI_FAINT, 0);
+        } else if (net_state == NS_ERROR) {
             char sn[96]; server_name(sn, sizeof sn);
             si_text_c(L->x, cy + 46, L->w, 24, "No se puede hablar con el servicio YouTube", 16, SI_TXT, 1);
             si_text_c(L->x, cy + 76, L->w, 20, "1. En tu Mac o PC:  python3 tools/yt_service.py --bind 0.0.0.0", 12, SI_DIM, 0);
             si_text_c(L->x, cy + 96, L->w, 20, "2. Aqui, en la caja de busqueda:  servidor <IP de ese equipo>", 12, SI_DIM, 0);
             char l3[140]; uint32_t q = 0; yt_put(l3, sizeof l3, &q, "Ahora se busca en "); yt_put(l3, sizeof l3, &q, sn);
             si_text_c(L->x, cy + 120, L->w, 20, l3, 12, SI_FAINT, 0);
+        } else if (ai_state == AI_THINK) {
+            si_text_c(L->x, cy + 46, L->w, 24, "La IA esta pensando que buscar", 16, SI_TXT, 1);
+            si_text_c(L->x, cy + 74, L->w, 20, "Convierte lo que has escrito en busquedas de YouTube.", 12, SI_FAINT, 0);
         } else if (net_state == NS_SEARCH) {
             si_text_c(L->x, cy + 46, L->w, 24, "Buscando en YouTube", 16, SI_TXT, 1);
         } else {
             si_text_c(L->x, cy + 46, L->w, 24, "Busca un video para empezar", 16, SI_TXT, 1);
-            si_text_c(L->x, cy + 74, L->w, 20, "Escribe arriba y pulsa Intro. Los videos se ven aqui mismo, mientras llegan.", 12, SI_FAINT, 0);
+            si_text_c(L->x, cy + 74, L->w, 20, conf.ai ? "Describe arriba con tus palabras lo que quieres ver y pulsa Intro: la IA lo busca por ti." : "Escribe arriba y pulsa Intro. Los videos se ven aqui mismo, mientras llegan.", 12, SI_FAINT, 0);
         }
         return;
     }
@@ -618,6 +831,8 @@ static void draw_browse(const struct ylay *L)
         draw_thumb(i, cx, cy, L->card_w, L->th_h, now_it.id[0] && yt_seq(items[i].id, now_it.id));
         draw_wrap(cx + 2, cy + L->th_h + 6, L->card_w - 4, items[i].title, 13, SI_TXT, 1, 2, 18);
         si_text_fit(cx + 2, cy + L->th_h + 44, 18, items[i].channel, L->card_w - 4, 12, SI_DIM, 0);
+        if (L->desc_h && items[i].desc[0]) draw_wrap(cx + 2, cy + L->th_h + 64, L->card_w - 4, items[i].desc, 11, SI_FAINT, 0, 2, 15);
+        if (ai_state != AI_OFF) { char nb[8]; uint32_t np = 0; yt_put_dec(nb, sizeof nb, &np, (uint64_t)(i + 1)); int nw = si_text_w(nb, 11, 1) + 12; fb_fill_rrect_aa(cx + 6, cy + 6, nw, 18, 9, 0xD0000000u); si_text(cx + 12, cy + 6, 18, nb, 11, 0x00FFFFFFu, 1); }
     }
     clip_pop(c);
     if (maxs > 0) {
@@ -626,14 +841,116 @@ static void draw_browse(const struct ylay *L)
     }
 }
 
+static void draw_side_list(const struct ylay *L)
+{
+    int ly = L->ly, lh = L->lh, total = nitems * L->row_h, maxs = total - lh; if (maxs < 0) maxs = 0;
+    if (side_scroll > maxs) side_scroll = maxs;
+    if (side_scroll < 0) side_scroll = 0;
+    int32_t c[4]; clip_push(c, L->sx - 6, ly, L->sw + 12, lh);
+    for (int i = 0; i < nitems; ++i) {
+        int y = ly + i * L->row_h - side_scroll;
+        if (y + L->row_h < ly || y > ly + lh) continue;
+        int on = i == cur_idx;
+        if (on || i == hover) fb_fill_rrect_aa(L->sx - 6, y - 4, L->sw + 12, L->row_h - 2, 10, on ? si_mix(SI_WIN, YT_RED, 36) : SI_CARD2);
+        draw_thumb(i, L->sx, y, 120, 67, 0);
+        draw_wrap(L->sx + 130, y, L->sw - 132, items[i].title, 12, on ? 0x00FFFFFFu : SI_TXT, 1, 2, 16);
+        si_text_fit(L->sx + 130, y + 36, 16, items[i].channel, L->sw - 132, 11, SI_DIM, 0);
+    }
+    clip_pop(c);
+}
+static void scrollbar(const struct ylay *L, int y, int h, int scroll, int maxs, int total)
+{
+    if (maxs <= 0 || total <= 0) return;
+    int th = h * h / total; if (th < 20) th = 20;
+    fb_fill_rrect_aa(L->sx + L->sw + 3, y + (h - th) * scroll / maxs, 3, th, 1, SI_LINE);
+}
+/* Linea de estado de la IA del video (lo que esta haciendo o el ultimo error). Devuelve el alto usado. */
+static int draw_ia_status(const struct ylay *L, int y)
+{
+    int busy = ia_run >= J_INFO;
+    if (!ia_status[0] || (!busy && !ia_err && !yt_seq(ia_status, "Cancelado"))) return 0;
+    char t[260]; uint32_t p = 0;
+    yt_put(t, sizeof t, &p, ia_status);
+    if (busy && !ia_err) {
+        char el[16]; yt_fmt_time(el, sizeof el, (uint32_t)((ms() - ia_t0) / 1000u));
+        yt_put(t, sizeof t, &p, dots()); yt_put(t, sizeof t, &p, "  "); yt_put(t, sizeof t, &p, el);
+    }
+    return draw_wrap(L->sx, y, L->sw, t, 11, ia_err ? 0x00FDA4AFu : SI_AMBER, 0, 4, 15) * 15 + 6;
+}
+static void draw_side_info(const struct ylay *L)
+{
+    int y = L->ly;
+    if (vd_state == 0) { char t[60]; uint32_t p = 0; yt_put(t, sizeof t, &p, "Cargando la ficha del video"); yt_put(t, sizeof t, &p, dots()); si_text(L->sx, y, 20, t, 12, SI_DIM, 0); return; }
+    if (vd_state == 2) { draw_wrap(L->sx, y, L->sw, vd_desc, 12, 0x00FDA4AFu, 0, 5, 17); return; }
+    char t[200]; uint32_t p = 0; char vv[64];
+    if (vd_info.date[0]) yt_put(t, sizeof t, &p, vd_info.date);
+    if (vd_info.views || now_it.views) { yt_fmt_views(vv, sizeof vv, vd_info.views ? vd_info.views : now_it.views); if (p) yt_put(t, sizeof t, &p, "  -  "); yt_put(t, sizeof t, &p, vv); }
+    if (p) { si_text_fit(L->sx, y, 18, t, L->sw, 11, SI_DIM, 1); y += 20; }
+    p = 0; yt_put(t, sizeof t, &p, vd_info.subs[0] ? "Subtitulos en YouTube: " : "Sin subtitulos en YouTube"); yt_put(t, sizeof t, &p, vd_info.subs);
+    si_text_fit(L->sx, y, 18, t, L->sw, 11, SI_FAINT, 0); y += 24;
+    int h = L->ly + L->lh - y;
+    if (!vd_desc[0]) { si_text(L->sx, y, 20, "Este video no tiene descripcion.", 12, SI_FAINT, 0); return; }
+    wrap_build(&wc_desc, vd_desc, vd_ver, L->sw - 4, 12);
+    int maxs = wrap_clamp(&wc_desc, h, 17, &info_scroll);
+    wrap_draw(&wc_desc, L->sx, y, h, info_scroll, 17, SI_TXT);
+    scrollbar(L, y, h, info_scroll, maxs, wc_desc.n * 17);
+}
+static int text_top(const struct ylay *L) { return L->bt_y + L->bt_h + 10; }
+static void draw_side_text(const struct ylay *L)
+{
+    int working = ia_run == J_WHISPER || ia_run == J_SUBS;
+    if (working) si_button(L->sx, L->bt_y, L->sw, L->bt_h, SI_CLOSE, "Cancelar", SIB_NEUTRAL, YT_RED, 0);
+    else {
+        si_button(L->sx, L->bt_y, L->bt_w, L->bt_h, SI_WAVE, "Transcribir", SIB_ACCENT, YT_RED, 0);
+        si_button(L->sx + L->bt_w + 8, L->bt_y, L->bt_w, L->bt_h, SI_COMMENT, "Subtitulos", SIB_NEUTRAL, YT_RED, 0);
+    }
+    int y = text_top(L);
+    y += draw_ia_status(L, y);
+    int h = L->ly + L->lh - y;
+    if (!tx_len) {
+        if (!working) draw_wrap(L->sx, y, L->sw, "Transcribir pasa el sonido del video por whisper en este equipo (tarda; mientras, el video puede ir a saltos). "
+                                "Subtitulos pide a YouTube los que tenga el video: es inmediato. Con el texto, en la pestana IA puedes pedir un resumen y preguntar por lo que se dice.", 12, SI_FAINT, 0, 9, 17);
+        return;
+    }
+    char t[160]; uint32_t p = 0; yt_put(t, sizeof t, &p, "Fuente: "); yt_put(t, sizeof t, &p, tx_src); yt_put(t, sizeof t, &p, ". Pulsa una linea para ir a ese momento.");
+    y += draw_wrap(L->sx, y, L->sw, t, 11, SI_FAINT, 0, 2, 15) * 15 + 6; h = L->ly + L->lh - y;
+    tx_y0 = y;
+    wrap_build(&wc_tx, tx, tx_ver, L->sw - 4, 12);
+    int maxs = wrap_clamp(&wc_tx, h, 17, &tx_scroll);
+    wrap_draw(&wc_tx, L->sx, y, h, tx_scroll, 17, SI_TXT);
+    scrollbar(L, y, h, tx_scroll, maxs, wc_tx.n * 17);
+}
+static void draw_side_ai(const struct ylay *L)
+{
+    int working = ia_run == J_SUM || ia_run == J_ASK;
+    if (working) si_button(L->sx, L->bt_y, L->sw, L->bt_h, SI_CLOSE, "Cancelar", SIB_NEUTRAL, YT_RED, 0);
+    else si_button(L->sx, L->bt_y, L->sw, L->bt_h, SI_LIST, tx_len ? "Resumir el video" : "Resumir (con la descripcion)", SIB_ACCENT, YT_RED, 0);
+    int y = text_top(L);
+    y += draw_ia_status(L, y);
+    int h = L->qf_y - 8 - y;
+    if (!chat_len) {
+        draw_wrap(L->sx, y, L->sw, tx_len ? "Pregunta abajo lo que quieras sobre el video: las respuestas salen de su transcripcion."
+                  : "Pregunta abajo lo que quieras sobre el video. Sin transcripcion (pestana Texto) solo se conoce su titulo y su descripcion.", 12, SI_FAINT, 0, 6, 17);
+    } else if (h > 20) {
+        wrap_build(&wc_chat, chat, chat_ver, L->sw - 4, 12);
+        if (chat_follow) chat_scroll = 1 << 28;
+        int maxs = wrap_clamp(&wc_chat, h, 17, &chat_scroll);
+        wrap_draw(&wc_chat, L->sx, y, h, chat_scroll, 17, SI_TXT);
+        scrollbar(L, y, h, chat_scroll, maxs, wc_chat.n * 17);
+    }
+    if (!tfq_ready) { tf_init(&tfq, qbuf, sizeof qbuf, 0); tfq_ready = 1; }
+    tf_render(&tfq, L->qf_x, L->qf_y, L->qf_w, L->qf_h, q_focus, "Pregunta sobre el video", SI_TXT);
+    si_round(L->qs_cx, L->qs_cy, 14, SI_NEXT, SIB_ON, YT_RED, 0);
+}
+
 static void draw_watch(const struct ylay *L)
 {
-    struct media_info mi; media_get_info(&mi);
+    struct media_info mi; pl_get_info(&mi);
     int ph = phase_of(&mi);
     /* escenario */
     fb_fill_rrect_aa(L->vx, L->vy, L->vw, L->vh, 10, 0x00000000u);
     const uint32_t *px; uint32_t fw, fh;
-    int have = (ph == PH_PLAY || ph == PH_ENDED) && media_frame(&px, &fw, &fh);
+    int have = (ph == PH_PLAY || ph == PH_ENDED) && pl_frame(&px, &fw, &fh);
     if (have) {
         uint32_t dw = (uint32_t)L->vw, dh = (uint32_t)((uint64_t)L->vw * fh / fw);
         if (dh > (uint32_t)L->vh) { dh = (uint32_t)L->vh; dw = (uint32_t)((uint64_t)L->vh * fw / fh); }
@@ -704,23 +1021,21 @@ static void draw_watch(const struct ylay *L)
     si_text_fit(L->vx, L->ty + used * 24 + 4, 20, sub, L->tw, 12, SI_DIM, 0);
     if (note[0]) si_text_fit(L->vx, L->ty + used * 24 + 26, 20, note, L->tw, 12, SI_AMBER, 0);
 
-    /* lista lateral */
+    /* panel lateral (SOMA_251: con pestanas) */
     if (L->sw) {
-        si_text(L->sx, L->sy, 24, "A continuacion", 13, SI_TXT, 1);
-        int ly = L->sy + 30, lh = L->sh - 30, total = nitems * L->row_h, maxs = total - lh; if (maxs < 0) maxs = 0;
-        if (side_scroll > maxs) side_scroll = maxs;
-        if (side_scroll < 0) side_scroll = 0;
-        int32_t c[4]; clip_push(c, L->sx - 6, ly, L->sw + 12, lh);
-        for (int i = 0; i < nitems; ++i) {
-            int y = ly + i * L->row_h - side_scroll;
-            if (y + L->row_h < ly || y > ly + lh) continue;
-            int on = i == cur_idx;
-            if (on || i == hover) fb_fill_rrect_aa(L->sx - 6, y - 4, L->sw + 12, L->row_h - 2, 10, on ? si_mix(SI_WIN, YT_RED, 36) : SI_CARD2);
-            draw_thumb(i, L->sx, y, 120, 67, 0);
-            draw_wrap(L->sx + 130, y, L->sw - 132, items[i].title, 12, on ? 0x00FFFFFFu : SI_TXT, 1, 2, 16);
-            si_text_fit(L->sx + 130, y + 36, 16, items[i].channel, L->sw - 132, 11, SI_DIM, 0);
+        static const char *const tn[T_COUNT] = { "Lista", "Info", "Texto", "IA" };
+        for (int i = 0; i < T_COUNT; ++i) {
+            int tx0 = L->sx + i * L->tb_w;
+            si_text_c(tx0, L->sy, L->tb_w, 26, tn[i], 12, i == tab ? SI_TXT : SI_DIM, 1);
+            if (i == tab) fb_fill_rrect_aa(tx0 + 8, L->sy + 26, L->tb_w - 16, 3, 1, YT_RED);
+            else if ((i == T_TEXT && tx_len) || (i == T_AI && chat_len) || ((i == T_TEXT || i == T_AI) && ia_run >= J_SUM))
+                fb_fill_rrect_aa(tx0 + L->tb_w / 2 + si_text_w(tn[i], 12, 1) / 2 + 4, L->sy + 8, 6, 6, 3, ia_run >= J_SUM ? SI_AMBER : SI_GREEN);
         }
-        clip_pop(c);
+        fb_fill_rect((uint32_t)L->sx, (uint32_t)(L->sy + 29), (uint32_t)L->sw, 1, SI_LINE);
+        if (tab == T_NEXT) draw_side_list(L);
+        else if (tab == T_INFO) draw_side_info(L);
+        else if (tab == T_TEXT) draw_side_text(L);
+        else draw_side_ai(L);
     }
 }
 
@@ -751,17 +1066,17 @@ static int item_at(const struct ylay *L, int32_t mx, int32_t my)
         }
         return -1;
     }
-    if (!L->sw || !inside(mx, my, L->sx - 6, L->sy + 30, L->sw + 12, L->sh - 30)) return -1;
-    int i = (my - (L->sy + 30) + side_scroll) / L->row_h;
+    if (!L->sw || tab != T_NEXT || !inside(mx, my, L->sx - 6, L->ly, L->sw + 12, L->lh)) return -1;
+    int i = (my - L->ly + side_scroll) / L->row_h;
     return i >= 0 && i < nitems ? i : -1;
 }
 
 static void toggle_play(void)
 {
-    struct media_info mi; media_get_info(&mi);
+    struct media_info mi; pl_get_info(&mi);
     int ph = phase_of(&mi);
     if (ph == PH_HELD) play_at(held_t);
-    else if (ph == PH_PLAY) media_pause_toggle();
+    else if (ph == PH_PLAY) pl_pause_toggle();
     else if (ph == PH_ENDED || ph == PH_ERROR) play_at(ph == PH_ERROR ? last_pos : 0);
 }
 static void seek_rel(int d)
@@ -773,14 +1088,98 @@ static void seek_rel(int d)
 }
 static void cycle_quality(void)
 {
+    if (native_mode()) { yt_scopy(note, sizeof note, "En modo nativo YouTube solo entrega 360p. Mas calidad: con el servicio externo (youtube modo servicio)."); return; }
     conf.height = conf.height == 240 ? 360 : conf.height == 360 ? 480 : 240;
     conf_save();
     if (now_it.id[0] && view == V_WATCH && !held) play_at(last_pos);
 }
 
+/* ---- SOMA_251: acciones del panel */
+static void ia_note_busy(void) { ia_set("Espera a que termine lo que esta en marcha (o pulsa Cancelar).", 1); }
+static void do_transcribe(int subs)
+{
+    if (!now_it.id[0]) return;
+    ia_video_reset(now_it.id);
+    if (ia_heavy() || ia_next >= J_SUM) { ia_note_busy(); return; }
+    tx_scroll = 0;
+    ia_set(subs ? "Pidiendo los subtitulos a YouTube" : "Preparando la transcripcion", 0);
+    (void)ia_start(subs ? J_SUBS : J_WHISPER, 0, 0);
+}
+static void do_summary(void)
+{
+    if (!now_it.id[0]) return;
+    ia_video_reset(now_it.id);
+    if (ia_heavy() || ia_next >= J_SUM) { ia_note_busy(); return; }
+    chat_follow = 1; ia_set("Preparando el resumen", 0);
+    (void)ia_start(J_SUM, 0, 0);
+}
+static void do_ask(const char *q)
+{
+    while (*q == ' ') q++;
+    if (!*q || !now_it.id[0]) return;
+    ia_video_reset(now_it.id);
+    if (ia_heavy() || ia_next >= J_SUM) { ia_note_busy(); return; }
+    chat_add(1, q); chat_follow = 1; ia_set("Pensando", 0);
+    (void)ia_start(J_ASK, q, 0);
+    if (tfq_ready) tf_set(&tfq, "");
+}
+static void set_tab(int t)
+{
+    tab = t; hover = -1;
+    if (t != T_AI) q_focus = 0;
+    if (t != T_NEXT && now_it.id[0]) {
+        ia_video_reset(now_it.id);
+        if (vd_state == 2 && ia_run == J_NONE) { vd_state = 0; vd_desc[0] = 0; vd_ver++; }          /* fallo antes: se reintenta */
+        if (vd_state == 0 && ia_run != J_INFO && ia_next == J_NONE) (void)ia_start(J_INFO, 0, 0);
+    }
+}
+/* clic en la transcripcion: va al momento del parrafo "[m:ss] ..." pulsado */
+static void tx_click(const struct ylay *L, int32_t my)
+{
+    (void)L;
+    int y = tx_y0;                                               /* donde la pinto draw_side_text */
+    if (my < y || !tx_len || wc_tx.src != tx) return;
+    int i = (my - y + tx_scroll) / 17;
+    if (i < 0 || i >= wc_tx.n) return;
+    uint32_t o = wc_tx.l[i].off;
+    while (o && tx[o - 1] != '\n') o--;
+    if (tx[o] != '[') return;
+    uint32_t u = 0, a = yt_num(tx + o + 1, 6, &u), sec = 0; const char *c = tx + o + 1 + u;
+    if (!u || *c != ':') return;
+    uint32_t b = yt_num(c + 1, 2, &u); c += 1 + u;
+    if (u != 2) return;
+    sec = a * 60 + b;
+    if (*c == ':') { uint32_t d = yt_num(c + 1, 2, &u); if (u == 2) sec = sec * 60 + d; }
+    play_at(sec);
+}
+static int side_click(const struct ylay *L, int32_t mx, int32_t my)       /* 1 = el clic era del panel */
+{
+    if (!L->sw || view != V_WATCH || !now_it.id[0] || mx < L->sx - 6) return 0;
+    if (inside(mx, my, L->sx, L->sy, L->sw, 30)) { int t = (mx - L->sx) / L->tb_w; if (t >= 0 && t < T_COUNT) set_tab(t); return 1; }
+    if (tab == T_NEXT) return 0;
+    if (tab == T_TEXT) {
+        if (inside(mx, my, L->sx, L->bt_y, L->sw, L->bt_h)) {
+            if (ia_run == J_WHISPER || ia_run == J_SUBS) ia_stop();
+            else do_transcribe(mx >= L->sx + L->bt_w + 4);
+        } else if (my > L->bt_y + L->bt_h) tx_click(L, my);
+        return 1;
+    }
+    if (tab == T_AI) {
+        if (inside(mx, my, L->sx, L->bt_y, L->sw, L->bt_h)) { if (ia_run == J_SUM || ia_run == J_ASK) ia_stop(); else do_summary(); }
+        else if (in_round(mx, my, L->qs_cx, L->qs_cy, 14)) do_ask(qbuf);
+        return 1;
+    }
+    return 1;
+}
+
 int youtube_handle_click(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh)
 {
     struct ylay L; make_layout(wx, wy, ww, wh, &L);
+    if (view == V_WATCH && tab == T_AI && tfq_ready && L.sw && tf_hit(&tfq, mx, my)) {     /* SOMA_251: la caja de preguntas */
+        q_focus = 1; tf_focus = 0; tf_press(&tfq, mx, my, keyboard_shift_held());
+        return 0;
+    }
+    q_focus = 0;
     if (tf_hit(&tf, mx, my)) {
         int was = tf_focus;
         tf_focus = 1; tf_press(&tf, mx, my, keyboard_shift_held());
@@ -791,7 +1190,13 @@ int youtube_handle_click(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint3
     if (L.back_w && in_round(mx, my, L.x + 36, L.y + 32, 16)) { stop_playback(); view = V_BROWSE; note[0] = 0; return 0; }
     if (in_round(mx, my, L.sb_cx, L.sb_cy, L.sb_r)) { do_search(query); return 0; }
     if (inside(mx, my, L.q_x - 4, L.q_y - 4, L.q_w + 8, L.q_h + 8)) { cycle_quality(); return 0; }
+    if (inside(mx, my, L.ai_x - 4, L.q_y - 4, L.ai_w + 8, L.q_h + 8)) {                    /* SOMA_251: interruptor de la IA */
+        conf.ai = !conf.ai; conf_save();
+        yt_scopy(note, sizeof note, conf.ai ? "Buscador con IA activado: describe lo que quieres ver." : "Buscador con IA desactivado: se busca el texto tal cual.");
+        return 0;
+    }
     if (my < L.y + BAR_H) return 0;
+    if (side_click(&L, mx, my)) return 0;
     int it = item_at(&L, mx, my);
     if (it >= 0) { play_item(it); return 0; }
     if (view != V_WATCH || !now_it.id[0]) return 0;
@@ -810,9 +1215,15 @@ int youtube_mouse(int32_t mx, int32_t my, uint32_t wx, uint32_t wy, uint32_t ww,
     struct ylay L; make_layout(wx, wy, ww, wh, &L);
     int rd = 0;
     if (tf_ready_ && tf_focus && tf_drag(&tf, mx, my, held_btn)) rd = 1;
+    if (tfq_ready && q_focus && tf_drag(&tfq, mx, my, held_btn)) rd = 1;
     if (wheel && inside(mx, my, L.x, L.y, L.w, L.h)) {
         if (view == V_BROWSE) scroll_px -= wheel * 60;
-        else if (L.sw && mx >= L.sx - 6) side_scroll -= wheel * 60;
+        else if (L.sw && mx >= L.sx - 6) {
+            if (tab == T_NEXT) side_scroll -= wheel * 60;
+            else if (tab == T_INFO) info_scroll -= wheel * 51;
+            else if (tab == T_TEXT) tx_scroll -= wheel * 51;
+            else { chat_follow = 0; if (chat_scroll > (1 << 27)) chat_scroll = wc_chat.n * 17; chat_scroll -= wheel * 51; }
+        }
         rd = 1;
     }
     int h = my >= L.y + BAR_H ? item_at(&L, mx, my) : -1;
@@ -829,6 +1240,7 @@ void youtube_close(void)
 
 int youtube_escape(void)
 {
+    if (q_focus) { q_focus = 0; return 1; }
     if (tf_focus) { tf_focus = 0; return 1; }
     if (view == V_WATCH && now_it.id[0]) { stop_playback(); view = V_BROWSE; note[0] = 0; return 1; }
     return 0;                                                    /* nada que cerrar: Esc hace lo de siempre en el escritorio */
@@ -837,6 +1249,16 @@ int youtube_escape(void)
 int youtube_clip_op(int op)                          /* Ctrl+C / Ctrl+X / Ctrl+V del escritorio: van a la caja de busqueda */
 {
     if (!tf_ready_) { tf_init(&tf, query, sizeof query, 0); tf_ready_ = 1; }
+    if (q_focus && tfq_ready) { tf_clip(&tfq, op); return 1; }   /* SOMA_251: la caja de preguntas */
+    if (!tf_focus && op == CLIP_OP_COPY && view == V_WATCH && now_it.id[0]) {              /* copiar lo que se esta leyendo en el panel */
+        if (tab == T_TEXT && tx_len) { clip_set_text(tx, tx_len); clip_toast("Transcripcion copiada"); return 1; }
+        if (tab == T_INFO && vd_desc[0]) { clip_set_text(vd_desc, 0); clip_toast("Descripcion copiada"); return 1; }
+        if (tab == T_AI && chat_len) {
+            char *b = (char *)kmalloc(chat_len + 1);
+            if (b) { uint32_t n = 0; for (uint32_t i = 0; i < chat_len; ++i) if ((unsigned char)chat[i] >= 4) b[n++] = chat[i]; b[n] = 0; clip_set_text(b, n); kfree(b); clip_toast("Conversacion copiada"); }
+            return 1;
+        }
+    }
     tf_focus = 1;
     tf_clip(&tf, op);
     return 1;
@@ -846,6 +1268,13 @@ void youtube_handle_key(char c)
 {
     int k = (uint8_t)c;
     if (!tf_ready_) { tf_init(&tf, query, sizeof query, 0); tf_ready_ = 1; }
+    if (q_focus && tfq_ready) {                                  /* SOMA_251: escribiendo una pregunta */
+        int md = keyboard_last_mods();
+        int r = tf_key(&tfq, c, (md & 1) || keyboard_ctrl_held(), (md & 2) || keyboard_shift_held());
+        if (r == TF_ENTER) do_ask(qbuf);
+        else if (r == TF_ESC || r == TF_TAB) q_focus = 0;
+        return;
+    }
     if (tf_focus) {
         int md = keyboard_last_mods();
         int r = tf_key(&tf, c, (md & 1) || keyboard_ctrl_held(), (md & 2) || keyboard_shift_held());
@@ -860,6 +1289,8 @@ void youtube_handle_key(char c)
         if (k == 'n') { if (cur_idx >= 0 && cur_idx + 1 < nitems) play_item(cur_idx + 1); return; }
         if (k == 'p') { if (cur_idx > 0) play_item(cur_idx - 1); return; }
         if (k == 'q') { cycle_quality(); return; }
+        if (k >= '1' && k <= '4') { set_tab(k - '1'); return; }                                    /* SOMA_251: pestanas del panel */
+        if (k == 'i' || k == '?') { set_tab(T_AI); if (!tfq_ready) { tf_init(&tfq, qbuf, sizeof qbuf, 0); tfq_ready = 1; } q_focus = 1; return; }
         if (k == 8 || k == 127) { stop_playback(); view = V_BROWSE; note[0] = 0; return; }       /* Retroceso: volver a los resultados (Esc: youtube_escape) */
         if (k == '/' || k == '\t') { tf_focus = 1; tf_select_all(&tf); return; }
         return;
@@ -882,6 +1313,8 @@ void youtube_handle_key(char c)
 int youtube_command(const char *args, char *out, uint32_t max)
 {
     uint32_t p = 0;
+    static char big[1500]; char *uo = out; uint32_t um = max;    /* SOMA_251: "estado" ya no cabe en el bufer de la orden */
+    out = big; max = sizeof big; big[0] = 0;
     while (*args == ' ') args++;
     conf_load();
     if (yt_starts(args, "servidor ") || yt_seq(args, "servidor")) {
@@ -902,9 +1335,66 @@ int youtube_command(const char *args, char *out, uint32_t max)
         int f = (int)yt_num(args + 4, 3, 0);
         if (f >= 10 && f <= 30) { conf.fps = f; conf_save(); yt_put(out, max, &p, "youtube: "); yt_put_dec(out, max, &p, (uint64_t)f); yt_put(out, max, &p, " fotogramas por segundo"); }
         else yt_put(out, max, &p, "uso: youtube fps 10..30");
+    } else if (yt_starts(args, "modo ") || yt_seq(args, "modo")) {                            /* SOMA_252 */
+        const char *v = args + 4; while (*v == ' ') v++;
+        if (yt_seq(v, "nativo") || yt_seq(v, "servicio")) {
+            conf.native = v[0] == 'n'; conf_save(); stop_playback();
+            yt_put(out, max, &p, conf.native ? "youtube: modo nativo (SOMA habla con YouTube directamente; 360p)" : "youtube: modo servicio (tools/yt_service.py en otro equipo)");
+            if (conf.native && !native_mode()) yt_put(out, max, &p, "\n  AVISO: en este procesador no hay reproductor nativo: se seguira usando el servicio");
+        } else { yt_put(out, max, &p, "uso: youtube modo nativo|servicio   (ahora: "); yt_put(out, max, &p, conf.native ? "nativo)" : "servicio)"); }
+    } else if (yt_starts(args, "api ") || yt_seq(args, "api")) {                              /* SOMA_252: base de la API (pruebas o un espejo propio) */
+        const char *v = args + 3; while (*v == ' ') v++;
+        struct yh_url u;
+        if (yt_seq(v, "auto") || yt_seq(v, "youtube")) { conf.api[0] = 0; conf_save(); yt_put(out, max, &p, "youtube: se habla con https://www.youtube.com"); }
+        else if (yh_parse_url(v, &u) && yt_slen(v) < sizeof conf.api && yt_seq(u.path, "/")) { yt_scopy(conf.api, sizeof conf.api, v); conf_save(); yt_put(out, max, &p, "youtube: la busqueda y los videos se piden a "); yt_put(out, max, &p, conf.api); }
+        else { yt_put(out, max, &p, "uso: youtube api auto | http(s)://equipo[:puerto]   (ahora: "); yt_put(out, max, &p, conf.api[0] ? conf.api : "https://www.youtube.com"); yt_put(out, max, &p, ")"); }
+    } else if (yt_starts(args, "mp4 ")) {                                                     /* SOMA_252: un MP4 de cualquier direccion */
+        const char *v = args + 4; while (*v == ' ') v++;
+        struct yh_url u;
+        if (!yh_parse_url(v, &u) || yt_slen(v) >= sizeof nat_direct_url) yt_put(out, max, &p, "uso: youtube mp4 http(s)://servidor/video.mp4   (H.264 + AAC, hasta 854x480)");
+        else if (!native_mode() && !yt_seq("x86_64", SOMA_ARCH_252)) yt_put(out, max, &p, "youtube: el reproductor nativo solo existe en x86_64");
+        else {
+            yt_scopy(nat_direct_url, sizeof nat_direct_url, v);
+            for (uint32_t i = 0; i < sizeof now_it; ++i) ((uint8_t *)&now_it)[i] = 0;
+            yt_scopy(now_it.id, sizeof now_it.id, NAT_DIRECT_ID); yt_scopy(now_it.title, sizeof now_it.title, u.path); yt_scopy(now_it.channel, sizeof now_it.channel, u.host);
+            cur_idx = -1; view = V_WATCH; tab = T_NEXT; ia_video_reset(now_it.id);
+            play_at(0);
+            if (uo && um) uo[0] = 0;
+            return 2;                                            /* hay que abrir la ventana, sin buscar nada */
+        }
+    } else if (yt_starts(args, "ia ") || yt_seq(args, "ia")) {                                /* SOMA_251 */
+        const char *v = args + 2; while (*v == ' ') v++;
+        if (yt_seq(v, "on") || yt_seq(v, "si")) conf.ai = 1; else if (yt_seq(v, "off") || yt_seq(v, "no")) conf.ai = 0;
+        else { yt_put(out, max, &p, "uso: youtube ia on|off   (ahora: "); yt_put(out, max, &p, conf.ai ? "on)" : "off)"); }
+        if (out[0] != 'u') { conf_save(); yt_put(out, max, &p, conf.ai ? "youtube: el buscador entiende lenguaje natural (usa el LLM del sistema)" : "youtube: el buscador busca el texto tal cual"); }
+    } else if (yt_starts(args, "idioma ")) {
+        const char *v = args + 7; while (*v == ' ') v++;
+        if (yt_lang_ok(v)) { yt_scopy(conf.lang, sizeof conf.lang, v); conf_save(); yt_put(out, max, &p, "youtube: idioma de la transcripcion: "); yt_put(out, max, &p, conf.lang); }
+        else yt_put(out, max, &p, "uso: youtube idioma auto|es|en|fr|...");
+    } else if (yt_starts(args, "minutos ")) {
+        int m = (int)yt_num(args + 8, 4, 0);
+        if (m >= 1 && m <= 120) { conf.max_min = m; conf_save(); yt_put(out, max, &p, "youtube: whisper transcribe como mucho "); yt_put_dec(out, max, &p, (uint64_t)m); yt_put(out, max, &p, " min de cada video"); }
+        else yt_put(out, max, &p, "uso: youtube minutos 1..120");
+    } else if (yt_starts(args, "contexto ")) {
+        uint32_t c = yt_num(args + 9, 7, 0);
+        if (c >= 2000 && c <= 120000) { conf.ctx = (int)c; conf_save(); yt_put(out, max, &p, "youtube: se pasan al LLM hasta "); yt_put_dec(out, max, &p, c); yt_put(out, max, &p, " caracteres de transcripcion"); }
+        else yt_put(out, max, &p, "uso: youtube contexto 2000..120000   (caracteres de transcripcion que caben en tu modelo)");
+    } else if (yt_starts(args, "ver ")) {
+        int n = (int)yt_num(args + 4, 3, 0);
+        if (n >= 1 && n <= nitems) { play_item(n - 1); yt_put(out, max, &p, "youtube: "); yt_put(out, max, &p, now_it.title); }
+        else yt_put(out, max, &p, "youtube: no hay un resultado con ese numero (busca antes)");
+    } else if (yt_seq(args, "transcribir") || yt_seq(args, "subtitulos") || yt_seq(args, "resumen") || yt_starts(args, "pregunta ")) {
+        if (!now_it.id[0]) yt_put(out, max, &p, "youtube: antes hay que abrir un video (youtube ver <n>)");
+        else {
+            if (args[0] == 't') { tab = T_TEXT; do_transcribe(0); }
+            else if (args[0] == 's') { tab = T_TEXT; do_transcribe(1); }
+            else if (args[0] == 'r') { tab = T_AI; do_summary(); }
+            else { tab = T_AI; do_ask(args + 9); }
+            yt_put(out, max, &p, ia_err ? ia_status : "youtube: en marcha (mira la ventana o 'youtube estado')");
+        }
     } else if (yt_seq(args, "estado")) {
         char sn[96]; server_name(sn, sizeof sn);
-        struct media_info mi; media_get_info(&mi);
+        struct media_info mi; pl_get_info(&mi);
         yt_put(out, max, &p, "youtube: servicio "); yt_put(out, max, &p, sn);
         yt_put(out, max, &p, conf.key[0] ? " (con clave), " : ", "); yt_put_dec(out, max, &p, (uint64_t)conf.height); yt_put(out, max, &p, "p a ");
         yt_put_dec(out, max, &p, (uint64_t)conf.fps); yt_put(out, max, &p, " fps\n  resultados: "); yt_put_dec(out, max, &p, (uint64_t)nitems);
@@ -915,7 +1405,17 @@ int youtube_command(const char *args, char *out, uint32_t max)
         yt_put(out, max, &p, mi.buffering ? ", esperando datos" : "");
         if (str_errgen == str_req && str_err[0]) { yt_put(out, max, &p, "\n  ultimo error: "); yt_put(out, max, &p, str_err); }
         if (net_state == NS_ERROR) { yt_put(out, max, &p, "\n  busqueda: "); yt_put(out, max, &p, net_err); }
+        yt_put(out, max, &p, "\n  modo: "); yt_put(out, max, &p, native_mode() ? "nativo (sin servicio externo)" : conf.native ? "servicio (este procesador no tiene reproductor nativo)" : "servicio");
+        if (nat_on) { struct media_info m2; pl_get_info(&m2); yt_put(out, max, &p, ", nativo: estado "); yt_put_dec(out, max, &p, (uint64_t)m2.state); yt_put(out, max, &p, ", "); yt_put_dec(out, max, &p, m2.frames); yt_put(out, max, &p, " fotogramas, "); yt_put_dec(out, max, &p, m2.dropped); yt_put(out, max, &p, " tarde, "); yt_put_dec(out, max, &p, m2.width); yt_put(out, max, &p, "x"); yt_put_dec(out, max, &p, m2.height); }
+        yt_put(out, max, &p, "\n  IA: buscador "); yt_put(out, max, &p, conf.ai ? "on" : "off"); yt_put(out, max, &p, ", idioma "); yt_put(out, max, &p, conf.lang);
+        yt_put(out, max, &p, ", "); yt_put_dec(out, max, &p, (uint64_t)conf.max_min); yt_put(out, max, &p, " min, contexto "); yt_put_dec(out, max, &p, (uint64_t)conf.ctx);
+        yt_put(out, max, &p, "\n  transcripcion: "); if (tx_len) { yt_put_dec(out, max, &p, tx_len); yt_put(out, max, &p, " caracteres ("); yt_put(out, max, &p, tx_src); yt_put(out, max, &p, ")"); } else yt_put(out, max, &p, "no");
+        yt_put(out, max, &p, ", ficha: "); yt_put(out, max, &p, vd_state == 1 ? "si" : "no"); yt_put(out, max, &p, ", conversacion: "); yt_put_dec(out, max, &p, chat_len);
+        yt_put(out, max, &p, ", trabajo: "); yt_put_dec(out, max, &p, (uint64_t)ia_run);
+        if (ia_status[0]) { yt_put(out, max, &p, "\n  "); yt_put(out, max, &p, ia_status); }
+        if (ai_state != AI_OFF) { yt_put(out, max, &p, "\n  busqueda IA ("); yt_put_dec(out, max, &p, (uint64_t)ai_state); yt_put(out, max, &p, "):"); for (int i = 0; i < ai_nq; ++i) { yt_put(out, max, &p, " ["); yt_put(out, max, &p, ai_q[i]); yt_put(out, max, &p, "]"); } }
     } else return 0;                                             /* abrir la ventana (y buscar, si hay texto) */
-    kprint(out); kprint("\n");
+    if (uo && p < um) yt_scopy(uo, um, out);                     /* lo escribe quien ha llamado (el terminal o un agente) */
+    else { if (uo && um) uo[0] = 0; kprint(out); kprint("\n"); }
     return 1;
 }

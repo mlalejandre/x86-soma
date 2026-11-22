@@ -7,6 +7,8 @@ void layout_init(void);
 void layout_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h, int show_cursor);
 int  layout_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h);
 void layout_handle_key(char c);
+int  layout_escape(void);               /* SOMA_254: Esc suelta el campo de texto (1 = lo ha usado; 0 = cerrar la ventana) */
+int  layout_clip_op(int op);            /* SOMA_254: Ctrl+C / Ctrl+X / Ctrl+V (CLIP_OP_*): campo con foco, o copia el codigo fuente */
 
 /* Carga un documento LaTeX (PARCHE 084) o #SOMA-LAYOUT v1 (se convierte a LaTeX) */
 void layout_set_source(const char *src, uint32_t len);

@@ -377,6 +377,7 @@ int dispatch_agent_command(const char *cmd_line, char *out_buf, uint32_t max_out
     int previous = agent_dispatch_mode;
     agent_dispatch_mode = 1;
 
+    { extern void gui_fase_orden(const char *linea); gui_fase_orden(cmd_line); }   /* SOMA_259_ORBE: orden o busqueda en la barra del orbe */
     int result = dispatch_command(cmd_line, out_buf, max_out);
     if (out_buf && max_out && agent_cmd_is_external(cmd_line)) agent_net_observe(out_buf);   /* SOMA_193 */
 
@@ -674,6 +675,8 @@ static int cmd_help(const char *args, char *out_buf, uint32_t max_out);
 #include "shell_agente.c"          /* agentes y modelo */
 #include "shell_apps.c"            /* aplicaciones y portatil */
 #include "shell_utilidades.c"      /* utilidades de terminal */
+#include "lcm_ordenes_shell.inc"    /* SOMA_258_LCM: ordenes cerrar y contiene (despues de las utilidades: usa sus ayudantes) */
+#include "llm_limites_shell.inc"    /* SOMA_260_LLM_TAM: orden llm-limites */
 
 static const struct command_entry cmd_table[] = {
         /* Scripting y Automatizacion (SOMA-LANG) */
@@ -851,6 +854,10 @@ static const struct command_entry cmd_table[] = {
     { "buscador",     cmd_buscador,     CMD_F_NORMAL, "Invoca al Agente Buscador (Web & System Research)" },
     { "agent",        cmd_agent,        CMD_F_NORMAL, "Despacha misiones a agentes (soma, buscador, etc.)" },
     { "mayordomo",    cmd_mayordomo,     CMD_F_NORMAL, "Agente directo para operaciones del sistema" },
+    { "lcm",          cmd_lcm,           CMD_F_NORMAL, "Traductor del LCM: lcm <frase> (que orden entenderia, sin ejecutar) | lcm estado | lcm encender | lcm apagar" },   /* SOMA_253_LCM */
+    { "cerrar",       cmd_cerrar,        CMD_F_NORMAL, "Cierra aplicaciones: cerrar (la ventana de delante) | cerrar todo | cerrar <aplicacion> (navegador, paint, notas, youtube...)" },   /* SOMA_258_LCM */
+    { "contiene",     cmd_contiene,      CMD_F_SAFE,   "Que archivos tienen un texto dentro: contiene <texto> [ruta] [-a]" },   /* SOMA_258_LCM */
+    { "llm-limites",  cmd_llm_limites,   CMD_F_NORMAL, "Tamanos del dialogo con el modelo: llm-limites | contexto <tokens> | salida <tokens> | como-antes" },   /* SOMA_260_LLM_TAM */
     { "delegate",     delegate_cmd,     CMD_F_SAFE,   "Delega una sub-mision especializada a otro agente" },
     { "myos",         cmd_soma,         CMD_F_ALIAS,  "Alias de soma" },
 
@@ -875,7 +882,7 @@ static const struct command_entry cmd_table[] = {
     { "font",         cmd_font,         CMD_F_SAFE,   "Muestra o cambia la fuente tipografica activa (classic|modern)" },
     { "terminal",     cmd_terminal,     CMD_F_SAFE,   "Abre la ventana del terminal de la GUI (barra de desplazamiento, seleccion, copiar/pegar, zoom)" },
     { "media",        cmd_media,        CMD_F_SAFE,   "Reproductor multimedia (video AVI y audio WAV del almacen BIGFS): media gui|list|play|pause|stop|seek|status" },
-    { "youtube",      cmd_youtube,      CMD_F_NORMAL, "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | estado" },
+    { "youtube",      cmd_youtube,      CMD_F_NORMAL, "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | modo nativo|servicio | mp4 <direccion> | ia on|off | ver N | transcribir | subtitulos | resumen | pregunta <texto> | idioma X | minutos N | contexto N | estado" },
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
     { "imagen",       cmd_imagen,       CMD_F_SAFE,   "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)" },
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
@@ -974,6 +981,7 @@ static const struct help_usage help_usages[] = {
     { "delegate",   "delegate <agente> \"<mision>\"" },
     { "mem_search", "mem_search <palabras clave>" },
     { "mayordomo",  "mayordomo <tarea>   p. ej. 'muestra la RAM', 'que procesos hay', 'ayuda ram'" },
+    { "lcm",        "lcm <frase> | estado | encender | apagar | voz natural|tecnica | umbral N | aprendido | aprende <frase> => <orden> | olvida N|todo" },   /* SOMA_253_LCM SOMA_257_LCM */
     { "font",       "font [nombre | id]" },
     { "cursor",     "cursor [nombre | id]" },
 };
@@ -1659,7 +1667,8 @@ void shell_run(void)
 
         static char shell_buf[2048];
         if (!dispatch_command(s0, shell_buf, sizeof(shell_buf))) {
-            kprint("Comando desconocido: '"); kprint(s0); kprint("'. Escribe 'help'.\n");
+            extern int lcm_terminal(const char *linea);   /* SOMA_253_LCM: una frase en vez de una orden */
+            if (!lcm_terminal(s0)) { kprint("Comando desconocido: '"); kprint(s0); kprint("'. Escribe 'help'.\n"); }
         }
     }
 }

@@ -34,6 +34,7 @@ int  voz_voice_install(char *msg, uint32_t cap);           /* copia la voz de MO
 int  voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap);   /* lee en voz alta (sincrono) */
 int  voz_speak_start(const char *text, uint32_t len);      /* lo mismo en segundo plano: 0 = empezo; -16 ya esta leyendo */
 void voz_speak_stop(void);
+int  voz_speaking(void);                                   /* SOMA_256: 1 = se esta preparando o leyendo (por el boton, por habla texto...) */
 int  voz_speak_state(void);                                /* 1 = preparando o leyendo */
 uint32_t voz_speak_ver(void);                              /* cambia al empezar y al terminar (para repintar) */
 const char *voz_speak_msg(void);                           /* motivo del ultimo fallo ("" si fue bien) */

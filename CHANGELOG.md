@@ -6,6 +6,140 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_262_PUBLICAR: entradas de los parches 257-262 -->
+### Publicar sin sorpresas: GitHub, README, exportador para Claude y tamaños del maquetador y el programador (262)
+- **`subir_github.py`** reconoce también los parches de un solo archivo (`parche_NNN_*.py`), que no escriben en
+  `parches/APLICADOS.txt`: los detecta por su respaldo (`.parche_NNN_respaldo/`) y toma el resumen de su documento, así que el
+  commit, la etiqueta y la release los anuncian. Antes de subir pasa las **pruebas rápidas** (`make pruebas-lcm`, unos segundos)
+  y se niega a subir respaldos de parches o lo preparado para Claude aunque falte en `.gitignore`.
+- **`.gitignore`**: `.parche_*_respaldo/` (con copias de archivos antiguos), `para_claude*.txt` y los exportadores sueltos.
+- **`tools/exporta_para_claude.py`**: prepara el `.txt` para una conversación con Claude: lo cambiado desde el último commit
+  (por defecto), un tema (`--tema lcm|voz|orbe|llm|agente|maquetador|programador|lang|github|compilar`), archivos concretos o el
+  archivo donde se define una función. Sin claves ni binarios.
+- **`make pruebas-lcm`**: las pruebas del LCM, el orbe y los tamaños del LLM entran en `make test` y en la CI.
+- **Maquetador**: con `llm-limites contexto` el prompt y las notas de investigación crecen (antes 8 KB y 3000 caracteres); la
+  respuesta admite lo que diga `llm-limites salida`. Sin configurar nada, igual que antes.
+- **Programador**: el prompt pasa de 24 KB a 80 KB (con un programa grande se cortaba, incluida la instrucción final) y el Studio
+  abre y respalda programas de hasta 32 KB, como los que ya escribía el programador (antes, de más de 16 KB no se podían modificar).
+- README al día: LCM, orbe nuevo, `llm-limites` y el exportador. Detalles: `docs/PARCHE_262_PUBLICAR.md`.
+
+### Arreglo: las pruebas del LCM no enlazaban en macOS (261)
+- `gui_fase` (barra de fases del orbe) pasa a ser una definición débil vacía en `lcm_soma.inc`; en el núcleo manda la del orbe.
+  No cambia nada en SOMA: solo el banco del 257 en el anfitrión.
+
+### El diálogo con el modelo de lenguaje se ajusta al contexto: `llm-limites` (260)
+- Antes, SOMA hablaba con el modelo con búferes fijos: respuesta final de **8 KB** (unos 2000 tokens; lo demás se cortaba sin avisar),
+  prompt del agente de 16 KB, historial de 8 KB y, de cada orden ejecutada, el modelo solo veía **400 caracteres**.
+- **`llm-limites contexto 250000`** (la ventana de tu modelo) y **`llm-limites salida <tokens>`**: el prompt, el historial, lo que
+  el modelo ve de cada orden, la petición y la respuesta HTTP se calculan de ahí. Con 250 000 tokens: prompt de 700 KB, historial
+  de 420 KB y 29 000 caracteres de cada orden. `llm-limites` enseña los tamaños; `llm-limites como-antes` vuelve atrás.
+- **Sin configurar nada, el agente se comporta igual que antes** (las peticiones salen idénticas byte a byte); solo suben los
+  techos: respuesta final de 384 KB, respuesta HTTP de 1 MB. Si algo aún no cabe, termina con «[... respuesta recortada ...]».
+- Detalles: `docs/PARCHE_260_LLM_TAMANOS.md`.
+
+### El orbe como teleprompter, con formato y barra de fases (259)
+- **Zona de texto fija con letra fija** (Ajustes → LCM → *Letra de las respuestas en el orbe*: compacta, mediana o grande): una
+  respuesta larga ya no pasa a letra diminuta. Sube sola mientras se escribe; con el **ratón arriba/abajo** (en el orbe no hay
+  puntero) o la **rueda** se recorre a mano, y al llegar al final vuelve a ir sola.
+- **Formato**: negrita, cursiva, subrayado, código, títulos, listas, citas, enlaces y **fórmulas** (`$...$`, `$$...$$`: griegas,
+  fracciones, raíces, superíndices y subíndices de verdad). El razonamiento va detrás, más tenue.
+- **Barra de fases** con iconos vectoriales entre el orbe y la respuesta: LCM, mayordomo, búsqueda, documento, programador, orden,
+  pensando, escribiendo, voz y hecho; la de ahora late. Detalles: `docs/PARCHE_259_ORBE_PROMPTER.md`.
+
+### LCM ampliado: 98 órdenes y muchas más formas de pedirlas (258)
+- Modelo nuevo (dos redes que votan) entrenado con fórmulas indirectas y educadas («¿serías tan amable de decirme qué archivos
+  contienen la palabra casa?»). Examen a ciegas: 79 % exactas, 2 % equivocadas, 0 peligrosas (el 253 daba 42 % y 10 %).
+- Órdenes nuevas: **`cerrar`** (`cerrar`, `cerrar todo`, `cerrar navegador`...) y **`contiene <texto>`** (qué archivos lo tienen
+  dentro). Detalles: `docs/PARCHE_258_LCM_ORDENES_AMPLIADO.md`.
+
+### El LCM habla con naturalidad (257)
+- Saludos y charla sin llamar al modelo de lenguaje, respuestas en una frase pensadas para la voz («Son las cinco y diez»), y
+  correcciones: «no era eso» + la orden buena, y lo aprende. Página **Ajustes → LCM** (encendido, voz natural o técnica,
+  umbral de seguridad, probar una frase, lo aprendido). Detalles: `docs/PARCHE_257_LCM_NATURAL.md`.
+
+### Esc detiene la misión del agente y la lectura en voz alta (256)
+- **Detener al modelo**: con el escritorio o el orbe en foco, **Esc** cancela la misión en marcha (antes no había manera: había que
+  esperar al plazo de la petición). El orbe muestra «Esc detiene la misión» mientras trabaja y «Misión detenida.» al cancelar; se puede
+  lanzar otra misión enseguida. El hilo del agente se detiene con `thread_kill` (cierra sus conexiones y suelta sus cerrojos).
+- **Detener la locución**: **Esc** para la lectura en voz alta desde cualquier aplicación (en el Bloc de notas, después de cerrar
+  menús o diálogos; el botón sigue funcionando). Ahora también corta **durante la preparación** (antes solo cuando ya sonaba) y la orden
+  `habla texto` usada por el agente. El orbe indica «Esc detiene la lectura en voz alta».
+- Límites: cancelar pierde los búferes de trabajo del agente (~200 KiB) y puede dejar a medias un archivo que estuviera escribiendo.
+- Toca `gui.c` (dos líneas de Esc), `gui_agente.c`, `gui_cosmos.c` y `voz_sys.[ch]`. Detalles: `docs/PARCHE_256_PARAR.md`.
+
+### Bloc de notas renovado: iconos, deshacer, buscar y revisión (255)
+- **Barra con iconos vectoriales** (`sysicon`): nuevo, abrir, guardar, guardar como, deshacer, rehacer, cortar, copiar, pegar, buscar y
+  ver en el navegador (iconos nuevos `SI_CUT` y `SI_PASTE`). «Guardar» se resalta cuando hay cambios; con ventana estrecha quedan solo
+  iconos; al pasar el ratón la barra de estado explica cada botón. El menú del clic derecho también lleva iconos.
+- **Deshacer / rehacer de verdad** (Ctrl+Z, Ctrl+Mayús+Z): las teclas seguidas forman un paso (una palabra), reemplazar una selección
+  se deshace de una vez, y funciona con pegar, cortar, Supr y Retroceso.
+- **Buscar** (Ctrl+F): barra con campo de texto del sistema (tildes, portapapeles, ratón), coincidencias resaltadas en todo el texto,
+  contador «4 de 17», Intro / Mayús+Intro para siguiente / anterior, Esc para cerrar. Si hay una línea seleccionada, es la búsqueda inicial.
+- **Fallos corregidos**: «Nuevo» conservaba la ruta del documento anterior (Guardar lo sobrescribía sin avisar) y ahora pide
+  confirmación si hay cambios y empieza sin nombre; un documento sin nombre abre «Guardar como» en vez de escribir en
+  `/workspace/notas.txt`; el nombre de archivo del cuadro de diálogo admite tildes y ñ y Retroceso quita un carácter UTF-8 entero.
+- **Cuadro de archivos** con el mismo aspecto (iconos de carpeta y archivo, tamaños, resaltado al pasar el ratón, botones del sistema).
+- Estado: «UTF-8», marcador de documento sin guardar con icono y texto de ayuda cuando el documento está vacío.
+- Toca `notepad.c`, `sysicon.[ch]` y `test_iconos_240.c` (ninguno protegido). Detalles: `docs/PARCHE_255_BLOC_NOTAS.md`.
+
+### Maquetador renovado: iconos vectoriales, campos de texto de verdad y revisión (254)
+- **Iconos vectoriales** del sistema (`sysicon`) en toda la barra: abrir, recargar, editar, copiar, Documento/Fuente, zoom −/+,
+  PDF, HTML, revisar con IA y el destello de «Generar» (iconos nuevos `SI_SPARK` y `SI_SEND`). La barra se adapta al ancho
+  (con ventana estrecha quedan solo iconos, y PDF/HTML conservan su texto) y al pasar el ratón se explica cada botón.
+- **Descripción para la IA con el campo de texto del sistema**: ya se pueden **escribir tildes, ñ, ¿ ¡** (antes salían rotas: el
+  teclado envía UTF-8 y el Maquetador lo trataba como Latin-1), **copiar, cortar y pegar** (Ctrl+C/X/V), mover el cursor con el
+  ratón en cualquier punto, **seleccionar arrastrando**, doble clic = palabra, triple = todo. Es de varias líneas (Mayús+Intro
+  hace un salto; Intro genera) y crece al escribir.
+- **Ruta editable**: se escribe o pega la ruta de un `.tex`/`.html` y Intro lo abre. **Abrir** ahora abre el explorador de
+  archivos en la carpeta del documento (antes hacía lo mismo que Recargar).
+- Revisión: **Esc** suelta el campo en vez de cerrar la ventana, **Ctrl+C** sin campo copia el código fuente del documento
+  (botón **Copiar**), Ctrl+V pega en la descripción, indicador «Página x de n», clic en el carril de la barra de desplazamiento,
+  teclas `o` (abrir), `p` (ruta), `g` (descripción). Textos de la interfaz con tildes.
+- Toca `gui.c` (portapapeles y Esc del Maquetador), `sysicon.[ch]` y `layout.[ch]`. Detalles: `docs/PARCHE_254_MAQUETADOR.md`.
+
+<!-- SOMA_262_PUBLICAR: el LCM (253) -->
+### LCM: SOMA entiende lo que le pides sin el modelo de lenguaje (253)
+- Un traductor pequeño (red BiLSTM en enteros, dentro del núcleo) convierte frases como «borra el archivo notas.txt» en órdenes
+  del terminal, en milisegundos y sin conexión. Lo que borra, mueve o apaga **siempre pregunta**; lo que no entiende sigue al
+  mayordomo o al modelo de lenguaje como antes. Orden `lcm` (`lcm <frase>`, `lcm estado`). Detalles: `docs/PARCHE_253_LCM_ORDENES.md`.
+
+### Transcribir sin equipos externos: el sonido del vídeo, dentro de SOMA (253)
+- En **modo nativo**, **Transcribir** (pestaña Texto) ya funciona: SOMA baja el MP4 de 360p de YouTube, **solo se queda con el
+  sonido** y lo pasa a whisper. Nada se guarda salvo el WAV temporal `/yt_audio.wav` (16 kHz, mono), que se borra al acabar.
+- Un **segundo reproductor de ring 3** (el mismo `vplay.elf`, en modo «solo audio») decodifica el AAC, lo reduce a 16 kHz mono
+  y lo entrega por un anillo de salida; el núcleo lo escribe en el almacén BIGFS. **No interrumpe el vídeo** que se está
+  viendo: son dos procesos independientes (`vplay_sys.c` ahora tiene dos instancias, `vps_*` para ver y `vpx_*` para extraer).
+- Respeta `youtube minutos N` (tope de audio), mira el sitio libre del almacén, enseña el avance (`0:15 de 0:45, 1,1 MiB
+  bajados`), se puede cancelar, y si la descarga se corta transcribe lo que llegó. También sirve con `youtube mp4 <dirección>`.
+- Prueba nueva en `tests/test_vplay_252.py`: el audio sale igual que el de ffmpeg (relación señal/error > 30 dB).
+  Detalles: `docs/PARCHE_253_AUDIO_NATIVO.md`.
+
+### Vídeo nativo y YouTube sin equipos externos (252)
+- **YouTube ya no necesita otro equipo**: SOMA busca, pide la ficha y descarga el vídeo hablando directamente con YouTube
+  por HTTPS, y lo decodifica él mismo. El servicio `tools/yt_service.py` queda como opción (`youtube modo servicio`).
+- **Reproductor nativo** (`vplay.elf`, ring 3): MP4 con H.264 (libavc) y AAC (libxaac), ambos Apache 2.0, en
+  `third_party/`. Proceso aislado sin archivos ni red; el vídeo le llega por memoria compartida. Sin tocar `usermode.c`.
+- **Cliente HTTPS propio** (`yt_https.c`) sobre el TLS 1.3 del sistema: lee según llega, con `Range` y redirecciones.
+- **Límites**: solo 360p (lo único que YouTube da con dirección directa), solo x86_64, y puede romperse cuando YouTube
+  cambie (se arregla en `src/apps/yt_inner.h`). En modo nativo aún no hay subtítulos ni transcripción.
+- Órdenes: `youtube modo nativo|servicio`, `youtube mp4 <dirección>`, `youtube api`. Herramienta: `tools/sonda_youtube_nativo.py`.
+- Pruebas: `test_mp4_252`, `test_yt_inner_252` (respuestas reales de YouTube) y `test_vplay_252.py` (reproductor completo).
+  Detalles y lo no verificado: `docs/PARCHE_252_VIDEO_NATIVO.md`.
+
+### YouTube con IA: buscador en lenguaje natural, transcripción y preguntas (251)
+- **Buscador con IA**: con el interruptor **IA** de la barra encendido, en la caja se escribe lo que se quiere ver con
+  palabras normales. El LLM del sistema lo convierte en hasta tres búsquedas de YouTube, los resultados se juntan numerados
+  y sin repetidos, y el LLM escribe un resumen de lo encontrado con sus recomendaciones. Sin LLM se busca el texto tal cual.
+- **Descripciones**: el principio en cada tarjeta de resultado y la ficha completa (fecha, vistas, subtítulos disponibles) en
+  la pestaña **Info** del reproductor.
+- **Transcripción** (pestaña **Texto**): con **whisper** en SOMA (el servicio entrega el sonido en WAV de 16 kHz, se guarda
+  en el almacén y pasa por `voz_run`) o con los **subtítulos de YouTube**. Texto con marcas `[m:ss]`: pulsar una línea salta
+  a ese momento. Se guarda por vídeo (`/yt_<id>.txt`).
+- **Resumen y preguntas** (pestaña **IA**): el LLM responde sobre el contenido del vídeo con la transcripción como contexto.
+- Servicio: `/yt/info`, `/yt/audio`, `/yt/subs` y descripción en `/yt/search` (**hay que reiniciar `tools/yt_service.py`**).
+- Órdenes: `youtube ia on|off`, `ver N`, `transcribir`, `subtitulos`, `resumen`, `pregunta <texto>`, `idioma`, `minutos`, `contexto`.
+- Pruebas nuevas: `tests/test_youtube_ia_251.c` y `tests/test_yt_service_251.py`. Detalles: `docs/PARCHE_251_YOUTUBE_IA.md`.
+
 ### Repaso antes de publicar (252)
 - README al día: el Maquetador ya no es «#SOMA-LAYOUT v1», la sección de agentes describe los caminos actuales y desaparece la
   mención a un streaming del LLM que no existe.

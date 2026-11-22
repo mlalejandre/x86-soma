@@ -323,6 +323,7 @@ static uint32_t her_app_min_w(enum app_mode app)
 
 /* SOMA_234_GUI_PARTIDO: el escritorio, por temas (se incluyen aqui, en este orden; ver la cabecera de cada archivo) */
 #include "gui_vortice.c"         /* matematicas del vortice y estado del orbe */
+#include "gui_prompter.c"        /* SOMA_259_ORBE: la respuesta como un teleprompter, con formato, y la barra de fases */
 #include "gui_cosmos.c"          /* rosquilla de acrecion */
 #include "gui_iconos.c"          /* iconos en orbita y vectoriales */
 #include "gui_ventanas.c"        /* arrastre de iconos y gadget */
@@ -411,6 +412,7 @@ static int soma_clip_apply(int op)
     case APP_PAINT:        return paint_clip_op(op);
     case APP_FILE_MANAGER: return fm_clip_op(op);
     case APP_YOUTUBE:      if (youtube_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_250_YOUTUBE: la caja de busqueda */
+    case APP_LAYOUT:       if (layout_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;     /* SOMA_254: ruta y descripcion del Maquetador */
     case APP_WEB_BROWSER:
         if (op == CLIP_OP_PASTE) {                       /* equivale a escribir el texto en el campo activo */
             uint32_t n = 0; const char *t = clip_text(&n);
@@ -953,6 +955,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
 
             if (m_dx != 0 || m_dy != 0) {
                 mouse_x += m_dx; mouse_y -= m_dy;
+                if (!her_cursor_should_show()) her_pr_raton(m_dy);   /* SOMA_259_ORBE: sin puntero, el raton arriba/abajo recorre la respuesta */
                 if (her_min_drag >= 0) { her_min_drag_x = mouse_x; her_min_drag_y = mouse_y; }
                 if (mouse_x < 0) mouse_x = 0;
                 if (mouse_x >= (int32_t)cur_w) mouse_x = (int32_t)cur_w - 1;
@@ -1005,6 +1008,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             acct_set_owner((uint8_t)(ACCT_APP0 + current_app));   /* PARCHE 089 */
             {   /* SOMA_PARCHE_024_TERM: rueda y boton derecho */
                 int wheel = mouse_wheel_take();
+                if (wheel && !her_cursor_should_show()) her_pr_rueda(wheel);   /* SOMA_259_ORBE: y la rueda */
                 int rclick = mouse_right_take_click();
                 if (current_app == APP_WEB_BROWSER) browser_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held()); /* SOMA_PARCHE_NAVEGADOR */
                 if (current_app == APP_FILE_MANAGER && !her_dragging && !her_resizing) {   /* SOMA_PARCHE_028_UI */
@@ -1265,6 +1269,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             if (soma_clip_gui_key(c)) continue;   /* SOMA_PARCHE_PORTAPAPELES */
             acct_set_owner((uint8_t)(ACCT_APP0 + current_app));   /* PARCHE 089 */
             if (c == 27 && her_voz_escape()) continue;                       /* SOMA_244_VOZ: Esc cancela el dictado */
+            if (c == 27 && current_app != APP_NOTEPAD && her_stop_escape(agent_global_focus || current_app == APP_DESKTOP)) continue;   /* SOMA_256: Esc detiene la lectura o la mision */
             if (c == 27) {
                 if (current_app == APP_TERMINAL_SHELL && term_popup_open()) {      /* SOMA_PARCHE_024_TERM: Esc cierra el menu */
                     term_popup_close();
@@ -1287,6 +1292,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     if (coder_app_escape()) { coder_app_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                     continue;
                 }
+                if (current_app == APP_LAYOUT && layout_escape()) {                /* SOMA_254: Esc suelta el campo de texto antes de cerrar */
+                    layout_render_window(win_x, win_y, win_w, win_h, 1);
+                    fb_present(); continue;
+                }
                 if (current_app == APP_YOUTUBE && youtube_escape()) {              /* SOMA_250_YOUTUBE: Esc sale de la caja de busqueda o del video */
                     youtube_render_window(win_x, win_y, win_w, win_h, 1);
                     fb_present(); continue;
@@ -1295,6 +1304,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     notepad_render_window(win_x, win_y, win_w, win_h, 1);
                     fb_present(); continue;
                 }
+                if (current_app == APP_NOTEPAD && her_stop_escape(0)) continue;    /* SOMA_256: en el Bloc de notas, Esc para la lectura despues de cerrar menus */
                 break;
             }
 
@@ -1496,7 +1506,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 paint_handle_key(c); paint_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
             }
             if (current_app == APP_LAYOUT) {
-                if (c == 27) {
+                if (c == 27 && !layout_escape()) {
                     her_close_current_app_vortex();
                     continue;
                 }

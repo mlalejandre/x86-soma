@@ -12,6 +12,8 @@ enum si_icon {
     /* SOMA_240_ICONOS: reproductor (SOMA Media) y editor (SOMA Studio) */
     SI_MUSIC, SI_FILM, SI_REWIND, SI_FFWD, SI_SKIP_PREV, SI_SKIP_NEXT, SI_LIST, SI_CODE, SI_UNDO, SI_REDO, SI_SEARCH, SI_REPLACE,
     SI_GOTO, SI_COMMENT, SI_FILE, SI_FILE_CODE, SI_DISK, SI_EDIT, SI_GRID, SI_COPY, SI_CLOSE, SI_SPEAKER_OFF, SI_LOOP, SI_TERMINAL,
+    SI_SPARK, SI_SEND,                 /* SOMA_254: IA (destello) y enviar */
+    SI_CUT, SI_PASTE,                  /* SOMA_255: Bloc de notas (tijeras y portapapeles) */
     SI_COUNT
 };
 

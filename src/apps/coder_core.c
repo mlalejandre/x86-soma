@@ -720,7 +720,7 @@ static const char *hint_for(const struct verdict *v)
 }
 
 /* ------------------------------------------------------------------ prompts */
-static char g_prompt[24576];
+static char g_prompt[CC_SRC_MAX * 2 + 16384];   /* SOMA_262_PUBLICAR: antes 24 KB: con un programa grande se cortaba el final */
 static char g_reply[CC_SRC_MAX + 8192];
 static char g_cand[CC_SRC_MAX + 4096];
 static char g_best[CC_SRC_MAX + 4096];

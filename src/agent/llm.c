@@ -11,6 +11,7 @@
 #include "mem.h"
 #include "net.h"
 #include "sysinfo.h"
+#include "llm_limites.inc"        /* SOMA_260_LLM_TAM: tamanos segun el contexto del modelo */
 
 /* SOMA_195: el servidor y el modelo ya no estan fijos en el codigo. Se leen de /etc/llm.conf (Ajustes > IA o la orden llm-config):
  * un servidor local o de la red local, o las API de ChatGPT, Claude o Gemini (llm_proto.h). Sin archivo vale lo de siempre
@@ -75,16 +76,25 @@ int  llm_test_passed = 0;
 static char *http_resp_buf = 0;
 static char *payload_buf = 0;
 
-static int ensure_llm_buffers(void)
+/* SOMA_260_LLM_TAM: del tamano que diga llm_tam() (antes 64 KB fijos); si no hay memoria, 64 KB como antes. Con puede_cambiar
+ * (solo con g_llm_busy tomado) se rehacen si cambio el tamano. */
+static uint32_t g_resp_cap = 65536, g_pay_cap = 65536;
+static int ensure_llm_buffers_ex(int puede_cambiar)
 {
+    const struct llm_tam *t = llm_tam();
+    if (puede_cambiar && http_resp_buf && g_resp_cap != t->http) { kfree(http_resp_buf); http_resp_buf = 0; }
+    if (puede_cambiar && payload_buf && g_pay_cap != t->peticion) { kfree(payload_buf); payload_buf = 0; }
     if (!http_resp_buf) {
-        http_resp_buf = (char *)kmalloc(65536);
+        http_resp_buf = (char *)kmalloc(t->http); g_resp_cap = t->http;
+        if (!http_resp_buf) { http_resp_buf = (char *)kmalloc(65536); g_resp_cap = 65536; }
     }
     if (!payload_buf) {
-        payload_buf = (char *)kmalloc(65536);
+        payload_buf = (char *)kmalloc(t->peticion); g_pay_cap = t->peticion;
+        if (!payload_buf) { payload_buf = (char *)kmalloc(65536); g_pay_cap = 65536; }
     }
     return (http_resp_buf != 0 && payload_buf != 0);
 }
+static int ensure_llm_buffers(void) { return ensure_llm_buffers_ex(0); }
 
 static uint32_t my_strlen(const char *s)
 {
@@ -254,8 +264,9 @@ static int extract_json_content(const char *json, char *out, uint32_t out_max)
 {
     if (!json || !out || out_max == 0) return 0;
 
-    char *c_buf = (char *)kmalloc(49152);
-    char *r_buf = (char *)kmalloc(32768);
+    uint32_t c_cap = out_max > 49152u ? out_max : 49152u, r_cap = out_max > 32768u ? out_max : 32768u;   /* SOMA_260_LLM_TAM */
+    char *c_buf = (char *)kmalloc(c_cap);
+    char *r_buf = (char *)kmalloc(r_cap);
     if (!c_buf || !r_buf) {
         if (c_buf) kfree(c_buf);
         if (r_buf) kfree(r_buf);
@@ -264,8 +275,8 @@ static int extract_json_content(const char *json, char *out, uint32_t out_max)
     c_buf[0] = '\0';
     r_buf[0] = '\0';
 
-    int c_len = extract_json_field(json, "\"content\"", c_buf, 49152);
-    int r_len = extract_json_field(json, "\"reasoning_content\"", r_buf, 32768);
+    int c_len = extract_json_field(json, "\"content\"", c_buf, c_cap);
+    int r_len = extract_json_field(json, "\"reasoning_content\"", r_buf, r_cap);
 
     if (c_len <= 0 && r_len <= 0) {
         kfree(c_buf);
@@ -344,7 +355,7 @@ static int llm_health_unlocked(void)
         if (r != LLM_P_OK) { set_err("LLM: ", llm_proto_strerror(r)); return 0; }
         return 1;
     }
-    int code = http_get(ip, port, "/health", http_resp_buf, 65536, &resp, 5000);
+    int code = http_get(ip, port, "/health", http_resp_buf, g_resp_cap, &resp, 5000);   /* SOMA_260_LLM_TAM */
     if (code != 200) set_err("LLM: el servidor local no responde en ", llm_conf_get()->base[LLM_LOCAL]);
     return (code == 200);
 }
@@ -372,7 +383,7 @@ static int llm_fetch(const struct llm_http *h, const char *body, uint32_t blen, 
 {
     struct wn_req rq; memset(&rq, 0, sizeof rq); memset(rs, 0, sizeof *rs);
     rq.url = h->url; rq.method = h->method; rq.body = body; rq.body_len = blen; rq.ctype = "application/json"; rq.accept = "application/json";
-    rq.timeout_ms = timeout_ms; rq.max_body = 262144; rq.no_redirect = 1;      /* sin redirecciones: la clave no viaja a otro sitio */
+    rq.timeout_ms = timeout_ms; rq.max_body = llm_tam()->http; rq.no_redirect = 1;   /* SOMA_260_LLM_TAM: antes 256 KB */      /* sin redirecciones: la clave no viaja a otro sitio */
     rq.extra_headers = h->headers; rq.direct = 1;
     return wn_fetch(&rq, rs);
 }
@@ -436,20 +447,21 @@ static uint32_t slen_(const char *s) { uint32_t n = 0; while (s && s[n]) n++; re
 
 static int llm_request(const char *prompt, int json_mode, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
-    if (!ensure_llm_buffers()) return 0;
     const struct llm_conf *c = llm_conf_get();
     static struct llm_http h;
     while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);          /* una peticion al LLM cada vez (bufferes compartidos) */
+    if (!ensure_llm_buffers_ex(1)) { __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE); return 0; }   /* SOMA_260_LLM_TAM: con el turno tomado */
     int ok = 0;
-    llm_last_error[0] = 0;
+    llm_last_error[0] = 0; llm_recortada = 0;
     uint64_t t_start = timer_get_uptime_ms();
-    int blen = llm_proto_chat(c, prompt, json_mode, payload_buf, 65536, &h);
+    llm_proto_max_tokens = llm_tam()->salida;
+    int blen = llm_proto_chat(c, prompt, json_mode, payload_buf, g_pay_cap, &h);
     if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); kprint(llm_last_error); kprint("\n"); goto out; }
     uint8_t ip[4]; uint16_t port;
     if (conf_legacy(ip, &port)) {                                                           /* el camino de siempre */
         struct http_response resp;
         net_client_lock();
-        int code = http_post_json(ip, port, "/v1/chat/completions", payload_buf, http_resp_buf, 65536, &resp, timeout_ms);
+        int code = http_post_json(ip, port, "/v1/chat/completions", payload_buf, http_resp_buf, g_resp_cap, &resp, timeout_ms);
         net_client_unlock();
         if (code != 200) {
             set_err("LLM: el servidor local no responde bien en ", c->base[LLM_LOCAL]);
@@ -457,6 +469,7 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
         } else if (!resp.body) { set_err("LLM: respuesta vacia", ""); kprint("LLM: empty HTTP response body\n"); }
         else if (!llm_proto_reply(c, resp.body, reply_out, reply_max) && !extract_json_content(resp.body, reply_out, reply_max)) { set_err("LLM: no se pudo leer la respuesta del servidor", ""); kprint("LLM: could not extract content from JSON response\n"); }
         else ok = 1;
+        if (ok) llm_marca_recorte(reply_out, reply_max);                                    /* SOMA_260_LLM_TAM */
         trace_record(t_start, slen_(prompt), code == 200 ? resp.body : 0, ok ? slen_(reply_out) : 0, ok);
         goto out;
     }
@@ -466,6 +479,7 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
         if (rc != 0 || rs.status != 200 || !rs.body) { llm_fetch_error(rc, &rs); kprint(llm_last_error); kprint("\n"); }
         else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
         else ok = 1;
+        if (ok) llm_marca_recorte(reply_out, reply_max);                                    /* SOMA_260_LLM_TAM */
         trace_record(t_start, slen_(prompt), rc == 0 ? rs.body : 0, ok ? slen_(reply_out) : 0, ok);
         wn_free(&rs);
     }
@@ -495,13 +509,16 @@ int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *im
     while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
     int ok = 0;
     llm_last_error[0] = 0;
+    llm_recortada = 0;
+    { const struct llm_tam *t = llm_tam();                    /* SOMA_260_LLM_TAM: la salida elegida en llm-limites manda si es mayor */
+      if (max_tokens <= 0) max_tokens = (int)t->salida; else if (t->salida_fijada && (uint32_t)max_tokens < t->salida) max_tokens = (int)t->salida; }
     int blen = llm_proto_chat_ex(c, system, prompt, img, nimg, max_tokens, body, cap, &h);
     if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); goto out; }
     {
         static struct wn_resp rs;
         struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
         rq.url = h.url; rq.method = h.method; rq.body = body; rq.body_len = (uint32_t)blen; rq.ctype = "application/json"; rq.accept = "application/json";
-        rq.timeout_ms = timeout_ms; rq.max_body = 1u << 20; rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1;
+        rq.timeout_ms = timeout_ms; rq.max_body = tam_max(1u << 20, llm_tam()->http); rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1;
         uint64_t t_start = timer_get_uptime_ms();
         int rc = wn_fetch(&rq, &rs);
         if (rc != 0 || rs.status != 200 || !rs.body) {
@@ -514,6 +531,7 @@ int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *im
             kprint(llm_last_error); kprint("\n");
         } else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
         else ok = 1;
+        if (ok == 1) llm_marca_recorte(reply_out, reply_max);                               /* SOMA_260_LLM_TAM */
         trace_record(t_start, slen_(prompt) + slen_(system), rc == 0 ? rs.body : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
         wn_free(&rs);
     }
