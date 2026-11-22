@@ -9,7 +9,7 @@ int main(void)
     T(3600, 1); T(3601, 1); T(3800, 1); T(3961, 1);                                                                                                  /* zona libre (PARCHE 130: acaba en 3961) */
     T(3962, 0); T(4000, 0); T(4094, 0); T(6211, 0); T(6212, 0); T(7000, 0); T(8191, 0);                                                              /* ranura B del checkpoint */
     T(4095, 0); T(4096, 0); T(4400, 0); T(4401, 0); T(5000, 0); T(6209, 0); T(6210, 0);                                                              /* marcador y checkpoint COMPLETO */
-    T(8192, 0); T(8255, 0); T(8256, 0); T(16383, 0);                                                                                                 /* SRCFS */
+    T(8192, 0); T(8255, 0); T(8256, 0); T(8319, 0); T(8320, 0); T(16383, 0);                                                                                                 /* SRCFS */
     T(16384, 0); T(16385, 0); T(100000, 0); T(1000000000ULL, 0); T(~0ULL, 0);                                                                         /* BIGFS y mas alla */
     printf("%s: %d comprobaciones, %d fallos\n", fails ? "FALLO" : "OK", checks, fails);
     return fails != 0;

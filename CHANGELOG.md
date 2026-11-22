@@ -6,6 +6,65 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_267_DISCOS -->
+### El pendrive en cuatro particiones: sistema, DATOS, MODELOS y USUARIO (267)
+- **SOMA** (FAT32, 1 GiB, el sistema), **DATOS** (formato de SOMA, 2 GiB: configuración, memoria, programas instalados),
+  **MODELOS** (exFAT, 16 GiB, menos en pendrives pequeños) y **USUARIO** (exFAT, el resto, con `Documentos`, `Imágenes`, `Audio`,
+  `Vídeos`, `Descargas` y `Proyectos`). Todo en Python puro: `tools/soma_disco.py` (MBR, FAT32, exFAT, DATOS).
+- **Grabar mira primero el pendrive**: si ya es de SOMA solo rehace el sistema (lo demás, idéntico byte a byte); si es de una
+  versión anterior conserva todo y lo migra (SOMADATA se queda en su sitio como DATOS; la DATOS FAT32 de macOS pasa a USUARIO; los
+  modelos de `SOMA/MODELOS` a `MODELOS/voz`; `SOMADATA.IMG` a DATOS). Lo que cambia de sitio se copia antes al ordenador y, si no
+  cabe, no se toca nada. El mismo código en Linux y macOS (`construyeimagen.py --grabar`; `ejecutar.py -t t480s-usb` lo usa).
+- **exFAT en el núcleo** (`src/core/exfat.c`, lectura y escritura) y **unidades** `/usuario` (lectura y escritura) y `/modelos`
+  (solo lectura desde el VFS) en `src/core/unidades.c`: `cat`, `write`, `cp`, `rm`, `ls`, `mkdir`... funcionan en ellas, y los
+  programas de ring 3 las leen con `SYS_OPEN`. Cada unidad solo lee y escribe dentro de su partición.
+- **Voz**: los modelos de `MODELOS/voz` se usan directamente desde allí (sin copiarlos a DATOS).
+- **Imagen del repositorio** de 5 GiB + 1 MiB (cabe en 8 GB): en un pendrive mayor, el primer arranque agranda MODELOS y USUARIO
+  mientras están vacías, a prueba de cortes de luz (probado cortando en cada una de sus 140 escrituras).
+- **`tools/datos.py`**: DATOS desde fuera (listar, leer, escribir, borrar, exportar sin secretos, comprobar), con los mismos
+  protocolos que el núcleo (diario de ranuras, BIGFS atómico).
+- Pruebas (`make pruebas-discos`, dentro de `make test`): exFAT frente a `mkfs.exfat`/`fsck.exfat` y a libexfat, DATOS frente al
+  código C real del núcleo, migraciones de pendrives antiguos, agrandado con cortes.
+- Arreglado en las pruebas de macOS: `pruebas-lang`/`pruebas-cc` no compilaban desde el 260 (`tests/stubs_lang.c`) y
+  `browser-boundary-test` chocaba con las macros de `memcpy` del SDK de Apple.
+
+<!-- SOMA_266_AVISO -->
+### El LCM avisa al momento cuando la petición va al modelo de lenguaje (266)
+- Antes de una respuesta directa, del agente con herramientas, del programador o del maquetador, el LCM dice **qué pasos se van a
+  dar** y **cuánto suele tardar** (media de lo que tardaron las anteriores de ese tipo, guardada en `/etc/lcm.conf`), y pide
+  paciencia. Con el saludo delante si lo hubo («Buenas tardes. Voy a...»), varias formulaciones y en castellano para la voz.
+- Se ve en el orbe (la respuesta lo sustituye y se revela entera), en la conversación (en ámbar), en el terminal, y se lee en
+  voz alta si el orbe lee sus respuestas (la respuesta de verdad corta la lectura). La barra de fases empieza por el LCM.
+- **Ajustes → LCM**: avisos encendidos o apagados, y lo que suele tardar cada tipo. Con el LCM apagado, todo como antes.
+- Pruebas: `tests/test_aviso_266.c` (33) y `tests/test_orbe_266.c` (9), en `make pruebas-lcm`.
+
+<!-- SOMA_265_CC -->
+### Compilador de C dentro de SOMA y el programador en C (265)
+- **Orden `cc`**: TinyCC (`third_party/tinycc`, LGPL 2.1) con una biblioteca de C propia (`src/user/cc`), dentro del núcleo y
+  ejecutado en ring 3 como Python. `cc hola.c` deja `/workspace/hola.elf`; `cc -run hola.c args` compila y ejecuta;
+  `cc -run hola.elf` ejecuta uno ya hecho; varios archivos, `-o`, `-c`, `-w`, `-D`, `-I`, `-heap MiB`.
+- **Ventanas desde C** con `#include <soma.h>` (`soma_win_create`, `soma_win_rect`, `soma_win_mouse`, `soma_win_key`...): la misma
+  ventana que SOMA-LANG y Python. Archivos del VFS (se escribe solo en `/workspace`), consola, hora del equipo.
+- **Biblioteca de C** completa para lo habitual: stdio con `printf`/`scanf` y archivos, stdlib, string, ctype, math (x87), time,
+  setjmp, wchar/UTF-8, atómicos. `printf` y `strtod`/`strtof`/`strtold` **exactos como glibc** (idénticos en 240 000 valores al azar).
+- **El programador y SOMA Studio escriben C**: botón *C* (o «en C» en la descripción); comprueba con el compilador de verdad,
+  ejecuta las pruebas, repara errores de compilación, de lógica y programas que se caen; añade los `#include` que falten.
+- Corregido un fallo de TinyCC con `long double` (`save_reg(RC_ST0)` en `x86_64-gen.c`): la batería de TinyCC da lo mismo con y
+  sin el cambio. Con el compilador y la biblioteca de SOMA pasan 110 de las 112 pruebas `tests2` de TinyCC.
+- Pruebas: `make pruebas-cc` (en `make test`; ejecuta los ELF de SOMA en Linux con un emulador de llamadas al sistema) y
+  `tests/prueba_cc_265.py` (QEMU). Detalles: `docs/PARCHE_265_CC.md`.
+
+<!-- SOMA_264_LANG -->
+### SOMA-LANG sin límites pequeños: arrays, tablas y cadenas que crecen (264)
+- **Arrays de miles de elementos** (antes 48), **miles de arrays y tablas vivos** (antes 48 de cada) y **tablas de hasta 262 144
+  entradas** con índice hash. **Cadenas de hasta 1 MB** (antes 16 KB) y 1024 cadenas largas a la vez (antes 24).
+- La memoria crece según la necesita el programa, con un **presupuesto de 64 MB por programa**: al pasarse, la operación no se
+  hace (como antes al llenar un array), se avisa una vez («[VM] Sin sitio para ...») y el programa sigue; nunca le quita la
+  memoria al núcleo. El recolector libera de verdad lo que ya no se usa.
+- **1024 variables** (antes 128), **512 funciones** (antes 64), **512 llamadas anidadas** (antes 128), pila de 1024 valores.
+- `run` ejecuta programas de **256 KB** (antes 16 KB, con bytecode de hasta 512 KB); el programador y el Studio, de **64 KB** (antes 32 KB).
+- Prueba nueva `tests/test_lang_264.c` en `make test` (53 comprobaciones). Detalles: `docs/PARCHE_264_SOMALANG_GRANDE.md`.
+
 <!-- SOMA_262_PUBLICAR: entradas de los parches 257-262 -->
 ### Publicar sin sorpresas: GitHub, README, exportador para Claude y tamaños del maquetador y el programador (262)
 - **`subir_github.py`** reconoce también los parches de un solo archivo (`parche_NNN_*.py`), que no escriben en

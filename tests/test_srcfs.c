@@ -12,7 +12,7 @@ uint64_t web_now_ms(void) { return 0; }   /* PARCHE 140: el lector usa wz_inflat
 void web_yield(void) { }
 
 typedef struct { char name[64]; uint32_t size; } entry_t;
-static entry_t ent[512];
+static entry_t ent[1024];   /* SOMA_267_SRCFS: el indice admite 1023 */
 static int nent;
 
 static int load_manifest(const char *path)
@@ -21,7 +21,7 @@ static int load_manifest(const char *path)
     char line[256];
 
     if (!f) return 0;
-    while (fgets(line, sizeof(line), f) && nent < 512) {
+    while (fgets(line, sizeof(line), f) && nent < 1024) {
         char *sp = strrchr(line, ' ');
         if (!sp) continue;
         *sp = 0;

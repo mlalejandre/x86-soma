@@ -1,0 +1,2 @@
+#define TCC_VERSION "0.9.28rc"
+#define CONFIG_TCC_STATIC 1

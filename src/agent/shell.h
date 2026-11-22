@@ -23,6 +23,7 @@ void shell_system_poweroff(void);
 void shell_run(void);
 int  shell_python_stop(void);              /* SOMA_237_PYTHON: para la orden python en marcha */
 int  shell_python_source(int check, const char *src, uint32_t len, const char *input, char *out, uint32_t cap, uint32_t max_ms);   /* SOMA_239 */
+int  shell_c_source(int check, const char *src, uint32_t len, const char *input, char *out, uint32_t cap, uint32_t max_ms);        /* SOMA_265_CC */
 int  dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out);
 int  dispatch_agent_command(const char *cmd_line, char *out_buf, uint32_t max_out);
 int  shell_autocomplete(const char *prefix, uint32_t plen, const char *matches[], int max_matches);

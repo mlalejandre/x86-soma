@@ -753,6 +753,7 @@ static const struct command_entry cmd_table[] = {
     { "habla",        cmd_habla,        CMD_F_NORMAL, "Texto a voz (voz de Piper): habla texto | habla instalar | habla parar | habla (estado)" },
     { "voz",          cmd_voz,          CMD_F_NORMAL, "Voz a texto (whisper.cpp, espanol): voz archivo.wav | voz ultima | voz instalar | voz modelo. Opciones: -T marcas de tiempo, -l idioma, -v detalles" },
     { "python",       cmd_python,       CMD_F_NORMAL, "Python (MicroPython en ring 3; ventanas con from soma import win): python | python script.py [args] | python -c \"codigo\". Rutas relativas: /workspace" },
+    { "cc",           cmd_cc,           CMD_F_NORMAL, "Compilador de C (TinyCC en ring 3; ventanas con #include <soma.h>): cc hola.c | cc -run hola.c [args] | cc -run hola.elf | cc a.c b.c -o x.elf. Rutas relativas: /workspace" },   /* SOMA_265_CC */
     { "procs",        cmd_procs,        CMD_F_NORMAL, "Lista los procesos de usuario (libera los terminados)" },
     { "usertest",     cmd_usertest,     CMD_F_NORMAL, "DEPURACION: ejecuta programas de prueba en ring 3 (syscalls, aislamiento, plazo)" },
     { "fbverify",     cmd_fbverify,     CMD_F_NORMAL, "DEPURACION: fbverify on|off — verifica el dano del renderizado" },

@@ -1,4 +1,5 @@
 /* SOMA_PARCHE_014_RING3: modo usuario (ring 3) en x86_64. Ver usermode.h. */
+#include "unidades.h"      /* SOMA_267_DISCOS */
 #include <stdint.h>
 #include <stddef.h>
 #include "usermode.h"
@@ -41,7 +42,7 @@ static int inited;
 
 #define USER_MAX_UPAGES (USER_CODE_MAX_PAGES + USER_STACK_PAGES + 16)
 struct upage { uint64_t va, frame, flags; };
-struct ufd { uint32_t ino; uint64_t pos; int used; };
+struct ufd { uint32_t ino; uint64_t pos; int used; int unid; struct unid_fd uf; };   /* SOMA_267_DISCOS: unid = 1 si es de /modelos o /usuario */
 
 /* Un proceso de usuario. Los tres primeros campos los usa el ensamblador (desplazamientos 0, 8, 16). */
 struct uproc {
@@ -273,13 +274,30 @@ static int64_t sys_open(uint64_t pptr, uint64_t plen)
     char path[BIGFS_PATH_MAX + 1];
     copy_from_user(path, pptr, plen); path[plen] = 0;
     if (!user_path_allowed(path, (unsigned)plen)) return E_ACCES;     /* PARCHE 121: nada privado ni interno de BIGFS desde ring 3 */
+    if (unid_ruta(path, 0) >= 0 && unid_activa(unid_ruta(path, 0))) {  /* SOMA_267_DISCOS: las unidades del pendrive, de solo lectura */
+        int fdi = -1;
+        for (int i = 0; i < USER_MAX_FDS; ++i) if (!usermode_cur->fds[i].used) { fdi = i; break; }
+        if (fdi < 0) return E_MFILE;
+        struct unid_fd uf;
+        arch_interrupts_enable();
+        int r = unid_abrir(path, &uf);
+        arch_interrupts_disable();
+        if (r == 0) {
+            struct ufd *f = &usermode_cur->fds[fdi];
+            f->used = 1; f->unid = 1; f->uf = uf; f->pos = 0; f->ino = 0;
+            return fdi;
+        }
+        if (r == EXFAT_E_ISDIR) return SOMA_EISDIR;
+        if (r != EXFAT_E_NOENT) return SOMA_EIO;
+        /* no esta en la unidad: puede estar en el almacen (BIGFS tiene su propia carpeta /modelos) */
+    }
     int e; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) return bigfs_errno(e);
     uint32_t ino; int t = bigfs_lookup(fs, path, &ino);
     if (t < 0) return bigfs_errno(t);
     if (t != (int)BIGFS_T_FILE) return SOMA_EISDIR;
     for (int i = 0; i < USER_MAX_FDS; ++i)
-        if (!usermode_cur->fds[i].used) { usermode_cur->fds[i].used = 1; usermode_cur->fds[i].ino = ino; usermode_cur->fds[i].pos = 0; return i; }
+        if (!usermode_cur->fds[i].used) { usermode_cur->fds[i].used = 1; usermode_cur->fds[i].unid = 0; usermode_cur->fds[i].ino = ino; usermode_cur->fds[i].pos = 0; return i; }
     return E_MFILE;
 }
 
@@ -370,6 +388,21 @@ static int64_t sys_read(uint64_t fdn, uint64_t ubuf, uint64_t len)
     if (len == 0) return 0;
     if (len > 65536) len = 65536;                               /* con IF=0: acota lo que se retrasa el reloj */
     if (!user_range(ubuf, len, 1)) return E_FAULT;
+    if (f->unid) {                                               /* SOMA_267_DISCOS */
+        uint64_t done = 0;
+        while (done < len) {
+            uint64_t n = len - done < sizeof(usermode_cur->io) ? len - done : sizeof(usermode_cur->io);
+            arch_interrupts_enable();
+            int g = unid_pread(&f->uf, f->pos, usermode_cur->io, (uint32_t)n);
+            arch_interrupts_disable();
+            if (g < 0) return done ? (int64_t)done : SOMA_EIO;
+            if (g == 0) break;
+            copy_to_user(ubuf + done, usermode_cur->io, (uint64_t)g);
+            f->pos += (uint64_t)g; done += (uint64_t)g;
+            if ((uint64_t)g < n) break;
+        }
+        return (int64_t)done;
+    }
     int e; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) return bigfs_errno(e);
     uint64_t done = 0;
@@ -391,11 +424,16 @@ static int64_t sys_seek(uint64_t fdn, int64_t off, uint64_t whence)
 {
     struct ufd *f = get_fd((int64_t)fdn);
     if (!f) return E_BADF;
-    int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return bigfs_errno(e);
-    struct bigfs_stat st;
-    if (bigfs_stat(fs, f->ino, &st) < 0) return SOMA_ENOENT;
-    int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)f->pos : whence == 2 ? (int64_t)st.size : -1;
+    int64_t size;
+    if (f->unid) size = unid_fd_tam(&f->uf);                     /* SOMA_267_DISCOS */
+    else {
+        int e; struct bigfs *fs = bigfs_sys(&e);
+        if (!fs) return bigfs_errno(e);
+        struct bigfs_stat st;
+        if (bigfs_stat(fs, f->ino, &st) < 0) return SOMA_ENOENT;
+        size = (int64_t)st.size;
+    }
+    int64_t base = whence == 0 ? 0 : whence == 1 ? (int64_t)f->pos : whence == 2 ? size : -1;
     if (base < 0) return E_INVAL;
     int64_t np;                                                  /* PARCHE 030: el desbordamiento con signo era indefinido */
     if (__builtin_add_overflow(base, off, &np) || np < 0) return E_INVAL;
@@ -407,6 +445,7 @@ static int64_t sys_fsize(uint64_t fdn)
 {
     struct ufd *f = get_fd((int64_t)fdn);
     if (!f) return E_BADF;
+    if (f->unid) return unid_fd_tam(&f->uf);                     /* SOMA_267_DISCOS */
     int e; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) return bigfs_errno(e);
     struct bigfs_stat st;

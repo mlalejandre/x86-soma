@@ -15,6 +15,15 @@
 
 /* ---- stubs del kernel ---- */
 uint64_t tsc_ticks_per_ms = 1000000; static uint64_t g_ms = 1000;
+/* SOMA_267_TCP_MAC: en arm64 el contador (cntvct_el0) va a la frecuencia de cntfrq_el0, no a 1 GHz: se ajustan los ticks por ms
+ * para que el RTO (1000 ms) dure lo mismo que en Linux x86_64 (~0,3 s reales) en vez de ~42 s. */
+static void ajusta_ticks_host(void)
+{
+#if defined(__aarch64__)
+    uint64_t f; __asm__ volatile ("mrs %0, cntfrq_el0" : "=r"(f));
+    if (f >= 1000) { tsc_ticks_per_ms = f / 1000 / 3; if (tsc_ticks_per_ms == 0) tsc_ticks_per_ms = 1; }
+#endif
+}
 uint64_t timer_get_uptime_ms(void) { return g_ms; }
 void *kmalloc(size_t n) { return malloc(n ? n : 1); } void kfree(void *p) { free(p); }
 void kheap_stats(size_t *u, size_t *f) { if (u) *u = 0; if (f) *f = 0; }
@@ -133,6 +142,7 @@ static uint8_t SRC[300000];
 
 int main(void)
 {
+    ajusta_ticks_host();                                       /* SOMA_267_TCP_MAC */
     memcpy(net_ip, (uint8_t[]){ 10, 0, 2, 15 }, 4); memcpy(net_gateway, (uint8_t[]){ 10, 0, 2, 2 }, 4); net_init();
     {   uint8_t f[64]; memset(f, 0, sizeof f); memcpy(f, K_MAC, 6); memcpy(f + 6, PMAC, 6); w16(f + 12, 0x0806);
         uint8_t *a = f + 14; w16(a, 1); w16(a + 2, 0x0800); a[4] = 6; a[5] = 4; w16(a + 6, 1); memcpy(a + 8, PMAC, 6); memcpy(a + 14, PEER, 4); memcpy(a + 24, net_ip, 4);

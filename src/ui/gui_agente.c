@@ -81,6 +81,23 @@ static void agent_turn_finish(void)
     g_agent_thr_on = 0; g_agent_thr_done = 0; g_gui_depth = 0; g_gui_req = 0; g_gui_grant = 0;
 }
 int gui_is_running(void) { return g_gui_loop_on; }   /* PARCHE 097 */
+/* SOMA_266_AVISO: el aviso del LCM antes de ir al modelo de lenguaje (src/agent/agent.c). Desde el hilo del agente: se lee en voz alta
+ * si Ajustes > Voz lo tiene activado (la respuesta de verdad corta la lectura), y con la pantalla cedida un momento se pone en la
+ * conversacion y en el orbe, que siguen trabajando. Sin escritorio, nada (el aviso ya salio por el terminal). */
+void gui_aviso(const char *texto);
+void gui_aviso(const char *texto)
+{
+    if (!texto || !*texto || !g_gui_loop_on) return;
+#if defined(__x86_64__)
+    (void)voz_speak_reply(texto);
+#endif
+    int tok = gui_enter();
+    if (!tok) return;
+    const uint32_t wrap = 76;
+    log_add(agent_log, &agent_log_count, "[soma]: ", texto, 0x00FBBF24, wrap);
+    her_aviso(texto);
+    gui_leave(tok);
+}
 int gui_agent_busy(void) { return g_agent_thr_on; }
 
 /* SOMA_256: detener la mision en marcha. El hilo del agente se mata (thread_kill cierra sus conexiones TCP y suelta sus cerrojos; el

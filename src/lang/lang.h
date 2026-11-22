@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include "lang_diag.h"
 
+/* SOMA_264_LANG: tamano maximo de un programa SOMA-LANG (fuente) y de su bytecode (antes 16 KB al ejecutarlo con run y
+ * 32-64 KB de bytecode) */
+#define LANG_SRC_MAX (256u * 1024u)
+#define LANG_BC_MAX  (512u * 1024u)
+
 void lang_init(void);
 int  lang_test_self(void);
 struct soma_lint_report {

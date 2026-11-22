@@ -5,12 +5,16 @@ Si prefieres compilarlo tú mismo, sigue las instrucciones del [README principal
 
 | Archivo | Qué es |
 |---|---|
-| `soma-0.3-prebeta-x86_64-usb.img.xz` | La imagen comprimida (11.6 MB; ocupa 5 GiB al grabarla) |
+| `soma-0.3-prebeta-x86_64-usb.img.xz` | La imagen comprimida (11.8 MB; ocupa 5 GiB al grabarla) |
+
+El pendrive queda con cuatro particiones: **SOMA** (el sistema, 1 GiB), **DATOS** (configuración y memoria de SOMA, 2 GiB; Windows y
+macOS no la abren, es normal), **MODELOS** (modelos de IA) y **USUARIO** (tus archivos: Documentos, Imágenes, Audio...). MODELOS y
+USUARIO se ven desde cualquier ordenador (exFAT). En un pendrive de más de 8 GB, SOMA las agranda solo en el primer arranque.
 | `soma-0.3-prebeta-x86_64-usb.img.xz.sha256` | Su huella SHA-256, para comprobar que se descargó bien |
 
-Generada el 22/11/2026 12:47 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
+Generada el 22/11/2026 21:57 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
 
-**Qué necesitas:** un pendrive de **8 GB o más** (se borra entero) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
+**Qué necesitas:** un pendrive de **8 GB o más** (se borra entero; con 32 GB o más, MODELOS tiene sus 16 GiB) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
 
 > ⚠️ Grabar la imagen **borra el pendrive entero**. Comprueba dos veces que eliges el pendrive y no el disco del ordenador.
 
@@ -37,7 +41,10 @@ xzcat soma-0.3-prebeta-x86_64-usb.img.xz | sudo dd of=/dev/rdisk4 bs=4m
 diskutil eject /dev/disk4
 ```
 
-Si macOS dice que no puede leer un disco, es la partición de SOMA: pulsa **Ignorar**, nunca «Inicializar».
+Si macOS dice que no puede leer un disco, es la partición DATOS de SOMA: pulsa **Ignorar**, nunca «Inicializar».
+
+Para **actualizar** SOMA más adelante sin perder nada, usa `python3 construyeimagen.py --grabar` desde el repositorio: solo
+reescribe la partición del sistema. (Grabar esta imagen otra vez con Etcher o `dd` borra el pendrive entero.)
 
 ## Linux: Terminal
 
@@ -60,7 +67,7 @@ El resultado tiene que coincidir con el de `soma-0.3-prebeta-x86_64-usb.img.xz.s
 1. En la BIOS/UEFI del PC **desactiva Secure Boot** (SOMA no está firmado). En el ThinkPad T480s: `F1` al encender → *Security → Secure Boot → Disabled*.
 2. Enchufa el pendrive, abre el menú de arranque (`F12` en Lenovo; `F11`, `F8` o `Esc` en otras marcas) y elige el USB.
 3. En el menú de GRUB elige **SOMA** (o *resolución segura 1024x768* si la pantalla se queda en negro).
-4. El primer arranque reclama la partición `SOMADATA` y, si el pendrive es de más de 8 GB, la amplía hasta ocuparlo (como mucho 8 GiB): desde ahí lo que guardes en SOMA se conserva.
+4. En el primer arranque SOMA prepara la partición `DATOS` y, si el pendrive es de más de 8 GB, agranda `MODELOS` (hasta 16 GiB) y `USUARIO` (el resto) mientras están vacías: desde ahí lo que guardes en SOMA se conserva.
 
 ¿Tu teclado no es español? Elige **SOMA - otro PC con teclado inglés (US)** en el menú de GRUB.
 

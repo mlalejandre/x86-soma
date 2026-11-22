@@ -24,6 +24,7 @@
 #include "fat.h"
 #include "fs.h"        /* SOMA_246: /etc/voz.conf */
 #include "habla_texto.h"   /* SOMA_250_TTS */
+#include "unidades.h"      /* SOMA_267_DISCOS: modelos en la unidad MODELOS */
 
 extern const uint8_t _binary_voz_elf_start[], _binary_voz_elf_end[];
 
@@ -97,9 +98,34 @@ void voz_set_pref(int t)
     (void)vfs_write("/etc/voz.conf", b, p);
 }
 
-/* Modelo instalado de un nivel: el recomendado si esta; si no, cualquier otro .bin de ese nivel. 0 = encontrado. */
+/* SOMA_267_DISCOS: un modelo de whisper.cpp en la unidad MODELOS del pendrive (/modelos/voz): se usa DIRECTAMENTE desde alli
+ * (voz.elf lo lee con SYS_OPEN), sin copiarlo al almacen de DATOS. Se comprueba la cabecera "lmgg" de ggml. */
+static int unid_modelo(int tier, char *path, uint32_t cap, uint64_t *size)
+{
+    if (!unid_activa(UNID_MODELOS)) return -1;
+    struct exfat_dirent *d = (struct exfat_dirent *)kmalloc(32 * sizeof *d);   /* lo llaman a la vez Ajustes y el dictado */
+    if (!d) return -1;
+    int total = 0, n = unid_listar(VOZ_DIR "/voz", d, 32, &total), pick = -1;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].is_dir || d[i].name[0] == '.' || d[i].size <= (1u << 20) || !ends_with(d[i].name, ".bin") || voz_tier_of(d[i].name) != tier) continue;
+        if (slen(d[i].name) + 16 >= cap) continue;
+        if (pick < 0 || ends_with(d[i].name, TIER_FILE[tier])) pick = i;
+    }
+    int r = -1;
+    if (pick >= 0) {
+        uint32_t p = 0; sput(path, cap, &p, VOZ_DIR "/voz/"); sput(path, cap, &p, d[pick].name);
+        uint8_t mg[4] = { 0 };
+        if (unid_leer(path, 0, mg, 4) == 4 && mg[0] == 'l' && mg[1] == 'm' && mg[2] == 'g' && mg[3] == 'g') { if (size) *size = d[pick].size; r = 0; }
+    }
+    kfree(d);
+    return r;
+}
+
+/* Modelo instalado de un nivel: el recomendado si esta; si no, cualquier otro .bin de ese nivel. 0 = encontrado.
+ * SOMA_267_DISCOS: primero el de la unidad MODELOS (sin copiar); despues el del almacen. */
 int voz_installed(int tier, char *path, uint32_t cap, uint64_t *size)
 {
+    if (tier >= 0 && tier < VOZ_TIERS && unid_modelo(tier, path, cap, size) == 0) return 0;
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     if (!fs || tier < 0 || tier >= VOZ_TIERS) return -1;
     uint32_t ino, dir; struct bigfs_stat st;
@@ -135,7 +161,7 @@ int voz_ready(const char **why)
     static const char *d; if (!why) why = &d;
     if (!usermode_avx2_ok()) { *why = "este procesador no tiene AVX2/FMA (o no esta activo): hace falta para el reconocimiento de voz"; return 0; }
     char m[96];
-    if (voz_model(m, sizeof m, 0) != 0) { *why = "no hay modelo de voz instalado (copia ggml-base-q5_1.bin a la carpeta MODELOS del pendrive y ejecuta: voz instalar; otros modelos en Ajustes > Voz)"; return 0; }
+    if (voz_model(m, sizeof m, 0) != 0) { *why = "no hay modelo de voz (copia ggml-base-q5_1.bin en la carpeta voz de la unidad MODELOS del pendrive; otros modelos en Ajustes > Voz)"; return 0; }
     *why = "";
     return 1;
 }
@@ -289,6 +315,11 @@ int voz_install_tier(int tier, char *msg, uint32_t cap)
     uint32_t p = 0;
     if (cap) msg[0] = 0;
     if (tier < 0 || tier >= VOZ_TIERS) return -1;
+    {   char um[160]; uint64_t us = 0;                                 /* SOMA_267_DISCOS: en MODELOS se usa desde alli */
+        if (unid_modelo(tier, um, sizeof um, &us) == 0) {
+            sput(msg, cap, &p, "el modelo esta en la unidad MODELOS y se usa directamente desde alli (no hace falta copiarlo): "); sput(msg, cap, &p, um);
+            return 0;
+        } }
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) { sput(msg, cap, &p, "no hay almacen BIGFS (preparalo con: big format yes)"); return -1; }
     uint32_t ino;
@@ -309,7 +340,7 @@ int voz_install_tier(int tier, char *msg, uint32_t cap)
     if (st != 0) {
         sput(msg, cap, &p, st == -2 ? "no se puede leer la carpeta MODELOS del pendrive" : "la carpeta MODELOS del pendrive no tiene el modelo ");
         if (st != -2) { sput(msg, cap, &p, TIER_NAME[tier]); sput(msg, cap, &p, " ("); sput(msg, cap, &p, TIER_FILE[tier]); sput(msg, cap, &p, ")"); }
-        sput(msg, cap, &p, ". Copialo en la carpeta MODELOS de la unidad SOMA del pendrive.");
+        sput(msg, cap, &p, ". Copialo en la carpeta voz de la unidad MODELOS del pendrive (o en MODELOS de la unidad SOMA si es un pendrive antiguo).");
         kmutex_unlock(&lk);
         return -1;
     }
@@ -333,7 +364,7 @@ int voz_install(char *msg, uint32_t cap)
     char m[96];
     if (voz_model(m, sizeof m, 0) == 0) return r;              /* ya hay otro: se usa ese (el aviso dice que falta el elegido) */
     for (int t = 0; t < VOZ_TIERS; ++t) if (t != want && voz_on_stick(t, 0, 0, 0) == 0) return voz_install_tier(t, msg, cap);
-    if (cap) { uint32_t p = 0; msg[0] = 0; sput(msg, cap, &p, "la carpeta MODELOS del pendrive no tiene ningun modelo. Copia ggml-base-q5_1.bin (whisper.cpp, 60 MB) en la carpeta MODELOS de la unidad SOMA del pendrive y repite 'voz instalar'."); }
+    if (cap) { uint32_t p = 0; msg[0] = 0; sput(msg, cap, &p, "el pendrive no tiene ningun modelo. Copia ggml-base-q5_1.bin (whisper.cpp, 60 MB) en la carpeta voz de la unidad MODELOS (desde cualquier ordenador; o pon los modelos en la carpeta modelos/ del proyecto y graba con construyeimagen.py)."); }
     return r;
 }
 
@@ -449,7 +480,7 @@ int voz_voice_install(char *msg, uint32_t cap)
         }
         if (!found) {
             sput(msg, cap, &p, n < 0 ? why : "la carpeta MODELOS del pendrive no tiene ninguna voz (.onnx)");
-            sput(msg, cap, &p, ". Copia una voz de Piper (el .onnx y su .onnx.json) en la carpeta MODELOS de la unidad SOMA del pendrive.");
+            sput(msg, cap, &p, ". Copia una voz de Piper (el .onnx y su .onnx.json) en la carpeta voz de la unidad MODELOS del pendrive.");
         } else if (r == 0 || (copied == 0 && have > 0)) { r = 0; }
         if (r == 0) { p = 0; msg[0] = 0; sput(msg, cap, &p, copied ? "voces instaladas en " VOCES_DIR ": " : "las voces del pendrive ya estaban instaladas ("); sdec(msg, cap, &p, (uint64_t)(copied ? copied : have)); if (!copied) sput(msg, cap, &p, ")"); }
         if (d) kfree(d);

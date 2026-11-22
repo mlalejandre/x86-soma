@@ -8,21 +8,23 @@
 
 /*
  * Formato (lo escribe ejecutar.py::pack_sources):
- *   LBA 8192..8255  indice (64 sectores), entradas de 64 bytes. La entrada 0 es la
+ *   LBA 8192..8319  indice (128 sectores), entradas de 64 bytes. La entrada 0 es la
  *                   cabecera: "SRCFSv01" + u32 count (little-endian).
  *                   Entradas 1..count: char name[48]; u32 lba; u32 size; pad[8].
- *   LBA 8256..      datos, cada archivo alineado a sector (hasta LBA 16383).
+ *   LBA 8320..      datos, cada archivo alineado a sector (hasta LBA 16383).
  * SOMA_PARCHE_011_SRCFS: el indice tenia 8 sectores (63 entradas) y solo se empaquetaba la
  * mitad de las fuentes; con 32 caben 255. SRCFS_INDEX_SECTORS debe coincidir con
  * SRCFS_INDEX_SECTORS de ejecutar.py y con SOMA_LBA_SRCFS_DATA - SOMA_LBA_SRCFS_INDEX
  * (python3 tools/audit.py lo comprueba).
  * PARCHE 107: con 32 sectores (255 entradas) y mas de 320 fuentes, el empaquetado cortaba por orden alfabetico y dejaba fuera net/,
  * lang/, ui/ y user/ (el agente no podia leerlas con src_cat). Ahora 64 sectores = 511 entradas.
+ * SOMA_267_SRCFS: 128 sectores = 1023 entradas (543 fuentes tras los parches 265 y 267: las ultimas por orden alfabetico, user/, quedaban fuera).
+ * Un disco antiguo (indice de 64 sectores) se sigue leyendo: sus entradas estan en los primeros 64 y cada una lleva su LBA.
  * PARCHE 140: "SRCFSv02": entrada = name[48], u32 lba, u32 tamano original, u32 tamano guardado, u32 flags (bit 0 = zlib). El codigo C
  * ocupa ~4 veces menos y vuelve a caber todo. Se siguen leyendo discos "SRCFSv01" (sin comprimir).
  */
 #define SRCFS_LBA            8192
-#define SRCFS_INDEX_SECTORS  64
+#define SRCFS_INDEX_SECTORS  128   /* SOMA_267_SRCFS: 1023 entradas (con el compilador de C del 265 hay mas de 511 fuentes) */
 #define SRCFS_ENTRY_SIZE     64
 #define SRCFS_NAME_MAX       48
 #define SRCFS_PAGE           768

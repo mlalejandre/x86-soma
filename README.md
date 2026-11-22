@@ -20,15 +20,24 @@ disco del ordenador. Está probado a fondo en un **Lenovo ThinkPad T480s** (pant
 Intel 8265, audio, cámara, batería y brillo); en otros PC x86_64 con UEFI debería arrancar, aunque el soporte de su
 hardware puede ser parcial.
 
-**Qué necesitas:** un pendrive de **8 GB o más** (se borra entero), un PC x86_64 con **UEFI** y, para compilar,
+**Qué necesitas:** un pendrive de **8 GB o más** (32 GB o más para que MODELOS tenga sus 16 GiB), un PC x86_64 con **UEFI** y, para compilar,
 **Docker** (Docker Desktop en Windows y Mac) y **Python 3**.
 
-El pendrive lleva dos particiones en una tabla **MBR**:
+<!-- SOMA_267_DISCOS -->
+El pendrive lleva **cuatro particiones** en una tabla **MBR** (las prepara `construyeimagen.py`, en Python, sin herramientas extra):
 
 | Partición | Formato | Etiqueta | Tamaño | Para qué |
 |---|---|---|---|---|
-| 1 | FAT32 | `SOMA` | 1 GB | El arranque: `EFI/BOOT/BOOTX64.EFI` (GRUB + núcleo + firmware WiFi en un solo archivo) |
-| 2 | FAT32 | `SOMADATA` | 4 GB | El disco de SOMA. Al primer arranque SOMA la reclama, la formatea con su propio sistema de archivos y, si es la última partición, la amplía hasta el final del pendrive (como mucho 8 GiB) |
+| 1 | FAT32 | `SOMA` | 1 GiB | El **sistema**: `EFI/BOOT/BOOTX64.EFI` (GRUB + núcleo + firmware WiFi) e `INFORME.TXT`. Es lo único que cambia al actualizar |
+| 2 | propio de SOMA | `DATOS` | 2 GiB | **Configuración, memoria y programas instalados**. No cambia al actualizar. Dentro de SOMA solo la tocan sus programas; desde fuera, `python3 tools/datos.py` (Windows y macOS no la abren: es normal) |
+| 3 | exFAT | `MODELOS` | 16 GiB | **Modelos de IA** (`voz/`, `llm/`). En SOMA se ve en `/modelos`, de solo lectura. En pendrives de menos de 32 GB, menos |
+| 4 | exFAT | `USUARIO` | el resto | **Tus archivos**: `Documentos`, `Imágenes`, `Audio`, `Vídeos`, `Descargas`, `Proyectos`. En SOMA es `/usuario`; se abre desde cualquier ordenador |
+
+Al grabar, `construyeimagen.py` **mira primero lo que tiene el pendrive**: si ya es de SOMA **solo reescribe el sistema**
+(DATOS, MODELOS y USUARIO quedan igual); si es de una versión anterior (SOMA + SOMADATA, con o sin la partición DATOS FAT32 de
+macOS, o con el fichero `SOMADATA.IMG`) **conserva todo y lo pasa a cuatro particiones** (lo que cambia de sitio se copia antes
+al ordenador; si no cabe, no toca nada); cualquier otro pendrive se prepara de cero pidiendo escribir `BORRAR`. Los modelos de
+voz que pongas en la carpeta `modelos/` del proyecto (whisper.cpp `ggml-*.bin`, voces de Piper `.onnx`) se copian a `MODELOS/voz`.
 
 ### ⚡ Opción rápida: imagen ya compilada
 
@@ -52,58 +61,23 @@ El resultado es **`build/usb/EFI/BOOT/BOOTX64.EFI`** (unos 5 MB).
 
 ### Paso 2 · Preparar el pendrive
 
-#### 🍎 macOS (automático)
+#### 🍎 macOS y 🐧 Linux (automático)
 
-    python3 ejecutar.py -t t480s-usb
+    python3 construyeimagen.py --grabar
 
-Compila, lista **solo discos externos**, pide escribir `BORRAR` y deja el pendrive listo (incluida una tercera partición
-`DATOS` para ti). Si el pendrive ya estaba preparado, solo copia el arranque y **conserva tus archivos de SOMA**.
-Si macOS dice que no puede leer un disco, es `SOMADATA`: pulsa **Ignorar**, nunca «Inicializar».
-
-#### 🐧 Linux
-
-1. Localiza el pendrive (fíjate en el tamaño y en `TRAN usb`):
-
-        lsblk -o NAME,SIZE,TRAN,MODEL
-
-2. Particiona y formatea (cambia `/dev/sdX` por tu pendrive, **sin número al final**):
-
-        sudo umount /dev/sdX?* 2>/dev/null
-        sudo parted -s /dev/sdX mklabel msdos \
-             mkpart primary fat32 1MiB 1GiB \
-             mkpart primary fat32 1GiB 5GiB
-        sudo mkfs.vfat -F 32 -n SOMA     /dev/sdX1
-        sudo mkfs.vfat -F 32 -n SOMADATA /dev/sdX2
-
-3. Copia el arranque:
-
-        sudo mkdir -p /mnt/soma && sudo mount /dev/sdX1 /mnt/soma
-        sudo cp -r build/usb/EFI /mnt/soma/
-        sudo umount /mnt/soma && sync
+(o `python3 ejecutar.py -t t480s-usb`, que hace lo mismo). Compila, lista **solo discos externos** y deja el pendrive con las
+cuatro particiones; se pedirá tu contraseña (sudo) para escribir en él. Opciones: `--disco disk4` o `--disco /dev/sdb` para no
+preguntar, `--formatear` para borrarlo entero aunque ya sea de SOMA, `--temporal CARPETA` si al migrar un pendrive antiguo no hay
+sitio en el disco del sistema para la copia temporal.
+Si macOS dice que no puede leer un disco, es la partición `DATOS`: pulsa **Ignorar**, nunca «Inicializar».
 
 #### 🪟 Windows
 
-1. Abre **PowerShell como administrador** y ejecuta `diskpart`.
-2. Dentro de `diskpart` (cambia `N` por el número de tu pendrive; compruébalo por el tamaño en `list disk`):
+Graba la imagen de la carpeta [`imagen/`](imagen/LEEME.md) con **balenaEtcher** o **Rufus** (modo imagen DD). Para actualizar
+después sin perder nada, hazlo desde Linux o macOS con `construyeimagen.py --grabar`.
 
-        list disk
-        select disk N
-        clean
-        convert mbr
-        create partition primary size=1024
-        format fs=fat32 quick label=SOMA
-        assign letter=S
-        create partition primary size=4096
-        format fs=fat32 quick label=SOMADATA
-        exit
-
-3. Copia la carpeta `EFI` a la raíz de la unidad `S:`:
-
-        Copy-Item -Recurse build\usb\EFI S:\
-
-   Si Windows ofrece «formatear» la segunda unidad tras el primer arranque de SOMA, pulsa **Cancelar**.
-
-En los tres casos el pendrive debe quedar así: `S:\EFI\BOOT\BOOTX64.EFI` (o `/EFI/BOOT/BOOTX64.EFI`) en la partición `SOMA`.
+Un pendrive preparado a mano con las dos particiones antiguas (`SOMA` y `SOMADATA`) sigue arrancando y guardando, pero sin
+`/usuario` ni `/modelos`: `construyeimagen.py --grabar` lo pasa a cuatro particiones conservando lo que tenga.
 
 ### Paso 3 · Arrancar el PC desde el pendrive
 
@@ -111,7 +85,8 @@ En los tres casos el pendrive debe quedar así: `S:\EFI\BOOT\BOOTX64.EFI` (o `/E
    En el ThinkPad T480s: `F1` al encender → *Security → Secure Boot → Disabled*.
 2. Enchufa el pendrive y abre el menú de arranque (`F12` en Lenovo; `F11`, `F8` o `Esc` en otras marcas) y elige el USB.
 3. En el menú de GRUB elige **SOMA** (o *resolución segura 1024x768* si la pantalla se queda en negro).
-4. El primer arranque reclama `SOMADATA`: a partir de ahí lo que guardes en SOMA se conserva entre arranques.
+4. En el primer arranque SOMA prepara `DATOS` y, si grabaste la imagen del repositorio en un pendrive de más de 8 GB, agranda
+   `MODELOS` y `USUARIO` hasta el final mientras están vacías (`soma.agrandar=off` lo evita). Desde ahí lo que guardes se conserva.
 5. ¿Tu teclado no es español? Elige **SOMA - otro PC con teclado inglés (US)** en el menú de GRUB.
 
 **Si algo falla:** prueba otro puerto USB, comprueba que Secure Boot está desactivado y que el PC arranca en modo UEFI
@@ -119,7 +94,7 @@ En los tres casos el pendrive debe quedar así: `S:\EFI\BOOT\BOOTX64.EFI` (o `/E
 
 #### 💾 Si SOMA no guarda la configuración (WiFi, IA, escritorio...)
 
-SOMA guarda todo en la partición `SOMADATA` del pendrive. Si no la encuentra, trabaja solo en memoria: al arrancar sale un
+SOMA guarda su configuración en la partición `DATOS` del pendrive (`SOMADATA` en los pendrives antiguos). Si no la encuentra, trabaja solo en memoria: al arrancar sale un
 aviso en el escritorio y *Ajustes → Sistema → SOMADATA* dice el motivo (también la orden `disco`). Lo habitual es un pendrive
 preparado con una versión antigua, que solo tiene la unidad *SOMA*. Hay dos arreglos, sin y con borrado:
 
@@ -128,8 +103,24 @@ preparado con una versión antigua, que solo tiene la unidad *SOMA*. Hay dos arr
   - macOS: `mkfile 2g /Volumes/SOMA/SOMADATA.IMG`
   - Linux: `dd if=/dev/zero of=/media/$USER/SOMA/SOMADATA.IMG bs=1M count=2048 && sync`
   - Windows (como administrador): `fsutil file createnew E:\SOMADATA.IMG 2147483648` (cambia `E:` por la unidad SOMA)
-- **Preparando el pendrive de nuevo** con la imagen o con `ejecutar.py -t t480s-usb --formatear` (crea `SOMADATA`; borra el
-  pendrive).
+- **Pasándolo a cuatro particiones** con `python3 construyeimagen.py --grabar`: conserva lo que tenga (también ese
+  `SOMADATA.IMG`).
+
+#### 📂 Tus archivos, los modelos y DATOS (SOMA_267)
+
+- Dentro de SOMA: `ls /usuario`, `ls /usuario/Documentos`, `cat /usuario/Documentos/nota.txt`, `write`, `cp`, `rm`, `mkdir`,
+  `rmdir` funcionan en `/usuario`. `/modelos` se lee pero no se escribe (solo los programas del sistema). La orden `disco`
+  dice qué unidades hay, su tamaño y lo libre.
+- Los modelos de voz de `MODELOS/voz` se usan **directamente** desde allí (ya no hace falta `voz instalar` ni copiarlos a DATOS).
+- Desde fuera, `DATOS` se lee y se edita con `tools/datos.py` (siguiendo los mismos protocolos a prueba de cortes que el núcleo):
+
+        python3 tools/datos.py /dev/sdb listar
+        python3 tools/datos.py /dev/sdb leer /etc/hostname
+        python3 tools/datos.py /dev/sdb escribir /etc/hostname mi_nombre.txt
+        python3 tools/datos.py /dev/sdb exportar copia_de_seguridad
+
+  En macOS, el pendrive es `/dev/rdiskN` (con `sudo`, tras `diskutil unmountDisk`). `exportar` no copia claves ni `.conf` salvo
+  con `--con-secretos`. `--crudo build/hdd.img` sirve para el disco de QEMU.
 
 #### 🩺 Diagnóstico del arranque e informe de hardware
 
@@ -395,6 +386,26 @@ Qué hay: enteros de precisión ilimitada, `float` doble, cadenas, listas, dicci
 (`/etc`, `/agent`, `/mem`...) no se pueden leer. Memoria del intérprete: 6 MiB. Plazo: 10 minutos por script (8 horas en modo
 interactivo). La prueba automática está en `tests/prueba_python_237.py`.
 
+<!-- SOMA_265_CC -->
+## ⚙️ C en SOMA (TinyCC)
+
+SOMA trae un **compilador de C**: TinyCC (en `third_party/tinycc`, licencia LGPL 2.1) con una biblioteca de C propia, como un
+programa más de ring 3, igual que Python. Solo en x86_64.
+
+```
+cc hola.c                   # compila /workspace/hola.c -> /workspace/hola.elf
+cc -run hola.c uno dos      # compila y ejecuta con argumentos
+cc -run hola.elf            # ejecuta uno ya compilado
+cc a.c b.c -o juego.elf     # varios archivos (-c, -w, -Dnombre=valor, -Iruta, -heap MiB)
+```
+
+Ventanas con `#include <soma.h>` (`soma_win_create`, `soma_win_clear`, `soma_win_rect`, `soma_win_text`, `soma_win_mouse`,
+`soma_win_key`, `soma_win_present`...), la misma ventana que SOMA-LANG y Python. La biblioteca tiene `stdio` (con archivos del
+VFS: se escribe solo en `/workspace`), `stdlib`, `string`, `ctype`, `math`, `time`, `setjmp`, `wchar` y atómicos; `printf` y
+`strtod` dan exactamente lo mismo que glibc. Cada programa tiene 12 MiB (8 de memoria dinámica y 1 de pila). En el Terminal,
+**Esc** lo para. **SOMA Studio → Crear con IA** también escribe C (botón *C*, o «en C» en la descripción) y lo comprueba con el
+compilador de verdad. Detalles en `docs/PARCHE_265_CC.md`; pruebas: `make pruebas-cc` y `tests/prueba_cc_265.py` (QEMU).
+
 ## 🎙️ Voz a texto (whisper.cpp)
 
 SOMA transcribe audio en español **sin conexión**, con [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT) como
@@ -543,6 +554,12 @@ soma hola, ¿cómo estás?                             → charla, sin el modelo
 - **Aprende de tus correcciones**: si se equivoca, dile «no era eso» y escríbele la orden buena.
 - **Ajustes → LCM**: encender o apagar, voz natural o técnica, umbral de seguridad, probar una frase sin ejecutarla, lo aprendido
   y la letra de las respuestas del orbe. En el terminal: `lcm <frase>` (qué haría, sin ejecutar), `lcm estado`, `lcm apagar`.
+- <!-- SOMA_266_AVISO --> **Avisa antes de usar el modelo de lenguaje**: si la petición va al modelo (una pregunta, un programa, un
+  documento, una búsqueda), el LCM dice al momento lo que se va a hacer y cuánto suele tardar, con lo que tardaron las anteriores
+  del mismo tipo («Voy a programarlo en C con el modelo de IA: primero planifico el programa, después escribo el código y lo
+  compruebo, y al final lo pruebo y corrijo lo que falle. Suele tardar unos 2 minutos, ten un poco de paciencia»). Sale en el orbe,
+  en la conversación, en el terminal y en voz alta si el orbe lee sus respuestas; la respuesta de verdad lo sustituye.
+  Se apaga en **Ajustes → LCM**, donde también se ve lo que suele tardar cada tipo.
 
 ## 📏 Modelos con contexto grande: `llm-limites`
 

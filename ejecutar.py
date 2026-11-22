@@ -80,7 +80,7 @@ def docker_image_exists() -> bool:
         return False
     # SOMA_242_TOOLCHAIN: desde el parche 241 (voz a texto, whisper.cpp) hace falta g++. Una imagen antigua sin g++ cuenta como
     # inexistente, asi se reconstruye sola con el Dockerfile actual.
-    res = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "sh", "-c", "command -v g++"],
+    res = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "sh", "-c", "command -v g++ && command -v python3"],   # SOMA_267_PYTHON3: el compilador de C (265) genera cc_fs.inc con python3 al compilar
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return res.returncode == 0
 
@@ -334,7 +334,7 @@ def handle_mailbox(approve: bool) -> bool | None:
 # ---------------------------------------------------------------- SRCFS
 
 SRCFS_LBA = 8192
-SRCFS_INDEX_SECTORS = 64   # SOMA_PARCHE_011_SRCFS: debe coincidir con src/fs/srcfs.c y disk_layout.h
+SRCFS_INDEX_SECTORS = 128   # SOMA_267_SRCFS (antes 64 = 511 entradas); SOMA_PARCHE_011_SRCFS: debe coincidir con src/fs/srcfs.c y disk_layout.h
 SRCFS_ENTRY = 64
 SRCFS_LIMIT_LBA = 16384
 SRCFS_DATA_SECTORS = SRCFS_LIMIT_LBA - (SRCFS_LBA + SRCFS_INDEX_SECTORS)
@@ -788,6 +788,21 @@ def t480s_usb_linux(args) -> int:
     return 1
 
 
+def t480s_usb_grabar(args) -> int:
+    """SOMA_267_DISCOS: el pendrive en cuatro particiones lo prepara construyeimagen.py (tools/soma_disco.py), en Linux y en macOS:
+    si ya es de SOMA solo actualiza el sistema; si es de una version anterior (SOMA + SOMADATA + DATOS, o SOMADATA.IMG) conserva
+    todo y lo migra; si no, lo prepara de cero (pidiendo BORRAR). Las funciones t480s_usb_macos / t480s_usb_linux de abajo son las
+    de antes (tres particiones FAT32) y ya no se usan."""
+    cmd = [sys.executable, str(ROOT / "construyeimagen.py"), "--grabar", "--sin-compilar"]
+    if args.disco:
+        cmd += ["--disco", args.disco]
+    if args.formatear:
+        cmd.append("--formatear")
+    if args.si:
+        cmd.append("--si")
+    return subprocess.run(cmd, cwd=ROOT).returncode
+
+
 def run_t480s_usb(args) -> int:
     print("\nSOMA para el Lenovo ThinkPad T480s: compilar + copiar al pendrive")
     if not shutil.which("docker"):
@@ -799,11 +814,11 @@ def run_t480s_usb(args) -> int:
     if not T480S_EFI.is_file():
         print(f"ERROR: no existe {T480S_EFI.relative_to(ROOT)} (ejecuta sin --sin-compilar).")
         return 1
-    rc = t480s_usb_macos(args) if sys.platform == "darwin" else t480s_usb_linux(args)
+    rc = t480s_usb_grabar(args)
     if rc == 0:
         print("\nEn el portatil: enciende pulsando F12, elige el USB y despues 'SOMA - Lenovo ThinkPad T480s'.")
-        print(f"SOMA guarda tus archivos en la particion {T480S_DATA} del pendrive. Si macOS dice que no puede leerla: 'Ignorar'")
-        print("(nunca 'Inicializar': borraria lo que SOMA guardo).")
+        print("SOMA_267_DISCOS: tus archivos estan en la unidad USUARIO y los modelos en MODELOS (las dos se ven desde el Mac). Si")
+        print("macOS dice que no puede leer un disco, es la particion DATOS de SOMA: 'Ignorar' (nunca 'Inicializar').")
         print("(Si el USB no aparece en F12: BIOS con F1 -> F9 Setup Defaults -> Secure Boot Disabled -> F10.)")
     return rc
 
@@ -962,7 +977,7 @@ def main() -> int:
     ap.add_argument("--disco", type=str, metavar="diskN",
                     help="t480s-usb: pendrive de destino (p. ej. disk4) sin preguntar cual")
     ap.add_argument("--formatear", action="store_true",
-                    help="t480s-usb: formatear el pendrive aunque ya tenga el volumen SOMA")
+                    help="t480s-usb: borrar el pendrive entero aunque ya sea de SOMA (si no, se conserva y solo se actualiza el sistema)")
     ap.add_argument("--si", action="store_true",
                     help="t480s-usb: no pedir la confirmacion BORRAR al formatear (cuidado)")
     ap.add_argument("--sin-compilar", action="store_true",

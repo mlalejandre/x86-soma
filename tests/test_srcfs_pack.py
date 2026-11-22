@@ -98,11 +98,11 @@ def test_muchos_archivos():
 
 def test_tope_de_entradas():
     with tempfile.TemporaryDirectory() as td:
-        files = {f"m/f{i:04d}.h": b"x\n" for i in range(600)}
+        files = {f"m/f{i:04d}.h": b"x\n" for i in range(1100)}   # SOMA_267_SRCFS: mas que las 1023 entradas
         ns, hdd, log = pack(tree(Path(td), files))
         img = read_image(hdd, ns)
         cap = ns["SRCFS_INDEX_SECTORS"] * SECTOR // 64 - 1
-        check(cap == 511, f"capacidad del indice = 511 (es {cap})")
+        check(cap == 1023, f"capacidad del indice = 1023 (es {cap})")   # SOMA_267_SRCFS
         check(len(img) == cap, f"se empaquetan exactamente {cap} (hay {len(img)})")
         check("solo caben" in log, "avisa de que no caben todos")
 

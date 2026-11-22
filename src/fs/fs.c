@@ -20,6 +20,7 @@
 #include "idt.h"
 #include "virtio_net.h"
 #include "disk_layout.h"
+#include "unidades.h"      /* SOMA_267_DISCOS: /usuario y /modelos (las unidades exFAT del pendrive) */
 
 #define FS_SUPER_LBA         SOMA_LBA_FS_SUPER
 #define FS_DATA_LBA          SOMA_LBA_FS_DATA
@@ -739,6 +740,47 @@ static int vfs_create_unlocked(const char *name, const char *initial_data, uint3
 /* SOMA_PARCHE_LIVE_V1: hook opcional (lo registra el GUI). */
 void (*vfs_live_hook)(const char *name, const char *data, uint32_t len) = 0;
 
+/* SOMA_267_DISCOS: las rutas /usuario/... y /modelos/... no son de RamFS: van a las unidades exFAT del pendrive (src/core/unidades.c).
+ * Asi cat, write, rm, cp, mv, head, ls, nano... funcionan alli sin cambiar cada orden. /modelos es de solo lectura desde aqui. */
+static int unid_es(const char *name) { return name && unid_ruta(name, 0) >= 0; }
+static void ul_put(char *o, uint32_t max, uint32_t *p, const char *s) { while (s && *s && *p + 1 < max) o[(*p)++] = *s++; if (max) o[*p] = 0; }
+/* lista una carpeta de una unidad: "Archivos: /usuario/Documentos/, /usuario/a.txt" (o por la consola) */
+static int unid_lista(int show_all, const char *dir, char *out, uint32_t max, int consola)
+{
+    struct exfat_dirent *d = (struct exfat_dirent *)kmalloc(64 * sizeof *d);    /* por llamada: dos listados a la vez no se pisan */
+    int total = 0, n = d ? unid_listar(dir, d, 64, &total) : EXFAT_E_NOMEM;
+    uint32_t p = 0, dl = str_len(dir);
+    if (out && max) { out[0] = 0; ul_put(out, max, &p, "Archivos: "); }
+    if (consola) { kprint("\nARCHIVOS EN LA UNIDAD "); kprint(dir); kprint(":\n--------------------------------------------------\n"); }
+    if (n < 0) {
+        if (consola) { kprint("  "); kprint(unid_activa(unid_ruta(dir, 0)) ? exfat_err_str(n) : "la unidad no esta en este pendrive"); kprint("\n"); }
+        if (d) kfree(d);
+        return out ? (int)p : 0;
+    }
+    int k = 0;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].name[0] == '.' && !show_all) continue;
+        if (out && max) {
+            if (k) ul_put(out, max, &p, ", ");
+            ul_put(out, max, &p, dir); if (dl && dir[dl - 1] != '/') ul_put(out, max, &p, "/");
+            ul_put(out, max, &p, d[i].name); if (d[i].is_dir) ul_put(out, max, &p, "/");
+        }
+        if (consola) {
+            kprint("  "); kprint(d[i].name); kprint(d[i].is_dir ? "/" : "");
+            if (!d[i].is_dir) { for (uint32_t s2 = str_len(d[i].name); s2 < 36; ++s2) kputc(' '); kprint_dec((uint32_t)(d[i].size > 0xFFFFFFFFu ? 0xFFFFFFFFu : d[i].size)); kprint(" bytes"); }
+            kprint("\n");
+        }
+        k++;
+    }
+    if (consola) {
+        kprint("--------------------------------------------------\n"); kprint_dec((uint32_t)k); kprint(" elementos");
+        if (total > n) { kprint(" (se muestran "); kprint_dec((uint32_t)n); kprint(" de "); kprint_dec((uint32_t)total); kprint(")"); }
+        kprint(unid_ruta(dir, 0) == UNID_MODELOS ? "  [MODELOS: solo lectura]\n\n" : "\n\n");
+    }
+    kfree(d);
+    return out ? (int)p : k;
+}
+
 static int vfs_write_core(const char *name, const char *data, uint32_t len);
 
 int vfs_write(const char *name, const char *data, uint32_t len)
@@ -755,6 +797,7 @@ static int vfs_write_core(const char *name, const char *data, uint32_t len)
     if (is_proc_path(name)) return -1;
     if (agent_path_denied(name)) return -1;
     if (str_eq(name, "/dev/null") || str_eq(name, "/dev/zero")) return (int)len;
+    if (unid_es(name)) return unid_escribir(name, data, len, 0) == 0 ? (int)len : -1;     /* SOMA_267_DISCOS */
 
     kmutex_lock(&vfs_mutex);
     for (int i = 0; i < FS_MAX_FILES; ++i) {
@@ -803,6 +846,12 @@ int vfs_read(const char *name, char *buf_out, uint32_t max_len)
     if (is_proc_path(name)) return read_proc_file(name, buf_out, max_len);
     if (is_dev_path(name))  return read_dev_file(name, buf_out, max_len);
     if (vfs_agent_secret(name)) { buf_out[0] = '\0'; return -1; }          /* SOMA_193 */
+    if (unid_es(name)) {                                                    /* SOMA_267_DISCOS */
+        int r = unid_leer(name, 0, buf_out, max_len - 1);
+        if (r < 0) { buf_out[0] = '\0'; return -1; }
+        buf_out[r] = '\0';
+        return r;
+    }
 
     kmutex_lock(&vfs_mutex);
     int r = vfs_read_unlocked(name, buf_out, max_len);
@@ -812,6 +861,7 @@ int vfs_read(const char *name, char *buf_out, uint32_t max_len)
 
 int vfs_delete(const char *name)
 {
+    if (unid_es(name)) return agent_path_denied(name) || unid_borrar(name, 0) ? -1 : 0;   /* SOMA_267_DISCOS */
     kmutex_lock(&vfs_mutex);
     if (!fs_initialized) vfs_init();
     if (is_proc_path(name) || is_dev_path(name)) { kmutex_unlock(&vfs_mutex); return -1; }
@@ -840,6 +890,7 @@ void vfs_list(void)
 
 void vfs_list_ext(int show_all, const char *filter_dir)
 {
+    if (unid_es(filter_dir)) { (void)unid_lista(show_all, filter_dir, 0, 0, 1); return; }   /* SOMA_267_DISCOS */
     kmutex_lock(&vfs_mutex);
     if (!fs_initialized) vfs_init();
 
@@ -891,6 +942,7 @@ int vfs_format_list(char *out_buf, uint32_t max)
 
 int vfs_format_list_ext(int show_all, const char *filter_dir, char *out_buf, uint32_t max)
 {
+    if (unid_es(filter_dir)) return unid_lista(show_all, filter_dir, out_buf, max, 0);    /* SOMA_267_DISCOS */
     kmutex_lock(&vfs_mutex);
     if (!fs_initialized) vfs_init();
     uint32_t pos = 0;
@@ -1369,6 +1421,10 @@ int vfs_size(const char *name)
     if (!fs_initialized) vfs_init();
     if (!name) return -1;
     if (is_proc_path(name) || is_dev_path(name)) { static char t[FS_DATA_MAX]; int r = vfs_read(name, t, sizeof t); return r; }
+    if (unid_es(name)) {                                                    /* SOMA_267_DISCOS */
+        uint64_t t = 0; int d = 0;
+        return unid_tam(name, &t, &d) || d || t > 0x7FFFFFFFu ? -1 : (int)t;
+    }
     kmutex_lock(&vfs_mutex);
     int r = -1;
     for (int i = 0; i < FS_MAX_FILES; ++i) if (files[i].used && vfs_names_equal(files[i].name, name)) { r = (int)files[i].size; break; }
@@ -1387,6 +1443,15 @@ char *vfs_read_alloc(const char *name, uint32_t *len_out)
         return b;
     }
     if (vfs_agent_secret(name)) return 0;                                    /* SOMA_193 */
+    if (unid_es(name)) {                                                    /* SOMA_267_DISCOS: como mucho FS_FILE_MAX */
+        uint64_t t = 0; int d = 0;
+        if (unid_tam(name, &t, &d) || d || t > FS_FILE_MAX) return 0;
+        char *u = (char *)kmalloc((size_t)t + 1);
+        if (!u) return 0;
+        if (unid_leer(name, 0, u, (uint32_t)t) != (int)t) { kfree(u); return 0; }
+        u[t] = 0; if (len_out) *len_out = (uint32_t)t;
+        return u;
+    }
     kmutex_lock(&vfs_mutex);
     char *b = 0;
     for (int i = 0; i < FS_MAX_FILES; ++i) {

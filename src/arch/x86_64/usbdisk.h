@@ -24,4 +24,6 @@ int usbdisk_bootfile_write(const char *name, const char *data, uint32_t len, con
 struct fat_dirent;
 int usbdisk_bootfile_read(const char *name, uint32_t off, void *buf, uint32_t len, uint32_t *size_out, const char **why);
 int usbdisk_bootdir(const char *path, struct fat_dirent *out, int max, const char **why);
+/* SOMA_267_DISCOS: estado de las unidades /usuario y /modelos (particiones 4 y 3, exFAT) para la orden "disco" */
+void usbdisk_unidades_info(void);
 #endif

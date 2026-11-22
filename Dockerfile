@@ -6,6 +6,7 @@ RUN apt-get update && \
         g++ \
         binutils \
         make \
+        python3 \
         grub-pc-bin \
         grub-efi-amd64-bin \
         grub-common \

@@ -5,6 +5,7 @@
 #include "coder_app.h"
 #include "docagent.h"   /* SOMA_248_DOC */
 #include "agent_ruta.h"  /* SOMA_251_RUTAS */
+#include "coder_core.h"  /* SOMA_266_AVISO: en que lenguaje se va a programar (para el aviso) */
 #include "lcm_ordenes.inc"   /* SOMA_253_LCM: traductor del LCM (solo enteros) */
 #include "rtc.h"
 #include "console.h"
@@ -1408,6 +1409,34 @@ static int mayordomo_try_command(const char *mission)
 
 #include "lcm_soma.inc"   /* SOMA_257_LCM: el LCM en el agente (charla, voz natural, correcciones; sustituye al pegamento del 253) */
 
+/* SOMA_266_AVISO: antes de ir al modelo de lenguaje, el LCM dice al momento que se va a hacer y cuanto suele tardar (en el orbe, en
+ * la conversacion, en voz alta si esta activado y en el terminal). Al acabar se apunta lo que tardo de verdad, para la proxima. */
+uint64_t timer_get_uptime_ms(void);
+void gui_aviso(const char *texto);                     /* src/ui/gui_agente.c */
+static int g_av_tipo; static uint64_t g_av_t0;
+static void agent_aviso(int tipo, const char *mission)
+{
+    static char t[900];
+    const char *lenguaje = 0; int editar = 0;
+    if (tipo == LCM_AV_PROGRAMA) {
+        lenguaje = cc_mission_wants_c(mission) ? "C" : cc_mission_wants_python(mission) ? "Python" : "SOMA-LANG";
+        static const char *const ed[] = { "modifica", "corrige", "arregla", "mejora", "cambia", "anade", "añade", "quita", "actualiza", 0 };
+        for (int i = 0; ed[i] && !editar; ++i) editar = mayordomo_has(mission, ed[i]);
+    }
+    if (tipo == LCM_AV_DOCUMENTO) editar = mayordomo_has(mission, "maquetador revisa") || mayordomo_has(mission, "revisa el documento");
+    g_av_tipo = lcm_del_usuario() ? tipo : 0;                    /* lo que pide otro agente no se cuenta */
+    g_av_t0 = timer_get_uptime_ms();
+    if (!lcm_aviso_texto(tipo, mission, lenguaje, editar, t, sizeof t)) return;
+    kprint("\n\033[1;33m[SOMA] "); kprint(t); kprint("\033[0m\n");
+    gui_fase("lcm");                                             /* lo dice el LCM: primero en la barra de fases */
+    gui_aviso(t);
+}
+static void agent_aviso_fin(int contar)
+{
+    if (g_av_tipo && contar) lcm_aviso_mide(g_av_tipo, timer_get_uptime_ms() - g_av_t0);
+    g_av_tipo = 0;
+}
+
 static void mayordomo_run(const char *mission)
 {
     while (*mission == ' ' || *mission == '\t') ++mission;
@@ -1814,7 +1843,7 @@ void agent_run(const char *agent_name, const char *mission)
     const char *requested_agent = agent_name ? agent_name : "soma";
     if (str_eq_ci(requested_agent, "maquetador") || (str_eq_ci(requested_agent, "soma") && docagent_should_handle(mission))) {   /* SOMA_248_DOC */
         while (*mission == ' ') mission++;
-        if (*mission) { gui_fase("documento"); maquetador_run(mission); return; }   /* SOMA_259_ORBE */
+        if (*mission) { agent_aviso(LCM_AV_DOCUMENTO, mission); gui_fase("documento"); maquetador_run(mission); agent_aviso_fin(1); return; }   /* SOMA_259_ORBE; SOMA_266_AVISO */
     }
     if (str_eq_ci(requested_agent, "mayordomo")) {
         gui_fase("mayordomo");                           /* SOMA_259_ORBE */
@@ -1824,7 +1853,7 @@ void agent_run(const char *agent_name, const char *mission)
     /* SOMA_251_RUTAS: el programador antes que el Mayordomo ("crea un programa..." acababa ensenando la RAM) */
     if (str_eq_ci(requested_agent, "coder") || (str_eq_ci(requested_agent, "soma") && programador_should_handle(mission))) {
         while (*mission == ' ') mission++;
-        if (*mission) { gui_fase("programador"); programador_run(mission); return; }   /* SOMA_259_ORBE */
+        if (*mission) { agent_aviso(LCM_AV_PROGRAMA, mission); gui_fase("programador"); programador_run(mission); agent_aviso_fin(1); return; }   /* SOMA_259_ORBE; SOMA_266_AVISO */
     }
     int lcm_v = str_eq_ci(requested_agent, "soma") ? lcm_soma(mission) : LCM_SIGUE;   /* SOMA_253_LCM */
     if (lcm_v == LCM_HECHO) return;
@@ -1838,11 +1867,16 @@ void agent_run(const char *agent_name, const char *mission)
     if (delegation_depth < MAX_DELEGATION_DEPTH + 2) g_deleg_chain[delegation_depth] = agent->name;   /* SOMA_251_RUTAS */
     /* SOMA_251_RUTAS: respuesta directa. Conversacion, redacciones, explicaciones, traducciones...: UNA llamada al modelo, sin JSON
      * ni herramientas. Si el modelo dice que necesita herramientas (AR_TOOLS_MARK), se sigue por el bucle de siempre. */
+    int av_herr = 0;                                                     /* SOMA_266_AVISO */
     if (*mission && str_eq_ci(agent->name, "soma") && delegation_depth == 0 && ar_direct_ok(mission)) {
+        agent_aviso(LCM_AV_DIRECTA, mission);                            /* SOMA_266_AVISO */
         int dr = direct_answer(agent, mission);
+        agent_aviso_fin(dr == 1);
         if (dr != 0) return;                                             /* 1 respondida; -1 el modelo no contesto (ya se dijo) */
         kprint("[SOMA] La mision necesita herramientas: paso al bucle de agente.\n");
+        av_herr = 1;
     }
+    if (*mission) agent_aviso(av_herr ? LCM_AV_HERRAMIENTA : LCM_AV_AGENTE, mission);   /* SOMA_266_AVISO */
 
     if (*mission == '\0') {
         kprint("Uso: "); kprint(agent->name); kprint(" <mision en lenguaje natural>\n");
@@ -1873,6 +1907,7 @@ void agent_run(const char *agent_name, const char *mission)
         if (cmd_f) kfree(cmd_f);
         if (patch_f) kfree(patch_f);
         if (verdict) kfree(verdict);
+        agent_aviso_fin(0);                                              /* SOMA_266_AVISO */
         return;
     }
 
@@ -2597,6 +2632,7 @@ fb_puts(history_buf, TH, &hist_len, ": ejecutaste '");
         gui_open_browser(agent_created_html);
     }
 
+    agent_aviso_fin(!llm_down);                                          /* SOMA_266_AVISO */
     kfree(agent_prompt_buf);
     kfree(agent_reply_buf);
     kfree(tool_feedback_buf);

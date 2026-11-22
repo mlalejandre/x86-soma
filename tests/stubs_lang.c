@@ -5,7 +5,11 @@
 #include "host_stubs.h"
 #include "agent.h"
 
-char agent_last_response[8192];
+/* SOMA_267_DISCOS: el tamano sale de agent.h (desde el parche 260 son 384 KiB; antes se declaraba de 8 KiB aqui y no compilaba) */
+#ifndef AGENT_RESP_MAX
+#define AGENT_RESP_MAX 8192
+#endif
+char agent_last_response[AGENT_RESP_MAX];
 
 /* vm.c los declara como simbolos debiles; el enlazador de macOS exige que existan. */
 int mouse_x = 0;

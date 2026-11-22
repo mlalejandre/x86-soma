@@ -1,6 +1,7 @@
 /* shell_utilidades.c: utilidades de terminal: whoami, uname, sysinfo, find, du, stat, mkdir, sort, uniq y compile.
  * SOMA_233_SHELL_PARTIDO: NO se compila por separado. Lo incluye src/agent/shell.c en su sitio (una sola unidad de
  * compilacion: usa las funciones auxiliares y la tabla de ordenes de shell.c, y el nucleo compilado sale identico). */
+#include "unidades.h"      /* SOMA_267_DISCOS: mkdir y rmdir en /usuario */
 /* ====================================================================
  * PARCHE_TERMINAL_V2: nuevas utilidades de terminal
  * ==================================================================== */
@@ -375,8 +376,30 @@ static int shell_dir_marker(const char *path, int n, char *marker, uint32_t cap)
     return 1;
 }
 
+/* SOMA_267_DISCOS: mkdir / rmdir dentro de una unidad (/usuario; /modelos es de solo lectura). 1 = era de una unidad (ya respondido). */
+static int shell_unid_dir(const char *args, int crear, char *out_buf, uint32_t max_out)
+{
+    while (*args == ' ') args++;
+    if (unid_ruta(args, 0) < 0) return 0;
+    char up[256], rep[320]; uint32_t k = 0, p = 0;
+    while (args[k] && args[k] != ' ' && k + 1 < sizeof up) { up[k] = args[k]; k++; }
+    up[k] = 0;
+    while (k > 1 && up[k - 1] == '/') up[--k] = 0;
+    int e;
+    if (crear) e = unid_mkdir(up, 0);
+    else { uint64_t t; int d = 0; e = unid_tam(up, &t, &d); if (!e && !d) e = EXFAT_E_NOTDIR; if (!e) e = unid_borrar(up, 0); }
+    rep[0] = 0;
+    soma_str_put(rep, sizeof rep, &p, e ? (crear ? "mkdir: " : "rmdir: ") : (crear ? "Directorio creado: " : "Directorio eliminado: "));
+    if (e) { soma_str_put(rep, sizeof rep, &p, e == EXFAT_E_RO ? "MODELOS es de solo lectura" : exfat_err_str(e)); soma_str_put(rep, sizeof rep, &p, ": "); }
+    soma_str_put(rep, sizeof rep, &p, up);
+    soma_str_putc(rep, sizeof rep, &p, '\n');
+    shell_emit(rep, out_buf, max_out);
+    return 1;
+}
+
 static int cmd_mkdir(const char *args, char *out_buf, uint32_t max_out)
 {
+    if (shell_unid_dir(args, 1, out_buf, max_out)) return 1;          /* SOMA_267_DISCOS */
     char path[FS_NAME_MAX + 8], marker[FS_NAME_MAX + 16], probe[2], rep[160];
     uint32_t p = 0;
     int n = shell_dir_path(args, path, sizeof(path));
@@ -408,6 +431,7 @@ static int cmd_mkdir(const char *args, char *out_buf, uint32_t max_out)
 
 static int cmd_rmdir(const char *args, char *out_buf, uint32_t max_out)
 {
+    if (shell_unid_dir(args, 0, out_buf, max_out)) return 1;          /* SOMA_267_DISCOS */
     char path[FS_NAME_MAX + 8], marker[FS_NAME_MAX + 16], prefix[FS_NAME_MAX + 16];
     char item[FS_NAME_MAX + 4], probe[2], rep[160];
     uint32_t p = 0;

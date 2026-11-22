@@ -151,10 +151,159 @@ static const char EX_CLI_PY[] =
     "for k in range(1, 4):\n"
     "    print(k, \"es par\" if k % 2 == 0 else \"es impar\")\n";
 
-static int g_py;                                                          /* el trabajo en curso es Python */
-static const char *ref_txt(void) { return g_py ? REF_PY : REF; }
-static const char *lang_name(void) { return g_py ? "Python (el de SOMA)" : "SOMA-LANG"; }
-static const char *fence_tag(void) { return g_py ? "python" : "soma"; }
+/* SOMA_265_CC: el mismo programador, en C (TinyCC de SOMA en ring 3; ventana con soma.h). Los ejemplos se compilan y ejecutan
+ * en tests/test_coder_c_265.c con el compilador de verdad. */
+static const char REF_C[] =
+    "REFERENCIA: C de SOMA (C99/C11 con TinyCC; programa de un solo archivo con int main(void) o int main(int argc, char **argv)):\n"
+    "- Cabeceras: stdio.h stdlib.h string.h ctype.h math.h time.h stdint.h stdbool.h limits.h float.h assert.h setjmp.h errno.h\n"
+    "  y soma.h (ventana). Pon SIEMPRE los #include de lo que uses. NO hay: conio.h windows.h graphics.h SDL ncurses pthread.h\n"
+    "  sys/socket.h fork() ni system(). Nada de getch(): en consola se lee con fgets/scanf.\n"
+    "- Archivos: fopen(\"datos.txt\", \"w\") escribe en /workspace (solo ahi se puede escribir); leer, de cualquier ruta permitida.\n"
+    "- Memoria: malloc hasta 8 MiB en total; pila de 1 MiB: los arrays grandes con malloc, no en la pila. Programa entero <= 12 MiB.\n"
+    "- Tiempo: time(NULL) y localtime() dan la hora del equipo; soma_ms() son ms desde el arranque (NO la hora); soma_sleep(ms).\n"
+    "- Azar: srand((unsigned)time(NULL)); rand() % n.  Matematicas: sqrt sin cos atan2 pow floor fabs fmod (math.h; double).\n"
+    "- Ventana (UNA por programa): #include <soma.h>\n"
+    "  if (!soma_win_create(\"titulo\", ancho, alto)) return 1;   soma_win_clear(color)   soma_win_rect(x, y, w, h, color)\n"
+    "  soma_win_text(x, y, \"texto\", color)   soma_win_line(x1, y1, x2, y2, color)   soma_win_circle(x, y, r, color)\n"
+    "  soma_win_pixel(x, y, color)   soma_win_present()   soma_win_active() (0 al cerrarla)   soma_win_close()\n"
+    "  struct soma_mouse m = soma_win_mouse();  m.x m.y m.clicked (clic desde la ultima vez) m.button (pulsado)\n"
+    "  int k = soma_win_key();  0 si no hay tecla; flechas SOMA_KEY_UP SOMA_KEY_DOWN SOMA_KEY_LEFT SOMA_KEY_RIGHT; Intro 10, espacio 32, 'a'.\n"
+    "  soma_win_size(&w, &h).  Colores 0xRRGGBB. Texto: 8x8 pixeles por caracter (snprintf para numeros). Esc cierra la ventana.\n"
+    "  Bucle obligatorio: while (soma_win_active()) { leer raton/teclas; dibujar todo; soma_win_present(); soma_sleep(16); }\n"
+    "- Un programa con ventana NO usa scanf ni fgets(stdin): todo con el raton y el teclado de la ventana.\n";
+
+static const char EX_GUI_C[] =
+    "// Contador grafico con botones\n"
+    "#include <stdio.h>\n"
+    "#include <soma.h>\n"
+    "\n"
+    "int main(void)\n"
+    "{\n"
+    "    if (!soma_win_create(\"Contador\", 320, 200)) return 1;\n"
+    "    int n = 0;\n"
+    "    char t[32];\n"
+    "    while (soma_win_active()) {\n"
+    "        struct soma_mouse m = soma_win_mouse();\n"
+    "        if (m.clicked) {\n"
+    "            if (m.x >= 20 && m.x < 140 && m.y >= 120 && m.y < 160) n++;\n"
+    "            if (m.x >= 180 && m.x < 300 && m.y >= 120 && m.y < 160) n = 0;\n"
+    "        }\n"
+    "        if (soma_win_key() == 32) n++;\n"
+    "        soma_win_clear(0x101828);\n"
+    "        snprintf(t, sizeof t, \"Pulsaciones: %d\", n);\n"
+    "        soma_win_text(20, 30, t, 0xFFFFFF);\n"
+    "        soma_win_rect(20, 120, 120, 40, 0x2563EB);\n"
+    "        soma_win_text(70, 136, \"+1\", 0xFFFFFF);\n"
+    "        soma_win_rect(180, 120, 120, 40, 0xDC2626);\n"
+    "        soma_win_text(220, 136, \"Reset\", 0xFFFFFF);\n"
+    "        soma_win_present();\n"
+    "        soma_sleep(16);\n"
+    "    }\n"
+    "    return 0;\n"
+    "}\n";
+
+static const char EX_CLI_C[] =
+    "// Suma de un array y paridad\n"
+    "#include <stdio.h>\n"
+    "\n"
+    "static int suma(const int *a, int n)\n"
+    "{\n"
+    "    int t = 0;\n"
+    "    for (int i = 0; i < n; i++) t += a[i];\n"
+    "    return t;\n"
+    "}\n"
+    "\n"
+    "int main(void)\n"
+    "{\n"
+    "    int nums[] = { 3, 5, 7, 10 };\n"
+    "    printf(\"Suma: %d\\n\", suma(nums, 4));\n"
+    "    for (int k = 1; k <= 3; k++) printf(\"%d %s\\n\", k, k % 2 == 0 ? \"es par\" : \"es impar\");\n"
+    "    return 0;\n"
+    "}\n";
+
+static int g_py;                                                          /* el trabajo en curso es Python (o C: ver g_c) */
+static int g_c;                                                           /* SOMA_265_CC: C (usa el mismo camino que Python: check_src/run_src) */
+static const char *ref_txt(void) { return g_c ? REF_C : g_py ? REF_PY : REF; }
+static const char *lang_name(void) { return g_c ? "C (el de SOMA)" : g_py ? "Python (el de SOMA)" : "SOMA-LANG"; }
+static const char *fence_tag(void) { return g_c ? "c" : g_py ? "python" : "soma"; }
+
+/* SOMA_265_CC: "en C", "en lenguaje C", "con C", "programa.c"... (C como palabra suelta: "en casa" no cuenta) */
+int cc_mission_wants_c(const char *m)
+{
+    if (!m) return 0;
+    static const char *const pre[] = { "en c", "con c", "usando c", "lenguaje c", "codigo c", "código c", "programa c", "ansi c", "en c99", "en c11", 0 };
+    for (int i = 0; pre[i]; i++) {
+        uint32_t k = cl(pre[i]);
+        for (const char *h = m; *h; h++) {
+            const char *a = h, *b = pre[i];
+            while (*a && *b) { char x = *a; if (x >= 'A' && x <= 'Z') x += 32; if (x != *b) break; a++; b++; }
+            if (*b) continue;
+            if (h > m && is_id(h[-1])) continue;                             /* "bien c..." no: debe empezar palabra */
+            char nx = h[k];
+            if (!is_id(nx) && nx != '+' && nx != '#') return 1;              /* "en c" pero no "en c++" ni "en c#" ni "en casa" */
+        }
+    }
+    for (const char *h = m; *h; h++)                                         /* hola.c */
+        if (h[0] == '.' && (h[1] == 'c' || h[1] == 'C') && !is_id(h[2]) && h > m && is_id(h[-1])) return 1;
+    return 0;
+}
+
+/* SOMA_265_CC: "programa.c:7: error: 'x' undeclared" -> 7 y el mensaje. Sin linea: "tcc: error: undefined symbol 'f'" o el
+ * motivo de un fallo al ejecutar ("[el programa termino: ...]"). */
+int cc_c_error(const char *out, uint32_t *line, char *msg, uint32_t cap)
+{
+    *line = 0; if (cap) msg[0] = 0;
+    if (!out) return 0;
+    for (const char *p = out; *p; ) {
+        const char *ls = p; while (*p && *p != '\n') p++;
+        const char *e = cfind(ls, ": error: ");
+        if (e && e < p) {
+            const char *d = e; while (d > ls && d[-1] >= '0' && d[-1] <= '9') d--;
+            uint32_t v = 0; for (const char *q = d; q < e; q++) v = v * 10 + (uint32_t)(*q - '0');
+            if (d < e && d > ls && d[-1] == ':') *line = v;
+            const char *t = e + 9;
+            ccatn(msg, cap, t, (uint32_t)(p - t));
+            return 1;
+        }
+        if (*p) p++;
+    }
+    const char *t = cfind(out, "[el programa termino: ");
+    if (t) { const char *e = t; while (*e && *e != ']') e++; ccatn(msg, cap, t + 1, (uint32_t)(e - t - 1)); return 1; }
+    return 0;
+}
+
+/* SOMA_265_CC: el de Python (sin cambiar el significado) y los #include que falten para lo que se usa: el modelo los olvida a menudo
+ * y TinyCC solo avisa (una llamada sin prototipo con double pasa mal los argumentos) */
+int cc_c_normalize(char *src, uint32_t *len, uint32_t cap)
+{
+    int fix = cc_py_normalize(src, len, cap);
+    static const struct { const char *inc; const char *uses[12]; } T[] = {
+        { "#include <stdio.h>", { "printf(", "puts(", "scanf(", "fgets(", "fopen(", "putchar(", "getchar(", "snprintf(", "sprintf(", "FILE", 0 } },
+        { "#include <stdlib.h>", { "malloc(", "calloc(", "free(", "rand(", "srand(", "atoi(", "exit(", "qsort(", "abs(", "strtol(", "realloc(", 0 } },
+        { "#include <string.h>", { "strlen(", "strcpy(", "strcmp(", "strcat(", "memset(", "memcpy(", "strncpy(", "strchr(", "strstr(", "strtok(", "strncmp(", 0 } },
+        { "#include <math.h>", { "sqrt(", "sin(", "cos(", "pow(", "fabs(", "floor(", "ceil(", "atan2(", "fmod(", "M_PI", "round(", 0 } },
+        { "#include <time.h>", { "time(", "localtime(", "clock(", "strftime(", "struct tm", 0 } },
+        { "#include <ctype.h>", { "isdigit(", "isalpha(", "toupper(", "tolower(", "isspace(", "isalnum(", "isupper(", "islower(", 0 } },
+        { "#include <stdbool.h>", { "bool ", "true", "false", 0 } },
+        { "#include <soma.h>", { "soma_", "SOMA_KEY_", 0 } },
+    };
+    char add[256]; add[0] = 0;
+    for (uint32_t i = 0; i < sizeof T / sizeof T[0]; i++) {
+        const char *base = T[i].inc + 10;                                   /* "stdio.h>" */
+        int have = 0;
+        for (const char *p = src; (p = cfind(p, "#include")) != 0; p += 8) { const char *q = p + 8; while (*q == ' ' || *q == '<' || *q == '"') q++; uint32_t k = 0; while (base[k] && base[k] != '>' && q[k] == base[k]) k++; if (base[k] == '>') { have = 1; break; } }
+        if (have) continue;
+        int used = 0;
+        for (int j = 0; T[i].uses[j] && !used; j++) {
+            const char *u = T[i].uses[j];
+            for (const char *p = src; (p = cfind(p, u)) != 0; p++) { if (p == src || !is_id(p[-1])) { used = 1; break; } }
+        }
+        if (used) { ccat(add, sizeof add, T[i].inc); ccat(add, sizeof add, "\n"); fix++; }
+    }
+    uint32_t k = cl(add);
+    if (k && *len + k + 1 < cap) { cmove(src + k, src, *len + 1); for (uint32_t i = 0; i < k; i++) src[i] = add[i]; *len += k; }
+    return fix;
+}
 
 int cc_mission_wants_python(const char *m)
 {
@@ -462,7 +611,7 @@ struct verdict {
     char     msg[160], token[48], issue[300], ltext[120];
     int      score;
 };
-static uint8_t g_bc[65536];
+static uint8_t g_bc[262144];   /* SOMA_264_LANG: bytecode de un programa de 64 KB (antes 64 KB) */
 static const struct cc_env *g_te;      /* PARCHE 116: entorno con pruebas durante cc_run */
 static char g_tout[4096];
 static struct soma_lint_report g_rep;
@@ -531,6 +680,7 @@ static const char *g_mission = "";                                       /* SOMA
 /* SOMA_239_PYTHON_GRAFICO: verificacion de un programa Python: compilarlo de verdad (python -s en un proceso), comprobaciones de
  * la tarea y, en los de consola, las pruebas ejecutandolo (python -x con la entrada de cada caso). Resultados en cache por huella. */
 static char g_pyout[2048];
+static int ext_error(const char *out, uint32_t *line, char *msg, uint32_t cap) { return g_c ? cc_c_error(out, line, msg, cap) : cc_py_error(out, line, msg, cap); }   /* SOMA_265_CC */
 static uint32_t g_pc_hash; static int g_pc_valid, g_pc_ok; static uint32_t g_pc_line; static char g_pc_msg[160];
 static void run_tests_py(const char *src, uint32_t n, struct verdict *v)
 {
@@ -551,7 +701,7 @@ static void run_tests_py(const char *src, uint32_t n, struct verdict *v)
             ccat(v->issue, sizeof v->issue, "La prueba '"); ccat(v->issue, sizeof v->issue, t->name ? t->name : "?"); ccat(v->issue, sizeof v->issue, "' FALLA");
             if (rc != 0) {
                 uint32_t ln; char em[96];
-                if (cc_py_error(g_tout, &ln, em, sizeof em) && em[0]) { ccat(v->issue, sizeof v->issue, " (error: "); ccat(v->issue, sizeof v->issue, em); ccat(v->issue, sizeof v->issue, ")"); }
+                if (ext_error(g_tout, &ln, em, sizeof em) && em[0]) { ccat(v->issue, sizeof v->issue, " (error: "); ccat(v->issue, sizeof v->issue, em); ccat(v->issue, sizeof v->issue, ")"); }
                 else ccat(v->issue, sizeof v->issue, " (el programa no termina bien: error o bucle infinito)");
             }
             ccat(v->issue, sizeof v->issue, ". Entrada: \""); ccat(v->issue, sizeof v->issue, a);
@@ -561,6 +711,31 @@ static void run_tests_py(const char *src, uint32_t n, struct verdict *v)
     }
     if (v->tfail) { v->issues++; if (v->tfail > 1) { ccat(v->issue, sizeof v->issue, "Fallan "); cnum(v->issue, sizeof v->issue, (uint32_t)v->tfail); ccat(v->issue, sizeof v->issue, " pruebas en total. "); } }
     g_tm_valid = 1; g_tm_hash = h; g_tm_pass = v->tpass; g_tm_fail = v->tfail; g_tm_issue[0] = 0; ccat(g_tm_issue, sizeof g_tm_issue, v->issue);
+}
+/* SOMA_265_CC: lo que compila pero no funciona en SOMA (C) */
+static void verify_c_task(const char *src, int gui, struct verdict *v)
+{
+    static const char *const banned[] = { "conio.h", "windows.h", "graphics.h", "SDL", "ncurses", "curses.h", "pthread.h", "sys/socket.h",
+                                          "fork(", "getch(", "system(", "GL/gl", 0 };
+    for (int i = 0; banned[i]; i++) if (cfind(src, banned[i])) {
+        ccat(v->issue, sizeof v->issue, "Usa '"); ccat(v->issue, sizeof v->issue, banned[i]);
+        ccat(v->issue, sizeof v->issue, "', que no existe en SOMA: para graficos usa #include <soma.h> (soma_win_*). "); v->issues++; break;
+    }
+    if (!cfind(src, "main(")) { ccat(v->issue, sizeof v->issue, "Falta la funcion int main(void). "); v->issues++; }
+    if (gui && !cfind(src, "soma_win_create")) { ccat(v->issue, sizeof v->issue, "La tarea pide una ventana grafica y no hay soma_win_create (#include <soma.h>). "); v->issues++; }
+    if (cfind(src, "soma_win_create") && !cfind(src, "soma_win_present")) { ccat(v->issue, sizeof v->issue, "Falta soma_win_present() en el bucle de dibujo. "); v->issues++; }
+    if (cfind(src, "soma_win_create") && !cfind(src, "soma_win_active")) { ccat(v->issue, sizeof v->issue, "Falta el bucle while (soma_win_active()) { ... }. "); v->issues++; }
+    if (cfind(src, "soma_win_create") && (cfind(src, "scanf(") || cfind(src, "getchar(") || cfind(src, "stdin"))) {
+        ccat(v->issue, sizeof v->issue, "Un programa con ventana no puede leer la consola (scanf, fgets, getchar): usa soma_win_key() y soma_win_mouse(). "); v->issues++;
+    }
+    if (ci_has(g_mission, "flecha") && cfind(src, "soma_win_key") && !cfind(src, "SOMA_KEY_") && !cfind(src, "== 16") && !cfind(src, "==16")) {
+        ccat(v->issue, sizeof v->issue, "La tarea usa las FLECHAS: compara soma_win_key() con SOMA_KEY_UP, SOMA_KEY_DOWN, SOMA_KEY_LEFT y SOMA_KEY_RIGHT. "); v->issues++;
+    }
+    if ((ci_has(g_mission, "hora") || ci_has(g_mission, "reloj")) && !ci_has(g_mission, "cronometro") && !ci_has(g_mission, "cronómetro")
+        && !ci_has(g_mission, "temporizador") && !ci_has(g_mission, "milisegund") && !ci_has(g_mission, "desde") && !ci_has(g_mission, "cuenta atras")
+        && !cfind(src, "localtime") && !cfind(src, "soma_clock") && cfind(src, "soma_ms")) {
+        ccat(v->issue, sizeof v->issue, "soma_ms() es el tiempo desde que arranco el equipo, no la hora: usa time(NULL) y localtime(). "); v->issues++;
+    }
 }
 static void verify_py(const char *src, uint32_t n, int gui, const char *orig, uint32_t orig_n, struct verdict *v)
 {
@@ -572,7 +747,7 @@ static void verify_py(const char *src, uint32_t n, int gui, const char *orig, ui
             g_pyout[0] = 0;
             int rc = e->check_src(src, n, g_pyout, sizeof g_pyout);
             if (rc == 0) g_pc_ok = 1;
-            else if (!cc_py_error(g_pyout, &g_pc_line, g_pc_msg, sizeof g_pc_msg) || !g_pc_msg[0]) ccpy(g_pc_msg, sizeof g_pc_msg, rc == 2 ? "la comprobacion tardo demasiado" : "no se pudo compilar");
+            else if (!ext_error(g_pyout, &g_pc_line, g_pc_msg, sizeof g_pc_msg) || !g_pc_msg[0]) ccpy(g_pc_msg, sizeof g_pc_msg, rc == 2 ? "la comprobacion tardo demasiado" : "no se pudo compilar");
         } else g_pc_ok = 1;                                                 /* sin comprobador (no deberia pasar): se confia */
     }
     if (g_pc_ok) { v->compiles = 1; v->bc = n; }
@@ -588,14 +763,15 @@ static void verify_py(const char *src, uint32_t n, int gui, const char *orig, ui
         int prose = 0, code = 0; const char *p = src, *end = src + n;
         while (p < end) {
             const char *ls = p; int words = 0, inw = 0, sym = 0;
-            while (p < end && *p != '\n') { char c = *p; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) { if (!inw) words++; inw = 1; } else { inw = 0; if (c == ':' || c == '(' || c == '=' || c == '[') sym = 1; } p++; }
+            while (p < end && *p != '\n') { char c = *p; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) { if (!inw) words++; inw = 1; } else { inw = 0; if (c == ':' || c == '(' || c == '=' || c == '[' || c == ';' || c == '{' || c == '}') sym = 1; } p++; }
             if (p < end) p++;
             while (ls < p && *ls == ' ') ls++;
-            if (ls[0] == '#') continue;
+            if (ls[0] == '#' || (ls[0] == '/' && (ls[1] == '/' || ls[1] == '*')) || (ls[0] == '*' && g_c)) continue;
             if (sym) code++; else if (words >= 4) prose++;
         }
         if (prose > code) { ccat(v->issue, sizeof v->issue, "La respuesta es TEXTO (razonamiento o explicacion), no un programa. "); v->issues += 3; }
     }
+    if (g_c) { verify_c_task(src, gui, v); goto comun; }                   /* SOMA_265_CC */
     static const char *const banned[] = { "import pygame", "import tkinter", "from tkinter", "import turtle", "import os", "from os ",
                                           "import threading", "import numpy", "import subprocess", "import curses", 0 };
     for (int i = 0; banned[i]; i++) if (cfind(src, banned[i])) {
@@ -615,8 +791,9 @@ static void verify_py(const char *src, uint32_t n, int gui, const char *orig, ui
         && !cfind(src, "localtime") && cfind(src, "ticks_ms")) {
         ccat(v->issue, sizeof v->issue, "time.ticks_ms() es el tiempo desde que arranco el equipo, no la hora: usa time.localtime(). "); v->issues++;
     }
+comun:
     if (orig && orig_n && orig_n == n) { uint32_t i = 0; while (i < n && orig[i] == src[i]) i++; if (i == n) { v->unchanged = 1; ccat(v->issue, sizeof v->issue, "El codigo es IDENTICO al original: no se aplico el cambio pedido. "); v->issues++; } }
-    if (v->compiles && !gui && !cfind(src, "win.create")) run_tests_py(src, n, v);
+    if (v->compiles && !gui && !cfind(src, "win.create") && !cfind(src, "soma_win_create")) run_tests_py(src, n, v);
     v->score = (v->compiles ? 0 : 1000) + v->issues * 60 + v->tfail * 300;
 }
 static void verify(const char *src, uint32_t n, int gui, const char *orig, uint32_t orig_n, struct verdict *v)
@@ -696,8 +873,23 @@ static const char *hint_for_py(const struct verdict *v)
     if (v->unchanged) return "Aplica el cambio pedido: el codigo devuelto es igual que el original.";
     return "Corrige solo lo necesario y conserva el resto.";
 }
+/* SOMA_265_CC */
+static const char *hint_for_c(const struct verdict *v)
+{
+    const char *m = v->msg;
+    if (cfind(m, "programa termino") || cfind(v->issue, "programa termino")) return "El programa se cae al ejecutarlo: revisa punteros (NULL, sin malloc), indices fuera del array, divisiones por cero y recursion sin fin. Arrays grandes con malloc.";
+    if (v->tfail) return "El programa compila pero no produce la salida esperada en las pruebas: compara la salida obtenida con la esperada y corrige la logica o el formato de printf (los \\n, espacios y decimales: %d, %.2f).";
+    if (cfind(m, "include file")) return "Esa cabecera no existe en SOMA. Hay stdio.h stdlib.h string.h ctype.h math.h time.h stdint.h stdbool.h y soma.h (ventana).";
+    if (cfind(m, "undeclared") || cfind(m, "undefined symbol") || cfind(m, "implicit declaration")) return "Usas un nombre que no existe: declara la variable antes, pon el #include de la funcion, o define la funcion antes de llamarla. Ventana: soma_win_* de <soma.h>.";
+    if (cfind(m, "expected") || cfind(m, "declaration")) return "Error de sintaxis de C: revisa el ';' al final de cada sentencia, las llaves y parentesis sin cerrar y las comillas.";
+    if (cfind(m, "unresolved") || cfind(m, "main")) return "Falta int main(void) o una funcion que se usa no esta definida: escribela entera en el mismo archivo.";
+    if (cfind(m, "pointer") || cfind(m, "incompatible")) return "Tipos incompatibles: revisa punteros y conversiones (char * frente a char, int frente a double); usa & en scanf.";
+    if (v->unchanged) return "Aplica el cambio pedido: el codigo devuelto es igual que el original.";
+    return "Corrige solo lo necesario y conserva el resto.";
+}
 static const char *hint_for(const struct verdict *v)
 {
+    if (g_c) return hint_for_c(v);
     if (g_py) return hint_for_py(v);
     const char *m = v->msg;
     if (py_block_line(v->ltext)) return "Eso es un bloque de Python: en SOMA-LANG la condicion va entre parentesis y el bloque entre llaves, sin ':'. Ej.: if (n == 0) { print(\"cero\"); } else { ... }";
@@ -760,12 +952,13 @@ static void add_tests(void)       /* PARCHE 116: los casos de prueba forman part
 static void build_gen(const char *mission, const char *plan, int gui, int edit, const char *retry_note)
 {
     g_prompt[0] = 0;
-    if (g_py) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en Python. Escribe para el Python de SOMA OS (MicroPython) codigo correcto a la primera.\n\n");
+    if (g_c) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en C. Escribe para el C de SOMA OS (TinyCC, sin POSIX) codigo correcto a la primera.\n\n");   /* SOMA_265_CC */
+    else if (g_py) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en Python. Escribe para el Python de SOMA OS (MicroPython) codigo correcto a la primera.\n\n");
     else ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en SOMA-LANG, el lenguaje de SOMA OS. Escribe codigo correcto a la primera.\n\n");
     ccat(g_prompt, sizeof g_prompt, ref_txt());
     ccat(g_prompt, sizeof g_prompt, "\nEJEMPLO VERIFICADO (funciona en "); ccat(g_prompt, sizeof g_prompt, lang_name()); ccat(g_prompt, sizeof g_prompt, "):\n```");
     ccat(g_prompt, sizeof g_prompt, fence_tag()); ccat(g_prompt, sizeof g_prompt, "\n");
-    ccat(g_prompt, sizeof g_prompt, g_py ? (gui ? EX_GUI_PY : EX_CLI_PY) : (gui ? EX_GUI : EX_CLI));
+    ccat(g_prompt, sizeof g_prompt, g_c ? (gui ? EX_GUI_C : EX_CLI_C) : g_py ? (gui ? EX_GUI_PY : EX_CLI_PY) : (gui ? EX_GUI : EX_CLI));
     ccat(g_prompt, sizeof g_prompt, "```\n");
     add_lessons();
     if (edit) {
@@ -790,7 +983,7 @@ static void build_repair(const char *mission, const char *cand, uint32_t n, cons
     add_tests();
     ccat(g_prompt, sizeof g_prompt, "\n\nPROBLEMAS DETECTADOS:\n");
     if (!v->compiles) {
-        ccat(g_prompt, sizeof g_prompt, g_py ? "- Error de Python en la linea " : "- Error del compilador en la linea "); cnum(g_prompt, sizeof g_prompt, v->line);
+        ccat(g_prompt, sizeof g_prompt, g_c ? "- Error del compilador de C en la linea " : g_py ? "- Error de Python en la linea " : "- Error del compilador en la linea "); cnum(g_prompt, sizeof g_prompt, v->line);
         ccat(g_prompt, sizeof g_prompt, ": "); ccat(g_prompt, sizeof g_prompt, v->msg);
         if (v->token[0]) { ccat(g_prompt, sizeof g_prompt, " (cerca de '"); ccat(g_prompt, sizeof g_prompt, v->token); ccat(g_prompt, sizeof g_prompt, "')"); }
         ccat(g_prompt, sizeof g_prompt, "\n");
@@ -808,7 +1001,7 @@ static void lessons_load(const struct cc_env *e)
 {
     g_lessons[0] = 0;
     if (!e->read) return;
-    int r = e->read(g_py ? CC_LESSONS_PY : CC_LESSONS, g_lessons, sizeof g_lessons - 1);
+    int r = e->read(g_c ? CC_LESSONS_C : g_py ? CC_LESSONS_PY : CC_LESSONS, g_lessons, sizeof g_lessons - 1);
     if (r < 0) r = 0;
     g_lessons[r] = 0;
 }
@@ -826,7 +1019,7 @@ static void lessons_add(const struct cc_env *e, const struct verdict *v)
     const char *p = g_lessons;
     while (total > 1600 && *p) { while (*p && *p != '\n') { p++; total--; } if (*p) { p++; total--; } }   /* se olvidan las mas viejas */
     ccat(nb, sizeof nb, p); ccat(nb, sizeof nb, line);
-    e->write(g_py ? CC_LESSONS_PY : CC_LESSONS, nb, cl(nb));
+    e->write(g_c ? CC_LESSONS_C : g_py ? CC_LESSONS_PY : CC_LESSONS, nb, cl(nb));
     ccpy(g_lessons, sizeof g_lessons, nb);
 }
 
@@ -872,7 +1065,7 @@ static uint32_t take(const struct cc_env *e, struct cc_result *r, int gui, int e
             const char *q = fence(s, g_reply);
             uint32_t n = q ? (uint32_t)(q - s) : cl(s); if (n >= CC_SRC_MAX) n = CC_SRC_MAX - 1;
             cmove(g_tmp, s, n); g_tmp[n] = 0;
-            int f = g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
+            int f = g_c ? cc_c_normalize(g_tmp, &n, CC_SRC_MAX) : g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
             verify(g_tmp, n, gui, edit ? g_orig : 0, edit ? cl(g_orig) : 0, &tv);
             if (!have || tv.score < v->score) { *v = tv; cmove(g_cand, g_tmp, n + 1); best_n = n; best_fix = f; have = 1; }
             if (!q) break;
@@ -882,14 +1075,14 @@ static uint32_t take(const struct cc_env *e, struct cc_result *r, int gui, int e
     {   /* sin bloques (o como alternativa): prosa recortada */
         uint32_t n = cc_extract_code(base, g_tmp, CC_SRC_MAX);
         const char *f3 = cfind(g_tmp, "```"); if (f3) { n = (uint32_t)(f3 - g_tmp); g_tmp[n] = 0; }
-        int f = g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
+        int f = g_c ? cc_c_normalize(g_tmp, &n, CC_SRC_MAX) : g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
         verify(g_tmp, n, gui, edit ? g_orig : 0, edit ? cl(g_orig) : 0, &tv);
         if (!have || tv.score < v->score) { *v = tv; cmove(g_cand, g_tmp, n + 1); best_n = n; best_fix = f; have = 1; }
     }
     if (best_fix) { char m[96]; m[0] = 0; ccat(m, sizeof m, "Normalizador: "); cnum(m, sizeof m, (uint32_t)best_fix); ccat(m, sizeof m, " correcciones automaticas sin gastar llamadas."); say(e, m); r->auto_fixes += best_fix; }
     /* deja g_rep coherente con el candidato elegido (la reparacion lista sus errores) */
     verify(g_cand, best_n, gui, edit ? g_orig : 0, edit ? cl(g_orig) : 0, &tv);
-    if (!v->compiles) { char m[220]; m[0] = 0; ccat(m, sizeof m, g_py ? "Candidato (Python): linea " : "Candidato: linea "); cnum(m, sizeof m, v->line); ccat(m, sizeof m, ": "); ccat(m, sizeof m, v->msg); if (v->ltext[0]) { ccat(m, sizeof m, "  |  "); ccatn(m, sizeof m, v->ltext, 70); } say(e, m); }
+    if (!v->compiles) { char m[220]; m[0] = 0; ccat(m, sizeof m, g_c ? "Candidato (C): linea " : g_py ? "Candidato (Python): linea " : "Candidato: linea "); cnum(m, sizeof m, v->line); ccat(m, sizeof m, ": "); ccat(m, sizeof m, v->msg); if (v->ltext[0]) { ccat(m, sizeof m, "  |  "); ccatn(m, sizeof m, v->ltext, 70); } say(e, m); }
     else if (v->issue[0]) { char m[320]; m[0] = 0; ccat(m, sizeof m, "Candidato compila; aviso: "); ccatn(m, sizeof m, v->issue, 280); say(e, m); }
     else say(e, "Candidato correcto (compila y pasa las comprobaciones).");
     if (v->compiles && (g_py ? e->run_src != 0 : e->run != 0) && e->tests && e->ntests > 0) { char m[96]; m[0] = 0; ccat(m, sizeof m, "Pruebas de comportamiento: "); cnum(m, sizeof m, (uint32_t)v->tpass); ccat(m, sizeof m, "/"); cnum(m, sizeof m, (uint32_t)e->ntests); ccat(m, sizeof m, " superadas."); say(e, m); }
@@ -904,9 +1097,10 @@ int cc_run(const struct cc_env *e, const char *target, const char *mission, stru
     if (g_busy) { for (uint32_t i = 0; i < sizeof *r; i++) ((char *)r)[i] = 0; ccpy(r->summary, sizeof r->summary, "El programador ya esta trabajando en otra tarea; espera a que termine."); return 0; }
     g_busy = 1;
     g_te = e; g_tm_valid = 0; g_pc_valid = 0;
-    g_py = e->lang == CC_LANG_PYTHON;                                     /* SOMA_239 */
+    g_py = e->lang == CC_LANG_PYTHON || e->lang == CC_LANG_C;             /* SOMA_239; SOMA_265_CC: C va por el mismo camino */
+    g_c = e->lang == CC_LANG_C;
     int ok = cc_run_inner(e, target, mission, r);
-    g_py = 0;
+    g_py = g_c = 0;
     g_te = 0;
     g_busy = 0;
     return ok;
@@ -926,12 +1120,13 @@ static int cc_run_inner(const struct cc_env *e, const char *target, const char *
     if (ol < 0) ol = 0;
     g_orig[ol] = 0;
     edit = ol > 0;
-    gui = cc_mission_is_gui(mission) || (edit && cfind(g_orig, "win.create") != 0);
+    gui = cc_mission_is_gui(mission) || (edit && (cfind(g_orig, "win.create") != 0 || cfind(g_orig, "soma_win_create") != 0));
     g_mission = mission ? mission : "";
     lessons_load(e);
     st(e, 1, "Fase 1/6: Analizando la tarea y preparando el contexto...", edit ? "Modificacion de un programa existente: se le pasa completo al modelo." : (gui ? "Programa nuevo con ventana grafica." : "Programa nuevo de consola."));
     say(e, edit ? "Tarea: MODIFICAR programa existente." : "Tarea: CREAR programa nuevo.");
-    if (g_py) say(e, "Lenguaje: Python (MicroPython de SOMA; ventana con soma.win).");
+    if (g_c) say(e, "Lenguaje: C (TinyCC de SOMA; ventana con soma.h).");
+    else if (g_py) say(e, "Lenguaje: Python (MicroPython de SOMA; ventana con soma.win).");
     say(e, gui ? "Tipo: aplicacion grafica (ejemplo de ventana como referencia)." : "Tipo: programa de consola (ejemplo de consola como referencia).");
     if (g_lessons[0]) say(e, "Lecciones de trabajos anteriores incluidas en el contexto.");
 
@@ -941,7 +1136,7 @@ static int cc_run_inner(const struct cc_env *e, const char *target, const char *
         ccat(g_prompt, sizeof g_prompt, "Planifica en 3-5 pasos MUY breves (maximo 300 caracteres, sin codigo) un programa ");
         ccat(g_prompt, sizeof g_prompt, lang_name()); ccat(g_prompt, sizeof g_prompt, " para: ");
         ccat(g_prompt, sizeof g_prompt, mission);
-        ccat(g_prompt, sizeof g_prompt, gui ? (g_py ? " (aplicacion con ventana: estado, bucle while win.active(), raton, dibujo)" : " (aplicacion con ventana: estado, bucle while (win.active()), raton, dibujo)") : " (programa de consola)");
+        ccat(g_prompt, sizeof g_prompt, gui ? (g_c ? " (aplicacion con ventana: estado, bucle while (soma_win_active()), raton, dibujo)" : g_py ? " (aplicacion con ventana: estado, bucle while win.active(), raton, dibujo)" : " (aplicacion con ventana: estado, bucle while (win.active()), raton, dibujo)") : " (programa de consola)");
         ccat(g_prompt, sizeof g_prompt, ". Incluye al final 'Criterio:' con lo que debe cumplir. Responde solo el plan.");
         g_kind = "PLAN";
         if (ask(e, r, 45000)) {

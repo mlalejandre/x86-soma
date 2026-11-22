@@ -1605,15 +1605,16 @@ void lcm_estadistica(uint32_t *v, int n);
 static char g_lcm_f[120], g_lcm_res[400];
 static int g_lcm_focus;
 static const int LCM_UMB[4] = { 60, 70, 80, 90 };
-struct lcml { int c1_y, c1_h, s1_y, s2_y, c2_y, c2_h, s3_y, c3_y, c3_h, f_y, c4_y, c4_h, b_x, b_y, c5_y, c5_h, s4_y; };   /* SOMA_259_ORBE: + s4_y */
+struct lcml { int c1_y, c1_h, s1_y, s2_y, c2_y, c2_h, s3_y, c3_y, c3_h, f_y, c4_y, c4_h, b_x, b_y, c5_y, c5_h, s4_y, s5_y; };   /* SOMA_259_ORBE: + s4_y; SOMA_266_AVISO: + s5_y */
 static void lcm_lay(const struct sl *L, struct lcml *A)
 {
-    A->c1_y = L->y + 84; A->c1_h = 278; A->s1_y = A->c1_y + 54; A->s2_y = A->c1_y + 136; A->s4_y = A->c1_y + 218;   /* SOMA_259_ORBE: + letra del orbe */
+    A->c1_y = L->y + 84; A->c1_h = 360; A->s1_y = A->c1_y + 54; A->s2_y = A->c1_y + 136; A->s4_y = A->c1_y + 218;   /* SOMA_259_ORBE: + letra del orbe */
+    A->s5_y = A->c1_y + 300;                                                                                        /* SOMA_266_AVISO: + avisos */
     A->c2_y = A->c1_y + A->c1_h + 12; A->c2_h = 110; A->s3_y = A->c2_y + 62;
     A->c3_y = A->c2_y + A->c2_h + 12; A->c3_h = 150; A->f_y = A->c3_y + 50;
     int n = lcm_aprendido_n(); int filas = n < 1 ? 1 : (n > 8 ? 8 : n);
     A->c4_y = A->c3_y + A->c3_h + 12; A->c4_h = 64 + filas * 20; A->b_x = L->cx + L->cw - 150; A->b_y = A->c4_y + 12;
-    A->c5_y = A->c4_y + A->c4_h + 12; A->c5_h = 74;
+    A->c5_y = A->c4_y + A->c4_h + 12; A->c5_h = 96;                                  /* SOMA_266_AVISO: + lo que suele tardar */
 }
 static void lcm_wrap2(int x, int y, int w, const char *s, uint32_t col)       /* hasta dos lineas */
 {
@@ -1642,6 +1643,9 @@ static void render_lcm(const struct sl *L)
     tx(L->cx + 20, A.s4_y - 28, 22, "Letra de las respuestas en el orbe (se desplazan con el raton o la rueda)", 12, KC_TXT, 0);   /* SOMA_259_ORBE */
     static const char *const letra[3] = { "Compacta", "Mediana", "Grande" };
     seg(L->cx + 20, A.s4_y, L->seg_w, 3, lcm_cfg_get(6), letra);
+    tx(L->cx + 20, A.s5_y - 28, 22, "Antes de usar el modelo de IA, avisar de lo que va a hacer y de cuanto suele tardar", 12, KC_TXT, 0);   /* SOMA_266_AVISO */
+    static const char *const aviso[2] = { "Sin aviso", "Avisar" };
+    seg(L->cx + 20, A.s5_y, L->seg_w, 2, lcm_cfg_get(7) ? 1 : 0, aviso);
     card(L->cx, A.c2_y, L->cw, A.c2_h);
     tx(L->cx + 20, A.c2_y + 14, 22, "Seguridad", 14, KC_TXT, 1);
     tx(L->cx + 20, A.c2_y + 34, 18, "Cuanto mas alta, menos veces actua solo y menos se equivoca. Lo que borra, mueve o apaga siempre pregunta.", 11, KC_DIM, 0);
@@ -1669,6 +1673,19 @@ static void render_lcm(const struct sl *L)
     s_num(b, sizeof b, (int)(st[1] + st[2])); s_cat(b, " al LLM, ", sizeof b); s_num(b, sizeof b, (int)st[3]); s_cat(b, " confirmadas, ", sizeof b);
     s_num(b, sizeof b, (int)st[4]); s_cat(b, " canceladas", sizeof b);
     tx(L->cx + 20, A.c5_y + 40, 22, b, 12, KC_DIM, 0);
+    {   /* SOMA_266_AVISO: lo que suele tardar el modelo (con lo que tardaron las ultimas veces; es lo que dice el aviso) */
+        static const char *const nom[4] = { "respuesta", "con herramientas", "programa", "documento" };
+        b[0] = 0; s_cat(b, "Suele tardar: ", sizeof b); int hay = 0;
+        for (int k = 0; k < 4; k++) {
+            int sg = lcm_cfg_get(11 + k);
+            if (!sg) continue;
+            if (hay++) s_cat(b, ", ", sizeof b);
+            s_cat(b, nom[k], sizeof b); s_cat(b, " ", sizeof b);
+            if (sg < 120) { s_num(b, sizeof b, sg); s_cat(b, " s", sizeof b); } else { s_num(b, sizeof b, (sg + 30) / 60); s_cat(b, " min", sizeof b); }
+        }
+        if (!hay) s_cat(b, "aun no hay medidas (se apuntan solas cada vez que se usa el modelo)", sizeof b);
+        tx(L->cx + 20, A.c5_y + 62, 22, b, 12, KC_DIM, 0);
+    }
 }
 static int click_lcm(const struct sl *L, int32_t mx, int32_t my)
 {
@@ -1677,6 +1694,7 @@ static int click_lcm(const struct sl *L, int32_t mx, int32_t my)
     if (in_seg && my >= A.s1_y && my < A.s1_y + 32) { lcm_cfg_set(0, seg_index(L, mx, 2)); return 1; }
     if (in_seg && my >= A.s2_y && my < A.s2_y + 32) { lcm_cfg_set(1, seg_index(L, mx, 2)); return 1; }
     if (in_seg && my >= A.s4_y && my < A.s4_y + 32) { lcm_cfg_set(6, seg_index(L, mx, 3)); return 1; }   /* SOMA_259_ORBE */
+    if (in_seg && my >= A.s5_y && my < A.s5_y + 32) { lcm_cfg_set(7, seg_index(L, mx, 2)); return 1; }   /* SOMA_266_AVISO */
     if (in_seg && my >= A.s3_y && my < A.s3_y + 32) { lcm_cfg_set(2, LCM_UMB[seg_index(L, mx, 4)]); return 1; }
     if (mx >= L->cx + 20 && mx < L->cx + L->cw - 20 && my >= A.f_y && my < A.f_y + 32) { g_lcm_focus = 1; return 1; }
     if (lcm_aprendido_n() && mx >= A.b_x && mx < A.b_x + 130 && my >= A.b_y && my < A.b_y + 30) { lcm_olvida(-1); return 1; }

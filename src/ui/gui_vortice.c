@@ -371,6 +371,19 @@ static void her_reveal_step(void)
 /* SOMA_259_ORBE: src/ui/gui_prompter.c (gui.c lo incluye despues de este archivo) */
 static void her_pr_turno(void); static void her_pr_fin(const char *resp); static void her_pr_pensamiento(const char *t);
 static void her_pr_stream_ini(void); static void her_pr_stream(const char *c);
+static void her_pr_aviso(const char *t);               /* SOMA_266_AVISO */
+static int her_aviso_on;                               /* SOMA_266_AVISO: el texto del orbe es el aviso, no la respuesta */
+/* SOMA_266_AVISO: el aviso del LCM ("voy a... suele tardar...") se ve en el orbe hasta que llega la respuesta. Solo con la pantalla
+ * cedida al hilo del agente (gui_aviso) o desde el hilo de la GUI. */
+static void her_aviso(const char *t)
+{
+    her_bufs_ensure();
+    if (!her_ans || !t) return;
+    her_ans_reveal = 0;
+    her_ans_len = her_text_cells(t, her_ans, HER_ANS_MAX);
+    her_aviso_on = 1;
+    her_pr_aviso(t);
+}
 static void her_begin_turn(const char *q)
 {
     her_bufs_ensure();
@@ -389,6 +402,7 @@ static void her_begin_turn(const char *q)
 static void her_finish_turn(const char *resp)
 {
     her_bufs_ensure();
+    if (her_aviso_on) { her_ans_len = 0; her_aviso_on = 0; }         /* SOMA_266_AVISO: la respuesta sustituye al aviso */
     static const char tag_r[] = "[Razonamiento]:\n";
     static const char tag_d[] = "\n\n[Dictamen]:\n";
     if (!resp) resp = "";
@@ -429,7 +443,7 @@ static struct her_u8 her_stream_dec = { 0, 0 };
 void gui_stream_begin(void)
 {
     her_bufs_ensure();
-    her_ans_len = 0; her_ans_reveal = 0;
+    her_ans_len = 0; her_ans_reveal = 0; her_aviso_on = 0;           /* SOMA_266_AVISO */
     her_stream_dec.cp = 0; her_stream_dec.need = 0;
     her_pr_stream_ini();                               /* SOMA_259_ORBE */
 }

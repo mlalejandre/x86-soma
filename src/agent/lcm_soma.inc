@@ -21,6 +21,16 @@
 /* ------------------------------------------------------------------------------------------- estado */
 static int  lcm_activo = 1, lcm_cargado = 0, lcm_voz = 1, lcm_umbral = 0;      /* umbral 0 = el del modelo */
 static int  lcm_letra = -1;                         /* SOMA_259_ORBE: letra del orbe (0 compacta, 1 mediana, 2 grande; -1 sin leer) */
+/* SOMA_266_AVISO: antes de una peticion que va al modelo de lenguaje, el LCM avisa al momento de lo que se va a hacer, cuanto suele
+ * tardar (lo que tardaron las anteriores de ese tipo) y pide paciencia. Tipos: */
+#define LCM_AV_DIRECTA     1      /* una pregunta o un texto: una llamada al modelo */
+#define LCM_AV_AGENTE      2      /* el modelo con herramientas (buscar, archivos, ordenes) */
+#define LCM_AV_PROGRAMA    3      /* el programador */
+#define LCM_AV_DOCUMENTO   4      /* el maquetador */
+#define LCM_AV_HERRAMIENTA 5      /* la respuesta directa pidio herramientas: se sigue con ellas */
+#define LCM_AV_N           6
+static int  lcm_aviso = 1;                                                       /* Ajustes > LCM > Avisos */
+static uint32_t lcm_av_ms[LCM_AV_N], lcm_av_n[LCM_AV_N];                         /* media (ms) y cuantas, por tipo */
 /* SOMA_261_ARREGLO: definiciones debiles que no hacen nada; las de src/ui/gui_prompter.c mandan en el nucleo. Antes eran
  * declaraciones debiles sin definir: valian en ELF, pero el enlazador de macOS (pruebas del anfitrion) las rechaza. */
 __attribute__((weak)) void gui_fase(const char *que) { (void)que; }
@@ -764,11 +774,16 @@ static int lcm_aprendido_busca(const char *frase, char *orden, uint32_t cap)
 /* ------------------------------------------------------------------------------------------- configuracion */
 static void lcm_cfg_guarda(void)
 {
-    char b[80]; b[0] = 0;
+    char b[320]; b[0] = 0;                                                       /* SOMA_266_AVISO: antes 80 */
     lcm_cat(b, sizeof b, "activo="); lcm_catn(b, sizeof b, (uint64_t)lcm_activo);
     lcm_cat(b, sizeof b, "\nvoz="); lcm_catn(b, sizeof b, (uint64_t)lcm_voz);
     lcm_cat(b, sizeof b, "\numbral="); lcm_catn(b, sizeof b, (uint64_t)lcm_umbral); lcm_cat(b, sizeof b, "\n");
     if (lcm_letra >= 0) { lcm_cat(b, sizeof b, "letra="); lcm_catn(b, sizeof b, (uint64_t)lcm_letra); lcm_cat(b, sizeof b, "\n"); }   /* SOMA_259_ORBE */
+    lcm_cat(b, sizeof b, "aviso="); lcm_catn(b, sizeof b, (uint64_t)lcm_aviso); lcm_cat(b, sizeof b, "\n");           /* SOMA_266_AVISO */
+    for (int t = 1; t < LCM_AV_N; ++t) if (lcm_av_n[t]) {
+        char k[8] = "t0="; k[1] = (char)('0' + t);
+        lcm_cat(b, sizeof b, k); lcm_catn(b, sizeof b, lcm_av_ms[t]); lcm_cat(b, sizeof b, "/"); lcm_catn(b, sizeof b, lcm_av_n[t]); lcm_cat(b, sizeof b, "\n");
+    }
     vfs_write("/etc/lcm.conf", b, lcm_len(b));
 }
 static int lcm_cfg_valor(const char *c, const char *clave, int def)
@@ -779,7 +794,7 @@ static int lcm_cfg_valor(const char *c, const char *clave, int def)
 static int lcm_letra_v(void)                         /* SOMA_259_ORBE: sin cargar el modelo (la pide la GUI al dibujar) */
 {
     if (lcm_letra < 0) {
-        char c[96]; int n = vfs_read("/etc/lcm.conf", c, sizeof(c) - 1);
+        char c[320]; int n = vfs_read("/etc/lcm.conf", c, sizeof(c) - 1);     /* SOMA_266_AVISO: antes 96 */
         int v = 2;
         if (n > 0) { c[n] = 0; v = lcm_cfg_valor(c, "letra=", 2); }
         lcm_letra = (v < 0 || v > 2) ? 2 : v;
@@ -790,13 +805,20 @@ static int lcm_listo(void)
 {
     if (!lcm_cargado) {
         lcm_cargado = 1;
-        char c[96]; int n = vfs_read("/etc/lcm.conf", c, sizeof(c) - 1);
+        char c[320]; int n = vfs_read("/etc/lcm.conf", c, sizeof(c) - 1);     /* SOMA_266_AVISO: antes 96 */
         if (n > 0) {
             c[n] = 0;
             if (lcm_busca(c, "activo=")) lcm_activo = lcm_cfg_valor(c, "activo=", 1) != 0;
             else if (mayordomo_has(c, "off")) lcm_activo = 0;                    /* formato del parche 253 */
             lcm_voz = lcm_cfg_valor(c, "voz=", 1) != 0;
             lcm_umbral = lcm_cfg_valor(c, "umbral=", 0);
+            lcm_aviso = lcm_cfg_valor(c, "aviso=", 1) != 0;                       /* SOMA_266_AVISO */
+            for (int t = 1; t < LCM_AV_N; ++t) {
+                char k[8] = "t0="; k[1] = (char)('0' + t);
+                const char *q = lcm_busca(c, k); uint32_t ms = 0, cu = 0;
+                if (q && (q == c || q[-1] == '\n') && q[3] >= '0' && q[3] <= '9' && (q = lcm_num(q + 3, &ms, 0)) != 0 && *q == '/' && q[1] >= '0' && q[1] <= '9'
+                    && lcm_num(q + 1, &cu, 0) && ms && cu) { lcm_av_ms[t] = ms; lcm_av_n[t] = cu; }
+            }
         }
         if (!lcm_carga(lcm_ordenes_blob, (uint32_t)sizeof(lcm_ordenes_blob))) {
             kprint("\n[LCM] El modelo del traductor no es valido: desactivado (todo sigue por el camino de siempre).\n");
@@ -812,6 +834,86 @@ static int lcm_del_usuario(void)
 {
     extern int shell_agent_mode(void);
     return !shell_agent_mode() && delegation_depth == 0;
+}
+
+/* ------------------------------------------------------------------------------------------- SOMA_266_AVISO: aviso inmediato */
+/* "unos 20 segundos", "alrededor de un minuto"... por lo que tardaron las anteriores; 0 si aun no hay ninguna */
+static int lcm_aviso_tiempo(int tipo, char *o, uint32_t cap)
+{
+    o[0] = 0;
+    if (tipo < 1 || tipo >= LCM_AV_N || !lcm_av_n[tipo]) return 0;
+    uint32_t s = (lcm_av_ms[tipo] + 500) / 1000;
+    if (s < 8) lcm_cpy(o, cap, "solo unos segundos");
+    else if (s < 55) { lcm_cpy(o, cap, "unos "); lcm_catn(o, cap, (s + 2) / 5 * 5); lcm_cat(o, cap, " segundos"); }
+    else if (s < 100) lcm_cpy(o, cap, "alrededor de un minuto");
+    else { lcm_cpy(o, cap, "unos "); lcm_catn(o, cap, (s + 30) / 60); lcm_cat(o, cap, " minutos"); }
+    return 1;
+}
+/* lo que tardo de verdad (desde el aviso hasta la respuesta): media movida, para la proxima vez */
+static void lcm_aviso_mide(int tipo, uint64_t ms)
+{
+    if (tipo < 1 || tipo >= LCM_AV_N || !ms || ms > 3600000u) return;
+    (void)lcm_listo();
+    if (!lcm_av_n[tipo]) lcm_av_ms[tipo] = (uint32_t)ms;
+    else lcm_av_ms[tipo] = (uint32_t)(((uint64_t)lcm_av_ms[tipo] * 3u + ms) / 4u);   /* pesan mas las ultimas */
+    if (lcm_av_n[tipo] < 1000000u) lcm_av_n[tipo]++;
+    lcm_cfg_guarda();
+}
+static int lcm_tiene(const char *f, const char *const *l) { for (int i = 0; l[i]; ++i) if (lcm_busca(f, l[i])) return 1; return 0; }
+/* El aviso (1) o nada (0: LCM apagado, avisos apagados, o no lo pide el usuario). lenguaje: "C", "Python"... o 0; editar: modificar
+ * algo que ya existe (un programa, un documento). En castellano y para la voz: sin numeros de lista ni simbolos. */
+static int lcm_aviso_texto(int tipo, const char *mission, const char *lenguaje, int editar, char *o, uint32_t cap)
+{
+    o[0] = 0;
+    if (!mission || !lcm_listo() || !lcm_aviso || !lcm_del_usuario() || tipo < 1 || tipo >= LCM_AV_N) return 0;
+    char f[512]; lcm_pliega(mission, f, sizeof f);
+    lcm_siembra(mission);
+    {   /* "buenas tardes, hazme..." -> "Buenas tardes. Voy a..." */
+        const char *g = lcm_sin_llamada(f), *tras = lcm_saludo_delante(g);
+        if (tras) { while (*tras == ' ') ++tras; if (*tras) { lcm_cpy(o, cap, lcm_saludo_de(g)); lcm_cat(o, cap, ". "); } }
+    }
+    static const char *const web[] = { "busca", "buscame", "internet", "noticia", "web", "precio", "cotiza", "que tiempo", "el tiempo en", "tiempo hara",
+                                       "quien gano", "resultado", "ultima hora", "actualidad", "hoy en", "investiga", "informate", "en google", 0 };
+    static const char *const arch[] = { "archivo", "fichero", "carpeta", "directorio", "documento", "/workspace", "/mis_", "disco", 0 };
+    char pasos[400];
+    if (tipo == LCM_AV_DIRECTA) {
+        static const char *const f1[] = { "Esto se lo paso al modelo de IA: lo piensa y te contesto.", "Para esto necesito al modelo de IA. Se lo pregunto y te respondo.",
+                                           "Se lo pregunto al modelo de IA y te cuento lo que diga.", "Esto lo tiene que pensar el modelo de IA; en cuanto responda, te lo digo." };
+        lcm_cat(o, cap, LCM_UNA(f1));
+    } else if (tipo == LCM_AV_PROGRAMA) {
+        char l[24] = ""; if (lenguaje && lenguaje[0]) { lcm_cpy(l, sizeof l, " en "); lcm_cat(l, sizeof l, lenguaje); }
+        if (editar) {
+            static const char *const f1[] = { "Voy a cambiar el programa{1} con el modelo de IA: primero leo el que tienes, después le pido los cambios y al final lo compruebo y lo pruebo.",
+                                               "Lo arreglo{1} con el modelo de IA: leo el programa, le pido los cambios, y antes de guardarlo lo compruebo y lo pruebo." };
+            lcm_forma(pasos, sizeof pasos, LCM_UNA(f1), l, 0, 0);
+        } else {
+            static const char *const f1[] = { "Voy a programarlo{1} con el modelo de IA: primero planifico el programa, después escribo el código y lo compruebo, y al final lo pruebo y corrijo lo que falle.",
+                                               "Lo programo{1} con el modelo de IA en varios pasos: un plan, el código, la comprobación y las pruebas, corrigiendo lo que falle por el camino." };
+            lcm_forma(pasos, sizeof pasos, LCM_UNA(f1), l, 0, 0);
+        }
+        lcm_cat(o, cap, pasos);
+    } else if (tipo == LCM_AV_DOCUMENTO) {
+        if (editar) { static const char *const f1[] = { "Voy a revisar el documento con el modelo de IA: lo leo, le pido las mejoras y te lo dejo maquetado de nuevo." }; lcm_cat(o, cap, LCM_UNA(f1)); }
+        else {
+            static const char *const f1[] = { "Voy a preparar el documento con el modelo de IA: primero redacta el contenido, después lo maqueto con su formato, lo reviso y al final lo exporto.",
+                                               "Lo hago con el modelo de IA en cuatro pasos: redactar el contenido, maquetarlo, revisarlo y exportarlo." };
+            lcm_cat(o, cap, LCM_UNA(f1));
+        }
+    } else {                                                                    /* con herramientas */
+        if (tipo == LCM_AV_HERRAMIENTA) { static const char *const f0[] = { "Para responderte bien necesito usar herramientas.", "El modelo necesita algo más que pensar: va a usar herramientas." }; lcm_cat(o, cap, LCM_UNA(f0)); lcm_cat(o, cap, " "); }
+        else { static const char *const f0[] = { "Para esto necesito al modelo de IA y algunas herramientas.", "Esto lo hago con el modelo de IA y las herramientas del sistema." }; lcm_cat(o, cap, LCM_UNA(f0)); lcm_cat(o, cap, " "); }
+        if (lcm_tiene(f, web)) { static const char *const f1[] = { "Primero busco en internet, después leo lo que encuentre y al final te lo resumo.", "Voy a buscarlo en internet, leer las páginas que salgan y contarte lo importante." }; lcm_cat(o, cap, LCM_UNA(f1)); }
+        else if (lcm_tiene(f, arch)) { static const char *const f1[] = { "Primero miro los archivos que hagan falta, después hago lo que pides y al final te cuento el resultado." }; lcm_cat(o, cap, LCM_UNA(f1)); }
+        else { static const char *const f1[] = { "Primero decido qué herramientas hacen falta, después las uso y al final te preparo la respuesta.", "Va a elegir las herramientas, usarlas y prepararte la respuesta." }; lcm_cat(o, cap, LCM_UNA(f1)); }
+    }
+    char t[64]; int hay = lcm_aviso_tiempo(tipo, t, sizeof t);
+    static const char *const pac[] = { "ten un poco de paciencia", "dame un momento", "te aviso en cuanto lo tenga", "enseguida te lo cuento" };
+    lcm_cat(o, cap, " ");
+    if (hay) { static const char *const f2[] = { "Suele tardar {1}, {2}.", "Normalmente tarda {1}; {2}.", "Lleva {1}, {2}." }; char x[200]; lcm_forma(x, sizeof x, LCM_UNA(f2), t, LCM_UNA(pac), 0); lcm_cat(o, cap, x); }
+    else if (tipo == LCM_AV_DIRECTA) { static const char *const f2[] = { "Dame un momento.", "Un momento, por favor.", "Enseguida te lo digo." }; lcm_cat(o, cap, LCM_UNA(f2)); }
+    else { static const char *const f2[] = { "Puede tardar un poco, {1}.", "Esto lleva su tiempo, {1}.", "Tardará un rato, {1}." }; char x[200]; lcm_forma(x, sizeof x, LCM_UNA(f2), LCM_UNA(pac), 0, 0); lcm_cat(o, cap, x); }
+    if (o[0] >= 'a' && o[0] <= 'z') o[0] = (char)(o[0] - 32);
+    return 1;
 }
 
 static const char *lcm_pieza_nombre(char s)
@@ -1160,9 +1262,11 @@ int lcm_terminal(const char *linea)
 /* ------------------------------------------------------------------------------------------- para Ajustes > LCM (hilo de la GUI) */
 int lcm_cfg_get(int que);
 int lcm_cfg_get(int que)          /* 0 activo, 1 voz natural, 2 umbral (%), 3 modelo valido, 4 aprendidas, 5 ordenes del modelo, 6 letra del orbe (SOMA_259_ORBE) */
-{
+{                                 /* SOMA_266_AVISO: 7 avisos antes del modelo; 11..15 segundos que suele tardar cada tipo (0: aun no se sabe) */
     if (que == 6) return lcm_letra_v();                  /* SOMA_259_ORBE */
     (void)lcm_listo();
+    if (que == 7) return lcm_aviso;
+    if (que > 10 && que < 10 + LCM_AV_N) return lcm_av_n[que - 10] ? (int)((lcm_av_ms[que - 10] + 500) / 1000) : 0;
     switch (que) {
     case 0: return lcm_activo; case 1: return lcm_voz; case 2: return lcm_m.ok ? (int)(lcm_m.umbral_mil / 10) : 0;
     case 3: return lcm_m.ok; case 4: return lcm_apr_n; case 5: return lcm_m.ok ? (int)lcm_m.ni - 1 : 0;
@@ -1177,6 +1281,7 @@ void lcm_cfg_set(int que, int v)
     if (que == 0) { lcm_activo = v ? 1 : 0; if (!v) { lcm_pendiente[0] = 0; lcm_corrigiendo = 0; } }
     else if (que == 6) { if (v >= 0 && v <= 2) lcm_letra = v; }   /* SOMA_259_ORBE */
     else if (que == 1) lcm_voz = v ? 1 : 0;
+    else if (que == 7) lcm_aviso = v ? 1 : 0;                                      /* SOMA_266_AVISO */
     else if (que == 2 && v >= 50 && v <= 99) { lcm_umbral = v; if (lcm_m.ok) lcm_m.umbral_mil = (uint32_t)v * 10; }
     lcm_cfg_guarda();
 }

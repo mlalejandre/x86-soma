@@ -13,6 +13,8 @@
 
 extern uint64_t timer_get_uptime_ms(void);
 
+/* SOMA_264_LANG: vm_init deja la VM vacia sin mirar lo que hubiera en la memoria (kmalloc no la pone a cero: antes se leia un
+ * table_pool basura). Si la VM ya se uso, hay que llamar antes a vm_release, que devuelve su memoria. */
 void vm_init(struct soma_vm *vm)
 {
     vm->sp = 0;
@@ -23,25 +25,16 @@ void vm_init(struct soma_vm *vm)
     vm->lp = 0;
     vm->fp = 0;
     vm->fsp = 0;
-        vm->array_pool_count = 0; /*PL3_INIT*/
-    for (int si = 0; si < VM_STR_SLOTS; ++si) { vm->str_used[si] = 0; vm->str_mark[si] = 0; vm->str_len[si] = 0; }
-    for (int ri = 0; ri < 4; ++ri) { vm->tmp_roots[ri].type = VAL_NIL; vm->tmp_roots[ri].i = 0; vm->tmp_roots[ri].arr_id = 0; vm->tmp_roots[ri].tab_id = 0; vm->tmp_roots[ri].s[0] = '\0'; } /*PL4_INIT*/
-    vm->table_pool_count = 0;
+    vm->array_pool = 0; vm->array_pool_cap = 0; vm->array_pool_count = 0;
+    vm->table_pool = 0; vm->table_pool_cap = 0; vm->table_pool_count = 0;
+    vm->mem_used = 0; vm->mem_budget = VM_MEM_BUDGET; vm->mem_aviso = 0; vm->gc_tras = (size_t)-1;
+    for (int si = 0; si < VM_STR_SLOTS; ++si) { vm->str_ptr[si] = 0; vm->str_used[si] = 0; vm->str_mark[si] = 0; vm->str_len[si] = 0; }
+    for (int ri = 0; ri < 8; ++ri) { vm->tmp_roots[ri].type = VAL_NIL; vm->tmp_roots[ri].i = 0; vm->tmp_roots[ri].arr_id = 0; vm->tmp_roots[ri].tab_id = 0; vm->tmp_roots[ri].s[0] = '\0'; } /*PL4_INIT*/
     vm->win.active = 0;
     vm->win.x = 0; vm->win.y = 0; vm->win.w = 0; vm->win.h = 0; vm->win.title[0] = '\0'; vm->win.bg = 0x0A0D14;
-    if (vm->table_pool) {
-        for (int ti = 0; ti < VM_TABLES_POOL_CAP; ++ti) {
-            vm->table_pool[ti].len = 0; vm->table_pool[ti].used = 0; vm->table_pool[ti].mark = 0;
-        }
-    }
     for (int i = 0; i < VM_STACK_CAPACITY; ++i) { vm->stack[i].type = VAL_NIL; vm->stack[i].i = 0; vm->stack[i].arr_id = 0; vm->stack[i].tab_id = 0; vm->stack[i].s[0] = '\0'; } /*PL1_INITZ*/
-    for (int i = 0; i < VM_VARS_CAPACITY; ++i) { vm->vars[i].type = VAL_NIL; vm->vars[i].i = 0; vm->vars[i].arr_id = 0; vm->vars[i].s[0] = '\0'; }
-    for (int i = 0; i < VM_LOCALS_CAPACITY; ++i) { vm->locals[i].type = VAL_NIL; vm->locals[i].i = 0; vm->locals[i].arr_id = 0; vm->locals[i].s[0] = '\0'; }
-    for (int i = 0; i < VM_ARRAYS_POOL_CAP; ++i) { /*PL2_INIT*/
-        vm->array_pool[i].len = 0;
-        vm->array_pool[i].used = 0;
-        vm->array_pool[i].mark = 0;
-    }
+    for (int i = 0; i < VM_VARS_CAPACITY; ++i) { vm->vars[i].type = VAL_NIL; vm->vars[i].i = 0; vm->vars[i].arr_id = 0; vm->vars[i].tab_id = 0; vm->vars[i].s[0] = '\0'; }
+    for (int i = 0; i < VM_LOCALS_CAPACITY; ++i) { vm->locals[i].type = VAL_NIL; vm->locals[i].i = 0; vm->locals[i].arr_id = 0; vm->locals[i].tab_id = 0; vm->locals[i].s[0] = '\0'; }
 }
 
 static int push_val(struct soma_vm *vm, struct vm_val val)
@@ -95,15 +88,37 @@ static int vm_truthy(const struct vm_val *v)
 static struct soma_vm *g_vm_cur = 0;
 static void vm_gc_collect(struct soma_vm *vm);
 
+/* ---------------------------------------------------------------- SOMA_264_LANG: memoria de la VM con presupuesto */
+static void *vm_mem_get(struct soma_vm *vm, size_t n)
+{
+    if (!n || vm->mem_used + n > vm->mem_budget) return 0;
+    void *p = kmalloc(n);
+    if (p) vm->mem_used += n;
+    return p;
+}
+static void vm_mem_put(struct soma_vm *vm, void *p, size_t n)
+{
+    if (!p) return;
+    kfree(p);
+    vm->mem_used = vm->mem_used >= n ? vm->mem_used - n : 0;
+}
+static void vm_sin_sitio(struct soma_vm *vm, const char *que)
+{
+    if (vm->mem_aviso) return;
+    vm->mem_aviso = 1;
+    kprint("[VM] Sin sitio para "); kprint(que); kprint(" (memoria del programa: ");
+    kprint_dec((uint32_t)(vm->mem_used >> 20)); kprint(" de "); kprint_dec((uint32_t)(vm->mem_budget >> 20)); kprint(" MB)\n");
+}
+
 static int vm_is_long(const struct soma_vm *vm, const struct vm_val *v)
 {
-    return vm && vm->str_pool && v->type == VAL_STR && v->i > 0 &&
-           v->i <= VM_STR_SLOTS && vm->str_used[v->i - 1];
+    return vm && v->type == VAL_STR && v->i > 0 &&
+           v->i <= VM_STR_SLOTS && vm->str_used[v->i - 1] && vm->str_ptr[v->i - 1];
 }
 
 static const char *vm_sdata(const struct soma_vm *vm, const struct vm_val *v)
 {
-    if (vm_is_long(vm, v)) return vm->str_pool + (uint32_t)(v->i - 1) * VM_STR_SLOT_CAP;
+    if (vm_is_long(vm, v)) return vm->str_ptr[v->i - 1];
     return v->s;
 }
 
@@ -115,19 +130,27 @@ static uint32_t vm_slen(const struct soma_vm *vm, const struct vm_val *v)
     return n;
 }
 
+static void vm_gc_collect(struct soma_vm *vm);
+/* recogida por falta de sitio: solo si se ha pedido memoria desde la ultima (si no, no liberaria nada y, repetida en cada
+ * operacion de un programa que ya lleno el presupuesto, lo volveria cuadratico) */
+static int vm_gc_por_sitio(struct soma_vm *vm)
+{
+    if (vm->gc_tras != (size_t)-1 && vm->mem_used <= vm->gc_tras) return 0;
+    vm_gc_collect(vm);
+    vm->gc_tras = vm->mem_used;
+    return 1;
+}
+
+/* una ranura para una cadena larga de 'len' caracteres (la memoria la pone vm_str_make2) */
 static int vm_str_slot_alloc(struct soma_vm *vm)
 {
-    if (!vm->str_pool) {
-        vm->str_pool = (char *)kmalloc((size_t)VM_STR_SLOTS * VM_STR_SLOT_CAP);
-        if (!vm->str_pool) return -1;
-        for (int i = 0; i < VM_STR_SLOTS; ++i) { vm->str_used[i] = 0; vm->str_mark[i] = 0; vm->str_len[i] = 0; }
-    }
     for (int pass = 0; pass < 2; ++pass) {
         for (int i = 0; i < VM_STR_SLOTS; ++i) {
             if (!vm->str_used[i]) {
                 vm->str_used[i] = 1;
                 vm->str_mark[i] = 0;
                 vm->str_len[i] = 0;
+                vm->str_ptr[i] = 0;
                 return i;
             }
         }
@@ -151,18 +174,20 @@ static void vm_str_make2(struct soma_vm *vm, struct vm_val *out,
     out->s[pre] = '\0';
     if (len < sizeof(out->s)) return;
 
-    int slot = vm_str_slot_alloc(vm);
-    if (slot < 0) return;   /* sin pool: queda el prefijo de 127 caracteres */
-
-    if (len > VM_STR_SLOT_CAP - 1) {
-        if (l1 >= VM_STR_SLOT_CAP - 1) { l1 = VM_STR_SLOT_CAP - 1; l2 = 0; }
-        else l2 = VM_STR_SLOT_CAP - 1 - l1;
+    if (len > VM_STR_MAX - 1) {
+        if (l1 >= VM_STR_MAX - 1) { l1 = VM_STR_MAX - 1; l2 = 0; }
+        else l2 = VM_STR_MAX - 1 - l1;
         len = l1 + l2;
     }
-    char *dst = vm->str_pool + (uint32_t)slot * VM_STR_SLOT_CAP;
+    int slot = vm_str_slot_alloc(vm);
+    if (slot < 0) { vm_sin_sitio(vm, "mas cadenas largas"); return; }   /* queda el prefijo de 127 caracteres */
+    char *dst = (char *)vm_mem_get(vm, (size_t)len + 1);
+    if (!dst && vm_gc_por_sitio(vm)) { vm->str_used[slot] = 1; dst = (char *)vm_mem_get(vm, (size_t)len + 1); }
+    if (!dst) { vm->str_used[slot] = 0; vm_sin_sitio(vm, "una cadena"); return; }
     for (uint32_t k = 0; k < l1; ++k) dst[k] = d1[k];
     for (uint32_t k = 0; k < l2; ++k) dst[l1 + k] = d2[k];
     dst[len] = '\0';
+    vm->str_ptr[slot] = dst;
     vm->str_len[slot] = len;
     out->i = (int64_t)slot + 1;
 }
@@ -211,97 +236,228 @@ static void vm_gc_mark_val(struct soma_vm *vm, const struct vm_val *v, int depth
         return;
     }
     if (v->type == VAL_TABLE) { /*PL4_MARK_TABLE*/
-        if (vm->table_pool && v->tab_id < VM_TABLES_POOL_CAP) {
+        if (vm->table_pool && v->tab_id < vm->table_pool_cap) {
             struct vm_table_obj *t = &vm->table_pool[v->tab_id];
             if (!t->used || t->mark || depth > 40) return;
             t->mark = 1;
-            for (uint16_t k = 0; k < t->len; ++k) {
+            for (uint32_t k = 0; k < t->len; ++k) {
                 vm_gc_mark_val(vm, &t->entries[k].key, depth + 1);
                 vm_gc_mark_val(vm, &t->entries[k].val, depth + 1);
             }
         }
         return;
     }
-    if (v->type != VAL_ARRAY || v->arr_id >= VM_ARRAYS_POOL_CAP) return;
+    if (v->type != VAL_ARRAY || !vm->array_pool || v->arr_id >= vm->array_pool_cap) return;
     struct vm_array_obj *a = &vm->array_pool[v->arr_id];
     if (!a->used || a->mark || depth > 40) return;
     a->mark = 1;
-    for (uint16_t k = 0; k < a->len; ++k) vm_gc_mark_val(vm, &a->items[k], depth + 1);
+    for (uint32_t k = 0; k < a->len; ++k) vm_gc_mark_val(vm, &a->items[k], depth + 1);
+}
+
+static void vm_array_free_items(struct soma_vm *vm, struct vm_array_obj *a)
+{
+    vm_mem_put(vm, a->items, (size_t)a->cap * sizeof(struct vm_val));
+    a->items = 0; a->cap = 0; a->len = 0;
+}
+static void vm_table_free_items(struct soma_vm *vm, struct vm_table_obj *t)
+{
+    vm_mem_put(vm, t->entries, (size_t)t->cap * sizeof(struct vm_table_entry));
+    vm_mem_put(vm, t->hidx, (size_t)t->hcap * sizeof(uint32_t));
+    t->entries = 0; t->cap = 0; t->len = 0; t->hidx = 0; t->hcap = 0;
 }
 
 static void vm_gc_collect(struct soma_vm *vm)
 {
-        for (int i = 0; i < VM_ARRAYS_POOL_CAP; ++i) vm->array_pool[i].mark = 0;
+    for (int i = 0; i < vm->array_pool_cap; ++i) vm->array_pool[i].mark = 0;
     for (int i = 0; i < VM_STR_SLOTS; ++i) vm->str_mark[i] = 0; /*PL3_GCSTR*/
-    if (vm->table_pool) { /*PL4_GCTAB*/
-        for (int i = 0; i < VM_TABLES_POOL_CAP; ++i) vm->table_pool[i].mark = 0;
-    }
-    for (int i = 0; i < 4; ++i) vm_gc_mark_val(vm, &vm->tmp_roots[i], 0);
+    for (int i = 0; i < vm->table_pool_cap; ++i) vm->table_pool[i].mark = 0; /*PL4_GCTAB*/
+    for (int i = 0; i < 8; ++i) vm_gc_mark_val(vm, &vm->tmp_roots[i], 0);
     for (int i = 0; i < vm->sp; ++i)  vm_gc_mark_val(vm, &vm->stack[i], 0);
     for (int i = 0; i < VM_VARS_CAPACITY; ++i) vm_gc_mark_val(vm, &vm->vars[i], 0);
     int lim = vm->lp;
     if (lim > VM_LOCALS_CAPACITY) lim = VM_LOCALS_CAPACITY;
     for (int i = 0; i < lim; ++i) vm_gc_mark_val(vm, &vm->locals[i], 0);
-    for (int i = 0; i < VM_ARRAYS_POOL_CAP; ++i) {
-                if (vm->array_pool[i].used && !vm->array_pool[i].mark) vm->array_pool[i].used = 0;
-        if (i < VM_STR_SLOTS && vm->str_used[i] && !vm->str_mark[i]) vm->str_used[i] = 0; /*PL3_SWEEPSTR*/
-        if (vm->table_pool && i < VM_TABLES_POOL_CAP && vm->table_pool[i].used && !vm->table_pool[i].mark) {
-            vm->table_pool[i].used = 0; /*PL4_SWEEPTAB*/
+    for (int i = 0; i < vm->array_pool_cap; ++i) {
+        struct vm_array_obj *a = &vm->array_pool[i];
+        if (a->used && !a->mark) { a->used = 0; vm_array_free_items(vm, a); }
+    }
+    for (int i = 0; i < VM_STR_SLOTS; ++i) { /*PL3_SWEEPSTR*/
+        if (vm->str_used[i] && !vm->str_mark[i]) {
+            vm->str_used[i] = 0;
+            vm_mem_put(vm, vm->str_ptr[i], (size_t)vm->str_len[i] + 1);
+            vm->str_ptr[i] = 0; vm->str_len[i] = 0;
         }
     }
+    for (int i = 0; i < vm->table_pool_cap; ++i) { /*PL4_SWEEPTAB*/
+        struct vm_table_obj *t = &vm->table_pool[i];
+        if (t->used && !t->mark) { t->used = 0; vm_table_free_items(vm, t); }
+    }
+}
+
+/* el pool de arrays (o de tablas) crece al doble hasta 'max'; los identificadores no cambian */
+static int vm_pool_grow(struct soma_vm *vm, void **pool, int *cap, size_t obj, int max)
+{
+    if (*cap >= max) return 0;
+    int n = *cap ? *cap * 2 : 64;
+    if (n > max) n = max;
+    uint8_t *p = (uint8_t *)kmalloc((size_t)n * obj);          /* el pool no cuenta en el presupuesto: son descriptores */
+    if (!p) return 0;
+    for (size_t k = 0; k < (size_t)n * obj; ++k) p[k] = 0;
+    if (*pool) {
+        uint8_t *q = (uint8_t *)*pool;
+        for (size_t k = 0; k < (size_t)*cap * obj; ++k) p[k] = q[k];
+        kfree(*pool);
+    }
+    *pool = p; *cap = n;
+    return 1;
 }
 
 static int vm_alloc_array(struct soma_vm *vm)
 {
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int i = 0; i < VM_ARRAYS_POOL_CAP; ++i) {
+    for (int pass = 0; pass < 3; ++pass) {
+        for (int i = 0; i < vm->array_pool_cap; ++i) {
             if (!vm->array_pool[i].used) {
-                vm->array_pool[i].used = 1;
-                vm->array_pool[i].mark = 0;
-                vm->array_pool[i].len = 0;
+                struct vm_array_obj *a = &vm->array_pool[i];
+                a->used = 1; a->mark = 0; a->len = 0;
                 if (i >= vm->array_pool_count) vm->array_pool_count = i + 1;
                 return i;
             }
         }
-        if (pass == 0) vm_gc_collect(vm);
+        if (pass == 0 && vm->array_pool_cap >= 64) vm_gc_collect(vm);
+        else if (!vm_pool_grow(vm, (void **)&vm->array_pool, &vm->array_pool_cap, sizeof(struct vm_array_obj), VM_ARRAYS_MAX)) {
+            if (pass == 0) vm_gc_collect(vm); else break;
+        }
     }
     return -1;
+}
+
+/* que quepan 'need' elementos en el array (crece al doble; 0 si no hay sitio) */
+static int vm_array_reserve(struct soma_vm *vm, struct vm_array_obj *a, uint32_t need)
+{
+    if (need <= a->cap) return 1;
+    if (need > VM_ARRAY_ITEMS_MAX) return 0;
+    uint32_t n = a->cap ? a->cap : 8;
+    while (n < need) n = (n > VM_ARRAY_ITEMS_MAX / 2) ? VM_ARRAY_ITEMS_MAX : n * 2;
+    struct vm_val *it = (struct vm_val *)vm_mem_get(vm, (size_t)n * sizeof(struct vm_val));
+    if (!it && n > need) { n = need; it = (struct vm_val *)vm_mem_get(vm, (size_t)n * sizeof(struct vm_val)); }
+    if (!it) return 0;
+    for (uint32_t k = 0; k < a->len; ++k) it[k] = a->items[k];
+    vm_mem_put(vm, a->items, (size_t)a->cap * sizeof(struct vm_val));
+    a->items = it; a->cap = n;
+    return 1;
+}
+/* igual, pero si no cabe recoge basura (con el array y el valor protegidos) y lo reintenta */
+static int vm_array_reserve_gc(struct soma_vm *vm, const struct vm_val *arr_v, const struct vm_val *extra, uint32_t need)
+{
+    struct vm_array_obj *a = &vm->array_pool[arr_v->arr_id];
+    if (vm_array_reserve(vm, a, need)) return 1;
+    vm->tmp_roots[4] = *arr_v;
+    if (extra) vm->tmp_roots[5] = *extra;
+    int otra = vm_gc_por_sitio(vm);
+    vm->tmp_roots[4].type = VAL_NIL; vm->tmp_roots[5].type = VAL_NIL;
+    a = &vm->array_pool[arr_v->arr_id];
+    if (otra && vm_array_reserve(vm, a, need)) return 1;
+    vm_sin_sitio(vm, "mas elementos en un array");
+    return 0;
 }
 
 /*PL4_TAB_HELPERS*/
 static int vm_alloc_table(struct soma_vm *vm)
 {
-    if (!vm->table_pool) {
-        vm->table_pool = (struct vm_table_obj *)kmalloc(sizeof(struct vm_table_obj) * VM_TABLES_POOL_CAP);
-        if (!vm->table_pool) return -1;
-        for (int i = 0; i < VM_TABLES_POOL_CAP; ++i) {
-            vm->table_pool[i].len = 0;
-            vm->table_pool[i].used = 0;
-            vm->table_pool[i].mark = 0;
-        }
-    }
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int i = 0; i < VM_TABLES_POOL_CAP; ++i) {
+    for (int pass = 0; pass < 3; ++pass) {
+        for (int i = 0; i < vm->table_pool_cap; ++i) {
             if (!vm->table_pool[i].used) {
-                vm->table_pool[i].used = 1;
-                vm->table_pool[i].mark = 0;
-                vm->table_pool[i].len = 0;
+                struct vm_table_obj *t = &vm->table_pool[i];
+                t->used = 1; t->mark = 0; t->len = 0;
                 if (i >= vm->table_pool_count) vm->table_pool_count = i + 1;
                 return i;
             }
         }
-        if (pass == 0) vm_gc_collect(vm);
+        if (pass == 0 && vm->table_pool_cap >= 64) vm_gc_collect(vm);
+        else if (!vm_pool_grow(vm, (void **)&vm->table_pool, &vm->table_pool_cap, sizeof(struct vm_table_obj), VM_TABLES_MAX)) {
+            if (pass == 0) vm_gc_collect(vm); else break;
+        }
     }
     return -1;
+}
+
+/* SOMA_264_LANG: hash de una clave, coherente con vm_values_equal (nil == 0; arrays y tablas por identidad) */
+static uint32_t vm_key_hash(const struct vm_val *k)
+{
+    uint64_t h;
+    if (k->type == VAL_STR) {
+        const char *s = vm_sdata(g_vm_cur, k);
+        h = 1469598103934665603ULL;
+        while (*s) { h ^= (uint8_t)*s++; h *= 1099511628211ULL; }
+    } else if (k->type == VAL_ARRAY) h = 0xA1A1A1A1ULL + k->arr_id;
+    else if (k->type == VAL_TABLE) h = 0x7B7B7B7BULL + k->tab_id;
+    else h = (k->type == VAL_NIL) ? 0 : (uint64_t)k->i;
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33;
+    return (uint32_t)h;
+}
+static void vm_table_reindex(struct soma_vm *vm, struct vm_table_obj *tab)
+{
+    if (tab->len < 32) return;                                   /* tablas pequenas: busqueda lineal, como antes */
+    uint32_t need = 64; while (need < tab->len * 2) need *= 2;
+    if (tab->hidx && tab->hcap >= need) return;
+    uint32_t *h = (uint32_t *)vm_mem_get(vm, (size_t)need * sizeof(uint32_t));
+    if (!h) return;                                               /* sin indice sigue funcionando (lineal) */
+    for (uint32_t k = 0; k < need; ++k) h[k] = 0;
+    for (uint32_t e = 0; e < tab->len; ++e) {
+        uint32_t p = vm_key_hash(&tab->entries[e].key) & (need - 1);
+        while (h[p]) p = (p + 1) & (need - 1);
+        h[p] = e + 1;
+    }
+    vm_mem_put(vm, tab->hidx, (size_t)tab->hcap * sizeof(uint32_t));
+    tab->hidx = h; tab->hcap = need;
 }
 
 static int vm_table_find_key(struct soma_vm *vm, const struct vm_table_obj *tab, const struct vm_val *key)
 {
     (void)vm;
-    for (uint16_t k = 0; k < tab->len; ++k) {
+    if (tab->hidx && tab->hcap) {
+        uint32_t p = vm_key_hash(key) & (tab->hcap - 1);
+        while (tab->hidx[p]) {
+            uint32_t e = tab->hidx[p] - 1;
+            if (e < tab->len && vm_values_equal(&tab->entries[e].key, key)) return (int)e;
+            p = (p + 1) & (tab->hcap - 1);
+        }
+        return -1;
+    }
+    for (uint32_t k = 0; k < tab->len; ++k) {
         if (vm_values_equal(&tab->entries[k].key, key)) return (int)k;
     }
     return -1;
+}
+
+static int vm_table_reserve(struct soma_vm *vm, struct vm_table_obj *tab, uint32_t need)
+{
+    if (need <= tab->cap) return 1;
+    if (need > VM_TABLE_ITEMS_MAX) return 0;
+    uint32_t n = tab->cap ? tab->cap * 2 : 8;
+    while (n < need) n *= 2;
+    if (n > VM_TABLE_ITEMS_MAX) n = VM_TABLE_ITEMS_MAX;
+    struct vm_table_entry *e = (struct vm_table_entry *)vm_mem_get(vm, (size_t)n * sizeof(struct vm_table_entry));
+    if (!e) return 0;
+    for (uint32_t k = 0; k < tab->len; ++k) e[k] = tab->entries[k];
+    vm_mem_put(vm, tab->entries, (size_t)tab->cap * sizeof(struct vm_table_entry));
+    tab->entries = e; tab->cap = n;
+    return 1;
+}
+
+/* anade al final sin buscar (la clave no esta); actualiza el indice */
+static int vm_table_append(struct soma_vm *vm, struct vm_table_obj *tab, const struct vm_val *key, const struct vm_val *val)
+{
+    if (!vm_table_reserve(vm, tab, tab->len + 1)) return 0;
+    tab->entries[tab->len].key = *key;
+    tab->entries[tab->len].val = *val;
+    tab->len++;
+    if (tab->hidx && tab->len * 2 <= tab->hcap) {
+        uint32_t p = vm_key_hash(key) & (tab->hcap - 1);
+        while (tab->hidx[p]) p = (p + 1) & (tab->hcap - 1);
+        tab->hidx[p] = tab->len;
+    } else vm_table_reindex(vm, tab);
+    return 1;
 }
 
 static int vm_table_set_val(struct soma_vm *vm, struct vm_table_obj *tab,
@@ -312,10 +468,8 @@ static int vm_table_set_val(struct soma_vm *vm, struct vm_table_obj *tab,
         tab->entries[idx].val = *val;
         return 1;
     }
-    if (tab->len >= VM_TABLE_ITEMS_CAP) return 0;
-    tab->entries[tab->len].key = *key;
-    tab->entries[tab->len].val = *val;
-    tab->len++;
+    if (tab->len >= VM_TABLE_ITEMS_MAX) return 0;
+    if (!vm_table_append(vm, tab, key, val)) { vm_sin_sitio(vm, "mas entradas en una tabla"); return 0; }
     return 1;
 }
 
@@ -368,7 +522,7 @@ static void val_to_str(struct soma_vm *vm, const struct vm_val *v, char *buf, ui
         if (pos < max_buf - 1) buf[pos++] = '[';
         if (v->arr_id < vm->array_pool_count) {
             struct vm_array_obj *arr = &vm->array_pool[v->arr_id];
-            for (uint16_t k = 0; k < arr->len && pos < max_buf - 8; ++k) {
+            for (uint32_t k = 0; k < arr->len && pos < max_buf - 8; ++k) {
                 if (k > 0 && pos < max_buf - 3) { buf[pos++] = ','; buf[pos++] = ' '; }
                 char ibuf[64]; /*PL1_IBUF*/
                 val_to_str(vm, &arr->items[k], ibuf, sizeof(ibuf));
@@ -382,9 +536,9 @@ static void val_to_str(struct soma_vm *vm, const struct vm_val *v, char *buf, ui
         uint32_t pos = 0;
         val_to_str_depth++;
         if (pos < max_buf - 1) buf[pos++] = '{';
-        if (vm->table_pool && v->tab_id < VM_TABLES_POOL_CAP) {
+        if (vm->table_pool && v->tab_id < vm->table_pool_cap) {
             struct vm_table_obj *tab = &vm->table_pool[v->tab_id];
-            for (uint16_t k = 0; k < tab->len && pos < max_buf - 12; ++k) {
+            for (uint32_t k = 0; k < tab->len && pos < max_buf - 12; ++k) {
                 if (k > 0 && pos < max_buf - 3) { buf[pos++] = ','; buf[pos++] = ' '; }
                 char kbuf[48];
                 val_to_str(vm, &tab->entries[k].key, kbuf, sizeof(kbuf));
@@ -1160,12 +1314,14 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             vm->ip += 2;
             int aid_i = vm_alloc_array(vm); /*PL2_NEWARR*/
             if (aid_i < 0) {
-                kprint("[VM ERROR] Pool de arrays agotado (32 arrays vivos a la vez)\n");
+                kprint("[VM ERROR] Demasiados arrays vivos a la vez (8192)\n");
                 return -1;
             }
             uint16_t aid = (uint16_t)aid_i;
             struct vm_array_obj *arr = &vm->array_pool[aid];
-            arr->len = (count < VM_ARRAY_ITEMS_CAP) ? count : VM_ARRAY_ITEMS_CAP;
+            arr->len = 0;
+            if (count && !vm_array_reserve(vm, arr, count) && vm_gc_por_sitio(vm)) { arr = &vm->array_pool[aid]; arr->used = 1; (void)vm_array_reserve(vm, arr, count); }
+            arr->len = count <= arr->cap ? count : arr->cap;   /* sin sitio: se quedan los que quepan (antes, 48) */
             for (int k = (int)count - 1; k >= 0; --k) { /*PL1_NEWARR*/
                 struct vm_val item = pop_val(vm);
                 if (k < (int)arr->len) arr->items[k] = item;
@@ -1197,7 +1353,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
 
             if (arr_v.type == VAL_TABLE) { /*PL4_TABGET*/
                 struct vm_val res = { VAL_NIL, 0, {0}, 0, 0 };
-                if (vm->table_pool && arr_v.tab_id < VM_TABLES_POOL_CAP) {
+                if (vm->table_pool && arr_v.tab_id < vm->table_pool_cap) {
                     struct vm_table_obj *tab = &vm->table_pool[arr_v.tab_id];
                     int ki = vm_table_find_key(vm, tab, &idx);
                     if (ki >= 0) res = tab->entries[ki].val;
@@ -1231,11 +1387,12 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                 if (idx.type != VAL_STR && idx.type != VAL_ARRAY && idx.type != VAL_TABLE) { /*PL11_ASET*/
                     if (idx.i >= 0 && idx.i < (int64_t)arr->len) {
                         arr->items[idx.i] = val;
-                    } else if (idx.i == (int64_t)arr->len && arr->len < VM_ARRAY_ITEMS_CAP) {
+                    } else if (idx.i == (int64_t)arr->len && vm_array_reserve_gc(vm, &arr_v, &val, arr->len + 1)) {
+                        arr = &vm->array_pool[arr_v.arr_id];
                         arr->items[arr->len++] = val;
                     }
                 }
-            } else if (arr_v.type == VAL_TABLE && vm->table_pool && arr_v.tab_id < VM_TABLES_POOL_CAP) { /*PL4_TABSET*/
+            } else if (arr_v.type == VAL_TABLE && vm->table_pool && arr_v.tab_id < vm->table_pool_cap) { /*PL4_TABSET*/
                 vm_table_set_val(vm, &vm->table_pool[arr_v.tab_id], &idx, &val);
             }
             break;
@@ -1249,7 +1406,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
                         } else if (arr_v.type == VAL_STR) {
                 uint32_t slen = 0; while (arr_v.s[slen]) slen++;
                 l = (int64_t)(slen >= 127 ? vm_slen(vm, &arr_v) : slen); /*PL3_LEN*/
-            } else if (arr_v.type == VAL_TABLE && vm->table_pool && arr_v.tab_id < VM_TABLES_POOL_CAP) { /*PL4_TABLEN*/
+            } else if (arr_v.type == VAL_TABLE && vm->table_pool && arr_v.tab_id < vm->table_pool_cap) { /*PL4_TABLEN*/
                 l = (int64_t)vm->table_pool[arr_v.tab_id].len;
             }
             struct vm_val res = { VAL_INT, l, {0}, 0, 0 };
@@ -1262,7 +1419,8 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             struct vm_val arr_v = pop_val(vm);
             if (arr_v.type == VAL_ARRAY && arr_v.arr_id < vm->array_pool_count) {
                 struct vm_array_obj *arr = &vm->array_pool[arr_v.arr_id];
-                if (arr->len < VM_ARRAY_ITEMS_CAP) {
+                if (vm_array_reserve_gc(vm, &arr_v, &val, arr->len + 1)) {
+                    arr = &vm->array_pool[arr_v.arr_id];
                     arr->items[arr->len++] = val;
                 }
             }
@@ -1288,21 +1446,24 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             vm->ip += 2;
             int tid_i = vm_alloc_table(vm);
             if (tid_i < 0) {
-                kprint("[VM ERROR] Pool de tablas agotado (32 tablas vivas a la vez)\n");
+                kprint("[VM ERROR] Demasiadas tablas vivas a la vez (8192)\n");
                 return -1;
             }
             uint16_t tid = (uint16_t)tid_i;
             struct vm_table_obj *tab = &vm->table_pool[tid];
             tab->len = 0;
+            uint32_t tcap = 0;
+            if (count && vm_table_reserve(vm, tab, count)) tcap = count;
             for (int k = (int)count - 1; k >= 0; --k) {
                 struct vm_val v = pop_val(vm);
                 struct vm_val ky = pop_val(vm);
-                if (k < VM_TABLE_ITEMS_CAP) {
+                if ((uint32_t)k < tcap) {
                     tab->entries[k].key = ky;
                     tab->entries[k].val = v;
                     tab->len++;
                 }
             }
+            vm_table_reindex(vm, tab);
             struct vm_val res = { VAL_TABLE, 0, {0}, 0, tid };
             if (!push_val(vm, res)) return -1;
             break;
@@ -1312,7 +1473,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             struct vm_val ky = pop_val(vm);
             struct vm_val tab_v = pop_val(vm);
             int has = 0;
-            if (tab_v.type == VAL_TABLE && vm->table_pool && tab_v.tab_id < VM_TABLES_POOL_CAP) {
+            if (tab_v.type == VAL_TABLE && vm->table_pool && tab_v.tab_id < vm->table_pool_cap) {
                 has = (vm_table_find_key(vm, &vm->table_pool[tab_v.tab_id], &ky) >= 0);
             }
             struct vm_val res = { VAL_INT, has ? 1 : 0, {0}, 0, 0 };
@@ -1329,12 +1490,14 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
             uint16_t aid = (uint16_t)aid_i;
             struct vm_array_obj *arr = &vm->array_pool[aid];
             arr->len = 0;
-            if (tab_v.type == VAL_TABLE && vm->table_pool && tab_v.tab_id < VM_TABLES_POOL_CAP) {
+            if (tab_v.type == VAL_TABLE && vm->table_pool && tab_v.tab_id < vm->table_pool_cap) {
                 struct vm_table_obj *tab = &vm->table_pool[tab_v.tab_id];
-                for (uint16_t k = 0; k < tab->len && k < VM_ARRAY_ITEMS_CAP; ++k) {
-                    arr->items[k] = tab->entries[k].key;
-                    arr->len++;
-                }
+                if (tab->len && vm_array_reserve(vm, arr, tab->len)) {
+                    for (uint32_t k = 0; k < tab->len; ++k) {
+                        arr->items[k] = tab->entries[k].key;
+                        arr->len++;
+                    }
+                } else if (tab->len) vm_sin_sitio(vm, "las claves de una tabla");
             }
             struct vm_val res = { VAL_ARRAY, 0, {0}, aid, 0 };
             if (!push_val(vm, res)) return -1;
@@ -2176,16 +2339,24 @@ int vm_run(struct soma_vm *vm, const uint8_t *bytecode, uint32_t len)
 
 void vm_release(struct soma_vm *vm)
 {
-    if (vm->str_pool) {
-        kfree(vm->str_pool);
-        vm->str_pool = 0;
+    for (int i = 0; i < VM_STR_SLOTS; ++i) {
+        if (vm->str_used[i] && vm->str_ptr[i]) kfree(vm->str_ptr[i]);
+        vm->str_ptr[i] = 0; vm->str_used[i] = 0; vm->str_mark[i] = 0; vm->str_len[i] = 0;
     }
-    for (int i = 0; i < VM_STR_SLOTS; ++i) { vm->str_used[i] = 0; vm->str_mark[i] = 0; vm->str_len[i] = 0; }
+    if (vm->array_pool) {
+        for (int i = 0; i < vm->array_pool_cap; ++i) if (vm->array_pool[i].items) kfree(vm->array_pool[i].items);
+        kfree(vm->array_pool);
+    }
+    vm->array_pool = 0; vm->array_pool_cap = 0; vm->array_pool_count = 0;
     if (vm->table_pool) { /*PL4_RELTAB*/
+        for (int i = 0; i < vm->table_pool_cap; ++i) {
+            if (vm->table_pool[i].entries) kfree(vm->table_pool[i].entries);
+            if (vm->table_pool[i].hidx) kfree(vm->table_pool[i].hidx);
+        }
         kfree(vm->table_pool);
-        vm->table_pool = 0;
     }
-    vm->table_pool_count = 0;
+    vm->table_pool = 0; vm->table_pool_cap = 0; vm->table_pool_count = 0;
+    vm->mem_used = 0;
     vm->win.active = 0;
 }
 
@@ -2205,8 +2376,9 @@ static int vm_test_self_impl(struct soma_vm *vmp)
         OP_HALT
     };
 
-    if (vm_run(&test_vm, prog, sizeof(prog)) != 0) return 0;
+    if (vm_run(&test_vm, prog, sizeof(prog)) != 0) { vm_release(&test_vm); return 0; }
     struct vm_val res = pop_val(&test_vm);
+    vm_release(&test_vm);                                           /* SOMA_264_LANG */
     if (res.type != VAL_INT || res.i != 70) return 0;
 
     vm_init(&test_vm);
@@ -2218,8 +2390,9 @@ static int vm_test_self_impl(struct soma_vm *vmp)
         OP_ARRAY_GET,
         OP_HALT
     };
-    if (vm_run(&test_vm, arr_prog, sizeof(arr_prog)) != 0) return 0;
+    if (vm_run(&test_vm, arr_prog, sizeof(arr_prog)) != 0) { vm_release(&test_vm); return 0; }
     struct vm_val ares = pop_val(&test_vm);
+    vm_release(&test_vm);
     if (ares.type != VAL_INT || ares.i != 11) return 0;
 
     kprint("  Operaciones en pila, logica booleana y arrays en Ring 0 OK\n");

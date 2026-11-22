@@ -742,9 +742,11 @@ static int her_pr_dibuja(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
 }
 
 /* ---------------------------------------------------------------------------------------------- enganches (gui_vortice.c) */
-static void her_pr_turno(void) { pr_reset(); pr_nf = 0; }                 /* pregunta nueva */
+static int pr_aviso;                                                      /* SOMA_266_AVISO: lo que hay escrito es el aviso del LCM */
+static void her_pr_turno(void) { pr_reset(); pr_nf = 0; pr_aviso = 0; }   /* pregunta nueva */
+static void her_pr_aviso(const char *t) { uint32_t n = 0; while (t[n]) ++n; pr_respuesta(t, n, 0); pr_aviso = 1; }   /* SOMA_266_AVISO */
 static void her_pr_pensamiento(const char *t) { uint32_t n = 0; while (t[n]) ++n; pr_pensamiento(t, n); gui_fase("pensar"); }
-static void her_pr_stream_ini(void) { pr_src_n = 0; pr_src[0] = 0; pr_nuevo = 1; pr_gen++; gui_fase("escribir"); }
+static void her_pr_stream_ini(void) { pr_src_n = 0; pr_src[0] = 0; pr_nuevo = 1; pr_gen++; pr_aviso = 0; gui_fase("escribir"); }
 static void her_pr_stream(const char *c) { pr_anade(c); }
 static const char *pr_tras(const char *s, const char *t)                  /* posicion de t en s, o 0 */
 {
@@ -765,7 +767,8 @@ static void her_pr_fin(const char *resp)
     }
     if (!*ans) ans = "Mision ejecutada en hardware.";
     uint32_t n = 0; while (ans[n]) ++n;
-    pr_respuesta(ans, n, pr_src_n > 0);                                  /* si ya se estaba escribiendo, no se repite el revelado */
+    pr_respuesta(ans, n, pr_src_n > 0 && !pr_aviso);                     /* si ya se estaba escribiendo, no se repite el revelado (SOMA_266_AVISO: */
+    pr_aviso = 0;                                                        /* el aviso no cuenta: la respuesta se revela entera) */
 #if defined(__x86_64__)
     if (voz_speak_state()) { gui_fase("voz"); return; }
 #endif

@@ -258,14 +258,16 @@ static int cmd_voz(const char *args, char *out_buf, uint32_t max_out)
 /* SOMA_239_PYTHON_GRAFICO: para el programador de SOMA. Comprueba (check=1: solo compila) o ejecuta un programa Python que todavia
  * no esta en disco, con `input` como entrada (lineas separadas por \n; agotada = EOFError) y su salida en out.
  * Devuelve 0 si termino bien, 1 si Python dio un error (el texto esta en out), 2 si se agoto el tiempo, <0 si no se pudo ejecutar. */
+#if defined(__x86_64__)
+static struct kmutex g_src_lk; static int g_src_lk_init;     /* SOMA_265_CC: Python y C comparten el codigo inyectado (op 8) */
+static void src_lock(void) { if (!g_src_lk_init) { kmutex_init(&g_src_lk, "pysrc"); g_src_lk_init = 1; } kmutex_lock(&g_src_lk); }
+#endif
 int shell_python_source(int check, const char *src, uint32_t len, const char *input, char *out, uint32_t cap, uint32_t max_ms)
 {
     if (out && cap) out[0] = 0;
 #if defined(__x86_64__)
-    static struct kmutex lk; static int lk_init;
-    if (!lk_init) { kmutex_init(&lk, "pysrc"); lk_init = 1; }
     if (!out || cap < 2) return -1;
-    kmutex_lock(&lk);
+    src_lock();
     usermode_python_set_source(src, len);
     int err = 0;
     int idx = usermode_exec_caps("python", _binary_python_elf_start, (size_t)(_binary_python_elf_end - _binary_python_elf_start),
@@ -277,11 +279,160 @@ int shell_python_source(int check, const char *src, uint32_t len, const char *in
         if (usermode_python_window_take()) gui_soma_win_close();
     }
     usermode_python_set_source(0, 0);
-    kmutex_unlock(&lk);
+    kmutex_unlock(&g_src_lk);
     if (idx < 0) return -1;
     if (code == USER_EXIT_TIMEOUT) return 2;
     if (code == 0) return 0;
     return code > 0 ? 1 : -1;
+#else
+    (void)check; (void)src; (void)len; (void)input; (void)max_ms;
+    return -1;
+#endif
+}
+
+/* SOMA_265_CC: compilador de C. TinyCC (third_party/tinycc) con la biblioteca de C de SOMA (src/user/cc), dentro del nucleo como
+ * Python y ejecutado como proceso de ring 3 con las mismas capacidades: consola, reloj, ventana y archivos del VFS (escribir solo en
+ * /workspace). Los programas que compila son ELF normales de SOMA y corren igual, con esas capacidades.
+ *   cc hola.c [mas.c] [-o x.elf] [-c] [-w] [-Dn=v] [-heap MiB]   compila (rutas relativas: /workspace)
+ *   cc -run hola.c [argumentos]                                    compila y ejecuta
+ *   cc -run hola.elf [argumentos]                                  ejecuta uno ya compilado */
+#if defined(__x86_64__)
+extern const uint8_t _binary_cc_elf_start[], _binary_cc_elf_end[];
+#define CC_RUN_ELF "/workspace/.cc_run.elf"
+#define CC_PROG_ELF "/workspace/.programa.elf"
+/* lanza un proceso con las capacidades de Python/C y espera; con out != 0, su salida va a out y su entrada es input */
+static int64_t cc_proc(const char *name, const void *img, size_t len, uint32_t ms, const char *args, char *out, uint32_t cap,
+                       const char *input, int *err)
+{
+    *err = 0;
+    int idx = usermode_exec_caps(name, img, len, ms, args, USER_SYS_PYTHON, err);
+    if (idx < 0) return (int64_t)idx - 1000000;                           /* < -1000000: no se pudo lanzar */
+    int guest = 0;
+    if (out) usermode_redirect(idx, out, cap, input ? input : "");
+    else guest = console_capture_active() && console_capture_guest(usermode_proc_tid(idx));
+    g_python_stopped = 0;
+    g_python_idx = idx;                                                   /* Esc en el terminal lo para, como a python */
+    int64_t code = usermode_wait(idx);
+    g_python_idx = -1;
+    if (guest) (void)console_capture_guest(0);
+    if (usermode_python_window_take()) gui_soma_win_close();
+    return code;
+}
+static const char *cc_motivo(int64_t code)
+{
+    return code == USER_EXIT_TIMEOUT ? "se agoto el tiempo" : code == USER_EXIT_NOMEM ? "sin memoria" :
+           code == USER_EXIT_QUOTA ? "demasiadas llamadas al sistema" :
+           code <= USER_EXIT_FAULT_BASE && code > USER_EXIT_FAULT_BASE - 256 ? "fallo de la CPU: puntero no valido, division por cero o pila agotada" : "a la fuerza";
+}
+/* carga un .elf del VFS y lo ejecuta; 0 bien, 1 no se pudo */
+static int cc_run_elf(const char *path, const char *args, char *out_buf, uint32_t max_out, uint32_t *pos)
+{
+    uint32_t ul = 0; char *img = vfs_read_alloc(path, &ul);
+    if (!img || ul == 0) {
+        if (img) kfree(img);
+        soma_str_put(out_buf, max_out, pos, "cc: no se puede leer "); soma_str_put(out_buf, max_out, pos, path);
+        return 1;
+    }
+    const char *base = path; for (const char *q = path; *q; ++q) if (*q == '/') base = q + 1;
+    int err;
+    int64_t code = cc_proc(base, img, ul, 10u * 60u * 1000u, args, 0, 0, 0, &err);
+    kfree(img);
+    if (code < -1000000) {
+        soma_str_put(out_buf, max_out, pos, err ? "cc: el ejecutable no es valido: " : "cc: sin recursos (procesos o memoria)");
+        if (err) soma_str_put(out_buf, max_out, pos, elf_strerror(err));
+        return 1;
+    }
+    if (code < 0 && g_python_stopped) kprint("cc: detenido\n");
+    else if (code < 0) { kprint("cc: el programa termino ("); kprint(cc_motivo(code)); kprint(")\n"); }
+    else if (code != 0) { kprint("cc: el programa termino con codigo "); kprint_dec((uint32_t)code); kprint("\n"); }
+    return 0;
+}
+#endif
+static int cmd_cc(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0;
+    if (max_out) out_buf[0] = 0;
+#if defined(__x86_64__)
+    while (args && *args == ' ') args++;
+    if (!args || !*args) {
+        soma_str_put(out_buf, max_out, &pos, "Compilador de C (TinyCC). Uso: cc hola.c  (crea /workspace/hola.elf) | cc -run hola.c [args] | "
+                                              "cc -run hola.elf [args] | cc a.c b.c -o juego.elf | opciones -c -w -Dnombre=valor -heap MiB. "
+                                              "Cabeceras: stdio.h, stdlib.h, string.h, math.h, time.h... y soma.h (ventanas)");
+        return 1;
+    }
+    char a[USER_ARGS_MAX]; uint32_t n = 0;
+    int run = args[0] == '-' && args[1] == 'r' && args[2] == 'u' && args[3] == 'n' && (args[4] == ' ' || !args[4]);
+    if (!run) {
+        while (args[n]) { if (n + 1 >= sizeof a) { soma_str_put(out_buf, max_out, &pos, "cc: demasiados argumentos"); return 1; } a[n] = args[n]; n++; }
+        while (n && a[n - 1] == ' ') n--;
+        a[n] = 0;
+        int err;
+        int64_t code = cc_proc("cc", _binary_cc_elf_start, (size_t)(_binary_cc_elf_end - _binary_cc_elf_start), 120000, a, 0, 0, 0, &err);
+        if (code < -1000000) { soma_str_put(out_buf, max_out, &pos, "cc: no se pudo lanzar el compilador"); return 1; }
+        if (code < 0 && !g_python_stopped) { kprint("cc: el compilador termino ("); kprint(cc_motivo(code)); kprint(")\n"); }
+        return 1;
+    }
+    /* cc -run archivo [argumentos] */
+    const char *f = args + 4; while (*f == ' ') f++;
+    char file[96]; uint32_t fl = 0;
+    while (f[fl] && f[fl] != ' ' && fl < sizeof file - 12) { file[fl] = f[fl]; fl++; }
+    file[fl] = 0;
+    const char *rest = f + fl; while (*rest == ' ') rest++;
+    if (!fl) { soma_str_put(out_buf, max_out, &pos, "uso: cc -run hola.c [argumentos]"); return 1; }
+    char path[112]; uint32_t pl = 0;
+    if (file[0] != '/') { const char *w = "/workspace/"; while (*w) path[pl++] = *w++; }
+    for (uint32_t i = 0; i < fl; ++i) path[pl++] = file[i];
+    path[pl] = 0;
+    int es_elf = pl > 4 && path[pl - 4] == '.' && path[pl - 3] == 'e' && path[pl - 2] == 'l' && path[pl - 1] == 'f';
+    if (!es_elf) {
+        const char *pre = "-run "; while (*pre) a[n++] = *pre++;
+        for (uint32_t i = 0; i < pl && n + 1 < sizeof a; ++i) a[n++] = path[i];
+        a[n] = 0;
+        int err;
+        int64_t code = cc_proc("cc", _binary_cc_elf_start, (size_t)(_binary_cc_elf_end - _binary_cc_elf_start), 120000, a, 0, 0, 0, &err);
+        if (code < -1000000) { soma_str_put(out_buf, max_out, &pos, "cc: no se pudo lanzar el compilador"); return 1; }
+        if (code != 0) { if (code < 0 && !g_python_stopped) { kprint("cc: el compilador termino ("); kprint(cc_motivo(code)); kprint(")\n"); } return 1; }
+        (void)cc_run_elf(CC_RUN_ELF, rest, out_buf, max_out, &pos);
+        return 1;
+    }
+    (void)cc_run_elf(path, rest, out_buf, max_out, &pos);
+#else
+    (void)args;
+    soma_str_put(out_buf, max_out, &pos, "cc: de momento solo en x86_64 (en aarch64 aun no hay procesos de usuario)");
+#endif
+    return 1;
+}
+
+/* SOMA_265_CC: para el programador. Como shell_python_source, pero con C: check=1 solo compila (los errores, "programa.c:N: error:
+ * ...", quedan en out); check=0 compila y ejecuta con `input` como entrada. 0 bien, 1 error (de compilacion o el programa termino
+ * con codigo distinto de 0 o por un fallo), 2 se agoto el tiempo, <0 no se pudo ejecutar. */
+int shell_c_source(int check, const char *src, uint32_t len, const char *input, char *out, uint32_t cap, uint32_t max_ms)
+{
+    if (out && cap) out[0] = 0;
+#if defined(__x86_64__)
+    if (!out || cap < 2) return -1;
+    src_lock();
+    usermode_python_set_source(src, len);
+    int err;
+    int64_t code = cc_proc("cc", _binary_cc_elf_start, (size_t)(_binary_cc_elf_end - _binary_cc_elf_start), 20000, check ? "-s" : "-x",
+                           out, cap, "", &err);
+    usermode_python_set_source(0, 0);
+    if (code < -1000000) { kmutex_unlock(&g_src_lk); return -1; }
+    if (code == USER_EXIT_TIMEOUT) { kmutex_unlock(&g_src_lk); return 2; }
+    if (code != 0 || check) { kmutex_unlock(&g_src_lk); return code == 0 ? 0 : code > 0 ? 1 : -1; }
+    uint32_t ul = 0; char *img = vfs_read_alloc(CC_PROG_ELF, &ul);
+    if (!img || !ul) { if (img) kfree(img); kmutex_unlock(&g_src_lk); return -1; }
+    code = cc_proc("programa", img, ul, max_ms ? max_ms : 5000, "", out, cap, input, &err);
+    kfree(img);
+    kmutex_unlock(&g_src_lk);
+    if (code < -1000000) return -1;
+    if (code == USER_EXIT_TIMEOUT) return 2;
+    if (code < 0) {                                                       /* el fallo se cuenta en la salida: el programador lo lee */
+        uint32_t p = 0; while (p < cap && out[p]) p++;
+        soma_str_put(out, cap, &p, "\n[el programa termino: "); soma_str_put(out, cap, &p, cc_motivo(code)); soma_str_put(out, cap, &p, "]");
+        return 1;
+    }
+    return code == 0 ? 0 : 1;
 #else
     (void)check; (void)src; (void)len; (void)input; (void)max_ms;
     return -1;

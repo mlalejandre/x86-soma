@@ -1,0 +1,15 @@
+TinyCC para SOMA (SOMA_265_CC)
+==============================
+
+Origen: https://repo.or.cz/tinycc.git (rama mob), commit fc1fc50f7a5b3151a8932e9c2adb784140306db4 (20-11-2026), version 0.9.28rc.
+Licencia: LGPL 2.1 (COPYING). Solo estan los archivos que necesita el compilador para x86_64 con ONE_SOURCE.
+
+Cambios de SOMA (todos marcados con "SOMA"):
+  * tcc.h: CONFIG_TCC_NO_NATIVE quita lo de ejecutar en memoria (tcc -run, dlopen): en SOMA el compilador solo escribe archivos y
+    el nucleo carga el ejecutable (las paginas de datos de un proceso no son ejecutables).
+  * x86_64-gen.c (gen_cvt_ftof): save_reg(RC_ST0) -> save_reg(TREG_ST0). Era un fallo de TinyCC: pasaba una clase de registro donde
+    va un registro, no guardaba st0 y "(long double)y * f(x)" daba un resultado equivocado si habia que convertir x a long double.
+    Con el cambio, la bateria de TinyCC (make test) da los mismos resultados que sin el; la prueba de SOMA es tests/cc_265/varios.c.
+  * config.h y tccdefs_.h: generados una vez (configure y c2str), para no necesitar el compilador del equipo al construir SOMA.
+
+Como se construye: Makefile (regla $(BUILD)/user/cc.elf) con src/user/cc (driver, biblioteca de C y cabeceras de SOMA).

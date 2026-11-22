@@ -38,8 +38,8 @@
 #define SOMA_LBA_CKPT_B_DATA2   3962   /* LBA 3962..4094 */
 
 /* Zona 5: Fuentes del Sistema (SRCFS) */
-#define SOMA_LBA_SRCFS_INDEX    8192   /* LBA 8192..8255: Índice de fuentes (64 sectores = 511 entradas) */
-#define SOMA_LBA_SRCFS_DATA     8256   /* LBA 8256..16383: Fuentes empaquetadas (~4 MiB) */
+#define SOMA_LBA_SRCFS_INDEX    8192   /* LBA 8192..8319: Índice de fuentes (128 sectores = 1023 entradas; SOMA_267_SRCFS) */
+#define SOMA_LBA_SRCFS_DATA     8320   /* LBA 8320..16383: Fuentes empaquetadas (~4 MiB) */
 #define SOMA_LBA_SRCFS_LIMIT    16384
 /* SOMA_PARCHE_018_BIGFS: almacen de archivos grandes (formato SOMABIG1, ver src/fs/bigfs.h): desde aqui hasta
  * el final del disco. ejecutar.py agranda hdd.img (por defecto a 64 MiB) para que haya sitio. */

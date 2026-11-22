@@ -1,36 +1,46 @@
 #!/usr/bin/env python3
-"""construyeimagen.py - SOMA_227_IMAGEN: imagen de pendrive de SOMA para PC x86_64 (UEFI), lista para grabar.
+"""construyeimagen.py - SOMA_227_IMAGEN / SOMA_267_DISCOS: el pendrive de SOMA para PC x86_64 (UEFI).
 
 Uso (desde la raiz del proyecto):
     python3 construyeimagen.py                 menu
-    python3 construyeimagen.py --grabar        1) genera la imagen y la graba en un pendrive
+    python3 construyeimagen.py --grabar        1) compila y graba un pendrive conectado (Linux y macOS)
     python3 construyeimagen.py --carpeta       2) genera la carpeta imagen/ (imagen comprimida + instrucciones) para el repositorio
 Opciones:
     --sin-compilar    usa el build/usb/EFI/BOOT/BOOTX64.EFI que ya existe
     --local           compila con las herramientas del equipo (make + grub-mkstandalone) en vez de Docker
     --disco DISCO     (con --grabar) pendrive de destino sin preguntar: /dev/sdb en Linux, disk4 en macOS
+    --formatear       (con --grabar) borra el pendrive entero aunque ya sea de SOMA (pide escribir BORRAR)
+    --temporal DIR    (con --grabar) carpeta del equipo para la copia temporal al migrar un pendrive antiguo
+    --si              no pregunta (para scripts): acepta migrar y, con --formatear, borrar
 
-La imagen es un disco MBR con dos particiones FAT32, igual que la que prepara ejecutar.py -t t480s-usb:
-    1  SOMA      1 GiB  arranque: EFI/BOOT/BOOTX64.EFI (GRUB + nucleo + firmware WiFi en un solo archivo)
-    2  SOMADATA  4 GiB  el disco de SOMA (lo reclama y lo formatea en el primer arranque; SOMA_228: si el pendrive es mayor, la
-                        estira hasta el final, como mucho 8 GiB)
-La particion SOMA lleva ademas INFORME.TXT (256 KiB): SOMA lo rellena en cada arranque con el informe de hardware, para que
-cualquiera pueda abrirlo desde Windows, macOS o Linux y compartirlo si algo no funciona.
-El formateo FAT32 lo hace este mismo script (Python puro, sin mtools ni permisos de administrador); solo grabar en un
-pendrive necesita permisos. Para compilar hace falta Docker (o --local en Linux con la cadena de herramientas).
+SOMA_267_DISCOS: el pendrive tiene CUATRO particiones (tools/soma_disco.py):
+    1  SOMA (sistema)  FAT32  1 GiB   arranque: EFI/BOOT/BOOTX64.EFI e INFORME.TXT. Es lo unico que se rehace al grabar.
+    2  DATOS           SOMA   2 GiB   configuracion, memoria y programas instalados (formato propio; desde fuera: tools/datos.py)
+    3  MODELOS         exFAT 16 GiB   modelos de IA (voz/, llm/); menos en pendrives pequenos
+    4  USUARIO         exFAT  resto   tus archivos: Documentos, Imagenes, Audio, Videos, Descargas, Proyectos
+Al grabar se mira primero lo que tiene el pendrive:
+    - ya es de SOMA (4 particiones): SOLO se actualiza el sistema; DATOS, MODELOS y USUARIO quedan igual;
+    - es de SOMA de antes (SOMA + SOMADATA, con o sin DATOS FAT32, o el fichero SOMADATA.IMG): se conserva todo y se pasa a las
+      cuatro particiones (SOMADATA queda como DATOS sin moverse; lo que cambia de sitio se copia antes al equipo y, si no cabe,
+      no se toca nada);
+    - cualquier otro: se prepara de cero (pide escribir BORRAR).
+Los modelos de la carpeta modelos/ del proyecto (ggml-*.bin de whisper.cpp, voces .onnx de Piper) se copian a MODELOS/voz.
+La imagen del repositorio (--carpeta) mide 5 GiB + 1 MiB (cabe en un pendrive de 8 GB): en un pendrive mayor, SOMA agranda
+MODELOS y USUARIO en el primer arranque, mientras aun estan vacias.
+Todo es Python puro (sin mtools ni permisos de administrador); solo grabar el pendrive necesita sudo.
 """
-import argparse, hashlib, json, lzma, os, platform, re, shutil, struct, subprocess, sys, time
+import argparse, hashlib, json, lzma, os, platform, plistlib, re, shutil, struct, subprocess, sys, time
 from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "tools"))
+import soma_disco as sd                     # SOMA_267_DISCOS
 EFI = ROOT / "build" / "usb" / "EFI" / "BOOT" / "BOOTX64.EFI"
 DOCKER_IMAGE = "soma-toolchain"
 OUT_DIR = ROOT / "imagen"
 SECTOR = 512
-P1_LBA, P1_SECT = 2048, 1 << 21            # SOMA: 1 GiB
-P2_LBA, P2_SECT = 2048 + (1 << 21), 1 << 23  # SOMADATA: 4 GiB
-TOTAL_SECT = P2_LBA + P2_SECT
+TOTAL_SECT = sd.IMAGEN_SECT                # SOMA_267_DISCOS: imagen del repositorio (5 GiB + 1 MiB)
 REPO = "https://github.com/mlalejandre/x86-soma"
 INFORME_BYTES = 256 * 1024                 # SOMA_228_ARRANQUE: hueco para el informe (SOMA lo reescribe en su sitio, sin cambiar el tamano)
 
@@ -80,7 +90,7 @@ def compilar(local):
             sys.exit("No encuentro Docker. Instala Docker Desktop (Windows/Mac) o docker.io (Linux), o usa --local.")
         # SOMA_242_TOOLCHAIN: GRUB para UEFI y g++ (voz a texto, parche 241); si falta algo se reconstruye el contenedor
         tiene = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64", DOCKER_IMAGE, "sh", "-c",
-                                "test -d /usr/lib/grub/x86_64-efi && command -v g++"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+                                "test -d /usr/lib/grub/x86_64-efi && command -v g++ && command -v python3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
         if not tiene:
             print("Preparando el contenedor de compilacion (solo la primera vez, unos minutos)...")
             if subprocess.run(["docker", "build", "--platform", "linux/amd64", "-t", DOCKER_IMAGE, "."], cwd=ROOT).returncode:
@@ -95,109 +105,7 @@ def compilar(local):
     print(f"[OK] {EFI.relative_to(ROOT)} ({EFI.stat().st_size / 1e6:.1f} MB)")
 
 
-# ------------------------------------------------------------------ FAT32 en Python
-def _fecha():
-    n = datetime.now()
-    return ((n.hour << 11) | (n.minute << 5) | (n.second // 2)), (((n.year - 1980) << 9) | (n.month << 5) | n.day)
-
-
-def _ent(name83, attr, clus, size):
-    t, d = _fecha()
-    return struct.pack("<11sBBBHHHHHHHI", name83, attr, 0, 0, t, d, d, clus >> 16, t, d, clus & 0xFFFF, size)
-
-
-def _n83(nombre):
-    base, _, ext = nombre.upper().partition(".")
-    return (base[:8].ljust(8) + ext[:3].ljust(3)).encode("ascii")
-
-
-def fat32(part_lba, nsec, etiqueta, archivos, volid):
-    """Regiones (desplazamiento, bytes) de un FAT32 completo en la particion. archivos: {'EFI/BOOT/BOOTX64.EFI': bytes}."""
-    spc, rsvd, nf = 8, 32, 2
-    t1, t2 = nsec - rsvd, (256 * spc + nf) // 2
-    fatsz = (t1 + t2 - 1) // t2
-    fds = rsvd + nf * fatsz
-    nclus = (nsec - fds) // spc
-    cbytes = spc * SECTOR
-    base = part_lba * SECTOR
-    fat = {0: 0x0FFFFFF8, 1: 0x0FFFFFFF}
-    sig = [3]
-    regiones = []
-
-    def alloc(n):
-        c0 = sig[0]; sig[0] += n
-        for k in range(n):
-            fat[c0 + k] = (c0 + k + 1) if k < n - 1 else 0x0FFFFFFF
-        return c0
-
-    def coff(c):
-        return base + (fds + (c - 2) * spc) * SECTOR
-
-    # arbol de directorios
-    dirs = {"": []}
-    for ruta in sorted(archivos):
-        partes = ruta.split("/")
-        for i in range(1, len(partes)):
-            d = "/".join(partes[:i])
-            if d not in dirs:
-                dirs[d] = []
-                dirs["/".join(partes[:i - 1])].append(("d", partes[i - 1], d))
-        dirs["/".join(partes[:-1])].append(("f", partes[-1], ruta))
-    clus = {"": 2}
-    fat[2] = 0x0FFFFFFF
-    for d in sorted(dirs):
-        if d:
-            clus[d] = alloc(1)
-    for d, items in dirs.items():
-        raw = bytearray()
-        if d == "":
-            raw += _ent(etiqueta.upper()[:11].ljust(11).encode("ascii"), 0x08, 0, 0)
-        else:
-            padre = "/".join(d.split("/")[:-1])
-            raw += _ent(b".          ", 0x10, clus[d], 0) + _ent(b"..         ", 0x10, clus[padre] if padre else 0, 0)
-        for tipo, nombre, ruta in items:
-            if tipo == "d":
-                raw += _ent(_n83(nombre), 0x10, clus[ruta], 0)
-            else:
-                datos = archivos[ruta]
-                n = max(1, (len(datos) + cbytes - 1) // cbytes)
-                c = alloc(n) if datos else 0
-                if datos:
-                    regiones.append((coff(c), datos))
-                raw += _ent(_n83(nombre), 0x20, c, len(datos))
-        assert len(raw) <= cbytes
-        regiones.append((coff(clus[d]), bytes(raw).ljust(cbytes, b"\0")))
-    usados = sig[0] - 2
-    bs = bytearray(SECTOR)
-    bs[0:3] = b"\xEB\x58\x90"; bs[3:11] = b"SOMA    "
-    struct.pack_into("<HBHBHHBHHHII", bs, 11, SECTOR, spc, rsvd, nf, 0, 0, 0xF8, 0, 63, 255, part_lba, nsec)
-    struct.pack_into("<IHHIHH", bs, 36, fatsz, 0, 0, 2, 1, 6)
-    struct.pack_into("<BBBI11s8s", bs, 64, 0x80, 0, 0x29, volid, etiqueta.upper()[:11].ljust(11).encode("ascii"), b"FAT32   ")
-    bs[510:512] = b"\x55\xAA"
-    fsi = bytearray(SECTOR)
-    struct.pack_into("<I", fsi, 0, 0x41615252); struct.pack_into("<II", fsi, 484, 0x61417272, nclus - usados)
-    struct.pack_into("<I", fsi, 492, sig[0]); struct.pack_into("<I", fsi, 508, 0xAA550000)
-    reservados = bytearray(rsvd * SECTOR)
-    reservados[0:SECTOR] = bs; reservados[SECTOR:2 * SECTOR] = fsi
-    reservados[6 * SECTOR:7 * SECTOR] = bs; reservados[7 * SECTOR:8 * SECTOR] = fsi
-    regiones.append((base, bytes(reservados)))
-    tabla = bytearray(fatsz * SECTOR)
-    for c, v in fat.items():
-        struct.pack_into("<I", tabla, c * 4, v)
-    for k in range(nf):
-        regiones.append((base + (rsvd + k * fatsz) * SECTOR, bytes(tabla)))
-    return regiones
-
-
-def mbr():
-    m = bytearray(SECTOR)
-    struct.pack_into("<I", m, 440, int(time.time()) & 0xFFFFFFFF)
-    for i, (act, lba, n) in enumerate(((0x80, P1_LBA, P1_SECT), (0x00, P2_LBA, P2_SECT))):
-        struct.pack_into("<B3sB3sII", m, 446 + 16 * i, act, b"\xFE\xFF\xFF", 0x0C, b"\xFE\xFF\xFF", lba, n)
-    m[510:512] = b"\x55\xAA"
-    return [(0, bytes(m))]
-
-
+# ------------------------------------------------------------------ contenido de la particion de arranque
 def informe_vacio():
     """SOMA_228_ARRANQUE: INFORME.TXT de la particion de arranque, aun sin informe. SOMA lo sobrescribe en cada arranque."""
     t = ("SOMA - informe de arranque y hardware\r\n\r\n"
@@ -207,20 +115,32 @@ def informe_vacio():
     return t + b"\n" * (INFORME_BYTES - len(t))
 
 
-def regiones_imagen():
-    leeme = ("SOMA " + version() + "\r\nParticion de arranque. El disco de SOMA es la particion SOMADATA.\r\n" + REPO + "\r\n").encode()
-    r = mbr()
-    r += fat32(P1_LBA, P1_SECT, "SOMA", {"EFI/BOOT/BOOTX64.EFI": EFI.read_bytes(), "LEEME.TXT": leeme,
-                                          "INFORME.TXT": informe_vacio()}, 0x50AA0001)
-    r += fat32(P2_LBA, P2_SECT, "SOMADATA", {}, 0x50AA0002)
-    return sorted(r)
+# SOMA_267_DISCOS: el FAT32 vive ahora en tools/soma_disco.py; se conserva el nombre de antes (lo usa tests/mk_informe_228.py)
+fat32 = sd.fat32_regiones
+P1_LBA, P1_SECT = sd.P1_LBA, sd.SISTEMA_SECT          # la particion del sistema (nombres de antes)
 
 
-def escribir_imagen(ruta, regiones):
+def leeme_sistema():
+    return ("SOMA " + version() + "\r\nParticion de arranque (sistema). Tus archivos estan en la unidad USUARIO y los modelos de IA en\r\n"
+            "MODELOS. La configuracion y la memoria de SOMA estan en la particion DATOS (se lee con tools/datos.py).\r\n" + REPO + "\r\n").encode()
+
+
+def modelos_proyecto():
+    """modelos de voz de la carpeta modelos/ del proyecto (whisper.cpp y Piper) -> MODELOS/voz del pendrive"""
+    d = ROOT / "modelos"
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir() if p.is_file() and not p.name.startswith(".") and
+                  (p.name.startswith("ggml-") and p.suffix == ".bin" or p.name.endswith(".onnx") or p.name.endswith(".onnx.json")))
+
+
+def escribir_imagen(ruta):
+    """SOMA_267_DISCOS: la imagen del repositorio, con las cuatro particiones (archivo disperso: los huecos no ocupan)"""
     with open(ruta, "wb") as f:
-        f.truncate(TOTAL_SECT * SECTOR)              # archivo disperso: los huecos son ceros sin ocupar disco
-        for off, datos in regiones:
-            f.seek(off); f.write(datos)
+        f.truncate(TOTAL_SECT * SECTOR)
+    with open(ruta, "r+b") as f:
+        dev = sd.Disco(f, TOTAL_SECT)
+        sd.grabar(dev, EFI.read_bytes(), leeme_sistema(), informe_vacio(), log=lambda m: print(" ", m.strip()), imagen=True)
 
 
 def comprimir(img, xz):
@@ -244,11 +164,15 @@ Si prefieres compilarlo tú mismo, sigue las instrucciones del [README principal
 | Archivo | Qué es |
 |---|---|
 | `{img}` | La imagen comprimida ({mb:.1f} MB; ocupa 5 GiB al grabarla) |
+
+El pendrive queda con cuatro particiones: **SOMA** (el sistema, 1 GiB), **DATOS** (configuración y memoria de SOMA, 2 GiB; Windows y
+macOS no la abren, es normal), **MODELOS** (modelos de IA) y **USUARIO** (tus archivos: Documentos, Imágenes, Audio...). MODELOS y
+USUARIO se ven desde cualquier ordenador (exFAT). En un pendrive de más de 8 GB, SOMA las agranda solo en el primer arranque.
 | `{img}.sha256` | Su huella SHA-256, para comprobar que se descargó bien |
 
 Generada el {fecha} a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
 
-**Qué necesitas:** un pendrive de **8 GB o más** (se borra entero) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
+**Qué necesitas:** un pendrive de **8 GB o más** (se borra entero; con 32 GB o más, MODELOS tiene sus 16 GiB) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
 
 > ⚠️ Grabar la imagen **borra el pendrive entero**. Comprueba dos veces que eliges el pendrive y no el disco del ordenador.
 
@@ -275,7 +199,10 @@ xzcat {img} | sudo dd of=/dev/rdisk4 bs=4m
 diskutil eject /dev/disk4
 ```
 
-Si macOS dice que no puede leer un disco, es la partición de SOMA: pulsa **Ignorar**, nunca «Inicializar».
+Si macOS dice que no puede leer un disco, es la partición DATOS de SOMA: pulsa **Ignorar**, nunca «Inicializar».
+
+Para **actualizar** SOMA más adelante sin perder nada, usa `python3 construyeimagen.py --grabar` desde el repositorio: solo
+reescribe la partición del sistema. (Grabar esta imagen otra vez con Etcher o `dd` borra el pendrive entero.)
 
 ## Linux: Terminal
 
@@ -298,7 +225,7 @@ El resultado tiene que coincidir con el de `{img}.sha256`.
 1. En la BIOS/UEFI del PC **desactiva Secure Boot** (SOMA no está firmado). En el ThinkPad T480s: `F1` al encender → *Security → Secure Boot → Disabled*.
 2. Enchufa el pendrive, abre el menú de arranque (`F12` en Lenovo; `F11`, `F8` o `Esc` en otras marcas) y elige el USB.
 3. En el menú de GRUB elige **SOMA** (o *resolución segura 1024x768* si la pantalla se queda en negro).
-4. El primer arranque reclama la partición `SOMADATA` y, si el pendrive es de más de 8 GB, la amplía hasta ocuparlo (como mucho 8 GiB): desde ahí lo que guardes en SOMA se conserva.
+4. En el primer arranque SOMA prepara la partición `DATOS` y, si el pendrive es de más de 8 GB, agranda `MODELOS` (hasta 16 GiB) y `USUARIO` (el resto) mientras están vacías: desde ahí lo que guardes en SOMA se conserva.
 
 ¿Tu teclado no es español? Elige **SOMA - otro PC con teclado inglés (US)** en el menú de GRUB.
 
@@ -333,7 +260,7 @@ def opcion_carpeta():
     img, xz = OUT_DIR / nombre, OUT_DIR / (nombre + ".xz")
     for viejo in OUT_DIR.glob("soma-*-usb.img*"):
         viejo.unlink()
-    escribir_imagen(img, regiones_imagen())
+    escribir_imagen(img)
     titulo("3/3  COMPRIMIENDO Y ESCRIBIENDO LAS INSTRUCCIONES")
     comprimir(img, xz)
     img.unlink()
@@ -354,40 +281,35 @@ def discos_linux():
     res = []
     for d in json.loads(out.stdout).get("blockdevices", []):
         if d.get("type") == "disk" and (d.get("tran") == "usb" or str(d.get("rm")) in ("1", "True", "true")) and int(d.get("size") or 0) > 0:
-            res.append({"dev": "/dev/" + d["name"], "size": int(d["size"]), "model": (d.get("model") or "USB").strip(),
-                        "parts": ["/dev/" + c["name"] for c in d.get("children", []) or []]})
+            res.append({"dev": "/dev/" + d["name"], "size": int(d["size"]), "model": (d.get("model") or "USB").strip()})
     return res
 
 
-def grabar_regiones(dev, regiones):
-    """Graba solo lo que tiene datos (MBR, sectores de arranque, FAT, directorios y archivos): segundos en vez de minutos.
-    Los huecos del pendrive quedan con lo que tuvieran, que es correcto: las FAT se escriben enteras (todo libre) y SOMA
-    formatea SOMADATA en el primer arranque."""
-    fd = os.open(dev, os.O_WRONLY | getattr(os, "O_SYNC", 0))
+def _plist(cmd):
+    out = subprocess.run(cmd, capture_output=True)
     try:
-        total = sum(len(d) for _, d in regiones); hecho = 0; ult = -1
-        for off, datos in regiones:
-            os.lseek(fd, off, os.SEEK_SET)
-            for i in range(0, len(datos), 1 << 20):
-                hecho += os.write(fd, datos[i:i + (1 << 20)])
-                pc = hecho * 100 // total
-                if pc != ult:
-                    ult = pc; print(f"\r  grabando {pc:3d} %", end="", flush=True)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    print("\r  grabado y sincronizado.        ")
+        return plistlib.loads(out.stdout) if out.returncode == 0 else {}
+    except Exception:
+        return {}
+
+
+def discos_macos():
+    """discos externos y fisicos; nunca uno interno (doble comprobacion con diskutil info)"""
+    res = []
+    for d in _plist(["diskutil", "list", "-plist", "external", "physical"]).get("AllDisksAndPartitions", []):
+        dev = d.get("DeviceIdentifier", "")
+        if not re.fullmatch(r"disk\d+", dev) or dev in ("disk0", "disk1"):
+            continue
+        info = _plist(["diskutil", "info", "-plist", dev])
+        if not info or info.get("Internal", True):
+            continue
+        res.append({"dev": dev, "size": int(info.get("TotalSize") or info.get("Size") or d.get("Size") or 0),
+                    "model": info.get("MediaName") or info.get("IORegistryEntryName") or "USB"})
+    return res
 
 
 def opcion_grabar(args):
     sistema = platform.system()
-    if sistema == "Darwin":
-        print("\nEn macOS el pendrive se prepara con ejecutar.py (deja tambien una particion DATOS para ti y conserva los")
-        print("archivos de SOMA si el pendrive ya estaba preparado).")
-        cmd = [sys.executable, str(ROOT / "ejecutar.py"), "-t", "t480s-usb", "--sin-compilar"]
-        if args.disco:
-            cmd += ["--disco", args.disco]
-        sys.exit(subprocess.run(cmd, cwd=ROOT).returncode)
     if sistema == "Windows":
         print("\nEn Windows grabar un disco entero desde un script exige bloquear y desmontar sus volumenes, y es facil")
         print("equivocarse de disco. Te dejo la imagen lista para grabarla con balenaEtcher o Rufus (instrucciones en LEEME.md).")
@@ -397,12 +319,12 @@ def opcion_grabar(args):
         except Exception:
             pass
         return
-    # Linux
-    discos = discos_linux()
+    discos = discos_macos() if sistema == "Darwin" else discos_linux()
     if not discos:
         sys.exit("No veo ningun pendrive USB conectado. Conectalo y vuelve a ejecutar.")
     if args.disco:
-        sel = [d for d in discos if d["dev"] == args.disco]
+        quiero = args.disco.replace("/dev/", "").replace("rdisk", "disk") if sistema == "Darwin" else args.disco
+        sel = [d for d in discos if d["dev"] == quiero]
         if not sel:
             sys.exit(f"{args.disco} no es un pendrive USB de la lista: " + ", ".join(d["dev"] for d in discos))
         disco = sel[0]
@@ -414,37 +336,79 @@ def opcion_grabar(args):
         if not k.isdigit() or not 1 <= int(k) <= len(discos):
             sys.exit("Cancelado.")
         disco = discos[int(k) - 1]
-    if disco["size"] < TOTAL_SECT * SECTOR:
-        sys.exit(f"El pendrive es demasiado pequeno: hacen falta {TOTAL_SECT * SECTOR / 1e9:.1f} GB.")
-    print(f"\nSe BORRARA ENTERO {disco['dev']} ({disco['size'] / 1e9:.1f} GB, {disco['model']}).")
-    if preguntar("Escribe BORRAR para continuar: ") != "BORRAR":
-        sys.exit("Cancelado.")
+    if disco["size"] < (sd.P1_LBA + sd.SISTEMA_SECT + sd.DATOS_SECT + 2 * sd.PARTE_MIN) * SECTOR:
+        sys.exit(f"El pendrive es demasiado pequeno: hacen falta {(sd.P1_LBA + sd.SISTEMA_SECT + sd.DATOS_SECT + 2 * sd.PARTE_MIN) * SECTOR / 1e9:.1f} GB.")
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--_grabar-dispositivo", disco["dev"], "--_tamano", str(disco["size"])]
+    for op, val in (("--formatear", args.formatear), ("--si", args.si)):
+        if val:
+            cmd.append(op)
+    if args.temporal:
+        cmd += ["--temporal", args.temporal]
     if os.geteuid() != 0:
-        print("Hacen falta permisos de administrador: se pedira tu contrasena (sudo).")
-        cmd = ["sudo", sys.executable, str(Path(__file__).resolve()), "--_grabar-dispositivo", disco["dev"]]
-        sys.exit(subprocess.run(cmd, cwd=ROOT).returncode)
-    _grabar_dispositivo(disco["dev"])
+        print("Hacen falta permisos de administrador para escribir en el pendrive: se pedira tu contrasena (sudo).")
+        cmd = ["sudo"] + cmd
+    sys.exit(subprocess.run(cmd, cwd=ROOT).returncode)
 
 
-def _grabar_dispositivo(dev):
-    titulo(f"2/3  CREANDO LA IMAGEN EN MEMORIA")
-    regiones = regiones_imagen()
-    # sin restos de una tabla GPT anterior: el primer MiB (salvo el MBR) y el ultimo MiB del pendrive a cero
+def _confirmar_borrar(si):
+    def f(msg):
+        print("\n" + msg)
+        return si or preguntar("Escribe BORRAR para continuar: ") == "BORRAR"
+    return f
+
+
+def _grabar_dispositivo(a):
+    """segunda llamada, ya con sudo: mira el pendrive y lo deja con las cuatro particiones"""
+    dev, tam = a.dispositivo, int(a.tamano or 0)
+    mac = platform.system() == "Darwin"
+    if mac:
+        subprocess.run(["diskutil", "unmountDisk", "/dev/" + dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ruta = "/dev/r" + dev
+    else:
+        ruta = dev
+        for p in sorted(Path("/dev").glob(Path(dev).name + "*")):
+            if str(p) != dev:
+                subprocess.run(["umount", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            tam = int(Path(f"/sys/block/{Path(dev).name}/size").read_text()) * SECTOR
+        except OSError:
+            pass
+    titulo(f"2/3  MIRANDO EL PENDRIVE {dev}")
     try:
-        with open(f"/sys/block/{Path(dev).name}/size") as f:
-            fin = int(f.read()) * SECTOR
-    except OSError:
-        fin = 0
-    regiones = [(SECTOR, bytes(P1_LBA * SECTOR - SECTOR))] + regiones
-    if fin > TOTAL_SECT * SECTOR + (1 << 20):
-        regiones.append((fin - (1 << 20), bytes(1 << 20)))
-    titulo(f"3/3  GRABANDO EN {dev}")
-    for p in sorted(Path("/dev").glob(Path(dev).name + "*")):
-        if str(p) != dev:
-            subprocess.run(["umount", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    grabar_regiones(dev, sorted(regiones))
-    subprocess.run(["blockdev", "--rereadpt", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"\n[OK] Pendrive {dev} listo. Desactiva Secure Boot, enchufalo al PC y arranca desde el USB (F12 en Lenovo).")
+        f = open(ruta, "r+b", buffering=0)
+    except OSError as e:
+        sys.exit(f"No se pudo abrir {ruta}: {e}")
+    try:
+        if not tam:
+            tam = f.seek(0, os.SEEK_END)
+        disco = sd.Disco(f, tam // SECTOR)
+        info = sd.analizar(disco)
+        print("  " + sd.describe(info))
+        if info["tipo"] == "nuevo" and not a.formatear:
+            print("  Se actualiza SOLO el sistema: DATOS, MODELOS y USUARIO no se tocan.")
+        elif info["tipo"] == "antiguo" and not a.formatear:
+            print("  Pendrive de una version anterior de SOMA: se conserva todo y se pasa a las cuatro particiones.")
+            if not a.si and preguntar("Pulsa Intro para continuar (o escribe NO para cancelar): ").upper() == "NO":
+                sys.exit("Cancelado: no se ha tocado el pendrive.")
+        titulo(f"3/3  GRABANDO EN {dev}")
+        t0 = time.time()
+        res = sd.grabar(disco, EFI.read_bytes(), leeme_sistema(), informe_vacio(), modelos_equipo=modelos_proyecto(), formatear=a.formatear,
+                        temporal=a.temporal, log=lambda m: print(m), confirmar=_confirmar_borrar(a.si))
+        disco.vacia()
+    except sd.ErrorDisco as e:
+        sys.exit(f"\nERROR: {e}")
+    finally:
+        f.close()
+    if mac:
+        subprocess.run(["diskutil", "eject", "/dev/" + dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(["blockdev", "--rereadpt", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    hecho = {"actualizar": "sistema actualizado (lo demas, intacto)", "migrar": "pasado a cuatro particiones conservando tus datos",
+             "nuevo": "preparado de cero"}[res["modo"]]
+    for m in res.get("migrado", []):
+        print(f"  migrado: {m}")
+    print(f"\n[OK] Pendrive {dev} {hecho} en {time.time() - t0:.0f} s." + (" Ya puedes desconectarlo." if mac else ""))
+    print("Desactiva Secure Boot, enchufalo al PC y arranca desde el USB (F12 en Lenovo).")
 
 
 # ------------------------------------------------------------------ principal
@@ -456,12 +420,16 @@ def main():
     ap.add_argument("--sin-compilar", action="store_true", help="usar el BOOTX64.EFI ya compilado")
     ap.add_argument("--local", action="store_true", help="compilar sin Docker (make y grub-mkstandalone del equipo)")
     ap.add_argument("--disco", help="pendrive de destino sin preguntar (/dev/sdb en Linux, disk4 en macOS)")
+    ap.add_argument("--formatear", action="store_true", help="borrar el pendrive entero aunque ya sea de SOMA")
+    ap.add_argument("--temporal", help="carpeta para la copia temporal al migrar un pendrive antiguo")
+    ap.add_argument("--si", action="store_true", help="no preguntar")
     ap.add_argument("--_grabar-dispositivo", dest="dispositivo", help=argparse.SUPPRESS)
+    ap.add_argument("--_tamano", dest="tamano", help=argparse.SUPPRESS)
     a = ap.parse_args()
     if a.dispositivo:                                   # segunda llamada, ya con sudo
         if not EFI.is_file():
             sys.exit("Falta " + str(EFI))
-        _grabar_dispositivo(a.dispositivo)
+        _grabar_dispositivo(a)
         return
     print(f"SOMA {version()} - imagen de pendrive para PC x86_64 (UEFI)")
     if not (a.grabar or a.carpeta):

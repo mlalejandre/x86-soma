@@ -9,10 +9,12 @@
 #include "gui.h"
 #include "soma_str.h"
 
-#define COMPILER_MAX_SYMS  128
-#define MAX_BREAKS         32
-#define MAX_CONTINUES      32
-#define MAX_FNS            64
+/* SOMA_264_LANG: antes 128 variables, 64 funciones y 32 break/continue. Las globales usan las ranuras de la VM
+ * (VM_VARS_CAPACITY = 1024). PARSE_MAX_DEPTH no sube: el analizador es recursivo y corre en la pila del nucleo. */
+#define COMPILER_MAX_SYMS  1024
+#define MAX_BREAKS         256
+#define MAX_CONTINUES      256
+#define MAX_FNS            512
 #define PARSE_MAX_DEPTH    48
 
 struct soma_sym {
@@ -242,7 +244,7 @@ static int sym_add(struct soma_compiler *c, const char *name)
     int existing = sym_find(c, name);
     if (existing >= 0) return existing;
     if (c->sym_count >= COMPILER_MAX_SYMS) {
-        compiler_error(c, "Maximo de variables excedido (max 128)");
+        compiler_error(c, "Maximo de variables excedido (max 1024)");
         return 0;
     }
     uint16_t slot = c->sym_count;
@@ -1883,7 +1885,7 @@ int cmd_lang_vm(const char *args, char *out_buf, uint32_t max_out)
     soma_sbuf_t sb;
     soma_sbuf_init(&sb, out_buf, max_out);
     if (ok) {
-        soma_sbuf_copy(&sb, "VM & Parser Test: SUPERADO (Ring 0 OK, 128 Variables, 64 Funciones OK)\n");
+        soma_sbuf_copy(&sb, "VM & Parser Test: SUPERADO (Ring 0 OK, 1024 Variables, 512 Funciones OK)\n");
     } else {
         soma_sbuf_copy(&sb, "VM & Parser Test: FALLO\n");
     }
@@ -1989,8 +1991,10 @@ int cmd_lang_run(const char *args, char *out_buf, uint32_t max_out)
         return cmd_lang_coder(p, out_buf, max_out);
     }
 
-    static char file_buf[16384];
-    int r = resolve_vfs_read(args, file_buf, sizeof(file_buf) - 1);
+    static char *file_buf;                                          /* SOMA_264_LANG: antes 16 KB fijos */
+    if (!file_buf) file_buf = (char *)kmalloc(LANG_SRC_MAX);
+    if (!file_buf) { kprint("run: sin memoria\n"); if (out_buf) out_buf[0] = '\0'; return 1; }
+    int r = resolve_vfs_read(args, file_buf, LANG_SRC_MAX - 1);
     if (r <= 0) {
         int is_script = 0;
         for (int i = 0; args[i]; ++i) {
@@ -2038,9 +2042,11 @@ int cmd_lang_run(const char *args, char *out_buf, uint32_t max_out)
 
     kprint("[SOMA-LANG] Compilando: "); kprint(args); kprint("\n");
 
-    static uint8_t bytecode[65536];
+    static uint8_t *bytecode;                                       /* SOMA_264_LANG: antes 64 KB fijos */
+    if (!bytecode) bytecode = (uint8_t *)kmalloc(LANG_BC_MAX);
+    if (!bytecode) { kprint("run: sin memoria\n"); if (out_buf) out_buf[0] = '\0'; return 1; }
     uint32_t bytecode_len = 0;
-        int err = lang_compile(file_buf, (uint32_t)r, bytecode, sizeof(bytecode), &bytecode_len);
+        int err = lang_compile(file_buf, (uint32_t)r, bytecode, LANG_BC_MAX, &bytecode_len);
     if (err != 0) {
         struct soma_compile_diag d;
         lang_get_diagnostic(&d);

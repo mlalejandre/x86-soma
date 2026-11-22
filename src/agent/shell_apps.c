@@ -318,7 +318,9 @@ static int cmd_disco(const char *args, char *out_buf, uint32_t max_out)
     } else {
         kprint("  pendrive: "); kprint(u->why && u->why[0] ? u->why : "no se intento"); kprint("\n");
     }
-    kprint("uso: disco | disco sync (vacia la cache del pendrive; se hace sola cada 5 s)\n");
+    kprint("Unidades del pendrive (tus archivos y los modelos de IA):\n");                 /* SOMA_267_DISCOS */
+    usbdisk_unidades_info();
+    kprint("uso: disco | disco sync (vacia la cache del pendrive; se hace sola cada 5 s). Archivos: ls /usuario, cat /usuario/...\n");
     return 1;
 }
 /* SOMA_228_ARRANQUE: "informe": guarda el informe de arranque y hardware (INFORME.TXT del pendrive y /informe.txt); "informe ver" lo muestra */

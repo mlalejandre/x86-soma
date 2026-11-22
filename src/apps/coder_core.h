@@ -17,7 +17,7 @@
  *  - Lecciones: cada error reparado se guarda en /agent/coder_lessons.txt y se ofrece en los siguientes trabajos. */
 #include <stdint.h>
 
-#define CC_SRC_MAX    32768
+#define CC_SRC_MAX    65536   /* SOMA_264_LANG: programas de hasta 64 KB (antes 32 KB) */
 #define CC_LESSONS    "/agent/coder_lessons.txt"
 
 struct cc_test {                      /* PARCHE 116 */
@@ -40,7 +40,8 @@ struct cc_env {
     const struct cc_test *tests; /* PARCHE 116: casos de prueba del encargo (con `run`) */
     int      ntests;
     /* SOMA_239_PYTHON_GRAFICO: lenguaje del programa. CC_LANG_PYTHON escribe Python (MicroPython de SOMA, modulo soma.win) y
-     * necesita check_src (compilar sin ejecutar) y, para las pruebas, run_src. Ambos devuelven 0 = bien; en out, la salida o el error. */
+     * necesita check_src (compilar sin ejecutar) y, para las pruebas, run_src. Ambos devuelven 0 = bien; en out, la salida o el error.
+     * SOMA_265_CC: CC_LANG_C igual, con el compilador de C (cc -s / cc -x). */
     int      lang;
     int      (*check_src)(const char *src, uint32_t n, char *out, uint32_t max);
     int      (*run_src)(const char *src, uint32_t n, const char *input, char *out, uint32_t max);
@@ -48,6 +49,8 @@ struct cc_env {
 #define CC_LANG_SOMA   0
 #define CC_LANG_PYTHON 1
 #define CC_LESSONS_PY  "/agent/coder_lessons_py.txt"
+#define CC_LANG_C      2      /* SOMA_265_CC: C (TinyCC de SOMA; ventana con soma.h). Usa check_src y run_src como Python */
+#define CC_LESSONS_C   "/agent/coder_lessons_c.txt"
 
 struct cc_result {
     int      ok;               /* el archivo se escribio y compila */
@@ -77,5 +80,8 @@ int      cc_mission_is_gui(const char *mission);
 int      cc_mission_wants_python(const char *mission);   /* SOMA_239: "en python", "con Python"... */
 int      cc_py_error(const char *out, uint32_t *line, char *msg, uint32_t cap);   /* SOMA_239: linea y mensaje de un error de Python */
 int      cc_py_normalize(char *src, uint32_t *len, uint32_t cap);
+int      cc_mission_wants_c(const char *mission);        /* SOMA_265_CC: "en C", "lenguaje C", "programa.c"... */
+int      cc_c_error(const char *out, uint32_t *line, char *msg, uint32_t cap);    /* SOMA_265_CC: "programa.c:7: error: ..." */
+int      cc_c_normalize(char *src, uint32_t *len, uint32_t cap);                  /* SOMA_265_CC: + los #include que falten */
 int      cc_busy(void);
 #endif

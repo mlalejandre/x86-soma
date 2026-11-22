@@ -19,6 +19,10 @@
 #include "usbdisk_core.h"
 #include "fat.h"
 #include "idt.h"           /* SOMA_238: timer_get_uptime_ms */
+#include "unidades.h"      /* SOMA_267_DISCOS: MODELOS y USUARIO */
+#include "exfat.h"
+#include "mem.h"
+#include "rtc.h"
 
 
 static struct kmutex g_lock __attribute__((aligned(16)));
@@ -141,6 +145,7 @@ static void grow_fresh(int idx, uint64_t disk_sectors)
  * arranque FAT. Asi un pendrive preparado sin SOMADATA (o con una version antigua de ejecutar.py) guarda sin borrarlo entero.
  * Devuelve 0 y deja part_lba/part_sectors con su sitio en el pendrive, o -1 con g.why. */
 static int bf_read(void *c, uint64_t lba, uint32_t n, void *buf);
+static void usbdisk_unidades(void);
 static int find_file(void)
 {
     static struct fat_vol v;
@@ -229,6 +234,7 @@ int usbdisk_attach(void)
     if (sysdisk_set_device(&g_ops) != 0) { g.why = "no se pudo poner como disco del sistema"; return -1; }
     g.active = 1; g.why = "activo";
     thread_create("usbsync", syncer, 0);
+    usbdisk_unidades();                                                    /* SOMA_267_DISCOS */
     kprint("DISCO USB: disco del sistema en ");
     if (g.in_file) kprint("el fichero SOMADATA.IMG");
     else { kprint("la particion "); kprint_dec((uint32_t)g.part_index); }
@@ -282,10 +288,34 @@ int usbdisk_bootfile_write(const char *name, const char *data, uint32_t len, con
 
 /* SOMA_241_VOZ: lee un trozo de un fichero de la particion FAT de arranque del pendrive (la "SOMA"), por ejemplo el modelo de voz
  * MODELOS/ggml-base-q5_1.bin que el usuario copia desde su ordenador. Con buf=0 solo da el tamano. Devuelve los bytes leidos o <0. */
+/* SOMA_267_DISCOS: "MODELOS/x" -> /modelos/voz/x de la unidad MODELOS (pendrive de cuatro particiones); 1 si la ruta es de ahi */
+static int modelos_unidad(const char *name, char *ruta, uint32_t cap)
+{
+    if (!unid_activa(UNID_MODELOS)) return 0;
+    static const char *const pre = "MODELOS";
+    for (int i = 0; i < 7; i++) { char c = name[i]; if (c >= 'a' && c <= 'z') c = (char)(c - 32); if (c != pre[i]) return 0; }
+    if (name[7] != '/' && name[7] != 0) return 0;
+    uint32_t q = 0; const char *b = "/modelos/voz";
+    while (*b && q + 1 < cap) ruta[q++] = *b++;
+    for (const char *c = name + 7; *c && q + 1 < cap; c++) ruta[q++] = *c;
+    ruta[q] = 0;
+    return 1;
+}
 int usbdisk_bootfile_read(const char *name, uint32_t off, void *buf, uint32_t len, uint32_t *size_out, const char **why)
 {
     static struct fat_vol v;
     static const char *dummy; if (!why) why = &dummy;
+    {   char ru[320];                                                      /* SOMA_267_DISCOS */
+        if (modelos_unidad(name, ru, sizeof ru)) {
+            uint64_t t = 0; int dir = 0, e = unid_tam(ru, &t, &dir);
+            if (e) { *why = e == EXFAT_E_NOENT ? "no esta en la unidad MODELOS (carpeta voz)" : exfat_err_str(e); return -1; }
+            if (dir) { *why = "es una carpeta"; return -1; }
+            if (size_out) *size_out = t > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)t;
+            if (!buf) { *why = ""; return 0; }
+            int r = unid_leer(ru, off, buf, len);
+            *why = r < 0 ? exfat_err_str(r) : "";
+            return r;
+        } }
     if (!g.active && !xhci_msc_ready()) { *why = "SOMA no arranco desde un pendrive"; return -1; }
     kmutex_lock(&g_lock);
     int r = -1;
@@ -314,6 +344,24 @@ int usbdisk_bootdir(const char *path, struct fat_dirent *out, int max, const cha
 {
     static struct fat_vol v;
     static const char *dummy; if (!why) why = &dummy;
+    {   char ru[320];                                                      /* SOMA_267_DISCOS: la carpeta voz de MODELOS */
+        if (modelos_unidad(path, ru, sizeof ru)) {
+            struct exfat_dirent *d = (struct exfat_dirent *)kmalloc(48 * sizeof *d);
+            if (!d) { *why = "sin memoria"; return -1; }
+            int total = 0, n = unid_listar(ru, d, 48, &total), k = 0;
+            if (n < 0) { kfree(d); *why = n == EXFAT_E_NOENT ? "la unidad MODELOS no tiene la carpeta voz" : exfat_err_str(n); return -1; }
+            for (int i = 0; i < n && k < max; i++) {
+                uint32_t L = 0; while (d[i].name[L]) L++;
+                if (L >= FAT_NAME_MAX || d[i].size > 0xFFFFFFFFu) continue;
+                for (uint32_t c = 0; c <= L; c++) out[k].name[c] = d[i].name[c];
+                out[k].size = (uint32_t)d[i].size; out[k].cluster = d[i].first_cluster; out[k].date = (uint16_t)(d[i].mtime >> 16);
+                out[k].time = (uint16_t)d[i].mtime; out[k].is_dir = d[i].is_dir; out[k].attr = (uint8_t)d[i].attr;
+                k++;
+            }
+            kfree(d);
+            *why = "";
+            return k;
+        } }
     if (!g.active && !xhci_msc_ready()) { *why = "SOMA no arranco desde un pendrive"; return -1; }
     kmutex_lock(&g_lock);
     int r = -1, total = 0;
@@ -326,4 +374,122 @@ int usbdisk_bootdir(const char *path, struct fat_dirent *out, int max, const cha
     }
     kmutex_unlock(&g_lock);
     return r;
+}
+
+/* ------------------------------------------------------------------ SOMA_267_DISCOS: las unidades MODELOS y USUARIO (exFAT)
+ * El pendrive tiene cuatro particiones (tools/soma_disco.py): SOMA (arranque), DATOS (el disco de SOMA, arriba), MODELOS y USUARIO.
+ * Aqui, tras poner DATOS como disco del sistema:
+ *   1. Primer arranque de la imagen del repositorio (5 GiB) en un pendrive mayor: MODELOS y USUARIO, si estan vacias, se agrandan
+ *      hasta el final (unid_agrandar; a prueba de cortes). Solo se puede escribir el MBR y desde MODELOS en adelante: nunca en el
+ *      arranque ni en DATOS. soma.agrandar=off lo evita.
+ *   2. Se montan: /usuario (lectura y escritura) y /modelos (solo lectura desde el VFS). Cada unidad solo lee y escribe dentro de
+ *      SU particion (se comprueba aqui, antes de llegar al USB) y, como DATOS, deja de escribir si el pendrive cambia. */
+static struct kmutex g_ulock __attribute__((aligned(16)));
+static void u_lock(void) { kmutex_lock(&g_ulock); }
+static void u_unlock(void) { kmutex_unlock(&g_ulock); }
+struct upart { uint64_t lba, n; };
+static struct upart g_up[UNID_N];
+static uint64_t g_p3_lba;                                       /* lo prohibido en el agrandado: [1, g_p3_lba) */
+static uint32_t g_ugrow_mod, g_ugrow_usu;
+static const char *g_ugrow_why = "", *g_uwhy[UNID_N] = { "no hay particion USUARIO", "no hay particion MODELOS" };
+
+static int u_raw(int wr, uint64_t abs, uint32_t n, void *buf)
+{
+    kmutex_lock(&g_lock);
+    int r = -1;
+    if (still_ours() && !(wr && g.readonly)) {
+        r = 0;
+        uint8_t *p = (uint8_t *)buf;
+        while (n && r == 0) { uint32_t k = n > 128 ? 128 : n; r = raw(wr, abs, k, p); abs += k; p += (uint64_t)k * 512; n -= k; }
+        if (wr) g.dirty = 1;
+    }
+    if (r) g_errors++;
+    kmutex_unlock(&g_lock);
+    return r ? -1 : 0;
+}
+static int up_rd(void *c, uint64_t lba, uint32_t n, void *b)
+{
+    const struct upart *p = (const struct upart *)c;
+    if (!n || lba >= p->n || n > p->n - lba) return -1;           /* fuera de SU particion: nunca llega al USB */
+    return u_raw(0, p->lba + lba, n, b);
+}
+static int up_wr(void *c, uint64_t lba, uint32_t n, const void *b)
+{
+    const struct upart *p = (const struct upart *)c;
+    if (!n || lba >= p->n || n > p->n - lba) return -1;
+    return u_raw(1, p->lba + lba, n, (void *)b);
+}
+static void *u_alloc(uint32_t n) { return kmalloc(n); }
+static void u_free(void *p) { kfree(p); }
+static uint32_t u_now(void)
+{
+    struct rtc_time t; rtc_get_datetime(&t);
+    uint32_t y = t.year >= 1980 ? (uint32_t)t.year - 1980 : 0;
+    return (y << 25) | ((uint32_t)t.month << 21) | ((uint32_t)t.day << 16) | ((uint32_t)t.hour << 11) | ((uint32_t)t.min << 5) | ((uint32_t)t.sec / 2);
+}
+/* agrandado: disco entero, pero solo el MBR y desde MODELOS */
+static int ag_rd(void *c, uint64_t lba, uint32_t n, void *b) { (void)c; return u_raw(0, lba, n, b); }
+static int ag_wr(void *c, uint64_t lba, uint32_t n, const void *b)
+{
+    (void)c;
+    if (lba == 0 ? n != 1 : lba < g_p3_lba) return -1;
+    if (g.part_sectors && lba < g.part_lba + g.part_sectors && lba + n > g.part_lba) return -1;    /* nunca en DATOS */
+    return u_raw(1, lba, n, (void *)b);
+}
+static int ag_sync(void *c) { (void)c; kmutex_lock(&g_lock); int r = xhci_msc_sync(); kmutex_unlock(&g_lock); return r; }
+
+static void usbdisk_unidades(void)
+{
+    static int inited;
+    if (!inited) { kmutex_init(&g_ulock, "unidades"); unid_set_lock(u_lock, u_unlock); inited = 1; }
+    const struct xhci_msc_info *mi = xhci_msc_get();
+    static uint8_t m[512] __attribute__((aligned(16)));
+    if (g.in_file || u_raw(0, 0, 1, m) != 0 || m[510] != 0x55 || m[511] != 0xAA) return;   /* pendrive antiguo (SOMADATA.IMG) o sin MBR */
+    g_p3_lba = ud_le32(m + 0x1BE + 16 * 2 + 8);
+    if (g_p3_lba && !bootinfo_disabled("agrandar")) {
+        struct unid_disco d = { ag_rd, ag_wr, ag_sync, 0, mi->sectors, u_alloc, u_free, u_now };
+        int r = unid_agrandar(&d, &g_ugrow_why, &g_ugrow_mod, &g_ugrow_usu);
+        if (r == 1) { kprint("DISCO USB: MODELOS y USUARIO agrandadas hasta el final del pendrive: "); kprint_dec(g_ugrow_mod); kprint(" y "); kprint_dec(g_ugrow_usu); kprint(" MiB\n"); }
+        else if (r < 0) { kprint("DISCO USB: no se pudieron agrandar MODELOS y USUARIO ("); kprint(g_ugrow_why); kprint("); se reintenta en el proximo arranque\n"); }
+        if (u_raw(0, 0, 1, m) != 0) return;
+    } else if (bootinfo_disabled("agrandar")) g_ugrow_why = "desactivado (soma.agrandar=off)";
+    for (int i = 0; i < 4; i++) {
+        const uint8_t *e = m + 0x1BE + 16 * i;
+        uint64_t lba = ud_le32(e + 8), n = ud_le32(e + 12);
+        if (!e[4] || !lba || n < 8192 || lba + n > mi->sectors) continue;
+        if (lba < g.part_lba + g.part_sectors && lba + n > g.part_lba) continue;                  /* DATOS */
+        static uint8_t b[512] __attribute__((aligned(16)));
+        if (u_raw(0, lba, 1, b) != 0 || !exfat_is_boot(b)) continue;
+        int u = -1;
+        struct upart prueba = { lba, n };
+        static struct exfat_vol v;
+        struct exfat_io io = { up_rd, 0, &prueba, u_alloc, u_free, u_now };
+        if (exfat_mount(&v, &io, 0, n) != 0) continue;
+        const char *l = v.label;
+        if (l[0] == 'U' && l[1] == 'S' && l[2] == 'U' && l[3] == 'A' && l[4] == 'R' && l[5] == 'I' && l[6] == 'O' && !l[7]) u = UNID_USUARIO;
+        if (l[0] == 'M' && l[1] == 'O' && l[2] == 'D' && l[3] == 'E' && l[4] == 'L' && l[5] == 'O' && l[6] == 'S' && !l[7]) u = UNID_MODELOS;
+        exfat_umount(&v);
+        if (u < 0 || unid_activa(u)) continue;
+        g_up[u].lba = lba; g_up[u].n = n;
+        struct exfat_io io2 = { up_rd, up_wr, &g_up[u], u_alloc, u_free, u_now };
+        int r = unid_montar(u, &io2, n);
+        g_uwhy[u] = r ? exfat_err_str(r) : "montada";
+        kprint("DISCO USB: unidad /"); kprint(unid_nombre(u)); kprint(r ? " no se pudo montar: " : " en la particion ");
+        if (r) kprint(exfat_err_str(r)); else { kprint_dec((uint32_t)(i + 1)); kprint(" ("); kprint_dec((uint32_t)(n / 2048)); kprint(" MiB)"); }
+        kprint("\n");
+    }
+}
+/* para la orden "disco" y el informe */
+void usbdisk_unidades_info(void)
+{
+    for (int u = 0; u < UNID_N; u++) {
+        kprint("  /"); kprint(unid_nombre(u)); kprint(": ");
+        uint64_t li, to; char et[16];
+        if (unid_info(u, &li, &to, et, sizeof et) == 0) {
+            kprint("exFAT '"); kprint(et); kprint("', particion de "); kprint_dec((uint32_t)(g_up[u].n / 2048)); kprint(" MiB, libres ");
+            kprint_dec((uint32_t)(li >> 20)); kprint(" MiB"); kprint(u == UNID_MODELOS ? " (solo lectura desde SOMA)\n" : "\n");
+        } else { kprint(g_uwhy[u]); kprint("\n"); }
+    }
+    if (g_ugrow_mod) { kprint("  agrandadas en este arranque: MODELOS "); kprint_dec(g_ugrow_mod); kprint(" MiB, USUARIO "); kprint_dec(g_ugrow_usu); kprint(" MiB\n"); }
+    else if (g_ugrow_why && g_ugrow_why[0]) { kprint("  sin agrandar: "); kprint(g_ugrow_why); kprint("\n"); }
 }
