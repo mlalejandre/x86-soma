@@ -20,16 +20,34 @@ static void test_canon(void)
 static void test_protegidas(void)
 {
     const char *no_tocar[] = { "/etc/init.sh", "/etc/soma_manifest.txt", "/etc/ui.conf", "/etc", "/etc/", "/sys/status.txt", "/bin/hello.elf",
-        "/boot/x", "etc/init.sh", "//etc//init.sh", "/./etc/init.sh", "/workspace/../etc/init.sh", "/workspace/./../etc/init.sh",
+        "/boot/x", /* SOMA_271_LCM */ "/lcm/modelo.lcm", "/lcm", "/workspace/../lcm/modelo.lcm", "//lcm//x", "etc/init.sh", "//etc//init.sh", "/./etc/init.sh", "/workspace/../etc/init.sh", "/workspace/./../etc/init.sh",
         "/a/../../etc/init.sh", "/etc/../etc/init.sh", "/tmp/../sys/telemetry.txt", "/etc/./", "/.//etc", 0 };
     for (int i = 0; no_tocar[i]; ++i)
         if (!agent_path_protected(no_tocar[i])) { printf("  FALLO: deberia estar protegida: %s\n", no_tocar[i]); soma_t_fails++; }
-    const char *libres[] = { "/workspace/a.soma", "/mis_archivos/x.txt", "/tmp/t", "/test_fib.soma", "nota.txt", "/etcetera/x", "/etc2/x",
+    const char *libres[] = { "/workspace/a.soma", "/mis_archivos/x.txt", "/tmp/t", "/test_fib.soma", "nota.txt", "/etcetera/x", "/etc2/x", "/lcmx/a", "/lcm2",
         "/system/x", "/binario", "/bootstrap/a", "/workspace/etc/init.sh", "/mem/indice.txt", "/agent/coder_ultimo.txt",
         "/workspace/../mis_archivos/a", "/etc/../workspace/a", 0 };
     for (int i = 0; libres[i]; ++i)
         if (agent_path_protected(libres[i])) { printf("  FALLO: deberia ser libre: %s\n", libres[i]); soma_t_fails++; }
     CHECK(agent_path_protected(0));
+}
+/* SOMA_268_ACCESO: el usuario solo escribe en /usuario y /tmp (con evasiones) */
+static void test_usuario_268(void)
+{
+    const char *si[] = { "/usuario", "/usuario/a.txt", "/usuario/Documentos/x/y.doc", "//usuario//a", "/./usuario/a", "/tmp/t", "/tmp",
+        "/workspace/../usuario/a", "/etc/../usuario/a", "/usuario/../tmp/x", "usuario/a", "/usuario/etc/init.sh", 0 };
+    for (int i = 0; si[i]; ++i)
+        if (!usuario_ruta_escribible(si[i])) { printf("  FALLO: deberia poder escribirse: %s\n", si[i]); soma_t_fails++; }
+    const char *no[] = { "/etc/init.sh", "/etc/llm.conf", "/mem/indice.txt", "/agent/state", "/mis_archivos/x", "/workspace/a.soma", "/", "",
+        "/usuarios/x", "/usuarioX", "/tmpx/a", "/modelos/voz/x.bin", "/usuario/../etc/init.sh", "/tmp/../etc/init.sh", "/usuario/../../etc/x",
+        "/tmp/../mem/a", "/lcm/modelo.lcm", "/usuario/../lcm/modelo.lcm", "/.usuario/a", "usuari/a", 0 };
+    for (int i = 0; no[i]; ++i)
+        if (usuario_ruta_escribible(no[i])) { printf("  FALLO: no deberia poder escribirse: %s\n", no[i]); soma_t_fails++; }
+    CHECK(!usuario_ruta_escribible(0));
+    char l[600]; memset(l, 'a', sizeof l); l[0] = '/'; l[599] = 0;
+    CHECK(!usuario_ruta_escribible(l));
+    char m[400]; strcpy(m, "/usuario/"); memset(m + 9, 'b', 380); m[389] = 0;
+    CHECK(!usuario_ruta_escribible(m));                    /* no cabe: se trata como no escribible */
 }
 static void test_largas(void)
 {
@@ -60,6 +78,7 @@ static void test_fuzz(void)
 }
 int main(void)
 {
-    test_canon(); test_protegidas(); test_largas(); test_fuzz();
+    test_canon(); test_protegidas(); test_largas();
+    test_usuario_268(); test_fuzz();
     TEST_MAIN_END("agent_policy");
 }

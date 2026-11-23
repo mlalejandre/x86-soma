@@ -207,16 +207,39 @@ static const char *cdr_find(const char *hay, const char *needle)
 static int cdr_lang;                                   /* CC_LANG_SOMA, CC_LANG_PYTHON o CC_LANG_C (SOMA_265_CC) */
 static int cdr_is_py(const char *p) { return cdr_ends_with(p, ".py"); }
 static int cdr_is_c(const char *p) { return cdr_ends_with(p, ".c"); }           /* SOMA_265_CC */
-static int cdr_is_prog(const char *p) { return cdr_ends_with(p, ".soma") || cdr_ends_with(p, ".py") || cdr_ends_with(p, ".c"); }
-static const char *cdr_ext_of(const char *p) { return cdr_is_c(p) ? ".c" : cdr_is_py(p) ? ".py" : ".soma"; }
-static const char *cdr_lang_ext(int l) { return l == CC_LANG_C ? ".c" : l == CC_LANG_PYTHON ? ".py" : ".soma"; }
+static int cdr_is_js(const char *p) { return cdr_ends_with(p, ".js"); }         /* SOMA_275_HTML */
+static int cdr_is_html(const char *p) { return cdr_ends_with(p, ".html"); }     /* SOMA_275_HTML */
+static int cdr_is_prog(const char *p) { return cdr_ends_with(p, ".soma") || cdr_ends_with(p, ".py") || cdr_ends_with(p, ".c") || cdr_is_js(p) || cdr_is_html(p); }
+static int cdr_is_ext(const char *p) { return cdr_is_py(p) || cdr_is_c(p) || cdr_is_js(p) || cdr_is_html(p); }   /* SOMA_275_HTML: los que se comprueban con un proceso/comprobador externo */
+static const char *cdr_ext_of(const char *p) { return cdr_is_html(p) ? ".html" : cdr_is_js(p) ? ".js" : cdr_is_c(p) ? ".c" : cdr_is_py(p) ? ".py" : ".soma"; }
+static const char *cdr_lang_ext(int l) { return l == CC_LANG_HTML ? ".html" : l == CC_LANG_JS ? ".js" : l == CC_LANG_C ? ".c" : l == CC_LANG_PYTHON ? ".py" : ".soma"; }
 static const char *cdr_ext_for(const char *mission)
 {
+    if (cdr_lang == CC_LANG_HTML) return ".html";
+    if (cdr_lang == CC_LANG_JS) return ".js";
     if (cdr_lang == CC_LANG_C) return ".c";
     if (cdr_lang == CC_LANG_PYTHON || cc_mission_wants_python(mission)) return ".py";
+    if (cc_mission_wants_html(mission)) return ".html";
+    if (cc_mission_wants_js(mission)) return ".js";
     return cc_mission_wants_c(mission) ? ".c" : ".soma";
 }
-static void cdr_strip_ext(char *p) { uint32_t n = cdr_len(p); if (cdr_ends_with(p, ".soma")) p[n - 5] = 0; else if (cdr_ends_with(p, ".py")) p[n - 3] = 0; else if (cdr_ends_with(p, ".c")) p[n - 2] = 0; }
+static void cdr_strip_ext(char *p) { uint32_t n = cdr_len(p); if (cdr_ends_with(p, ".soma")) p[n - 5] = 0; else if (cdr_is_html(p)) p[n - 5] = 0; else if (cdr_ends_with(p, ".py") || cdr_is_js(p)) p[n - 3] = 0; else if (cdr_ends_with(p, ".c")) p[n - 2] = 0; }
+/* SOMA_275_HTML: comprobar/ejecutar un archivo del lenguaje que sea y leer su error, por la extension */
+static const char *cdr_lang_label(const char *p) { return cdr_is_html(p) ? "HTML" : cdr_is_js(p) ? "JavaScript" : cdr_is_c(p) ? "C" : cdr_is_py(p) ? "Python" : "SOMA-LANG"; }
+static uint32_t cdr_lang_color(const char *p) { return cdr_is_html(p) ? 0x00FB923Cu : cdr_is_js(p) ? 0x00F7DF1Eu : cdr_is_py(p) ? CDR_C_AMBER : cdr_is_c(p) ? CDR_C_NUM : CDR_C_CYAN; }
+static int cdr_ext_src(const char *p, const char *src, uint32_t n, char *o, uint32_t cap)
+{
+    if (cdr_is_html(p)) return shell_html_source(1, src, n, "", o, cap, 8000);
+    if (cdr_is_js(p)) return shell_js_source(1, src, n, "", o, cap, 8000);
+    if (cdr_is_c(p)) return shell_c_source(1, src, n, "", o, cap, 8000);
+    return shell_python_source(1, src, n, "", o, cap, 8000);
+}
+static void cdr_ext_err(const char *p, const char *o, uint32_t *ln, char *m, uint32_t cap)
+{
+    if (cdr_is_js(p)) cc_js_error(o, ln, m, cap);
+    else if (cdr_is_c(p) || cdr_is_html(p)) cc_c_error(o, ln, m, cap);
+    else cc_py_error(o, ln, m, cap);
+}
 
 static void cdr_clean_text(char *dst, uint32_t cap, const char *src)
 {
@@ -480,14 +503,13 @@ static int cdr_verify(const char *path)
     r = vfs_read(path, cdr_src, CDR_SRC_MAX - 1);
     if (r <= 0) return -1;
     cdr_src[r] = '\0';
-    if (cdr_is_py(path) || cdr_is_c(path)) {                 /* SOMA_239: Python se compila de verdad en su proceso (python -s); SOMA_265_CC: C con cc -s */
+    if (cdr_is_ext(path)) {                                  /* SOMA_239: Python se compila de verdad en su proceso (python -s); SOMA_265_CC: C con cc -s; SOMA_275_HTML: JS (js -s) y HTML (html comprobar) */
         static char o[1024];
-        int c = cdr_is_c(path);
-        int pr = c ? shell_c_source(1, cdr_src, (uint32_t)r, "", o, sizeof o, 8000) : shell_python_source(1, cdr_src, (uint32_t)r, "", o, sizeof o, 8000);
+        int pr = cdr_ext_src(path, cdr_src, (uint32_t)r, o, sizeof o);
         if (pr == 0) { cdr_bc_len = (uint32_t)r; return 1; }
-        uint32_t ln = 0; char m[96];
-        if (c) cc_c_error(o, &ln, m, sizeof m); else cc_py_error(o, &ln, m, sizeof m);
-        cdr_diag.line = ln; cdr_copy(cdr_diag.msg, sizeof cdr_diag.msg, m[0] ? m : c ? "no se pudo comprobar con el compilador de C" : "no se pudo comprobar con Python");
+        uint32_t ln = 0; char m[96]; m[0] = 0;
+        cdr_ext_err(path, o, &ln, m, sizeof m);
+        cdr_diag.line = ln; cdr_copy(cdr_diag.msg, sizeof cdr_diag.msg, m[0] ? m : "no se pudo comprobar con el compilador del lenguaje");
         cdr_diag_valid = 1;
         return 0;
     }
@@ -813,8 +835,15 @@ static int cdr_env_py_run(const char *src, uint32_t n, const char *input, char *
 /* SOMA_265_CC: C igual, con el compilador de C (cc -s / cc -x) */
 static int cdr_env_c_check(const char *src, uint32_t n, char *out, uint32_t max) { return shell_c_source(1, src, n, "", out, max, 8000); }
 static int cdr_env_c_run(const char *src, uint32_t n, const char *input, char *out, uint32_t max) { return shell_c_source(0, src, n, input, out, max, 5000); }
+/* SOMA_275_HTML: JavaScript (js -s / js -x) y HTML (comprobar; no hay nada que ejecutar) */
+static int cdr_env_js_check(const char *src, uint32_t n, char *out, uint32_t max) { return shell_js_source(1, src, n, "", out, max, 8000); }
+static int cdr_env_js_run(const char *src, uint32_t n, const char *input, char *out, uint32_t max) { return shell_js_source(0, src, n, input, out, max, 5000); }
+static int cdr_env_html_check(const char *src, uint32_t n, char *out, uint32_t max) { return shell_html_source(1, src, n, "", out, max, 8000); }
+static int cdr_env_html_run(const char *src, uint32_t n, const char *input, char *out, uint32_t max) { return shell_html_source(0, src, n, input, out, max, 5000); }
 static void cdr_env_python(struct cc_env *env, const char *target)
 {
+    if (cdr_is_html(target)) { env->lang = CC_LANG_HTML; env->check_src = cdr_env_html_check; env->run_src = cdr_env_html_run; return; }
+    if (cdr_is_js(target)) { env->lang = CC_LANG_JS; env->check_src = cdr_env_js_check; env->run_src = cdr_env_js_run; return; }
     if (cdr_is_c(target)) { env->lang = CC_LANG_C; env->check_src = cdr_env_c_check; env->run_src = cdr_env_c_run; return; }
     if (!cdr_is_py(target)) return;
     env->lang = CC_LANG_PYTHON; env->check_src = cdr_env_py_check; env->run_src = cdr_env_py_run;
@@ -916,6 +945,8 @@ done:
         desc[0] = '\0';
         if (cdr_is_py(cdr_w_target)) cdr_copy(desc, sizeof(desc), "Fase 6/6: Programa Python verificado con exito (compila en SOMA, 0 errores).");
         else if (cdr_is_c(cdr_w_target)) cdr_copy(desc, sizeof(desc), "Fase 6/6: Programa en C verificado con exito (compila en SOMA, 0 errores).");
+        else if (cdr_is_js(cdr_w_target)) cdr_copy(desc, sizeof(desc), "Fase 6/6: Programa en JavaScript verificado con exito (sin errores de sintaxis).");
+        else if (cdr_is_html(cdr_w_target)) cdr_copy(desc, sizeof(desc), "Fase 6/6: Pagina web verificada con exito (etiquetas, enlaces y scripts correctos).");
         else {
         cdr_copy(desc, sizeof(desc), "Fase 6/6: Programa verificado con exito (");
         cdr_cat_u32(desc, sizeof(desc), cdr_bc_len);
@@ -943,8 +974,8 @@ done:
 static void cdr_run_app(const char *path)
 {
     static char out[512]; char cmd[160];
-    if (cdr_is_py(path) || cdr_is_c(path)) {                  /* SOMA_239: en el Terminal (salida, input() y Esc); SOMA_265_CC: C con cc -run */
-        cdr_copy(cmd, sizeof cmd, cdr_is_c(path) ? "cc -run " : "python "); cdr_cat(cmd, sizeof cmd, path);
+    if (cdr_is_ext(path)) {                                   /* SOMA_239: en el Terminal (salida, input() y Esc); SOMA_265_CC: C con cc -run; SOMA_275_HTML: js y html abrir */
+        cdr_copy(cmd, sizeof cmd, cdr_is_html(path) ? "html abrir " : cdr_is_js(path) ? "js " : cdr_is_c(path) ? "cc -run " : "python "); cdr_cat(cmd, sizeof cmd, path);
         gui_terminal_run(cmd);
         return;
     }
@@ -1158,20 +1189,21 @@ static int ide_verify(void)
 {
     uint32_t len = 0; const char *t = ce_text(&len);
     struct cdr_snap sn; cdr_snapshot(&sn);
-    if (cdr_is_py(ce_path()) || cdr_is_c(ce_path())) {       /* SOMA_239: Python se comprueba con el interprete de verdad; SOMA_265_CC: C con cc */
+    if (cdr_is_ext(ce_path())) {                             /* SOMA_239: Python se comprueba con el interprete de verdad; SOMA_265_CC: C con cc; SOMA_275_HTML: JS y HTML */
         static char o[1024];
-        int c = cdr_is_c(ce_path());
         ide_prob_n = 0; ce_set_error(0, 0);
-        int pr = c ? shell_c_source(1, t, len, "", o, sizeof o, 8000) : shell_python_source(1, t, len, "", o, sizeof o, 8000);
+        int pr = cdr_ext_src(ce_path(), t, len, o, sizeof o);
         ide_prob_ok = pr == 0;
-        if (ide_prob_ok) { ide_say(c ? "C: compila sin errores." : "Python: compila sin errores.", CDR_C_GREEN); return 1; }
-        uint32_t ln = 0; char m[96]; if (c) cc_c_error(o, &ln, m, sizeof m); else cc_py_error(o, &ln, m, sizeof m);
+        if (ide_prob_ok) { static char okm[48]; cdr_copy(okm, sizeof okm, cdr_lang_label(ce_path())); cdr_cat(okm, sizeof okm, cdr_is_html(ce_path()) ? ": la pagina es correcta." : ": sin errores."); ide_say(okm, CDR_C_GREEN); return 1; }
+        uint32_t ln = 0; char m[96]; m[0] = 0; cdr_ext_err(ce_path(), o, &ln, m, sizeof m);
         char mm[112]; cdr_copy(mm, sizeof mm, "Linea "); cdr_cat_u32(mm, sizeof mm, ln); cdr_cat(mm, sizeof mm, ": "); cdr_cat(mm, sizeof mm, m[0] ? m : "no se pudo comprobar");
         cdr_copy(ide_prob[0], sizeof ide_prob[0], mm); ide_prob_line[0] = (int)ln; ide_prob_n = 1;
         ce_set_error((int)ln, m);
         if (ln) ce_goto_line((int)ln);
-        ide_say(pr < 0 ? (c ? "No se pudo ejecutar el compilador de C ahora; prueba de nuevo." : "No se pudo ejecutar Python ahora (otra orden en marcha); prueba de nuevo.")
-                       : (c ? "Error de C: revisa la linea marcada." : "Error de Python: revisa la linea marcada."), CDR_C_RED);
+        { static char em[96]; const char *lb = cdr_lang_label(ce_path());   /* SOMA_275_HTML */
+          if (pr < 0) { cdr_copy(em, sizeof em, "No se pudo comprobar "); cdr_cat(em, sizeof em, lb); cdr_cat(em, sizeof em, " ahora (otra orden en marcha); prueba de nuevo."); }
+          else { cdr_copy(em, sizeof em, "Error de "); cdr_cat(em, sizeof em, lb); cdr_cat(em, sizeof em, ": revisa la linea marcada."); }
+          ide_say(em, CDR_C_RED); }
         return 0;
     }
     if (sn.state == CODER_JOB_WORKING) { ide_say("El compilador esta ocupado con la tarea de SOMA; espera a que termine.", CDR_C_AMBER); return -1; }
@@ -1260,7 +1292,7 @@ static const char *ide_base(const char *p) { const char *n = p; for (; *p; p++) 
 
 static uint32_t cdr_file_col(const struct cdr_proj *p, int strong)
 {
-    uint32_t c = cdr_is_py(p->path) ? CDR_C_AMBER : cdr_is_c(p->path) ? CDR_C_NUM : p->is_gui ? CDR_C_GREEN : CDR_C_CYAN;   /* SOMA_265_CC: C violeta */
+    uint32_t c = cdr_is_ext(p->path) ? cdr_lang_color(p->path) : p->is_gui ? CDR_C_GREEN : CDR_C_CYAN;   /* SOMA_265_CC: C violeta; SOMA_275_HTML: JS amarillo, HTML naranja */
     return strong ? c : si_mix(0x000C1220u, c, 200);
 }
 static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h, const struct cdr_snap *sn)
@@ -1355,7 +1387,7 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
         fb_fill_rounded_rect(ex + 6, body_y + 6, tw, 27, 7, 0x000B1120u);
         fb_fill_rect((uint32_t)(ex + 6), (uint32_t)(body_y + 26), (uint32_t)tw, 8, 0x000B1120u);
         fb_fill_rounded_rect(ex + 14, body_y + 6, tw - 16, 2, 1, CDR_C_CYAN);
-        si_icon(SI_FILE_CODE, ex + 21, body_y + 19, 16, cdr_is_py(pth) ? CDR_C_AMBER : cdr_is_c(pth) ? CDR_C_NUM : CDR_C_CYAN);
+        si_icon(SI_FILE_CODE, ex + 21, body_y + 19, 16, cdr_lang_color(pth));
         font_draw_string((uint32_t)(ex + 32), (uint32_t)(body_y + 14), nm, CDR_C_WHITE, 1);
         if (ce_dirty()) fb_fill_rounded_rect(ex + tw - 6, body_y + 16, 8, 8, 4, CDR_C_AMBER);
         fb_set_clip(ex + tw + 14, body_y, ew - tw - 24, 33);
@@ -1417,7 +1449,7 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
         cdr_cat(st, sizeof st, ", Col "); cdr_cat_u32(st, sizeof st, (uint32_t)col);
         if (sc) { cdr_cat(st, sizeof st, "  ("); cdr_cat_u32(st, sizeof st, (uint32_t)sc); cdr_cat(st, sizeof st, " sel.)"); }
         cdr_cat(st, sizeof st, "   \xC2\xB7   "); cdr_cat_u32(st, sizeof st, (uint32_t)lines);
-        cdr_cat(st, sizeof st, cdr_is_py(ce_path()) ? " lineas   \xC2\xB7   UTF-8   \xC2\xB7   Python" : cdr_is_c(ce_path()) ? " lineas   \xC2\xB7   UTF-8   \xC2\xB7   C" : " lineas   \xC2\xB7   UTF-8   \xC2\xB7   SOMA-LANG");
+        cdr_cat(st, sizeof st, " lineas   \xC2\xB7   UTF-8   \xC2\xB7   "); cdr_cat(st, sizeof st, cdr_lang_label(ce_path()));   /* SOMA_275_HTML */
         int sw = cdr_tw(st);
         font_draw_string((uint32_t)(x0 + w - sw - 14), (uint32_t)(status_y + 7), st, 0x008391A7u, 1);
         uint32_t dot = ide_prob_ok == 1 ? CDR_C_GREEN : ide_prob_ok == 0 ? CDR_C_RED : 0x00475569u;
@@ -1527,7 +1559,7 @@ static void ide_key(char c)
  * - Campos de texto de verdad (textfield.c): cursor, seleccion con raton y teclado, doble clic, Ctrl+A, portapapeles.
  * - Registro de zonas pulsables: cada boton se registra al pintarlo, asi el clic cae SIEMPRE donde se ve.
  * ======================================================================== */
-enum { UB_GEN = 1, UB_CANCEL, UB_RUN, UB_EDIT, UB_TPL0, UB_TPL_END = UB_TPL0 + 8, UB_AUTO, UB_LSOMA, UB_LPY, UB_LC,
+enum { UB_GEN = 1, UB_CANCEL, UB_RUN, UB_EDIT, UB_TPL0, UB_TPL_END = UB_TPL0 + 8, UB_AUTO, UB_LSOMA, UB_LPY, UB_LC, UB_LJS, UB_LHTML,
        UB_PRUN, UB_PEDIT, UB_PNOTES, UB_PDUP, UB_PREN, UB_PDEL, UB_PDELOK, UB_PROW0 = 100, UB_PROW_END = 400,
        UB_LCOPY = 500, UB_LTRACE, UB_LCLEAR };
 struct ui_hit { int x, y, w, h, id; };
@@ -1641,11 +1673,13 @@ static void ui_render_new(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, co
     int fy = cy + 34;
     {   /* SOMA_239_PYTHON_GRAFICO: lenguaje del programa nuevo */
         font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 12), "Lenguaje", CDR_C_DIM, 1);
-        int lx = x0 + 86, sp = cdr_lang == CC_LANG_PYTHON, sc = cdr_lang == CC_LANG_C, ss = !sp && !sc;   /* SOMA_265_CC: + C */
+        int lx = x0 + 86, sp = cdr_lang == CC_LANG_PYTHON, sc = cdr_lang == CC_LANG_C, sj = cdr_lang == CC_LANG_JS, sh = cdr_lang == CC_LANG_HTML, ss = !sp && !sc && !sj && !sh;   /* SOMA_265_CC: + C; SOMA_275_HTML: + JS y HTML */
         lx += ui_btn_i(lx, fy, ss ? SI_CHECK : SI_CODE, "SOMA-LANG", UB_LSOMA, ss ? 0x00173A7Au : CDR_C_PANEL, ss ? 0x0060A5FAu : CDR_C_BORDER2, ss ? CDR_C_WHITE : CDR_C_SOFT) + 8;
         lx += ui_btn_i(lx, fy, sp ? SI_CHECK : SI_TERMINAL, "Python", UB_LPY, sp ? 0x003A2A0Au : CDR_C_PANEL, sp ? CDR_C_AMBER : CDR_C_BORDER2, sp ? 0x00FDE68Au : CDR_C_SOFT) + 8;
-        lx += ui_btn_i(lx, fy, sc ? SI_CHECK : SI_FILE_CODE, "C", UB_LC, sc ? 0x002A1F4Au : CDR_C_PANEL, sc ? CDR_C_NUM : CDR_C_BORDER2, sc ? 0x00DDD6FEu : CDR_C_SOFT) + 10;
-        font_draw_string((uint32_t)lx, (uint32_t)(fy + 12), sp ? ".py: ventanas con soma.win" : sc ? ".c: compilado con TinyCC; ventanas con soma.h" : ".soma: el lenguaje de SOMA", 0x00475569u, 1);
+        lx += ui_btn_i(lx, fy, sc ? SI_CHECK : SI_FILE_CODE, "C", UB_LC, sc ? 0x002A1F4Au : CDR_C_PANEL, sc ? CDR_C_NUM : CDR_C_BORDER2, sc ? 0x00DDD6FEu : CDR_C_SOFT) + 8;
+        lx += ui_btn_i(lx, fy, sj ? SI_CHECK : SI_FILE_CODE, "JavaScript", UB_LJS, sj ? 0x00332B05u : CDR_C_PANEL, sj ? 0x00F7DF1Eu : CDR_C_BORDER2, sj ? 0x00FEF08Au : CDR_C_SOFT) + 8;
+        lx += ui_btn_i(lx, fy, sh ? SI_CHECK : SI_FILE_CODE, "HTML", UB_LHTML, sh ? 0x00391A07u : CDR_C_PANEL, sh ? 0x00FB923Cu : CDR_C_BORDER2, sh ? 0x00FED7AAu : CDR_C_SOFT) + 10;
+        font_draw_string((uint32_t)lx, (uint32_t)(fy + 12), sp ? ".py: ventanas con soma.win" : sc ? ".c: TinyCC; ventanas con soma.h" : sj ? ".js: ventanas con win.*" : sh ? ".html: pagina web de un archivo" : ".soma: el lenguaje de SOMA", 0x00475569u, 1);
         fy += 36;
     }
     font_draw_string((uint32_t)(x0 + 16), (uint32_t)(fy + 11), "Archivo", CDR_C_DIM, 1);
@@ -1753,7 +1787,7 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
         ui_reg(ui_list_x, ry, ui_list_w, 36, UB_PROW0 + i);
         ry += 40;
     }
-    if (!vis) font_draw_string((uint32_t)(ui_list_x + 12), (uint32_t)(ui_list_y + 8), ui_search[0] ? "Ningun programa coincide." : "Aun no hay programas .soma, .py ni .c", CDR_C_DIM, 1);
+    if (!vis) font_draw_string((uint32_t)(ui_list_x + 12), (uint32_t)(ui_list_y + 8), ui_search[0] ? "Ningun programa coincide." : "Aun no hay programas .soma, .py, .c, .js ni .html", CDR_C_DIM, 1);
     if (w < 760) return;
     /* detalle */
     int dx = x0 + lw + 10, dw = w - lw - 10;
@@ -1767,10 +1801,10 @@ static void ui_render_projects(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t w
         return; }
     struct cdr_proj *it = &projects[project_selected];
     int ty = y0 + 44;
-    si_badge(dx + 16, ty, 48, (cdr_is_py(it->path) || cdr_is_c(it->path)) ? SI_TERMINAL : it->is_gui ? SI_SCREEN : SI_FILE_CODE, cdr_file_col(it, 1));
+    si_badge(dx + 16, ty, 48, cdr_is_ext(it->path) ? SI_TERMINAL : it->is_gui ? SI_SCREEN : SI_FILE_CODE, cdr_file_col(it, 1));
     font_draw_string((uint32_t)(dx + 80), (uint32_t)(ty + 10), it->name, CDR_C_WHITE, 1);
-    { char inf[96]; inf[0] = 0; cdr_cat(inf, sizeof inf, cdr_is_py(it->path) ? "Python  \xC2\xB7  " : cdr_is_c(it->path) ? "C  \xC2\xB7  " : "SOMA-LANG  \xC2\xB7  ");
-      cdr_cat(inf, sizeof inf, it->is_gui ? "Aplicacion con ventana" : "Programa de consola");
+    { char inf[96]; inf[0] = 0; cdr_cat(inf, sizeof inf, cdr_lang_label(it->path)); cdr_cat(inf, sizeof inf, "  \xC2\xB7  ");
+      cdr_cat(inf, sizeof inf, cdr_is_html(it->path) ? "Pagina web" : it->is_gui ? "Aplicacion con ventana" : "Programa de consola");
       cdr_cat(inf, sizeof inf, "  \xC2\xB7  "); cdr_cat_u32(inf, sizeof inf, it->lines); cdr_cat(inf, sizeof inf, " lineas  \xC2\xB7  ");
       cdr_fmt_size(inf + cdr_len(inf), sizeof inf - cdr_len(inf), it->size);
       font_draw_string((uint32_t)(dx + 80), (uint32_t)(ty + 30), inf, CDR_C_GRAY, 1); }
@@ -1890,8 +1924,8 @@ static int ui_click(int mx, int my, const struct cdr_snap *sn)
         case UB_CANCEL: coder_cancel_job(); return 1;
         case UB_RUN: cdr_run_app(sn->target_file); return 1;
         case UB_EDIT: cdr_open_in_editor(sn->target_file); return 1;
-        case UB_LSOMA: case UB_LPY: case UB_LC: {                             /* SOMA_239: cambia el lenguaje (y la extension) */
-            cdr_lang = id == UB_LPY ? CC_LANG_PYTHON : id == UB_LC ? CC_LANG_C : CC_LANG_SOMA;
+        case UB_LSOMA: case UB_LPY: case UB_LC: case UB_LJS: case UB_LHTML: {   /* SOMA_239: cambia el lenguaje (y la extension) */
+            cdr_lang = id == UB_LPY ? CC_LANG_PYTHON : id == UB_LC ? CC_LANG_C : id == UB_LJS ? CC_LANG_JS : id == UB_LHTML ? CC_LANG_HTML : CC_LANG_SOMA;
             cdr_sync_inputs();
             if (input_create_file[0] && cdr_is_prog(input_create_file)) {
                 char t[96]; cdr_copy(t, sizeof t, input_create_file); cdr_strip_ext(t); cdr_cat(t, sizeof t, cdr_lang_ext(cdr_lang)); tf_set(&tf_cfile, t); cdr_sync_inputs();
@@ -2196,7 +2230,7 @@ static int coder_ui_snapshot(const char *target, uint8_t **png, uint32_t *pn)
 static void coder_ui_review(struct cc_env *env, const char *target, const char *mission, struct cc_result *cr)
 {
     extern int gui_is_running(void);
-    if (!cr->ok || cdr_is_py(target) || cdr_is_c(target) || !cc_mission_is_gui(mission) || !gui_is_running() || llm_vision_unsupported()) return;
+    if (!cr->ok || cdr_is_ext(target) || !cc_mission_is_gui(mission) || !gui_is_running() || llm_vision_unsupported()) return;
     cm_log("Revision visual: abro el programa y capturo su ventana");
     uint8_t *png; uint32_t pn;
     if (coder_ui_snapshot(target, &png, &pn) != 0) { cm_log("Revision visual: no se pudo capturar la ventana"); return; }
@@ -2247,6 +2281,12 @@ int coder_run_mission(const char *target_in, const char *mission, char *out, uin
             if (cdr_is_py(target)) {
                 cm_puts(out, max, &p, "\nPython: compila y pasa las comprobaciones.");
                 cm_puts(out, max, &p, "\nEjecutalo con:  python "); cm_puts(out, max, &p, target);
+            } else if (cdr_is_html(target)) {                                  /* SOMA_275_HTML */
+                cm_puts(out, max, &p, "\nPagina web: etiquetas, enlaces y scripts correctos.");
+                cm_puts(out, max, &p, "\nAbrela con:  html abrir "); cm_puts(out, max, &p, target);
+            } else if (cdr_is_js(target)) {
+                cm_puts(out, max, &p, "\nJavaScript: sin errores de sintaxis y pasa las comprobaciones.");
+                cm_puts(out, max, &p, "\nEjecutalo con:  js "); cm_puts(out, max, &p, target);
             } else if (cdr_is_c(target)) {                                     /* SOMA_265_CC */
                 cm_puts(out, max, &p, "\nC: compila con TinyCC y pasa las comprobaciones.");
                 cm_puts(out, max, &p, "\nEjecutalo con:  cc -run "); cm_puts(out, max, &p, target);

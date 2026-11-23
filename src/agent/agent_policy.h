@@ -45,11 +45,21 @@ static inline int agent_path_has_prefix(const char *c, const char *dir)
 /* 1 si los agentes NO pueden modificar `path`. */
 static inline int agent_path_protected(const char *path)
 {
-    static const char *const dirs[] = { "/etc", "/sys", "/bin", "/boot", 0 };
+    static const char *const dirs[] = { "/etc", "/sys", "/bin", "/boot", "/lcm", 0 };   /* SOMA_271_LCM: /lcm (el modelo del LCM) */
     char c[AGENT_POLICY_PATH_MAX + 1];
     if (!path || !agent_path_canon(path, c, sizeof c)) return 1;
     for (int i = 0; dirs[i]; ++i)
         if (agent_path_has_prefix(c, dirs[i])) return 1;
     return 0;
+}
+
+/* SOMA_268_ACCESO: 1 si el USUARIO (terminal, editor de texto, gestor de archivos) puede escribir en `path`: solo en su unidad (/usuario)
+ * y en /tmp (temporal, en RAM). Todo lo demas (configuracion, memoria, programas instalados) es de solo lectura para el usuario: lo
+ * cambian los programas del sistema o se edita desde fuera de SOMA. Normaliza la ruta (//, /./, /../) antes de decidir. */
+static inline int usuario_ruta_escribible(const char *path)
+{
+    char c[AGENT_POLICY_PATH_MAX + 1];
+    if (!path || !agent_path_canon(path, c, sizeof c)) return 0;
+    return agent_path_has_prefix(c, "/usuario") || agent_path_has_prefix(c, "/tmp");
 }
 #endif

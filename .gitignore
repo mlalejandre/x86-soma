@@ -72,3 +72,7 @@ voces/
 .parche_*_respaldo/
 para_claude*.txt
 exporta_soma_*.py
+
+# SOMA_284_GITHUB: lo que exporta tools/exporta_memoria.py es tu memoria personal: no se sube
+memoria-export/
+*.smem

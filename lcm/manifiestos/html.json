@@ -1,0 +1,227 @@
+{
+ "manifiesto": 1,
+ "origen": "html (parche 275: webs para el navegador de SOMA)",
+ "ordenes": [
+  {
+   "id": "html_comprobar",
+   "orden": "html comprobar {A}",
+   "peligrosa": false,
+   "frases": [
+    "(comprueba|revisa|verifica|valida|chequea) [la página|la web|el html|el archivo|el código] [html] {A}",
+    "(comprueba|revisa|verifica|valida|chequea) si {A} tiene errores",
+    "html comprobar {A}",
+    "(comprueba|revisa|verifica|valida) las etiquetas de {A}",
+    "(quiero|necesito|me gustaría|quisiera) (comprobar|revisar|verificar|validar) [la página|la web|el html] {A}",
+    "(pasa|pásale|pasale) el comprobador de html a {A}",
+    "¿(puedes|podrías|me puedes) (comprobar|revisar|verificar|validar) [la página|la web|el html] {A}?",
+    "(a ver|vamos a ver) si la página {A} está bien",
+    "(busca|encuentra) errores en la (web|página) {A}",
+    "(valida|comprueba) el html de {A}"
+   ],
+   "infinitivos": [
+    "comprobar la página {A}",
+    "revisar el html {A}",
+    "validar la web {A}"
+   ],
+   "preguntas": [
+    "tiene errores la página {A}"
+   ],
+   "pruebas": [
+    [
+     "comprueba la página index.html",
+     "html comprobar index.html"
+    ],
+    [
+     "revisa el html contacto.html",
+     "html comprobar contacto.html"
+    ],
+    [
+     "valida la web tienda.html",
+     "html comprobar tienda.html"
+    ],
+    [
+     "comprueba si menu.html tiene errores",
+     "html comprobar menu.html"
+    ],
+    [
+     "quiero verificar la página landing.html",
+     "html comprobar landing.html"
+    ],
+    [
+     "busca errores en la web blog.html",
+     "html comprobar blog.html"
+    ],
+    [
+     "pásale el comprobador de html a juego.html",
+     "html comprobar juego.html"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "index.html",
+     "pagina.html",
+     "tareas.html",
+     "/workspace/web/index.html",
+     "contacto.html",
+     "juego.html",
+     "inicio.html",
+     "calculadora.html",
+     "menu.html",
+     "reloj.html",
+     "portfolio.html",
+     "blog.html",
+     "/workspace/prueba.html",
+     "landing.html",
+     "formulario.html",
+     "tienda.html"
+    ]
+   }
+  },
+  {
+   "id": "html_empaquetar",
+   "orden": "html empaquetar {A}",
+   "peligrosa": false,
+   "frases": [
+    "(empaqueta|junta|une|fusiona|agrupa) [la página|la web|el html|el proyecto] {A} en un (solo archivo|único archivo|archivo)",
+    "(empaqueta|junta|une|fusiona) [la página|la web|el html] {A}",
+    "html empaquetar {A}",
+    "(mete|pon|incrusta|integra) (el css|los estilos|el javascript|el js|las imágenes|todo) (de|en) {A} (en|dentro de) (el html|un solo archivo|la página)",
+    "(quiero|necesito|me gustaría|quisiera) (empaquetar|juntar|unir|fusionar) [la página|la web|el html|el proyecto] {A}",
+    "(genera|crea|haz) (una versión|una copia) (empaquetada|en un solo archivo) de {A}",
+    "¿(puedes|podrías|me puedes) (empaquetar|juntar|unir) [la página|la web|el html] {A}?",
+    "(deja|convierte) [la página|la web] {A} en un solo (archivo|html)"
+   ],
+   "infinitivos": [
+    "empaquetar la página {A}",
+    "juntar el css y el js de {A}",
+    "unir la web {A} en un archivo"
+   ],
+   "preguntas": [
+    "cómo empaqueto la web {A}"
+   ],
+   "pruebas": [
+    [
+     "empaqueta la página index.html en un solo archivo",
+     "html empaquetar index.html"
+    ],
+    [
+     "junta la web pagina.html",
+     "html empaquetar pagina.html"
+    ],
+    [
+     "une el html tareas.html",
+     "html empaquetar tareas.html"
+    ],
+    [
+     "quiero empaquetar el proyecto portfolio.html",
+     "html empaquetar portfolio.html"
+    ],
+    [
+     "genera una versión empaquetada de inicio.html",
+     "html empaquetar inicio.html"
+    ],
+    [
+     "deja la web blog.html en un solo archivo",
+     "html empaquetar blog.html"
+    ],
+    [
+     "fusiona la página juego.html",
+     "html empaquetar juego.html"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "index.html",
+     "pagina.html",
+     "tareas.html",
+     "/workspace/web/index.html",
+     "contacto.html",
+     "juego.html",
+     "inicio.html",
+     "calculadora.html",
+     "menu.html",
+     "reloj.html",
+     "portfolio.html",
+     "blog.html",
+     "/workspace/prueba.html",
+     "landing.html",
+     "formulario.html",
+     "tienda.html"
+    ]
+   }
+  },
+  {
+   "id": "html_abrir",
+   "orden": "html abrir {A}",
+   "peligrosa": false,
+   "frases": [
+    "(abre|muestra|enséñame|ensename|lanza|carga) la (página|web|página web) {A} en el navegador",
+    "(abre|muestra|lanza|carga) [el html|la página|la web] {A} en (el navegador|la web)",
+    "html abrir {A}",
+    "(quiero|necesito|me gustaría|quisiera) (ver|abrir|probar) [la página|la web|el html] {A} en el navegador",
+    "(a ver|vamos a ver) cómo queda la (web|página) {A}",
+    "¿(puedes|podrías|me puedes) (abrir|mostrar|enseñar) la (web|página) {A} [en el navegador]?",
+    "(ábreme|abreme|muéstrame|muestrame) la (web|página) {A}",
+    "(prueba|visualiza) la (web|página) {A} en el navegador"
+   ],
+   "infinitivos": [
+    "abrir la página {A} en el navegador",
+    "ver la web {A}",
+    "mostrar la página {A}"
+   ],
+   "preguntas": [
+    "cómo queda la web {A}"
+   ],
+   "pruebas": [
+    [
+     "abre la página index.html en el navegador",
+     "html abrir index.html"
+    ],
+    [
+     "muestra la web contacto.html en el navegador",
+     "html abrir contacto.html"
+    ],
+    [
+     "abre el html calculadora.html en el navegador",
+     "html abrir calculadora.html"
+    ],
+    [
+     "quiero ver la página reloj.html en el navegador",
+     "html abrir reloj.html"
+    ],
+    [
+     "ábreme la web menu.html",
+     "html abrir menu.html"
+    ],
+    [
+     "a ver cómo queda la web formulario.html",
+     "html abrir formulario.html"
+    ],
+    [
+     "lanza la página juego.html en el navegador",
+     "html abrir juego.html"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "index.html",
+     "pagina.html",
+     "tareas.html",
+     "/workspace/web/index.html",
+     "contacto.html",
+     "juego.html",
+     "inicio.html",
+     "calculadora.html",
+     "menu.html",
+     "reloj.html",
+     "portfolio.html",
+     "blog.html",
+     "/workspace/prueba.html",
+     "landing.html",
+     "formulario.html",
+     "tienda.html"
+    ]
+   }
+  }
+ ]
+}

@@ -5,6 +5,7 @@
 #include "coder_app.h"
 #include "docagent.h"   /* SOMA_248_DOC */
 #include "agent_ruta.h"  /* SOMA_251_RUTAS */
+#include "memoria.h"      /* SOMA_277_MEMORIA: la memoria de SOMA (portada de memorIA) sustituye a la ventana de STM y al arbol /mem */
 #include "coder_core.h"  /* SOMA_266_AVISO: en que lenguaje se va a programar (para el aviso) */
 #include "lcm_ordenes.inc"   /* SOMA_253_LCM: traductor del LCM (solo enteros) */
 #include "rtc.h"
@@ -207,6 +208,10 @@ static void stm_load_into_prompt(const struct agent_profile *agent, char *dst, u
 
 static void stm_append_interaction(const struct agent_profile *agent, const char *user_msg, const char *verdict_msg)
 {
+    if (memoria_activa()) {                                    /* SOMA_277_MEMORIA: el intercambio va a la memoria nueva (solo lo que escribe el usuario, no las sub-misiones) */
+        if (delegation_depth == 0) memoria_registra(user_msg, verdict_msg);
+        return;
+    }
     static char existing[2048];
     static char updated[3072];
     int r = vfs_read(agent->stm_file, existing, sizeof(existing) - 1);
@@ -247,7 +252,7 @@ static void stm_append_interaction(const struct agent_profile *agent, const char
  * MEMORIA DEL SISTEMA Y PIZARRA COMPARTIDA
  * ==================================================================== */
 
-static void inject_agent_memory(const struct agent_profile *agent, char *dst, uint32_t max, uint32_t *pos)
+static void inject_agent_memory(const struct agent_profile *agent, char *dst, uint32_t max, uint32_t *pos, const char *mission)
 {
     fb_puts(dst, max, pos, "\n[MEMORIA DEL SISTEMA]:\n");
 
@@ -299,7 +304,8 @@ static void inject_agent_memory(const struct agent_profile *agent, char *dst, ui
             fb_puts(dst, max, pos, "\n");
         }
     }
-    stm_load_into_prompt(agent, dst, max, pos);
+    if (!memoria_activa()) stm_load_into_prompt(agent, dst, max, pos);       /* SOMA_277_MEMORIA: con la memoria nueva, esto lo pone memoria_contexto */
+    else memoria_contexto(mission, dst, max, pos);
 }
 
 /* ====================================================================
@@ -397,6 +403,14 @@ int mem_search_cmd(const char *args, char *out_buf, uint32_t max_out)
     }
     static char search_res[2048];
     search_res[0] = '\0';
+    if (memoria_activa()) {                                    /* SOMA_277_MEMORIA: primero la memoria nueva (embeddings); si no hay nada, la busqueda de siempre */
+        static char nueva[3072];
+        if (memoria_busca_agente(args, nueva, sizeof nueva) > 0) {
+            kprint("\n--- Memoria de SOMA ---\n"); kprint(nueva); kprint("-----------------------\n");
+            uint32_t pp = 0; fb_puts(out_buf, max_out, &pp, nueva);
+            return 1;
+        }
+    }
     int hits = vfs_search_bm25(args, "", search_res, sizeof(search_res));
 
     uint32_t pos = 0;
@@ -415,6 +429,11 @@ int mem_search_cmd(const char *args, char *out_buf, uint32_t max_out)
 int mem_tree_cmd(const char *args, char *out_buf, uint32_t max_out)
 {
     (void)args;
+    if (memoria_activa()) {                                    /* SOMA_277_MEMORIA: el arbol de temas de la memoria (SOMA_279_SUENO) */
+        memoria_cmd("arbol", out_buf, max_out);
+        kprint(out_buf); kprint("\n");
+        return 1;
+    }
     static char tree_idx[1024];
     uint32_t pos = 0;
     int r = vfs_read("/mem/indice.txt", tree_idx, sizeof(tree_idx) - 1);
@@ -441,6 +460,13 @@ int mem_read_cmd(const char *args, char *out_buf, uint32_t max_out)
         return 1;
     }
 
+    if (memoria_activa() && args[0] >= '0' && args[0] <= '9') {  /* SOMA_277_MEMORIA: mem_read 12 = el recuerdo numero 12 */
+        char cmd[40]; uint32_t cp = 0; fb_puts(cmd, sizeof cmd, &cp, "ver ");
+        while (*args >= '0' && *args <= '9' && cp < sizeof cmd - 1) cmd[cp++] = *args++;
+        cmd[cp] = 0;
+        memoria_cmd(cmd, out_buf, max_out); kprint(out_buf); kprint("\n");
+        return 1;
+    }
     char target[64];
     uint32_t tp = 0;
     if (args[0] != '/') {
@@ -488,6 +514,11 @@ int mem_write_cmd(const char *args, char *out_buf, uint32_t max_out)
     }
     text[tp] = '\0';
 
+    if (memoria_activa() && tp > 0) {                          /* SOMA_277_MEMORIA: lo que el agente quiere recordar va a la memoria (el nodo queda como fuente) */
+        memoria_recuerda_agente(text, node, out_buf, max_out);
+        kprint("mem_write: "); kprint(out_buf); kprint("\n");
+        return 1;
+    }
     int r = vfs_write(node, text, tp);
     uint32_t pos = 0;
     if (r >= 0) {
@@ -1834,7 +1865,14 @@ static void programador_run(const char *mission)
     if (ok && gui_is_running()) gui_open_coder_file(target);   /* SOMA_217_STUDIO: la ventana de ese archivo, o una nueva */
 }
 
-void agent_run(const char *agent_name, const char *mission)
+static void agent_run_core(const char *agent_name, const char *mission);
+void agent_run(const char *agent_name, const char *mission)     /* SOMA_277_MEMORIA: la extraccion de hechos espera a que ningun agente este usando el LLM */
+{
+    memoria_agente_entra();
+    agent_run_core(agent_name, mission);
+    memoria_agente_sale();
+}
+static void agent_run_core(const char *agent_name, const char *mission)
 {
     while (*mission == ' ') mission++;
     /* SOMA_193: las URL que escribe el USUARIO en su mision son destinos permitidos. Las de una mision delegada por otro agente no
@@ -2036,7 +2074,7 @@ void agent_run(const char *agent_name, const char *mission)
             }
         }
 
-        inject_agent_memory(agent, agent_prompt_buf, TP, &ap_len);
+        inject_agent_memory(agent, agent_prompt_buf, TP, &ap_len, mission);
         fb_puts(agent_prompt_buf, TP, &ap_len, "\nFECHA ACTUAL DEL SISTEMA: ");
         fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_y);
         fb_putc(agent_prompt_buf, TP, &ap_len, '-');

@@ -20,6 +20,7 @@
 #include "idt.h"
 #include "virtio_net.h"
 #include "disk_layout.h"
+#include "agent_policy.h"  /* SOMA_268_ACCESO */
 #include "unidades.h"      /* SOMA_267_DISCOS: /usuario y /modelos (las unidades exFAT del pendrive) */
 
 #define FS_SUPER_LBA         SOMA_LBA_FS_SUPER
@@ -185,6 +186,30 @@ int vfs_agent_secret(const char *name)
     if (fs_strstr(name, "/etc/secreto/") == name) return 1;
     for (int i = 0; secret[i]; ++i) if (vfs_names_equal(secret[i], name)) return 1;
     return 0;
+}
+
+/* SOMA_268_ACCESO: hilos en sesion de usuario (el terminal y el terminal de texto; a lo sumo unos pocos a la vez) */
+#define SESION_USU_MAX 4
+static struct tcb *sesion_usu[SESION_USU_MAX];
+int vfs_sesion_usuario_activa(void)
+{
+    struct tcb *t = thread_current();
+    if (!t || t->agent_mode) return 0;                                  /* los agentes tienen su propia politica (agent_policy.h) */
+    for (int i = 0; i < SESION_USU_MAX; ++i) if (sesion_usu[i] == t) return 1;
+    return 0;
+}
+int vfs_sesion_usuario(int on)
+{
+    struct tcb *t = thread_current();
+    int antes = 0;
+    if (!t) return 0;
+    for (int i = 0; i < SESION_USU_MAX; ++i) if (sesion_usu[i] == t) { antes = 1; if (!on) sesion_usu[i] = 0; }
+    if (on && !antes) for (int i = 0; i < SESION_USU_MAX; ++i) if (!sesion_usu[i]) { sesion_usu[i] = t; break; }
+    return antes;
+}
+int vfs_usuario_puede_escribir(const char *name)
+{
+    return !vfs_sesion_usuario_activa() || usuario_ruta_escribible(name);
 }
 
 static int agent_path_denied(const char *name)
@@ -503,6 +528,20 @@ static int vfs_sync_unlocked(void)
     return 0;
 }
 
+/* SOMA_269_RAM: guardado diferido (modo RAM). Todo guardado automatico pasa por aqui; vfs_sync() siempre guarda de verdad. */
+static int fs_diferido;
+static int vfs_sync_auto_unlocked(void) { return fs_diferido ? 0 : vfs_sync_unlocked(); }
+void vfs_modo_ram(int on) { kmutex_lock(&vfs_mutex); fs_diferido = on ? 1 : 0; kmutex_unlock(&vfs_mutex); }
+int  vfs_modo_ram_activo(void) { return fs_diferido; }
+uint32_t vfs_sin_guardar(void)
+{
+    uint32_t n = 0;
+    kmutex_lock(&vfs_mutex);
+    for (int i = 0; i < FS_MAX_FILES; ++i) if (files[i].dirty) n++;
+    kmutex_unlock(&vfs_mutex);
+    return n;
+}
+
 static int vfs_create_internal(const char *name, const char *initial_data, uint32_t len)
 {
     if (!name || name[0] == '\0') return -1;
@@ -731,7 +770,7 @@ static int vfs_create_unlocked(const char *name, const char *initial_data, uint3
 {
     if (!fs_initialized) vfs_init();
     int r = vfs_create_internal(name, initial_data, len);
-    if (r == 0 && !is_ephemeral_path(name) && vfs_sync_unlocked() != 0) {
+    if (r == 0 && !is_ephemeral_path(name) && vfs_sync_auto_unlocked() != 0) {
         return -1;
     }
     return r;
@@ -781,6 +820,11 @@ static int unid_lista(int show_all, const char *dir, char *out, uint32_t max, in
     return out ? (int)p : k;
 }
 
+/* SOMA_268_ACCESO: carpetas de la unidad del usuario para el gestor de archivos */
+int vfs_unid_mkdir(const char *name) { return unid_es(name) && unid_mkdir(name, 0) == 0 ? 0 : -1; }
+int vfs_unid_rename(const char *de, const char *a) { return unid_es(de) && unid_es(a) && unid_renombrar(de, a, 0) == 0 ? 0 : -1; }
+int vfs_unid_borrar_rec(const char *name) { return unid_es(name) && unid_borrar_rec(name, 0) == 0 ? 0 : -1; }
+
 static int vfs_write_core(const char *name, const char *data, uint32_t len);
 
 int vfs_write(const char *name, const char *data, uint32_t len)
@@ -809,7 +853,7 @@ static int vfs_write_core(const char *name, const char *data, uint32_t len)
             files[i].size = len;
             if (!is_ephemeral_path(name)) {
                 files[i].dirty = 1;
-                if (vfs_sync_unlocked() != 0) { kmutex_unlock(&vfs_mutex); return -1; }
+                if (vfs_sync_auto_unlocked() != 0) { kmutex_unlock(&vfs_mutex); return -1; }
             }
             kmutex_unlock(&vfs_mutex);
             return (int)len;
@@ -874,7 +918,7 @@ int vfs_delete(const char *name)
             files[i].name[0] = '\0';
             files[i].dirty = 1;
             drop_data(i);
-            int r = vfs_sync_unlocked();
+            int r = vfs_sync_auto_unlocked();
             kmutex_unlock(&vfs_mutex);
             return r != 0 ? -1 : 0;
         }

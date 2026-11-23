@@ -31,6 +31,9 @@ int  llm_list_models(char *out, uint32_t max);                /* modelos del pro
 int  llm_launcher_models(char *out, uint32_t max);            /* modelos que puede arrancar, uno por linea; cuantos o -1 */
 int  llm_launcher_status(char *model, uint32_t mmax);         /* 1 listo, 2 cargando, 0 parado, -1 error, -2 sin lanzador */
 int  llm_launcher_start(const char *model, uint32_t max_wait_ms, void (*progress)(uint32_t secs));   /* 1 = arrancado y listo */
+int  llm_launcher_emb_status(void);                          /* SOMA_278_EMBEDDINGS: 1 listo, 2 cargando, 0 parado, -1 error, -2 sin lanzador */
+int  llm_launcher_emb_start(uint32_t max_wait_ms, void (*progress)(uint32_t secs));   /* arranca el servidor de embeddings (bge-m3, CPU); 1 = listo */
+int  llm_launcher_emb_stop(void);                            /* 0 = parado */
 int  llm_launcher_stop(void);                                 /* 0 = parado */
 extern char llm_last_error[200];                              /* motivo del ultimo fallo, en claro */
 

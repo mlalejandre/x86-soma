@@ -108,6 +108,7 @@ struct jrt {
     void *dom;                    /* estado del DOM (web_js_dom.c) */
     void *recache; uint32_t recache_pos;   /* cache de regex compiladas */
     const struct jdyn *dyn;       /* ganchos de propiedades dinamicas para objetos host (style, dataset, storage) */
+    uint32_t task_ms;             /* SOMA_274_JS: limite de una tarea en ms (0 = 12000, el del navegador); jsrun lo sube: un bucle de juego dura minutos */
     int timed_out;                /* halted por tiempo (se puede reanudar con la siguiente tarea) */
     int heap_over;                /* SOMA 188B: ya se supero una vez el tope de memoria (queda la reserva para los manejadores) */
     /* SOMA 189: recolector de basura (web_js_gc.c) */

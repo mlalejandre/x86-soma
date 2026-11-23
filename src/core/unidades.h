@@ -46,7 +46,8 @@ int  unid_escribir(const char *ruta, const void *datos, uint64_t n, int priv);
 int  unid_anadir(const char *ruta, const void *datos, uint32_t n, int priv);
 int  unid_borrar(const char *ruta, int priv);
 int  unid_mkdir(const char *ruta, int priv);
-int  unid_renombrar(const char *de, const char *a, int priv);            /* las dos en la misma unidad */
+int  unid_renombrar(const char *de, const char *a, int priv);
+int  unid_borrar_rec(const char *ruta, int priv);                         /* SOMA_268_ACCESO: archivo, o carpeta con todo lo que contiene (no la raiz de la unidad) */            /* las dos en la misma unidad */
 int  unid_listar(const char *ruta, struct exfat_dirent *out, int max, int *total);
 struct unid_fd { int u; uint32_t gen; struct exfat_file f; };
 int  unid_abrir(const char *ruta, struct unid_fd *fd);                  /* para leer mucho (SYS_OPEN de ring 3) */

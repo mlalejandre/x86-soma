@@ -56,6 +56,7 @@
 #include "pdfview.h"   /* PARCHE 088 */
 #include "acct.h"      /* PARCHE 089 */
 #include "sysmon.h"                                /* PARCHE 085 */
+#include "agenda_gui.h"                            /* SOMA_272_AGENDA */
 #include "recorder.h"                               /* SOMA_177_T480S */
 #include "camapp.h"                                /* SOMA_178_T480S */
 #include "capapp.h"                                /* SOMA_179_T480S */
@@ -99,7 +100,8 @@ enum app_mode {
     APP_RECORDER,  /* SOMA_177_T480S: grabadora */
     APP_CAMERA,    /* SOMA_178_T480S: camara web */
     APP_CAPTURE,   /* SOMA_179_T480S: captura de pantalla y audio interno */
-    APP_YOUTUBE    /* SOMA_250_YOUTUBE: videos de YouTube (busqueda y reproduccion en directo) */
+    APP_YOUTUBE,   /* SOMA_250_YOUTUBE: videos de YouTube (busqueda y reproduccion en directo) */
+    APP_AGENDA     /* SOMA_272_AGENDA: calendario */
 };
 
 static enum app_mode current_app = APP_DESKTOP;
@@ -299,7 +301,7 @@ static uint32_t her_app_min_w(enum app_mode app)
 {
     switch (app) {
     case APP_WEB_BROWSER:    return 520u;
-    case APP_AGENT_MEMORY:   return 600u;
+    case APP_AGENT_MEMORY:   return 860u;   /* SOMA_283_MEMORIA_APP: consola de la memoria (3 columnas) */
     case APP_FILE_MANAGER:   return 480u;
     case APP_IMAGE_VIEWER:   return 460u;
     case APP_NOTEPAD:        return 400u;
@@ -307,6 +309,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_SETTINGS:       return 760u;   /* PARCHE 085 */
     case APP_PDF:            return 760u;   /* PARCHE 088 */
     case APP_SYSMON:         return 900u;   /* PARCHE 089 */
+    case APP_AGENDA:         return 860u;   /* SOMA_272_AGENDA */
     case APP_RECORDER:       return 800u;   /* SOMA_177_T480S; SOMA_210: con la lista de grabaciones a la vista */
     case APP_CAMERA:         return 760u;   /* SOMA_178_T480S; SOMA_210 */
     case APP_CAPTURE:        return 720u;   /* SOMA_179_T480S; SOMA_210 */
@@ -411,6 +414,7 @@ static int soma_clip_apply(int op)
     case APP_CODER_APP:    if (coder_app_clip_op(op)) { her_refresh_all(); fb_present(); return 1; } return 0;   /* PARCHE 093 */
     case APP_PAINT:        return paint_clip_op(op);
     case APP_FILE_MANAGER: return fm_clip_op(op);
+    case APP_AGENT_MEMORY: if (memview_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_283_MEMORIA_APP: los campos de la memoria */
     case APP_YOUTUBE:      if (youtube_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_250_YOUTUBE: la caja de busqueda */
     case APP_LAYOUT:       if (layout_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;     /* SOMA_254: ruta y descripcion del Maquetador */
     case APP_WEB_BROWSER:
@@ -866,13 +870,13 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         }
         if (!her_dragging && !her_resizing) {   /* SOMA_179_T480S: Captura, Camara y Grabadora se repintan solas (hora, nivel, imagen) aunque no se mueva el raton:
                                                  * sus tick() estaban dentro de mouse_poll y no corrian sin actividad del puntero */
-            static const int live_apps[4] = { APP_CAPTURE, APP_CAMERA, APP_RECORDER, APP_YOUTUBE };   /* SOMA_250_YOUTUBE: el video se pinta solo */
-            for (int k = 0; k < 4; k++) {
+            static const int live_apps[5] = { APP_CAPTURE, APP_CAMERA, APP_RECORDER, APP_YOUTUBE, APP_AGENT_MEMORY };   /* SOMA_250_YOUTUBE: el video se pinta solo; SOMA_283_MEMORIA_APP: la memoria en vivo */
+            for (int k = 0; k < 5; k++) {
                 int app = live_apps[k], si = -1;
                 for (int i = 0; i < her_num_windows; i++) if ((int)her_windows[i].app == app) si = i;
                 if (si < 0) continue;
                 uint8_t own = acct_set_owner((uint8_t)(ACCT_APP0 + app));
-                int ch = app == APP_CAPTURE ? capapp_tick() : app == APP_CAMERA ? camapp_tick() : app == APP_YOUTUBE ? youtube_tick() : recorder_tick();
+                int ch = app == APP_CAPTURE ? capapp_tick() : app == APP_CAMERA ? camapp_tick() : app == APP_YOUTUBE ? youtube_tick() : app == APP_AGENT_MEMORY ? memview_tick() : recorder_tick();
                 if (ch) {
                     struct her_win_node *sw = &her_windows[si];
                     int covered = 0;
@@ -1005,6 +1009,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     mouse_erase_cursor();
             }
 
+            if (agenda_gui_aviso() && current_app == APP_AGENDA) { agenda_gui_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }   /* SOMA_272_AGENDA: avisos activos, con o sin ventana */
             acct_set_owner((uint8_t)(ACCT_APP0 + current_app));   /* PARCHE 089 */
             {   /* SOMA_PARCHE_024_TERM: rueda y boton derecho */
                 int wheel = mouse_wheel_take();
@@ -1017,6 +1022,9 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 }
                 if (current_app == APP_CODER_APP && !her_dragging && !her_resizing) {   /* PARCHE 093: arrastre de seleccion y rueda */
                     if (coder_app_mouse(mouse_x, mouse_y, wheel, mouse_left_held())) { coder_app_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
+                if (current_app == APP_AGENT_MEMORY && !her_dragging && !her_resizing) {   /* SOMA_283_MEMORIA_APP: rueda, resaltado y arrastre en los campos */
+                    if (memview_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { memview_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
                 if (current_app == APP_SYSMON && !her_dragging && !her_resizing) {   /* PARCHE 089: muestra por segundo y rueda */
                     int rd = sysmon_tick();
@@ -1186,6 +1194,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     if (current_app == APP_CAMERA) {                 /* SOMA_178_T480S */
                         camapp_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
                         camapp_render_window(win_x, win_y, win_w, win_h, 1);
+                    } else
+                    if (current_app == APP_AGENDA) {                 /* SOMA_272_AGENDA */
+                        agenda_gui_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        agenda_gui_render_window(win_x, win_y, win_w, win_h, 1);
                     } else
                     if (current_app == APP_SYSMON) {                 /* PARCHE 089 */
                         if (sysmon_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h) == 2) { HER_SYNC_WIN(); her_refresh_all(); }
@@ -1470,6 +1482,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 if (c == 27) { micrec_stop(); her_close_current_app_vortex(); continue; }
                 recorder_handle_key(c); recorder_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
             }
+            if (current_app == APP_AGENDA) {                     /* SOMA_272_AGENDA */
+                if (c == 27) { her_close_current_app_vortex(); continue; }
+                agenda_gui_handle_key(c); agenda_gui_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
             if (current_app == APP_SYSMON) {                     /* PARCHE 089 */
                 if (c == 27) { her_close_current_app_vortex(); continue; }
                 sysmon_handle_key(c); sysmon_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
@@ -1667,7 +1683,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                         if (!cap_txt) cap_txt = (char *)kmalloc(CAP_MAX);
                         int capturing = cap_txt && !console_capture_active();
                         if (capturing) console_capture_begin(cap_txt, CAP_MAX, "");
-                        int ret = dispatch_command(cmd_run, cmd_out, sizeof(cmd_out));
+                        int ret = dispatch_command_usuario(cmd_run, cmd_out, sizeof(cmd_out));   /* SOMA_268_ACCESO */
                         if (capturing) {
                             uint32_t cn = console_capture_end();
                             if (cmd_out[0] == '\0' && cn) {                 /* quita los colores ANSI (ESC [ ... letra) */

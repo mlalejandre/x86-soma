@@ -6,6 +6,61 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_284_GITHUB -->
+### Listo para publicar en GitHub (284)
+- Entradas del historial y sección del README para la memoria nueva (277–283); documentación de los parches 281 y 282 (en `docs/PARCHE_284_GITHUB.md`).
+- `.gitignore`: no se suben `memoria-export/` ni los `.smem` (llevan tu memoria personal, que exporta `tools/exporta_memoria.py`).
+- Las claves falsas de la prueba del exportador se arman al ejecutarla: escritas enteras, el detector de secretos de
+  `subir_github.py` no dejaba subir el repositorio.
+
+<!-- SOMA_283_MEMORIA_APP -->
+### La aplicación de Memoria, rehecha: monitor en vivo, explorador, búsqueda y cartuchos (283)
+- La ventana **Memoria** pasa a ser la consola de la memoria de SOMA con el aspecto de memorIA, en seis pestañas: **Monitor** (hechos,
+  cola de extracción, ciclo de sueño, las 9 tareas con la que corre iluminada, últimos hechos aprendidos, registro de mantenimiento y
+  servidor de embeddings), **Explorador** (árbol de temas; ver, editar, archivar, restaurar, borrar, copiar y mover recuerdos; crear,
+  renombrar, describir y quitar ramas), **Buscar** (por significado), **Cartuchos**, **Ajustes** y **Archivos** (los de los agentes).
+  Se repinta sola cuando la memoria cambia; lo que tarda lo hace el hilo de la memoria y la pantalla no se congela.
+- **Cartuchos** como en memorIA: el primario aprende; hasta 3 más se conectan en solo lectura y el agente los consulta a la vez.
+  Crear, conectar, hacer primario, clonar, exportar e importar `.smem`, vaciar y borrar; copiar y mover recuerdos o ramas entre ellos.
+  El Principal sigue en `/memoria/` (sin migrar nada). También `memoria cartucho ...` en el terminal.
+- **Borrar de verdad** (`memoria borrar ID`): quita el recuerdo, rehace la memoria sin huecos y libera disco y RAM.
+- Arreglado (del 279): al podar una rama vacía, lo archivado seguía apuntando a ella y aparecía dentro del tema que reutilizara el hueco.
+- Pruebas: `test_memoria_283` (89), el pegamento con cartuchos (225) y `test_memview_283` (128), que dibuja la ventana de verdad en el
+  anfitrión y pulsa sus botones; con una carpeta como argumento guarda capturas. Detalles: `docs/PARCHE_283_APP_MEMORIA.md`.
+
+<!-- SOMA_282_ZONA_BAJA -->
+### La imagen del núcleo vuelve a enlazar: zona baja reservada de 48 MiB (282)
+- El núcleo ya pesaba unos 29,3 MiB y el enlazador exigía como mucho 30. `PMMC_LOWER` pasa de 32 a 48 MiB y los dos `ASSERT` de
+  `linker_x86_64.ld` a 46 MiB (imagen) y 48 MiB (virtqueue), como hizo el 202 de 16 a 32. Pruebas del PMM sin cambios.
+
+<!-- SOMA_281_ARREGLOS -->
+### Las pruebas de la memoria pasan en macOS (281)
+- Usaban `ASAN_OPTIONS=detect_leaks=1` y LeakSanitizer no existe en macOS; ahora `detect_leaks=0` como el resto.
+
+<!-- SOMA_280_IMPORTAR -->
+### Tu memoria de memorIA entra en SOMA, y la agenda en el contexto (280)
+- `tools/exporta_memoria.py` (se ejecuta en el Mac): lee `memoria.db` en solo lectura, se salta lo que parece un secreto y escribe
+  archivos `.smem`; `--servir` los ofrece en la red local con una clave de un solo uso.
+- En SOMA, `memoria importar RUTA.smem`: hechos, sustituciones, árbol con descripciones, mensajes y vectores bge-m3; no duplica.
+- Cuando se pregunta por planes, citas o fechas, el contexto lleva la agenda de los próximos 7 días.
+
+<!-- SOMA_279_SUENO -->
+### Árbol de temas y ciclo de sueño de la memoria (279)
+- Los recuerdos se ordenan en temas de 3 niveles (`memoria arbol`); con SOMA en calma, las 9 tareas de memorIA (reparar, embeber,
+  olvidar, ordenar, describir, fusionar, rescatar, partir y unir ramas) se ejecutan por turnos (`memoria sueno [N]`).
+- Curva del olvido de memorIA en enteros; lo olvidado vuelve solo si una consulta lo trae.
+
+<!-- SOMA_278_EMBEDDINGS -->
+### El servidor de embeddings se arranca desde SOMA (278)
+- `memoria servidor [estado|arrancar|parar]`: bge-m3 en la CPU del servidor de IA (puerto 8089), con el mismo lanzador que el LLM
+  e independiente de él.
+
+<!-- SOMA_277_MEMORIA -->
+### La memoria de memorIA dentro de SOMA (277)
+- Sustituye a la memoria antigua del agente: hechos atómicos extraídos de la charla (con sustitución temporal: «vivía en Madrid» →
+  «vive en Bilbao»), mensajes literales, búsqueda por significado con embeddings (por palabras si no hay servidor) y regla de atribución.
+- Orden `memoria` (`estado`, `recordar`, `buscar`, `ver`, `olvidar`, `config`, `importar`...). Se guarda en `/memoria` por fragmentos.
+
 <!-- SOMA_267_DISCOS -->
 ### El pendrive en cuatro particiones: sistema, DATOS, MODELOS y USUARIO (267)
 - **SOMA** (FAT32, 1 GiB, el sistema), **DATOS** (formato de SOMA, 2 GiB: configuración, memoria, programas instalados),

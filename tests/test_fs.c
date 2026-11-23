@@ -143,6 +143,66 @@ static void test_politica_agente(void)
     }
 }
 
+/* SOMA_268_ACCESO: la sesion de usuario solo escribe en /usuario y /tmp; fuera de la sesion (programas del sistema) nada cambia */
+static void test_sesion_usuario_268(void)
+{
+    CHECK_EQ_INT(vfs_sesion_usuario_activa(), 0);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/etc/ui.conf"), 1);               /* sin sesion: sin restriccion (programas del sistema) */
+    CHECK_EQ_INT(vfs_sesion_usuario(1), 0);                                     /* devuelve la sesion anterior */
+    CHECK_EQ_INT(vfs_sesion_usuario_activa(), 1);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/etc/ui.conf"), 0);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/mem/indice.txt"), 0);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/workspace/../etc/ui.conf"), 0);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/usuario/a.txt"), 1);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/tmp/x"), 1);
+    CHECK_EQ_INT(vfs_sesion_usuario(1), 1);                                     /* anidada: la anterior ya estaba */
+    CHECK_EQ_INT(vfs_sesion_usuario(1), 1);
+    vfs_sesion_usuario(1);
+    host_agent_mode(1);                                                         /* un agente no esta en sesion de usuario: su politica es otra */
+    CHECK_EQ_INT(vfs_sesion_usuario_activa(), 0);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/etc/ui.conf"), 1);
+    host_agent_mode(0);
+    CHECK_EQ_INT(vfs_sesion_usuario(0), 1);                                     /* sale */
+    CHECK_EQ_INT(vfs_sesion_usuario_activa(), 0);
+    CHECK_EQ_INT(vfs_usuario_puede_escribir("/etc/ui.conf"), 1);
+    CHECK(vfs_write("/etc/ui.conf", "x", 1) >= 0);                              /* el VFS en si no cambia: solo cambian las ordenes del usuario */
+    for (int i = 0; i < 8; ++i) vfs_sesion_usuario(1);                          /* nunca se desborda la tabla */
+    vfs_sesion_usuario(0);
+    CHECK_EQ_INT(vfs_sesion_usuario_activa(), 0);
+}
+
+/* SOMA_269_RAM: modo RAM: nada va al disco hasta vfs_sync(); y entonces se guarda todo */
+static void test_modo_ram_269(void)
+{
+    char b[64];
+    fresh(); vfs_init();
+    CHECK_EQ_INT(vfs_modo_ram_activo(), 0);
+    int w0 = host_disk_writes();
+    CHECK(vfs_write("/mem/ram1.txt", "uno", 3) == 3);
+    CHECK(host_disk_writes() > w0);                                   /* modo normal: se guarda en cada escritura */
+    vfs_modo_ram(1);
+    CHECK_EQ_INT(vfs_modo_ram_activo(), 1);
+    CHECK_EQ_INT((int)vfs_sin_guardar(), 0);
+    w0 = host_disk_writes();
+    CHECK(vfs_write("/mem/ram2.txt", "dos", 3) == 3);                 /* crear */
+    CHECK(vfs_write("/mem/ram1.txt", "UNO!", 4) == 4);                /* reescribir */
+    CHECK(vfs_write("/tmp/ram_tmp.txt", "t", 1) == 1);                /* efimero: nunca va al disco */
+    CHECK_EQ_INT(host_disk_writes(), w0);                             /* ni un sector */
+    CHECK(vfs_sin_guardar() >= 2);
+    CHECK(vfs_read("/mem/ram1.txt", b, sizeof b) == 4 && !strcmp(b, "UNO!"));     /* en RAM se ve todo igual */
+    CHECK_EQ_INT(vfs_delete("/mem/ram2.txt"), 0);
+    CHECK_EQ_INT(host_disk_writes(), w0);
+    CHECK_EQ_INT(vfs_sync(), 0);
+    CHECK(host_disk_writes() > w0);                                   /* sync guarda de verdad */
+    CHECK_EQ_INT((int)vfs_sin_guardar(), 0);
+    int w1 = host_disk_writes();
+    CHECK_EQ_INT(vfs_sync(), 0);                                      /* sin pendientes: nada que escribir */
+    CHECK_EQ_INT(host_disk_writes(), w1);
+    vfs_modo_ram(0);
+    CHECK(vfs_write("/mem/ram3.txt", "tres", 4) == 4);
+    CHECK(host_disk_writes() > w1);                                   /* de vuelta al modo normal */
+}
+
 static void test_tabla_llena(void)
 {
     char nombre[48];
@@ -279,6 +339,8 @@ int main(int argc, char **argv)
     test_nombres();
     test_rutas_especiales();
     test_politica_agente();
+    test_sesion_usuario_268();
+    test_modo_ram_269();
     test_busqueda();
     test_fallo_de_disco();
     test_checkpoint();

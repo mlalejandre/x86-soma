@@ -1,0 +1,98 @@
+{
+ "manifiesto": 1,
+ "origen": "js (parche 274: JavaScript para aplicaciones)",
+ "ordenes": [
+  {
+   "id": "js_ejecuta",
+   "orden": "js {A}",
+   "peligrosa": true,
+   "frases": [
+    "(ejecuta|lanza|corre|arranca|prueba|pon en marcha) [el programa|el script|el guion|el código|el archivo] (en|de) (javascript|js) {A}",
+    "(ejecuta|lanza|corre|arranca|prueba) [el programa|el script|el guion|el archivo] {A} con (javascript|js|node)",
+    "js {A}",
+    "(ejecuta|lanza|corre|arranca) [el programa|el script|el guion|el archivo|el código] (javascript|js) {A}",
+    "(quiero|necesito|tengo que|me gustaría|quisiera) (ejecutar|probar|lanzar|correr) [el programa|el script|el guion|el archivo] (en|de) (javascript|js) {A}",
+    "(corre|ejecuta|lanza) {A} con (el intérprete de|el) (javascript|js)",
+    "¿(puedes|podrías|me puedes) (ejecutar|correr|lanzar|probar) [el programa|el script] (en|de) (javascript|js) {A}?",
+    "(pon|pónme|ponme) en marcha [el programa|el script] (en|de) (javascript|js) {A}",
+    "(a ver|vamos a ver|veamos) qué hace [el programa|el script] (de|en) (javascript|js) {A}",
+    "(ejecuta|lanza|corre) [mi|el] (script|programa) (de|en) (javascript|js) {A}",
+    "pasa {A} por (javascript|js|el intérprete de javascript)",
+    "(arranca|lanza|ejecuta) la aplicación (en|de) (javascript|js) {A}",
+    "(ejecuta|corre|lanza|prueba) [el archivo] {A} (en|con) (javascript|js)"
+   ],
+   "infinitivos": [
+    "ejecutar el programa en javascript {A}",
+    "ejecutar el script de js {A}",
+    "probar el programa en javascript {A}"
+   ],
+   "preguntas": [
+    "qué hace el script de javascript {A}"
+   ],
+   "pruebas": [
+    [
+     "ejecuta el programa en javascript juego.js",
+     "js juego.js"
+    ],
+    [
+     "corre el script de js suma.js",
+     "js suma.js"
+    ],
+    [
+     "lanza hola.js con javascript",
+     "js hola.js"
+    ],
+    [
+     "quiero probar el programa en js reloj.js",
+     "js reloj.js"
+    ],
+    [
+     "¿puedes ejecutar el script en javascript calculadora.js?",
+     "js calculadora.js"
+    ],
+    [
+     "arranca la aplicación en javascript ventana.js",
+     "js ventana.js"
+    ],
+    [
+     "ejecuta main.js con js",
+     "js main.js"
+    ],
+    [
+     "pon en marcha el programa de javascript tabla.js",
+     "js tabla.js"
+    ],
+    [
+     "a ver qué hace el script de js ejemplo.js",
+     "js ejemplo.js"
+    ],
+    [
+     "js primos.js",
+     "js primos.js"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "hola.js",
+     "suma.js",
+     "juego.js",
+     "calculadora.js",
+     "reloj.js",
+     "main.js",
+     "ventana.js",
+     "primos.js",
+     "tabla.js",
+     "ejemplo.js",
+     "/workspace/prueba.js",
+     "/usuario/programa.js",
+     "bucle.js",
+     "saludo.js",
+     "ordena.js",
+     "app.js",
+     "snake.js",
+     "pelota.js"
+    ]
+   }
+  }
+ ]
+}

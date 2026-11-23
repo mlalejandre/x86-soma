@@ -46,7 +46,7 @@ endif
 endif
 ifdef SOMA_MAC_NO_TOOLCHAIN
 # SOMA_263_ARREGLO: + pruebas-lcm (pruebas del anfitrion: no necesitan el compilador cruzado; make test la llama). SOMA_265_CC: + pruebas-cc
-ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm pruebas-lang pruebas-cc pruebas-discos run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
+ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm pruebas-lang pruebas-cc pruebas-js pruebas-memoria pruebas-discos run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
 $(error macOS: el compilador del sistema (Apple clang) no puede generar el nucleo x86_64. Opcion 1: brew install x86_64-elf-gcc x86_64-elf-binutils x86_64-elf-grub xorriso  (y repetir make). Opcion 2 (solo Docker): make docker-make ARCH=$(ARCH) PLATFORM=$(PLATFORM) EXTRA_CFLAGS='$(EXTRA_CFLAGS)')
 endif
 endif
@@ -142,6 +142,7 @@ OBJS_CORE = \
 	$(BUILD)/llm_proto.o \
 	$(BUILD)/docagent.o $(BUILD)/docgen.o $(BUILD)/pdfw.o \
 	$(BUILD)/agent_ruta.o $(BUILD)/busca_web.o \
+	$(BUILD)/memoria.o $(BUILD)/memoria_core.o \
 	$(BUILD)/shell.o \
 	$(BUILD)/httpd.o \
 	$(BUILD)/fb.o \
@@ -154,7 +155,7 @@ OBJS_CORE = \
 	$(BUILD)/fm.o \
 	$(BUILD)/notepad.o \
 	$(BUILD)/memview.o $(BUILD)/js_runtime.o \
-	$(BUILD)/layout.o $(BUILD)/tex.o $(BUILD)/settings.o $(BUILD)/savedlg.o $(BUILD)/codeedit.o $(BUILD)/textfield.o $(BUILD)/coder_core.o $(BUILD)/coder_demo.o $(BUILD)/pdf_sbx.o $(BUILD)/pdfview.o $(BUILD)/sysmon.o $(BUILD)/recorder.o $(BUILD)/camapp.o $(BUILD)/capapp.o $(BUILD)/sysicon.o \
+	$(BUILD)/layout.o $(BUILD)/tex.o $(BUILD)/settings.o $(BUILD)/savedlg.o $(BUILD)/codeedit.o $(BUILD)/textfield.o $(BUILD)/coder_core.o $(BUILD)/coder_demo.o $(BUILD)/pdf_sbx.o $(BUILD)/pdfview.o $(BUILD)/sysmon.o $(BUILD)/agenda_core.o $(BUILD)/agenda.o $(BUILD)/agenda_gui.o $(BUILD)/recorder.o $(BUILD)/camapp.o $(BUILD)/capapp.o $(BUILD)/sysicon.o \
 	$(BUILD)/paint.o \
 	$(BUILD)/coder_app.o \
 	$(BUILD)/vm.o \
@@ -259,6 +260,16 @@ OBJS_ARCH += $(BUILD)/vplayprog.o $(BUILD)/vplay_sys.o
 $(BUILD)/pyprog.o: $(BUILD)/user/python.elf
 	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../pyprog.o python.elf
 OBJS_ARCH += $(BUILD)/pyprog.o
+# SOMA_274_JS: JavaScript para aplicaciones: el motor del navegador (src/apps/web_js_*.c) sin pagina, como programa de ring 3 (orden "js").
+# Sin red ni maquetacion: solo el interprete, el DOM minimo (document vacio), console, fs, win, temporizadores y promesas.
+JSRUN_SRCS = src/user/jsrun.c src/apps/jsrun_core.c src/apps/web_html.c src/apps/web_css.c $(wildcard src/apps/web_js_*.c) src/apps/web_f64.c src/apps/web_regex.c
+$(BUILD)/user/jsrun.elf: $(JSRUN_SRCS) src/apps/jsrun_core.h src/apps/web_js.h src/apps/web_js_i.h src/user/ulib.h src/user/user.ld $(wildcard src/apps/*.h) | $(BUILD)
+	rm -rf $(BUILD)/user/jsrun && mkdir -p $(BUILD)/user/jsrun
+	set -e; for f in $(JSRUN_SRCS); do $(CC) $(USER_CFLAGS) $(EXTRA_CFLAGS) -w -USOMA_WEB_ASYNC_IMAGES -DSOMA_WEB_ASYNC_IMAGES=0 -DSOMA_WEBSVC=1 $(WEBSVC_INC) -Isrc/user -c $$f -o $(BUILD)/user/jsrun/$$(basename $$f .c).o; done
+	$(CC) $(USER_CFLAGS) -Wl,-T,src/user/user.ld -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--no-relax $(BUILD)/user/jsrun/*.o -o $@
+$(BUILD)/jsprog.o: $(BUILD)/user/jsrun.elf
+	cd $(BUILD)/user && $(LD) -z noexecstack -r -b binary -o ../jsprog.o jsrun.elf
+OBJS_ARCH += $(BUILD)/jsprog.o
 # SOMA_265_CC: compilador de C (TinyCC, third_party/tinycc, LGPL 2.1) con la biblioteca de C de SOMA (src/user/cc) como programa
 # de ring 3 (orden "cc"), como Python. Lleva dentro sus cabeceras y la biblioteca, que compila con cada programa (cc_fs.inc).
 TCC_DIR = third_party/tinycc
@@ -329,7 +340,8 @@ OBJS_CORE += $(BUILD)/term_core.o $(BUILD)/term_ui.o
 # SOMA_PARCHE_PORTAPAPELES: portapapeles global del sistema
 OBJS_CORE += $(BUILD)/clipboard.o
 # SOMA_PARCHE_NAVEGADOR: motor web (HTML5/CSS3/JavaScript) para el navegador
-OBJS_CORE += $(BUILD)/web_regex.o $(BUILD)/web_js_regex.o $(BUILD)/web_js_run.o $(BUILD)/web_js_co.o $(BUILD)/web_js_u16.o $(BUILD)/web_js_bin.o $(BUILD)/web_js_proxy.o $(BUILD)/web_js_big.o $(BUILD)/web_js_gc.o $(BUILD)/web_js_module.o $(BUILD)/web_js_lib.o $(BUILD)/web_js_lib2.o $(BUILD)/web_js_lib3.o $(BUILD)/web_js_lib4.o $(BUILD)/web_js_parse.o $(BUILD)/web_js_api.o $(BUILD)/web_js_dom.o $(BUILD)/web_f64.o $(BUILD)/web_net.o $(BUILD)/web_html.o $(BUILD)/web_css.o $(BUILD)/web_layout.o $(BUILD)/web_font.o $(BUILD)/web_img_sbx.o $(BUILD)/web_inflate_sbx.o $(BUILD)/web_net_sbx.o $(BUILD)/web_page.o
+# SOMA_275_HTML: comprobador/empaquetador de webs (orden html y Programador)
+OBJS_CORE += $(BUILD)/htmlproj.o $(BUILD)/web_regex.o $(BUILD)/web_js_regex.o $(BUILD)/web_js_run.o $(BUILD)/web_js_co.o $(BUILD)/web_js_u16.o $(BUILD)/web_js_bin.o $(BUILD)/web_js_proxy.o $(BUILD)/web_js_big.o $(BUILD)/web_js_gc.o $(BUILD)/web_js_module.o $(BUILD)/web_js_lib.o $(BUILD)/web_js_lib2.o $(BUILD)/web_js_lib3.o $(BUILD)/web_js_lib4.o $(BUILD)/web_js_parse.o $(BUILD)/web_js_api.o $(BUILD)/web_js_dom.o $(BUILD)/web_f64.o $(BUILD)/web_net.o $(BUILD)/web_html.o $(BUILD)/web_css.o $(BUILD)/web_layout.o $(BUILD)/web_font.o $(BUILD)/web_img_sbx.o $(BUILD)/web_inflate_sbx.o $(BUILD)/web_net_sbx.o $(BUILD)/web_page.o
 $(BUILD)/web_css.o: src/apps/web_color.inc
 # PARCHE 138: en x86_64 los decodificadores de imagen (web_img, web_jpeg, bmp_dec) NO se enlazan en el kernel: viven en el servicio
 # aislado imgdec.elf (ring 3). En aarch64 (sin EL0 todavia) se enlazan y web_img_sbx.c los llama directamente.
@@ -434,6 +446,7 @@ $(BUILD)/youtube.o: src/apps/youtube_ia.c src/apps/youtube_nativo.c src/apps/yt_
 $(BUILD)/gui.o: src/ui/gui_vortice.c src/ui/gui_cosmos.c src/ui/gui_iconos.c src/ui/gui_ventanas.c src/ui/gui_agente.c src/ui/gui_orbe_fx.c src/ui/gui_fotograma.c src/ui/gui_minimizar.c src/ui/gui_lang.c src/ui/gui_abrir.c src/ui/gui_orbe_frente.c src/ui/gui_prompter.c   # SOMA_234_GUI_PARTIDO: gui.c los incluye (SOMA_259_ORBE: + gui_prompter.c)
 $(BUILD)/shell.o: $(wildcard src/agent/shell_*.c)    # SOMA_233_SHELL_PARTIDO: shell.c incluye sus ordenes por temas
 $(BUILD)/agent.o: $(wildcard src/agent/lcm_*.inc)    # SOMA_257_LCM: agent.c incluye el LCM (modelo y pegamento en .inc)
+$(BUILD)/agenda_core.o: src/apps/agenda_nl.inc src/apps/agenda_ics.inc    # SOMA_272_AGENDA
 $(BUILD)/shell.o: src/agent/lcm_ordenes_shell.inc    # SOMA_258_LCM: shell.c incluye cerrar y contiene
 $(BUILD)/shell.o: src/agent/llm_limites_shell.inc    # SOMA_260_LLM_TAM
 $(BUILD)/llm.o: src/agent/llm_limites.inc            # SOMA_260_LLM_TAM
@@ -547,6 +560,8 @@ test:
 	$(MAKE) browser-boundary-test
 	$(MAKE) pruebas-lcm   # SOMA_262_PUBLICAR
 	$(MAKE) pruebas-cc    # SOMA_265_CC
+	$(MAKE) pruebas-js    # SOMA_274_JS
+	$(MAKE) pruebas-memoria   # SOMA_277_MEMORIA
 	$(MAKE) pruebas-discos   # SOMA_267_DISCOS
 	@mkdir -p build/tests
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_lexer.c src/lang/lexer.c -o build/tests/test_lexer
@@ -828,6 +843,7 @@ browser-boundary-test:
 LCM_TEST_CFLAGS = -std=gnu11 -g -Wall -Wextra -Wno-unused-function -fsanitize=address,undefined -fno-sanitize-recover=undefined $(if $(filter 1,$(STRICT)),-Werror)
 pruebas-lcm:
 	@mkdir -p build/tests
+	python3 tests/test_lcm_ajuste_276.py   # SOMA_276_LCM
 	$(HOST_CC) $(LCM_TEST_CFLAGS) -O2 -Isrc/agent tests/test_lcm_ordenes_253.c -o build/tests/test_lcm_ordenes_253
 	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_lcm_257.c -o build/tests/test_lcm_257
 	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_lcm_258_ordenes.c -o build/tests/test_lcm_258_ordenes
@@ -852,6 +868,38 @@ pruebas-cc:
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_coder_c_265.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_coder_c_265
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_coder_c_265
 	HOST_CC="$(HOST_CC)" python3 tests/test_cc_265.py $(if $(filter 1,$(RAPIDO)),--rapido)
+
+# SOMA_274_JS: la orden js. El nucleo de js (consola, input, fs, ventana, temporizadores) con ASan/UBSan y el programa de ring 3 real
+# (src/user/jsrun.c) ejecutado en el anfitrion Linux x86_64 con el motor compilado como en SOMA. Sin Docker ni compilador cruzado.
+pruebas-js:
+	@mkdir -p build/tests
+	@echo "[prueba] test_jsrun_274"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_jsrun_274.c src/apps/jsrun_core.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o build/tests/test_jsrun_274 2>/dev/null; then ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 ./build/tests/test_jsrun_274; else echo "== test_jsrun_274: no compila en este equipo: SE OMITE"; fi
+	CC="$(HOST_CC)" sh tests/jsrun_host_274/run.sh
+	python3 tests/test_js_manifiesto_274.py
+	python3 tests/test_html_manifiesto_275.py
+	@echo "[prueba] test_html_275"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_html_275.c src/apps/htmlproj.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o build/tests/test_html_275 2>/dev/null; then ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 ./build/tests/test_html_275; else echo "== test_html_275: no compila en este equipo: SE OMITE"; fi
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_coder_js_275.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_coder_js_275
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_coder_js_275
+
+# SOMA_277_MEMORIA: el nucleo de la memoria (memorIA portada a C) con ASan/UBSan: fechas, vectores int8, busqueda, sustitucion temporal,
+# canal lexical, lectura de las respuestas del LLM, contexto del prompt y guardado por fragmentos con CRC (corrupcion y truncado). Sin Docker.
+# SOMA_281_ARREGLOS: LeakSanitizer no existe en macOS (ASAN_OPTIONS=detect_leaks=1 aborta alli); como el resto de pruebas, detect_leaks=0
+pruebas-memoria:
+	@mkdir -p build/tests
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/agent tests/test_memoria_277.c src/agent/memoria_core.c -o build/tests/test_memoria_277
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_memoria_277
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/agent tests/test_llm_proto_278.c src/agent/llm_proto.c -o build/tests/test_llm_proto_278   # SOMA_278_EMBEDDINGS
+	./build/tests/test_llm_proto_278
+	python3 tests/test_lanzador_emb_278.py
+	$(HOST_CC) $(TEST_CFLAGS) -DPLATFORM_X86 -Isrc/agent tests/test_memoria_279.c src/agent/memoria_core.c -lm -o build/tests/test_memoria_279   # SOMA_279_SUENO
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_memoria_279
+	python3 tests/test_exporta_280.py build/tests/f280   # SOMA_280_IMPORTAR
+	$(HOST_CC) $(TEST_CFLAGS) -DPLATFORM_X86 -Isrc/agent tests/test_memoria_280.c src/agent/memoria_core.c -lm -o build/tests/test_memoria_280
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_memoria_280 build/tests/f280
+	$(HOST_CC) $(TEST_CFLAGS) -DPLATFORM_X86 -Isrc/agent tests/test_memoria_283.c src/agent/memoria_core.c -lm -o build/tests/test_memoria_283   # SOMA_283_MEMORIA_APP
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_memoria_283
+	@echo "[prueba] test_memview_283"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPLATFORM_X86 -DWEB_HOST_TEST -Itests -Isrc -Isrc/core -Isrc/drivers -Isrc/fs -Isrc/net -Isrc/ui -Isrc/apps -Isrc/agent -Isrc/lang -Isrc/arch/x86_64 -Isrc/fonts -Isrc/icons tests/test_memview_283.c src/ui/textfield.c tests/layhost/fbhost.c src/apps/web_font.c src/ui/soma_fonts.c src/agent/memoria_core.c src/agent/llm_proto.c src/apps/agenda_core.c src/core/png_enc.c -lm -o build/tests/test_memview_283; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_memview_283; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_memview_283: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)): SE OMITE"; fi
+	@echo "[prueba] test_memoria_glue_279"; if $(HOST_CC) $(TEST_CFLAGS) -DPLATFORM_X86 tests/test_memoria_glue_279.c src/agent/memoria_core.c src/agent/llm_proto.c src/apps/agenda_core.c -o build/tests/test_memoria_glue_279; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_memoria_glue_279 build/tests/f280; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_memoria_glue_279: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)): SE OMITE"; fi
 
 # SOMA_267_DISCOS: el pendrive en cuatro particiones. El exFAT del nucleo frente a mkfs.exfat/fsck.exfat (exfatprogs) y a una segunda
 # implementacion (EXREF=), las herramientas de tools/ (soma_disco.py, somafs.py, datos.py) frente al codigo C real del nucleo, la

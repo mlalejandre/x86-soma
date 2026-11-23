@@ -51,13 +51,28 @@ int  vfs_format_list(char *out_buf, uint32_t max);
 int  vfs_format_list_ext(int show_all, const char *filter_dir, char *out_buf, uint32_t max);
 
 int  vfs_sync(void);
+/* SOMA_269_RAM: modo RAM. Con el modo activo las escrituras en RamFS no van al pendrive: quedan marcadas como pendientes y se guardan en
+ * vfs_sync() (apagar, reiniciar, `disco sync`). Un corte de luz pierde lo no guardado. vfs_sin_guardar() = archivos pendientes. */
+void     vfs_modo_ram(int on);
+int      vfs_modo_ram_activo(void);
+uint32_t vfs_sin_guardar(void);
 void vfs_format(void);
 void vfs_tree(char *out_buf, uint32_t max);
 void vfs_tree_ext(int show_all, char *out_buf, uint32_t max);
 
 void vfs_get_stats(uint32_t *files_used, uint32_t *bytes_used, uint32_t *dirty_count);
 int  vfs_is_hidden(const char *name);
-int  vfs_agent_secret(const char *name);   /* SOMA_193: 1 si el hilo actual es un agente y `name` es un archivo con secretos */
+int  vfs_agent_secret(const char *name);
+/* SOMA_268_ACCESO: sesion de USUARIO. Mientras el hilo actual esta en sesion de usuario (el terminal ejecutando lo que ha escrito la persona),
+ * las ordenes y editores genericos solo pueden escribir en /usuario y /tmp; los programas del sistema (Ajustes, memoria, instalador...) no
+ * pasan por aqui y siguen escribiendo en DATOS. vfs_sesion_usuario(on) devuelve la sesion anterior (0/1) para poder anidar. */
+int  vfs_sesion_usuario(int on);
+int  vfs_sesion_usuario_activa(void);
+int  vfs_usuario_puede_escribir(const char *name);   /* 1 si se permite escribir `name` en la sesion actual */
+/* SOMA_268_ACCESO: carpetas de la unidad del usuario (/usuario) para el gestor de archivos. 0 = bien, -1 = error o no es de una unidad */
+int  vfs_unid_mkdir(const char *name);
+int  vfs_unid_rename(const char *de, const char *a);          /* archivos y carpetas */
+int  vfs_unid_borrar_rec(const char *name);                   /* archivo, o carpeta con todo lo que contiene */   /* SOMA_193: 1 si el hilo actual es un agente y `name` es un archivo con secretos */
 
 /* Motor de Búsqueda Semántica y Ponderada BM25 */
 int  vfs_search_bm25(const char *query, const char *path_prefix, char *out, uint32_t max);

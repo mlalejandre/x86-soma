@@ -407,6 +407,10 @@ static int cmd_mkdir(const char *args, char *out_buf, uint32_t max_out)
         shell_emit("Uso: mkdir <ruta>   (relativa a /workspace si no empieza por /)\n", out_buf, max_out);
         return 1;
     }
+    if (!vfs_usuario_puede_escribir(path)) {                         /* SOMA_268_ACCESO */
+        shell_emit("mkdir: solo puedes crear carpetas en /usuario (y /tmp).\n", out_buf, max_out);
+        return 1;
+    }
     if (agent_dispatch_mode && !shell_user_space(path)) {
         shell_emit("mkdir: los agentes solo pueden crear directorios en /workspace o /mis_archivos.\n", out_buf, max_out);
         return 1;
@@ -438,6 +442,10 @@ static int cmd_rmdir(const char *args, char *out_buf, uint32_t max_out)
     int n = shell_dir_path(args, path, sizeof(path));
     if (n <= 1) {
         shell_emit("Uso: rmdir <ruta>   (solo directorios vacios)\n", out_buf, max_out);
+        return 1;
+    }
+    if (!vfs_usuario_puede_escribir(path)) {                         /* SOMA_268_ACCESO */
+        shell_emit("rmdir: solo puedes borrar carpetas en /usuario (y /tmp).\n", out_buf, max_out);
         return 1;
     }
     if (agent_dispatch_mode && !shell_user_space(path)) {

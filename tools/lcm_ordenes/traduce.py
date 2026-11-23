@@ -26,6 +26,10 @@ try:
 except ImportError:
     PROPOSITO = []
 try:
+    from .catalogo import PROPIOS          # SOMA_271_LCM: valores de una pieza solo para una orden (manifiestos)
+except ImportError:
+    PROPIOS = {}
+try:
     from .catalogo import EXTRA, ENVUELVE_INF, ENVUELVE_IND
 except ImportError:
     EXTRA, ENVUELVE_INF, ENVUELVE_IND = {}, [], []
@@ -101,7 +105,9 @@ def _fragmentos():
     return _UD
 
 
-def valor(s, rnd):
+def valor(s, rnd, it=None):
+    if it in PROPIOS and s in PROPIOS[it] and rnd.random() < 0.9:
+        return rnd.choice(PROPIOS[it][s])
     if s == "X" and rnd.random() < 0.4:
         return rnd.choice(VALORES["X"]) + " " + valor("T", rnd)
     if s == "T" and rnd.random() < 0.7:
@@ -194,7 +200,7 @@ def ejemplo(rnd):
         m = re.fullmatch(r"\{([A-Z])\}", parte)
         if m:
             s = m.group(1)
-            ws = trocea(valor(s, rnd))
+            ws = trocea(valor(s, rnd, it))
             for k, w in enumerate(ws):
                 toks.append(w); tags.append(("O" if it == "LLM" else ("B-" if k == 0 else "I-") + s))
         else:
@@ -268,7 +274,7 @@ def _lote(ejs, voc, rasgos, torch):
     return X, F
 
 
-def entrena(n=120000, epocas=8, semilla=11, log=print):
+def entrena(n=120000, epocas=8, semilla=11, log=print, desde=None, lr=2e-3):
     torch, Traductor, rasgos = _red()
     import torch.nn.functional as Fn
     rnd = random.Random(semilla); torch.manual_seed(semilla)
@@ -276,8 +282,17 @@ def entrena(n=120000, epocas=8, semilla=11, log=print):
     from collections import Counter
     c = Counter(w.lower().translate(_SIN_TILDE) for t, _, _ in datos for w in t)
     voc = {w: i + 2 for i, w in enumerate(w for w, k in c.items() if k >= 3 and not w[:1].isdigit())}
+    ant = None
+    if desde:                                          # SOMA_276_LCM: ajuste fino de un modelo ya bueno (en vez de entrenar desde cero)
+        ant = torch.load(desde, map_location="cpu")
+        voc = dict(ant["voc"])                         # se conservan los ids de las palabras ya aprendidas ...
+        for w, k in c.items():                         # ... y las palabras nuevas (comandos nuevos) se añaden al final
+            if k >= 3 and not w[:1].isdigit() and w not in voc:
+                voc[w] = len(voc) + 2
     m = Traductor(len(voc) + 2, len(INTENTS), len(TAGS))
-    opt = torch.optim.Adam(m.parameters(), lr=2e-3)
+    if ant:
+        _hereda(m, ant, torch)
+    opt = torch.optim.Adam(m.parameters(), lr=lr)
     i2 = {x: i for i, x in enumerate(INTENTS)}; t2 = {x: i for i, x in enumerate(TAGS)}
     for ep in range(epocas):
         m.train(); rnd.shuffle(datos); tot = 0.0
@@ -298,6 +313,27 @@ def entrena(n=120000, epocas=8, semilla=11, log=print):
     torch.save({"modelo": m.state_dict(), "voc": voc, "intents": INTENTS, "tags": TAGS}, RUTA)
     _C.clear()
     return m
+
+
+def _hereda(m, ant, torch):
+    """SOMA_276_LCM: copia los pesos de un modelo anterior en uno con mas palabras y/o mas ordenes (las nuevas empiezan al azar)."""
+    sd = m.state_dict()
+    for k, v in ant["modelo"].items():
+        if k in ("intent.weight", "intent.bias"):
+            vi = {x: i for i, x in enumerate(INTENTS)}
+            for i, x in enumerate(ant["intents"]):
+                if x in vi:
+                    sd[k][vi[x]] = v[i]
+        elif k in ("tag.weight", "tag.bias"):
+            vt = {x: i for i, x in enumerate(TAGS)}
+            for i, x in enumerate(ant["tags"]):
+                if x in vt:
+                    sd[k][vt[x]] = v[i]
+        elif k == "ew.weight":
+            sd[k][:v.shape[0]] = v
+        else:
+            sd[k] = v.clone()
+    m.load_state_dict(sd)
 
 
 _C = {}

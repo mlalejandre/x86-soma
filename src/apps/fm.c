@@ -12,6 +12,8 @@
 #include "mouse.h"
 #include "console.h"
 #include "fs.h"
+#include "unidades.h"      /* SOMA_268_ACCESO: /usuario */
+#include "agent_policy.h"   /* SOMA_268_ACCESO: usuario_ruta_escribible */
 #include "mem.h"
 #include "arch.h"
 #include "rtc.h"
@@ -23,6 +25,7 @@
 #include "gui.h"
 #include "web_font.h"     /* SOMA_PARCHE_028_UI: texto suavizado */
 #include "web_img.h"      /* SOMA_PARCHE_028_UI: miniaturas PNG/JPEG/GIF/BMP */
+#include "fm_edit.h"      /* SOMA_273_ARCHIVOS: edicion de texto de los dialogos */
 
 uint64_t timer_get_uptime_ms(void);
 void fm_refresh(void);
@@ -114,7 +117,8 @@ struct fm_inst {
     char preview_text[256], preview_extra[64];
     uint64_t last_click_time;
     enum fm_modal_mode modal_mode;
-    char modal_input[48]; uint32_t modal_input_len; char modal_target[FM_PATH];
+    char modal_input[64]; uint32_t modal_input_len; char modal_target[FM_PATH];
+    uint32_t modal_caret, modal_s0, modal_s1; char modal_err[72];     /* SOMA_273_ARCHIVOS */
     char fm_filter[24]; uint32_t fm_filter_len; int fm_search_active;
     char fm_msg[112]; uint64_t fm_msg_until; char st_info[160];
     int g_vis_rows;
@@ -129,7 +133,7 @@ static void fm_inst_defaults(struct fm_inst *p)
 {
     char *b = (char *)p; for (size_t i = 0; i < sizeof *p; ++i) b[i] = 0;
     p->selected_idx = -1; p->sort_mode = FM_SORT_NAME_ASC;
-    const char *w = "/workspace"; int k = 0; while (w[k]) { p->current_folder[k] = w[k]; k++; } p->current_folder[k] = 0;
+    const char *w = "/usuario"; int k = 0; while (w[k]) { p->current_folder[k] = w[k]; k++; } p->current_folder[k] = 0;
     p->fm_view = FV_RAM; p->modal_mode = FM_MODAL_NONE; p->g_vis_rows = 10;
     p->fm_hover = -1; p->fm_hover_ui = -1; p->fm_hover_side = -1; p->fm_ctx_hover = -1; p->g_vis_cols = 1; p->fm_hpos = -1;
 }
@@ -153,6 +157,10 @@ static void fm_iboot(void) { if (!fm_iready) { fm_iready = 1; fm_inst_defaults(&
 #define modal_input (FMI->modal_input)
 #define modal_input_len (FMI->modal_input_len)
 #define modal_target (FMI->modal_target)
+#define modal_caret (FMI->modal_caret)
+#define modal_s0 (FMI->modal_s0)
+#define modal_s1 (FMI->modal_s1)
+#define modal_err (FMI->modal_err)
 #define fm_filter (FMI->fm_filter)
 #define fm_filter_len (FMI->fm_filter_len)
 #define fm_search_active (FMI->fm_search_active)
@@ -326,6 +334,14 @@ static struct bigfs *fm_big(void) {
 
 static char ram_buf[4096];
 
+/* SOMA_268_ACCESO: "Mi unidad" (/usuario) es donde trabaja el gestor; el resto del sistema se puede ver pero no cambiar (solo /tmp, temporal) */
+static int fm_es_unid(const char *p) { return p && str_starts_with(p, "/usuario") && (p[8] == '/' || p[8] == '\0'); }
+static int fm_puede(const char *p) {
+    if (usuario_ruta_escribible(p)) return 1;
+    fm_say("Solo puedes cambiar archivos en Mi unidad (/usuario)");
+    return 0;
+}
+
 static const char *fm_ram_list_begin(void) {
     int len = vfs_format_list_ext(1, 0, ram_buf, sizeof(ram_buf) - 1);
     if (len <= 0) return 0;
@@ -366,7 +382,9 @@ static int64_t fm_read_head(int store, const char *path, char *buf, uint32_t n) 
 }
 
 static int fm_move_ram(const char *from, const char *to) {
-    if (str_len(to) >= FS_NAME_MAX) return -3;
+    if (!usuario_ruta_escribible(from) || !usuario_ruta_escribible(to)) return -5;      /* SOMA_268_ACCESO */
+    if (fm_es_unid(to) && fm_es_unid(from)) return fm_exists(ST_RAM, to) ? -2 : vfs_unid_rename(from, to);
+    if (str_len(to) >= (fm_es_unid(to) ? FM_PATH : FS_NAME_MAX)) return -3;
     if (fm_exists(ST_RAM, to)) return -2;
     uint32_t r = 0; char *tmp = vfs_read_alloc(from, &r);   /* PARCHE 087: archivos de cualquier tamano */
     if (!tmp) return -4;
@@ -405,6 +423,8 @@ static void fm_delete_item(int store, const char *path, int is_dir) {
         if (is_dir) fm_delete_big_rec(fs, path, 0); else bigfs_unlink(fs, path);
         return;
     }
+    if (!usuario_ruta_escribible(path)) return;                                       /* SOMA_268_ACCESO */
+    if (fm_es_unid(path)) { vfs_unid_borrar_rec(path); return; }
     if (!is_dir) { vfs_delete(path); return; }
     uint32_t tl = str_len(path);
     const char *p = fm_ram_list_begin();
@@ -551,7 +571,29 @@ static void fm_update_status(void) {
 
 static int fm_match(const char *name) { return !fm_filter_len || str_contains_ci(name, fm_filter); }
 
+/* SOMA_268_ACCESO: el contenido de una carpeta de /usuario (exFAT): se lee directamente de la unidad, con tamanos y carpetas reales */
+static void fm_reload_unid(void) {
+    int cap = MAX_FM_FILES, total = 0, n;                       /* un nombre exFAT ocupa hasta 768 bytes: ~200 KiB para 256 entradas */
+    struct exfat_dirent *d = (struct exfat_dirent *)kmalloc((size_t)cap * sizeof *d);
+    if (!d) { cap = 64; d = (struct exfat_dirent *)kmalloc((size_t)cap * sizeof *d); }
+    if (!d) { fm_say("Memoria insuficiente"); return; }
+    n = unid_listar(current_folder, d, cap, &total);
+    if (n < 0) { fm_say("La unidad del usuario no esta disponible en este pendrive"); kfree(d); return; }
+    for (int i = 0; i < n && file_count < MAX_FM_FILES; ++i) {
+        if (!fm_match(d[i].name)) continue;
+        struct fm_item *it = &file_list[file_count++];
+        fm_item_clear(it);
+        str_copy(it->name, d[i].name, sizeof(it->name));
+        fm_build_path(current_folder, d[i].name, it->full_path, sizeof(it->full_path));
+        it->is_dir = d[i].is_dir ? 1 : 0;
+        if (!it->is_dir) { it->size = d[i].size; it->cat = (uint8_t)fm_cat_of(d[i].name); }
+    }
+    if (total > n) fm_say("Hay mas elementos de los que caben en la vista");
+    kfree(d);
+}
+
 static void fm_reload_ram(void) {
+    if (fm_es_unid(current_folder)) { fm_reload_unid(); return; }                       /* SOMA_268_ACCESO */
     uint32_t cur_len = str_len(current_folder);
     int is_root = str_eq(current_folder, "/");
     const char *p = fm_ram_list_begin();
@@ -640,6 +682,7 @@ static void fm_reload_lib(void) {
 }
 
 static void fm_update_preview(int idx);
+static void fm_side_rebuild(void);
 
 static void fm_reload(void) {
     file_count = 0; selected_idx = -1;
@@ -648,6 +691,7 @@ static void fm_reload(void) {
     else if (fm_view == FV_BIG) fm_reload_big();
     else fm_reload_lib();
     fm_sort_list();
+    if (fm_view == FV_RAM && str_eq(current_folder, "/usuario")) fm_side_rebuild();      /* SOMA_273_ARCHIVOS */
     if (scroll_offset > file_count - 1) scroll_offset = 0;
     if (scroll_offset < 0) scroll_offset = 0;
     fm_update_status();
@@ -655,7 +699,10 @@ static void fm_reload(void) {
 
 void fm_refresh(void) { lib_dirty = 1; fm_reload(); }
 
+/* SOMA_273_ARCHIVOS: el explorador solo trabaja dentro de Mi unidad (/usuario). Cualquier otro destino (Biblioteca, BIGFS, "/", "..") vuelve a la raiz de la unidad. */
+static int fm_ruta_ok(const char *p) { return fm_ed_ruta_ok(p); }
 static void fm_goto(int view, const char *path, int cat) {
+    if (view != FV_RAM || !fm_ruta_ok(path)) { view = FV_RAM; path = "/usuario"; cat = 0; }
     fm_view = view; fm_cat = cat;
     if (view == FV_LIB) str_copy(current_folder, "@Biblioteca", sizeof(current_folder));
     else if (view == FV_CAT) { str_copy(current_folder, "@Biblioteca/", sizeof(current_folder)); ap(current_folder, sizeof(current_folder), cat_name[cat]); }
@@ -674,7 +721,7 @@ void fm_init(void) {
     fm_iboot();
     modal_mode = FM_MODAL_NONE;
     fm_msg[0] = '\0';
-    fm_goto(FV_RAM, "/workspace", 0);
+    fm_goto(FV_RAM, "/usuario", 0);
 }
 
 void fm_open_folder(const char *folder) {
@@ -699,7 +746,7 @@ void fm_open_folder(const char *folder) {
 static void fm_go_up(void) {
     if (fm_view == FV_CAT) { fm_goto(FV_LIB, 0, 0); return; }
     if (fm_view == FV_LIB) return;
-    if (str_eq(current_folder, "/")) return;
+    if (str_eq(current_folder, "/") || str_eq(current_folder, "/usuario")) return;      /* SOMA_273_ARCHIVOS: no se sube de Mi unidad */
     char parent[FM_PATH];
     fm_get_parent_folder(current_folder, parent, sizeof(parent));
     fm_goto(fm_view, parent, 0);
@@ -1066,23 +1113,28 @@ static void fl_make(struct fl *L, uint32_t wx, uint32_t wy, uint32_t ww, uint32_
         L->cols = 1; L->rows_vis = L->items_h / FM_ROW; if (L->rows_vis < 1) L->rows_vis = 1; L->vis = L->rows_vis;
     }
 }
-/* filas de la barra lateral */
-struct side_row { uint8_t kind; /* 0 titulo, 1 RamFS, 2 BIGFS, 3 biblioteca, 4 categoria */ const char *label; const char *path; int cat; };
-static const struct side_row side_rows[] = {
-    {0, "LUGARES", 0, 0},
-    {1, "Workspace", "/workspace", 0},
-    {1, "Documentos", "/documentos", 0},
-    {1, "Mis archivos", "/mis_archivos", 0},
-    {1, "Sistema (RamFS)", "/", 0},
-    {2, "Almac\xC3\xA9n BIGFS", "/", 0},
-    {0, "BIBLIOTECA", 0, 0},
-    {3, "Vista general", 0, 0},
-    {4, 0, 0, FC_IMG}, {4, 0, 0, FC_VID}, {4, 0, 0, FC_AUD}, {4, 0, 0, FC_DOC}, {4, 0, 0, FC_TXT},
-    {4, 0, 0, FC_PRG}, {4, 0, 0, FC_WEB}, {4, 0, 0, FC_ZIP}, {4, 0, 0, FC_OTR}
-};
-#define SIDE_N ((int)(sizeof(side_rows) / sizeof(side_rows[0])))
+/* filas de la barra lateral (SOMA_273_ARCHIVOS: solo Mi unidad y sus carpetas, que se rellenan al listar la raiz) */
+struct side_row { uint8_t kind; /* 0 titulo, 1 carpeta */ const char *label; const char *path; int cat; };
+#define SIDE_MAX 24
+static char side_lab[SIDE_MAX][64], side_pat[SIDE_MAX][FM_PATH];
+static struct side_row side_rows[SIDE_MAX] = { {0, "MI UNIDAD", 0, 0}, {1, "Mi unidad", "/usuario", 0} };
+static int side_n = 2;
+#define SIDE_N side_n
 #define SIDE_HEAD_H 28
 #define SIDE_ITEM_H 26
+static void fm_side_rebuild(void) {
+    if (fm_filter_len) return;
+    side_n = 2; int dirs = 0;
+    for (int i = 0; i < file_count; ++i) if (file_list[i].is_dir) dirs++;
+    if (!dirs) return;
+    side_rows[side_n].kind = 0; side_rows[side_n].label = "CARPETAS"; side_rows[side_n].path = 0; side_rows[side_n].cat = 0; side_n++;
+    for (int i = 0; i < file_count && side_n < SIDE_MAX; ++i) {
+        if (!file_list[i].is_dir) continue;
+        int k = side_n;
+        str_copy(side_lab[k], file_list[i].name, sizeof(side_lab[k])); str_copy(side_pat[k], file_list[i].full_path, sizeof(side_pat[k]));
+        side_rows[k].kind = 1; side_rows[k].label = side_lab[k]; side_rows[k].path = side_pat[k]; side_rows[k].cat = 0; side_n++;
+    }
+}
 static int side_y(const struct fl *L, int i) {
     int y = L->body_y + 4;
     for (int k = 0; k < i; ++k) y += side_rows[k].kind == 0 ? SIDE_HEAD_H : SIDE_ITEM_H;
@@ -1090,10 +1142,11 @@ static int side_y(const struct fl *L, int i) {
 }
 static int side_is_cur(const struct side_row *s) {
     switch (s->kind) {
-    case 1: return fm_view == FV_RAM && str_eq(current_folder, s->path);
-    case 2: return fm_view == FV_BIG;
-    case 3: return fm_view == FV_LIB;
-    case 4: return fm_view == FV_CAT && fm_cat == s->cat;
+    case 1: {
+        if (fm_view != FV_RAM) return 0;
+        if (str_eq(s->path, "/usuario")) return str_eq(current_folder, s->path);
+        return str_starts_with(current_folder, s->path) && (current_folder[str_len(s->path)] == '/' || current_folder[str_len(s->path)] == '\0');
+    }
     default: return 0;
     }
 }
@@ -1117,10 +1170,10 @@ static void fm_build_crumbs(const struct fl *L) {
         CR_ADD(FV_LIB, 0, "Biblioteca", 10, 0);
         if (fm_view == FV_CAT) CR_ADD(FV_CAT, fm_cat, cat_name[fm_cat], str_len(cat_name[fm_cat]), 0);
     } else {
-        if (fm_view == FV_RAM) CR_ADD(FV_RAM, 0, "RamFS", 5, 1);
+        if (fm_view == FV_RAM) CR_ADD(FV_RAM, 0, "Mi unidad", 9, 8);
         else CR_ADD(FV_BIG, 0, "BIGFS", 5, 1);
         const char *p = current_folder;
-        uint32_t pos = 0;
+        uint32_t pos = (fm_view == FV_RAM && fm_es_unid(current_folder)) ? 8 : 0;
         while (p[pos]) {
             while (p[pos] == '/') pos++;
             if (!p[pos]) break;
@@ -1204,7 +1257,8 @@ static const struct fm_mi fm_menu_item[] = {
     { "Abrir", "Intro", FMI_OPEN }, { 0, 0, 0 },
     { "Cortar", "Ctrl+X", FMI_CUT }, { "Copiar", "Ctrl+C", FMI_COPY }, { "Pegar", "Ctrl+V", FMI_PASTE }, { 0, 0, 0 },
     { "Renombrar", "E", FMI_REN }, { "Eliminar", "Supr", FMI_DEL }, { 0, 0, 0 },
-    { "Copiar ruta", 0, FMI_PATH },
+    { "Copiar ruta", 0, FMI_PATH }, { 0, 0, 0 },
+    { "Nueva carpeta", "F", FMI_NFOL }, { "Nuevo archivo", "N", FMI_NFIL },
 };
 static const struct fm_mi fm_menu_bg[] = {
     { "Nueva carpeta", "F", FMI_NFOL }, { "Nuevo archivo", "N", FMI_NFIL }, { 0, 0, 0 },
@@ -1307,10 +1361,12 @@ static void fm_usage(int32_t x, int32_t y, int32_t w, const char *label, const c
 
 /* ---- dialogos ---- */
 static void fm_modal_rect(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, uint32_t *mx, uint32_t *my, uint32_t *mw, uint32_t *mh) {
-    *mw = 440; *mh = (modal_mode == FM_MODAL_ORGANIZE) ? 196 : 158;
+    *mw = 440; *mh = (modal_mode == FM_MODAL_ORGANIZE) ? 196 : (modal_mode == FM_MODAL_DELETE_CONFIRM ? 158 : 184);
     *mx = wx + (ww > *mw ? (ww - *mw) / 2 : 10);
     *my = wy + (wh > *mh ? (wh - *mh) / 2 : 10);
 }
+static uint32_t fm_dg_n = 0, fm_dg_c = 0;       /* SOMA_273_ARCHIVOS: teclas que llegan al dialogo (diagnostico) */
+static int fm_pw(const char *s, uint32_t n) { char t[72]; uint32_t i = 0; for (; i < n && i < sizeof(t) - 1 && s[i]; ++i) t[i] = s[i]; t[i] = '\0'; return ftw(t, 14); }
 static void fm_draw_modal(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h, uint64_t now) {
     uint32_t mx, my, mw, mh; fm_modal_rect(win_x, win_y, win_w, win_h, &mx, &my, &mw, &mh);
     fb_fill_rect_alpha((int32_t)win_x, (int32_t)win_y, (int32_t)win_w, (int32_t)win_h, 0x90060910u);
@@ -1339,9 +1395,20 @@ static void fm_draw_modal(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32
         ftx((int32_t)mx + 22, y, 18, pr, 12, KC_DIM, 0);
         int32_t fx = (int32_t)mx + 22, fy = y + 22, fw = (int32_t)mw - 44;
         fb_fill_rounded_rect(fx, fy, fw, 34, 8, KC_FIELD);
-        fb_stroke_rrect_aa(fx, fy, fw, 34, 8, 0xFF000000u | KC_ACC);
-        ftx(fx + 12, fy, 34, modal_input, 14, 0x00FFFFFF, 0);
-        if (((now / 530) & 1) == 0) fb_fill_rect((uint32_t)(fx + 12 + ftw(modal_input, 14) + 1), (uint32_t)(fy + 8), 2, 18, KC_ACC);
+        fb_stroke_rrect_aa(fx, fy, fw, 34, 8, modal_err[0] ? 0xFFEF4444u : (0xFF000000u | KC_ACC));
+        int32_t tx0 = fx + 12;
+        fb_set_clip(fx + 6, fy, fw - 12, 34);
+        if (modal_s1 > modal_s0) {                                          /* SOMA_273_ARCHIVOS: tramo seleccionado */
+            int32_t x0 = tx0 + fm_pw(modal_input, modal_s0), x1 = tx0 + fm_pw(modal_input, modal_s1);
+            fb_fill_rounded_rect(x0 - 1, fy + 6, x1 - x0 + 2, 22, 4, 0x00265E9A);
+        }
+        ftx(tx0, fy, 34, modal_input, 14, 0x00FFFFFF, 0);
+        if (((now / 530) & 1) == 0) fb_fill_rect((uint32_t)(tx0 + fm_pw(modal_input, modal_caret) + 1), (uint32_t)(fy + 8), 2, 18, KC_ACC);
+        fb_reset_clip();
+        if (modal_err[0]) ftx(fx, fy + 38, 16, modal_err, 12, 0x00FCA5A5, 0);
+        else ftx(fx, fy + 38, 16, "Intro: aceptar    Esc: cancelar    Ctrl+A: seleccionar todo", 11, KC_FAINT, 0);
+        { char dg[64]; dg[0] = '\0'; ap(dg, sizeof(dg), "teclas recibidas: "); ap_u(dg, sizeof(dg), fm_dg_n); ap(dg, sizeof(dg), "   ultima: ");
+          ap_u(dg, sizeof(dg), fm_dg_c); ftx((int32_t)mx + 22, (int32_t)(my + mh - 20), 14, dg, 10, 0x00394456, 0); }   /* diagnostico temporal del parche 273 */
     }
     int del = (modal_mode == FM_MODAL_DELETE_CONFIRM);
     uint32_t ok_x = mx + mw - 210, by = my + mh - 50;
@@ -1514,7 +1581,7 @@ void fm_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t w
     /* 2. barra lateral */
     fb_fill_rect((uint32_t)L.x, (uint32_t)L.body_y, (uint32_t)L.side_w, (uint32_t)L.body_h, KC_SIDE);
     fb_fill_rect((uint32_t)(L.x + L.side_w - 1), (uint32_t)L.body_y, 1, (uint32_t)L.body_h, KC_LINE);
-    int32_t usage_h = L.body_h > 520 ? 76 : 0;
+    int32_t usage_h = 0;      /* SOMA_273_ARCHIVOS: sin medidores de RamFS/BIGFS; el explorador solo muestra Mi unidad */
     fb_set_clip(L.x, L.body_y, L.side_w - 1, L.body_h - usage_h);
     for (int i = 0; i < SIDE_N; ++i) {
         const struct side_row *s = &side_rows[i];
@@ -1536,6 +1603,11 @@ void fm_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t w
         }
     }
     fb_reset_clip();
+    if (L.body_h > 300) {                                           /* SOMA_273_ARCHIVOS: ayuda discreta */
+        ftx(L.x + 16, L.body_y + L.body_h - 52, 16, "Clic derecho para", 11, KC_FAINT, 0);
+        ftx(L.x + 16, L.body_y + L.body_h - 36, 16, "crear, renombrar,", 11, KC_FAINT, 0);
+        ftx(L.x + 16, L.body_y + L.body_h - 20, 16, "copiar o eliminar", 11, KC_FAINT, 0);
+    }
     if (usage_h) {
         int32_t ux = L.x + 16, uw = L.side_w - 32, uy = L.body_y + L.body_h - usage_h + 6;
         uint32_t f = 0, b = 0, d = 0; vfs_get_stats(&f, &b, &d); (void)b; (void)d;
@@ -1748,10 +1820,25 @@ static void fm_select_name(const char *name) {
     if (i >= 0) fm_set_sel(i); else fm_update_preview(-1);
 }
 
+/* SOMA_273_ARCHIVOS: nombre sugerido y unico ("Nueva carpeta", "Nueva carpeta 2"...), seleccionado para sustituirlo al teclear */
+static void fm_ed_load(struct fm_ed *e) { e->t = modal_input; e->cap = sizeof(modal_input); e->len = modal_input_len; e->caret = modal_caret; e->s0 = modal_s0; e->s1 = modal_s1; }
+static void fm_ed_store(const struct fm_ed *e) { modal_input_len = e->len; modal_caret = e->caret; modal_s0 = e->s0; modal_s1 = e->s1; }
+static void fm_default_name(int folder) {
+    char nm[64];
+    for (int n = 1; n < 100; ++n) {
+        nm[0] = '\0';
+        ap(nm, sizeof(nm), folder ? "Nueva carpeta" : "Nuevo archivo");
+        if (n > 1) { ap(nm, sizeof(nm), " "); ap_u(nm, sizeof(nm), (uint64_t)n); }
+        if (!folder) ap(nm, sizeof(nm), ".txt");
+        if (fm_find_item_index(nm) < 0) break;
+    }
+    struct fm_ed e; fm_ed_set(&e, modal_input, sizeof(modal_input), nm); fm_ed_select_base(&e, folder); fm_ed_store(&e);
+    modal_err[0] = '\0';
+}
 static void fm_new_item(int folder) {
     if (!(fm_view == FV_RAM || fm_view == FV_BIG)) { fm_say("Abre una carpeta real (p. ej. Workspace) para crear elementos"); return; }
     modal_mode = folder ? FM_MODAL_NEW_FOLDER : FM_MODAL_NEW_FILE;
-    modal_input[0] = '\0'; modal_input_len = 0;
+    fm_default_name(folder);
 }
 
 static void fm_ask_delete(void) {
@@ -1767,8 +1854,7 @@ static void fm_ask_rename(void) {
     if (!it) return;
     if (it->store == ST_VIRT) { fm_say("Las categorias de la Biblioteca no se pueden renombrar"); return; }
     modal_mode = FM_MODAL_RENAME;
-    str_copy(modal_input, it->name, sizeof(modal_input));
-    modal_input_len = str_len(modal_input);
+    { struct fm_ed e; fm_ed_set(&e, modal_input, sizeof(modal_input), it->name); fm_ed_select_base(&e, it->is_dir); fm_ed_store(&e); modal_err[0] = '\0'; }
     str_copy(modal_target, it->full_path, sizeof(modal_target));
 }
 static void fm_ask_organize(void) {
@@ -1878,11 +1964,7 @@ static void fm_undo(void) {
     fm_say(m);
 }
 
-static int fm_valid_name(const char *n) {
-    if (!n[0] || n[0] == '.') return 0;
-    for (; *n; ++n) if (*n == '/') return 0;
-    return 1;
-}
+static int fm_valid_name(const char *n) { return fm_ed_name_ok(n); }      /* SOMA_273_ARCHIVOS: tambien sin : * ? " < > | \\ ni punto o espacio al final */
 
 static void fm_modal_confirm(void) {
     enum fm_modal_mode mode = modal_mode;
@@ -1890,7 +1972,8 @@ static void fm_modal_confirm(void) {
     if (mode == FM_MODAL_ORGANIZE) { fm_organize(); return; }
 
     if (mode == FM_MODAL_NEW_FILE || mode == FM_MODAL_NEW_FOLDER) {
-        if (!fm_valid_name(modal_input)) { fm_say("Nombre no valido"); return; }
+        if (!fm_valid_name(modal_input)) { modal_mode = mode; str_copy(modal_err, "Nombre no v\xC3\xA1lido: no puede estar vac\xC3\xADo ni llevar / \\ : * ? \" < > |", sizeof(modal_err)); return; }
+        if (fm_find_item_index(modal_input) >= 0) { modal_mode = mode; str_copy(modal_err, "Ya existe algo con ese nombre en esta carpeta", sizeof(modal_err)); return; }
         char full[FM_PATH];
         fm_build_path(current_folder, modal_input, full, sizeof(full));
         int ok = 0;
@@ -1900,12 +1983,17 @@ static void fm_modal_confirm(void) {
                 if (mode == FM_MODAL_NEW_FILE) { uint32_t ino; ok = (bigfs_create(fs, full, &ino) == 0); }
                 else ok = (bigfs_mkdir(fs, full) == 0);
             }
+        } else if (!fm_puede(full)) {                                                     /* SOMA_268_ACCESO */
+            return;
+        } else if (fm_es_unid(full)) {
+            ok = (mode == FM_MODAL_NEW_FILE) ? (vfs_write(full, "", 0) >= 0) : (vfs_unid_mkdir(full) == 0);
         } else {
             if (str_len(full) >= FS_NAME_MAX - 5) { fm_say("Ruta demasiado larga para RamFS"); return; }
             if (mode == FM_MODAL_NEW_FILE) ok = (vfs_write(full, "", 0) >= 0);
             else { char marker[FM_PATH]; fm_build_path(full, ".dir", marker, sizeof(marker)); ok = (vfs_write(marker, "", 0) >= 0); }
         }
-        if (!ok) fm_say("No se pudo crear (nombre existente, sin espacio o sin permisos)");
+        if (!ok) fm_say("No se pudo crear (sin espacio o sin permisos)");
+        else fm_say(mode == FM_MODAL_NEW_FOLDER ? "Carpeta creada" : "Archivo creado");
         lib_dirty = 1; fm_reload();
         fm_select_name(modal_input);
         return;
@@ -1913,14 +2001,20 @@ static void fm_modal_confirm(void) {
 
     if (mode == FM_MODAL_RENAME) {
         struct fm_item *it = fm_sel_item();
-        if (!it || !fm_valid_name(modal_input)) { fm_say("Nombre no valido"); return; }
+        if (!it) return;
+        if (str_eq(modal_input, it->name)) return;                                         /* SOMA_273_ARCHIVOS: sin cambios */
+        if (!fm_valid_name(modal_input)) { modal_mode = mode; str_copy(modal_err, "Nombre no v\xC3\xA1lido: no puede estar vac\xC3\xADo ni llevar / \\ : * ? \" < > |", sizeof(modal_err)); return; }
+        if (fm_find_item_index(modal_input) >= 0) { modal_mode = mode; str_copy(modal_err, "Ya existe algo con ese nombre en esta carpeta", sizeof(modal_err)); return; }
         char parent[FM_PATH], nf[FM_PATH];
         fm_get_parent_folder(it->full_path, parent, sizeof(parent));
         fm_build_path(parent, modal_input, nf, sizeof(nf));
         int rc;
-        if (it->is_dir && it->store == ST_RAM) rc = fm_rename_ram_dir(it->full_path, nf);
+        if (it->store == ST_RAM && (!fm_puede(it->full_path) || !fm_puede(nf))) return;   /* SOMA_268_ACCESO */
+        if (it->is_dir && it->store == ST_RAM && fm_es_unid(nf)) rc = vfs_unid_rename(it->full_path, nf);
+        else if (it->is_dir && it->store == ST_RAM) rc = fm_rename_ram_dir(it->full_path, nf);
         else rc = fm_move(it->store, it->full_path, nf);
         if (rc != 0) fm_say("No se pudo renombrar (el nombre ya existe o es demasiado largo)");
+        else fm_say("Renombrado");
         lib_dirty = 1; fm_reload();
         fm_select_name(modal_input);
         return;
@@ -2032,9 +2126,6 @@ int fm_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint
     if (sh >= 0) {
         const struct side_row *s = &side_rows[sh];
         if (s->kind == 1) fm_goto(FV_RAM, s->path, 0);
-        else if (s->kind == 2) fm_goto(FV_BIG, "/", 0);
-        else if (s->kind == 3) fm_goto(FV_LIB, 0, 0);
-        else fm_goto(FV_CAT, 0, s->cat);
         return 0;
     }
     if (mx < L.x + L.side_w) return 0;
@@ -2143,13 +2234,21 @@ static void fm_filter_changed(void) { scroll_offset = 0; fm_reload(); }
 void fm_handle_key(char c) {
     if (fm_ctx_open) { fm_ctx_open = 0; fm_ctx_hover = -1; if (c == 27) return; }
     if (modal_mode != FM_MODAL_NONE) {
-        if (c == 27) modal_mode = FM_MODAL_NONE;
-        else if (c == '\r' || c == '\n') fm_modal_confirm();
-        else if (modal_mode == FM_MODAL_ORGANIZE || modal_mode == FM_MODAL_DELETE_CONFIRM) { /* solo Intro/Esc */ }
-        else if (c == '\b' || (uint8_t)c == 127) { if (modal_input_len > 0) modal_input[--modal_input_len] = '\0'; }
-        else if ((uint8_t)c >= 32 && (uint8_t)c < 127 && c != '/' && modal_input_len < sizeof(modal_input) - 1) {
-            modal_input[modal_input_len++] = c; modal_input[modal_input_len] = '\0';
-        }
+        fm_dg_n++; fm_dg_c = (uint8_t)c;
+        if (c == 27) { modal_mode = FM_MODAL_NONE; return; }
+        if (c == '\r' || c == '\n') { fm_modal_confirm(); return; }
+        if (modal_mode == FM_MODAL_ORGANIZE || modal_mode == FM_MODAL_DELETE_CONFIRM) return;       /* solo Intro/Esc */
+        struct fm_ed e; fm_ed_load(&e);
+        modal_err[0] = '\0';
+        if (c == '\b' || (uint8_t)c == 127) fm_ed_back(&e);
+        else if (c == 4) fm_ed_supr(&e);                      /* Ctrl+D / Supr */
+        else if (c == 2) fm_ed_left(&e);                      /* flecha izquierda */
+        else if (c == 6) fm_ed_right(&e);                     /* flecha derecha */
+        else if (c == 16) fm_ed_home(&e);                     /* flecha arriba = inicio */
+        else if (c == 14 || c == 5) fm_ed_end(&e);            /* flecha abajo / Ctrl+E = fin */
+        else if (c == 1) fm_ed_select_all(&e);                /* Ctrl+A */
+        else if (fm_ed_char_ok(c) || (uint8_t)c >= 128) fm_ed_insert(&e, c);       /* los bytes UTF-8 (tildes, enes) pasan tal cual */
+        fm_ed_store(&e);
         return;
     }
     int cols = g_vis_cols > 0 ? g_vis_cols : 1;
@@ -2248,7 +2347,8 @@ static int fmc_copy(int s_store, const char *src, int d_store, const char *dst, 
         int r = (int)rl;
         int rc = -1;
         if (d_store == ST_RAM) {
-            if (str_len(dst) >= FS_NAME_MAX) *why = "Ruta demasiado larga para RamFS";
+            if (!usuario_ruta_escribible(dst)) *why = "Solo puedes guardar en Mi unidad (/usuario)";   /* SOMA_268_ACCESO */
+            else if (str_len(dst) >= (fm_es_unid(dst) ? FM_PATH : FS_NAME_MAX)) *why = "Ruta demasiado larga";
             else if (vfs_write(dst, buf, (uint32_t)r) >= 0) rc = 0;
             else *why = "RamFS lleno o sin permisos";
         } else {
@@ -2270,7 +2370,8 @@ static int fmc_copy(int s_store, const char *src, int d_store, const char *dst, 
     if (!buf) { *why = "Memoria insuficiente"; return -1; }
     int rc = -1;
     if (d_store == ST_RAM) {
-        if (str_len(dst) >= FS_NAME_MAX) *why = "Ruta demasiado larga para RamFS";
+        if (!usuario_ruta_escribible(dst)) *why = "Solo puedes guardar en Mi unidad (/usuario)";   /* SOMA_268_ACCESO */
+        else if (str_len(dst) >= (fm_es_unid(dst) ? FM_PATH : FS_NAME_MAX)) *why = "Ruta demasiado larga";
         else {
             char *all = (char *)kmalloc((size_t)st.size + 1);  /* PARCHE 087: el archivo entero, no solo el primer trozo */
             if (!all) *why = "Memoria insuficiente";
@@ -2343,7 +2444,7 @@ int fm_clip_op(int op) {
         if (bn < 0) { kfree(bmp); fmc_toast("Imagen demasiado grande para guardarla aqui"); return 1; }
         fmc_dest(dest, sizeof(dest), dstore, "portapapeles.bmp");
         int ok = 0;
-        if (dstore == ST_RAM) ok = (str_len(dest) < FS_NAME_MAX && vfs_write(dest, (const char *)bmp, (uint32_t)bn) >= 0);
+        if (dstore == ST_RAM) ok = (usuario_ruta_escribible(dest) && str_len(dest) < (fm_es_unid(dest) ? FM_PATH : FS_NAME_MAX) && vfs_write(dest, (const char *)bmp, (uint32_t)bn) >= 0);   /* SOMA_268_ACCESO */
         else { struct bigfs *fs = fm_big(); uint32_t ino; ok = (fs && bigfs_create(fs, dest, &ino) == 0 && bigfs_write(fs, ino, 0, bmp, (uint64_t)bn) == (int64_t)bn); }
         kfree(bmp);
         if (!ok) { fmc_toast("No se pudo guardar la imagen"); return 1; }
@@ -2353,7 +2454,7 @@ int fm_clip_op(int op) {
         fmc_dest(dest, sizeof(dest), dstore, "portapapeles.txt");
         int ok = 0;
         if (t) {
-            if (dstore == ST_RAM) ok = (str_len(dest) < FS_NAME_MAX && vfs_write(dest, t, n) >= 0);
+            if (dstore == ST_RAM) ok = (usuario_ruta_escribible(dest) && str_len(dest) < (fm_es_unid(dest) ? FM_PATH : FS_NAME_MAX) && vfs_write(dest, t, n) >= 0);   /* SOMA_268_ACCESO */
             else { struct bigfs *fs = fm_big(); uint32_t ino; ok = (fs && bigfs_create(fs, dest, &ino) == 0 && (n == 0 || bigfs_write(fs, ino, 0, t, n) == (int64_t)n)); }
         }
         if (!ok) { fmc_toast("No se pudo guardar el texto"); return 1; }
@@ -2380,6 +2481,10 @@ int fm_clip_op(int op) {
 #undef modal_input
 #undef modal_input_len
 #undef modal_target
+#undef modal_caret
+#undef modal_s0
+#undef modal_s1
+#undef modal_err
 #undef fm_filter
 #undef fm_filter_len
 #undef fm_search_active
@@ -2417,6 +2522,7 @@ int fm_inst_new(void)
         fm_inst_defaults(fm_insts[k]);
         fm_iused[k] = 1;
         FMI = fm_insts[k];
+        fm_goto(FV_RAM, "/usuario", 0);                  /* SOMA_273_ARCHIVOS: la ventana nueva empieza en Mi unidad, ya con su lista */
         return k;
     }
     return 0;
@@ -2443,6 +2549,7 @@ const char *fm_inst_name(int slot)
 {
     if (slot < 1 || slot > FM_INST_MAX || !fm_insts[slot]) return "";
     struct fm_inst *p = fm_insts[slot];
+    if (p->fm_view == FV_RAM && p->current_folder[0] == '/' && p->current_folder[1] == 'u' && p->current_folder[8] == '\0') return "Mi unidad";   /* SOMA_273_ARCHIVOS */
     if (p->fm_view == FV_LIB || p->fm_view == FV_CAT) return "Biblioteca";
     const char *s = p->current_folder, *n = s;
     for (; *s; ++s) if (*s == '/' && s[1]) n = s + 1;

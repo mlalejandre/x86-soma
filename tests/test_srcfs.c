@@ -202,6 +202,17 @@ int main(int argc, char **argv)
         return 2;
     }
     CHECK(nent > 63);                                 /* el limite antiguo era 63 */
+    {   /* SOMA_269_RAM: con las fuentes en memoria no se lee el disco y todo sigue coincidiendo */
+        int antes = host_disk_reads();
+        CHECK_EQ_INT(srcfs_a_ram(), 0);
+        CHECK(host_disk_reads() > antes);                        /* la copia lee el disco una vez */
+        CHECK_EQ_INT(srcfs_a_ram(), 0);                          /* segunda vez: no hace nada */
+        int tras = host_disk_reads();
+        test_todos_los_archivos_coinciden();
+        test_archivo_grande_y_ultimo();
+        test_grep_y_errores();
+        CHECK_EQ_INT(host_disk_reads(), tras);                   /* ni un sector del disco mientras se leen las fuentes */
+    }
     test_listado();
     test_filtro();
     test_buffer_pequeno_avisa();

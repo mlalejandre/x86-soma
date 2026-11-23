@@ -1,0 +1,7 @@
+{
+ "comentario": "Comandos del núcleo que NO se piden con lenguaje natural: depuración, pruebas internas, diagnóstico de hardware o de bajo nivel. No cuentan como 'sin cubrir'.",
+ "comandos": ["acpi", "ahci", "apic", "arp", "big", "blk", "check", "conctest", "crash", "deadlock", "demo_ai", "fat", "fbverify", "fs-backup", "fs-format", "fs-restore",
+              "fscheck", "fscrash", "gpio", "hang", "heap", "hexdump", "hpatch", "hw", "irq", "membench", "memprot", "mutex", "myos", "nvme", "oomtest", "panic", "pci", "pmm",
+              "pmmbench", "ramtest", "rng", "sector_r", "sector_read", "sector_w", "sector_write", "stacks", "test", "test_suite", "threads", "traza", "usertest", "usfuzz",
+              "vm", "vmm", "vsoma", "watchdog", "xxd", "agent_sim", "agentmem", "coderlog", "memprot", "sbx", "spawn", "ddg", "tls", "wpa", "webr3", "navegador-aislado"]
+}

@@ -180,7 +180,7 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
 - SOMA Paint: Editor bitmap sobre lienzo de 80×60 con lápiz, pincel, figuras geométricas, relleno por inundación (flood fill), paleta y guardado BMP a disco.
 - SOMA File Manager: Explorador de archivos para SOMAFS02 con clasificación por tipo, tamaño, metadatos y apertura directa.
 - SOMA Notepad: Editor de texto gráfico con seguimiento en vivo de los archivos creados por los agentes y lectura en voz alta.
-- SOMA Memory View: Visor en árbol del grafo de conocimiento persistente, la pizarra compartida (Blackboard) y la memoria episódica.
+- Memoria: consola de la memoria de SOMA (monitor del ciclo de sueño, explorador de temas y recuerdos, búsqueda por significado, cartuchos y ajustes; ver *Memoria de SOMA*).
 - Maquetador: documentos HTML y LaTeX paginados como en papel (A4, A5, carta, 16:9, email), exportación a PDF/HTML/PNG y revisión con IA (ver *Documentos con acabado profesional*).
 - Terminal Gráfica: Consola interactiva con emulación ANSI, historial persistente, autocompletado y tuberías (| , > , && , ||).
 - SOMA Studio: editor de código para SOMA-LANG y Python con explorador, verificación, ejecución y peticiones a la IA; pestañas *Crear con IA*, *Proyectos* y *Registro*.
@@ -530,6 +530,27 @@ Cómo funciona:
 - **Programas también**: cuando el programador termina una aplicación gráfica y el modelo ve imágenes, SOMA la abre, captura
   su ventana y un "diseñador de interfaces" la critica; si propone cambios, el programador hace una ronda de mejora (solo se
   queda si compila). La captura queda en `/agent/coder_captura.png`.
+
+<!-- SOMA_284_GITHUB: la memoria de SOMA (277-283) -->
+## 🧠 Memoria de SOMA (portada de memorIA)
+
+SOMA recuerda lo que hablas con él con la memoria de memorIA, portada al núcleo en C (parches 277–283):
+
+- **Hechos y mensajes**: después de cada respuesta, con todo en calma, el modelo saca los hechos de lo que dijiste («El usuario vive
+  en Bilbao»), con su fecha y su fuente; si uno sustituye a otro, el antiguo queda como historia. Los mensajes se guardan tal cual.
+- **Búsqueda por significado**: con el servidor de embeddings **bge-m3** (`memoria servidor arrancar` lo levanta en el servidor de
+  IA, puerto 8089); sin él, por palabras. Lo relevante entra solo en el prompt del agente, junto a la agenda si se habla de planes.
+- **Ciclo de sueño**: con SOMA en calma ordena los recuerdos en temas, describe las ramas, fusiona repetidos, olvida lo que no se usa
+  (y lo restaura si vuelve a hacer falta), rescata lo importante y parte o une ramas.
+- **Cartuchos**: memorias completas e independientes. El primario aprende; hasta 3 más se conectan en solo lectura y el agente los
+  consulta a la vez. Se pueden crear, clonar, exportar, importar, vaciar y borrar, y copiar o mover recuerdos entre ellos.
+- **La ventana Memoria**: monitor en vivo del ciclo de sueño, explorador del árbol con editor de recuerdos, búsqueda, cartuchos y ajustes.
+- **Tu memoria de memorIA**: en el Mac, `python3 tools/exporta_memoria.py CARPETA_DEL_CARTUCHO --servir`; en SOMA, `descargar` cada
+  parte y `memoria importar /usuario/memoria-001.smem`. El exportador solo lee `memoria.db` y se salta lo que parezca un secreto.
+
+En el terminal: `memoria ayuda`. Detalles: `docs/PARCHE_277_MEMORIA.md` a `docs/PARCHE_283_APP_MEMORIA.md`.
+
+---
 
 <!-- SOMA_262_PUBLICAR: LCM y llm-limites -->
 ## 🗣️ LCM: SOMA entiende lo que le pides (sin el modelo de lenguaje)

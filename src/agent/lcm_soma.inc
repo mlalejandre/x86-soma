@@ -20,6 +20,7 @@
 
 /* ------------------------------------------------------------------------------------------- estado */
 static int  lcm_activo = 1, lcm_cargado = 0, lcm_voz = 1, lcm_umbral = 0;      /* umbral 0 = el del modelo */
+static int  lcm_usa_datos = 1;                        /* SOMA_271_LCM: modelo=0 en /etc/lcm.conf = forzar el modelo de fabrica */
 static int  lcm_letra = -1;                         /* SOMA_259_ORBE: letra del orbe (0 compacta, 1 mediana, 2 grande; -1 sin leer) */
 /* SOMA_266_AVISO: antes de una peticion que va al modelo de lenguaje, el LCM avisa al momento de lo que se va a hacer, cuanto suele
  * tardar (lo que tardaron las anteriores de ese tipo) y pide paciencia. Tipos: */
@@ -780,6 +781,7 @@ static void lcm_cfg_guarda(void)
     lcm_cat(b, sizeof b, "\numbral="); lcm_catn(b, sizeof b, (uint64_t)lcm_umbral); lcm_cat(b, sizeof b, "\n");
     if (lcm_letra >= 0) { lcm_cat(b, sizeof b, "letra="); lcm_catn(b, sizeof b, (uint64_t)lcm_letra); lcm_cat(b, sizeof b, "\n"); }   /* SOMA_259_ORBE */
     lcm_cat(b, sizeof b, "aviso="); lcm_catn(b, sizeof b, (uint64_t)lcm_aviso); lcm_cat(b, sizeof b, "\n");           /* SOMA_266_AVISO */
+    if (!lcm_usa_datos) lcm_cat(b, sizeof b, "modelo=0\n");                                                           /* SOMA_271_LCM */
     for (int t = 1; t < LCM_AV_N; ++t) if (lcm_av_n[t]) {
         char k[8] = "t0="; k[1] = (char)('0' + t);
         lcm_cat(b, sizeof b, k); lcm_catn(b, sizeof b, lcm_av_ms[t]); lcm_cat(b, sizeof b, "/"); lcm_catn(b, sizeof b, lcm_av_n[t]); lcm_cat(b, sizeof b, "\n");
@@ -801,6 +803,62 @@ static int lcm_letra_v(void)                         /* SOMA_259_ORBE: sin carga
     }
     return lcm_letra;
 }
+/* ------------------------------------------------------------------------------------------- SOMA_271_LCM: modelo versionado en DATOS
+ * El LCM puede reentrenarse FUERA de SOMA (cuando el nucleo gana comandos o aplicaciones, que se declaran en lcm/manifiestos/ (.json)) y
+ * el modelo nuevo se instala en DATOS: /lcm/modelo.lcm. Dentro de SOMA nadie lo escribe (ni usuario ni agentes: /lcm esta protegido).
+ * Paquete LCMP: 'LCMP', u32 formato=1, u32 longitud del modelo, u32 FNV-1a del modelo, u32 longitud de metadatos, metadatos "clave=valor\n", modelo.
+ * Si falta, esta danado o no es valido, se usa el de fabrica (el incorporado en el nucleo) y `lcm modelo` dice por que. */
+static char *lcm_paq = 0;                             /* paquete cargado (el modelo apunta a el: se queda en memoria) */
+static const char *lcm_meta = 0; static uint32_t lcm_meta_n = 0;
+static const char *lcm_paq_motivo = "";               /* por que no se uso el de DATOS ("" = no hay ninguno) */
+static uint32_t lcm_fnv_paq(const uint8_t *p, uint32_t n) { uint32_t h = 0x811C9DC5u; while (n--) { h ^= *p++; h *= 0x01000193u; } return h; }
+static int lcm_paquete(void)
+{
+    uint32_t n = 0; lcm_paq_motivo = "";
+    if (vfs_size("/lcm/modelo.lcm") < 0) return 0;
+    char *b = vfs_read_alloc("/lcm/modelo.lcm", &n);
+    if (!b) { lcm_paq_motivo = "no se pudo leer"; return 0; }
+    const uint8_t *u = (const uint8_t *)b;
+    if (n < 20 || u[0] != 'L' || u[1] != 'C' || u[2] != 'M' || u[3] != 'P' || lcm_u32(u + 4) != 1) lcm_paq_motivo = "no es un paquete LCMP";
+    else {
+        uint32_t lb = lcm_u32(u + 8), ck = lcm_u32(u + 12), lm = lcm_u32(u + 16);
+        if (lm > 4096 || lb < 64 || (uint64_t)20 + lm + lb > n) lcm_paq_motivo = "tamano incoherente";
+        else if (lcm_fnv_paq(u + 20 + lm, lb) != ck) lcm_paq_motivo = "danado (la suma de comprobacion no coincide)";
+        else if (!lcm_carga(u + 20 + lm, lb)) lcm_paq_motivo = "el modelo no es valido";
+        else { lcm_paq = b; lcm_meta = b + 20; lcm_meta_n = lm; return 1; }
+    }
+    kfree(b);
+    return 0;
+}
+/* valor de una clave de los metadatos del paquete cargado ("" si no esta) */
+static void lcm_meta_valor(const char *clave, char *o, uint32_t cap)
+{
+    o[0] = 0;
+    if (!lcm_meta) return;
+    uint32_t kl = lcm_len(clave), i = 0;
+    while (i < lcm_meta_n) {
+        uint32_t f = i; while (f < lcm_meta_n && lcm_meta[f] != '\n') ++f;
+        if (f - i > kl && lcm_meta[i + kl] == '=' && lcm_empieza(lcm_meta + i, clave)) {
+            uint32_t k = 0; for (uint32_t j = i + kl + 1; j < f && k + 1 < cap; ++j) o[k++] = lcm_meta[j];
+            o[k] = 0; return;
+        }
+        i = f + 1;
+    }
+}
+/* carga el modelo que toca: el de DATOS si es bueno y no se pidio el de fabrica; si no, el incorporado. 0 = ninguno valido */
+static int lcm_carga_modelo(void)
+{
+    char *viejo = lcm_paq;
+    lcm_paq = 0; lcm_meta = 0; lcm_meta_n = 0;
+    int ok = lcm_usa_datos && lcm_paquete();
+    if (!ok) {
+        ok = lcm_carga(lcm_ordenes_blob, (uint32_t)sizeof(lcm_ordenes_blob));
+        if (lcm_paq_motivo[0] && lcm_usa_datos) { kprint("\n[LCM] El modelo de /lcm/modelo.lcm no se usa ("); kprint(lcm_paq_motivo); kprint("): sigo con el de fabrica.\n"); }
+    }
+    if (viejo) kfree(viejo);                          /* el nuevo ya apunta a otro sitio */
+    return ok;
+}
+
 static int lcm_listo(void)
 {
     if (!lcm_cargado) {
@@ -813,6 +871,7 @@ static int lcm_listo(void)
             lcm_voz = lcm_cfg_valor(c, "voz=", 1) != 0;
             lcm_umbral = lcm_cfg_valor(c, "umbral=", 0);
             lcm_aviso = lcm_cfg_valor(c, "aviso=", 1) != 0;                       /* SOMA_266_AVISO */
+            lcm_usa_datos = lcm_cfg_valor(c, "modelo=", 1) != 0;                  /* SOMA_271_LCM */
             for (int t = 1; t < LCM_AV_N; ++t) {
                 char k[8] = "t0="; k[1] = (char)('0' + t);
                 const char *q = lcm_busca(c, k); uint32_t ms = 0, cu = 0;
@@ -820,7 +879,7 @@ static int lcm_listo(void)
                     && lcm_num(q + 1, &cu, 0) && ms && cu) { lcm_av_ms[t] = ms; lcm_av_n[t] = cu; }
             }
         }
-        if (!lcm_carga(lcm_ordenes_blob, (uint32_t)sizeof(lcm_ordenes_blob))) {
+        if (!lcm_carga_modelo()) {                                              /* SOMA_271_LCM: DATOS o, si no sirve, el de fabrica */
             kprint("\n[LCM] El modelo del traductor no es valido: desactivado (todo sigue por el camino de siempre).\n");
             lcm_activo = 0;
         }
@@ -1282,6 +1341,11 @@ void lcm_cfg_set(int que, int v)
     else if (que == 6) { if (v >= 0 && v <= 2) lcm_letra = v; }   /* SOMA_259_ORBE */
     else if (que == 1) lcm_voz = v ? 1 : 0;
     else if (que == 7) lcm_aviso = v ? 1 : 0;                                      /* SOMA_266_AVISO */
+    else if (que == 8) {                                                           /* SOMA_271_LCM: 1 = modelo de DATOS si lo hay, 0 = de fabrica */
+        lcm_usa_datos = v ? 1 : 0;
+        if (!lcm_carga_modelo()) lcm_activo = 0;
+        else if (lcm_umbral >= 50 && lcm_umbral <= 99) lcm_m.umbral_mil = (uint32_t)lcm_umbral * 10;
+    }
     else if (que == 2 && v >= 50 && v <= 99) { lcm_umbral = v; if (lcm_m.ok) lcm_m.umbral_mil = (uint32_t)v * 10; }
     lcm_cfg_guarda();
 }
@@ -1353,6 +1417,25 @@ int lcm_cmd(const char *args, char *out, uint32_t max)
         lcm_cfg_set(0, 0); fb_puts(msg, sizeof msg, &p, "LCM apagado: las peticiones van por el camino de antes (mayordomo y LLM).\n");
     } else if (str_eq_ci(args, "encender") || str_eq_ci(args, "on")) {
         lcm_cfg_set(0, 1); fb_puts(msg, sizeof msg, &p, lcm_m.ok ? "LCM encendido.\n" : "El modelo no es valido: no se puede encender.\n");
+    } else if (lcm_empieza(args, "modelo")) {                                          /* SOMA_271_LCM */
+        const char *a2 = args + 6; while (*a2 == ' ') ++a2;
+        if (str_eq_ci(a2, "fabrica") || str_eq_ci(a2, "datos")) {
+            int d = str_eq_ci(a2, "datos");
+            lcm_cfg_set(8, d);
+            fb_puts(msg, sizeof msg, &p, d ? "Modelo: el de DATOS si lo hay y es valido (si no, el de fabrica).\n" : "Modelo: el de fabrica (el del nucleo). El de DATOS queda guardado pero no se usa.\n");
+        }
+        fb_puts(msg, sizeof msg, &p, "Modelo del LCM en uso: ");
+        if (lcm_paq) fb_puts(msg, sizeof msg, &p, "de DATOS (/lcm/modelo.lcm, reentrenado)\n"); else fb_puts(msg, sizeof msg, &p, "de fabrica (incorporado en el nucleo)\n");
+        if (lcm_paq) {
+            static const char *const ks[] = { "modelo", "fecha", "ordenes", "manifiestos", "puerta", "exactas", "errores", 0 };
+            for (int i = 0; ks[i]; ++i) { char v[96]; lcm_meta_valor(ks[i], v, sizeof v); if (v[0]) { fb_puts(msg, sizeof msg, &p, "  "); fb_puts(msg, sizeof msg, &p, ks[i]); fb_puts(msg, sizeof msg, &p, ": "); fb_puts(msg, sizeof msg, &p, v); fb_puts(msg, sizeof msg, &p, "\n"); } }
+        } else {
+            fb_put_dec(msg, sizeof msg, &p, lcm_m.ok ? lcm_m.ni - 1 : 0); fb_puts(msg, sizeof msg, &p, " ordenes\n");
+            if (!lcm_usa_datos) fb_puts(msg, sizeof msg, &p, "  (elegido el de fabrica: 'lcm modelo datos' vuelve al de DATOS)\n");
+            else if (lcm_paq_motivo[0]) { fb_puts(msg, sizeof msg, &p, "  El de DATOS no se usa: "); fb_puts(msg, sizeof msg, &p, lcm_paq_motivo); fb_puts(msg, sizeof msg, &p, "\n"); }
+            else fb_puts(msg, sizeof msg, &p, "  No hay ninguno en DATOS. Se instala desde fuera de SOMA: tools/datos.py DISCO escribir /lcm/modelo.lcm ARCHIVO\n");
+        }
+        fb_puts(msg, sizeof msg, &p, "Uso: lcm modelo | lcm modelo fabrica | lcm modelo datos\n");
     } else if (lcm_empieza(args, "voz")) {
         lcm_cfg_set(1, lcm_busca(args, "tec") ? 0 : 1);
         fb_puts(msg, sizeof msg, &p, lcm_voz ? "Respuestas naturales, pensadas para la voz.\n" : "Respuestas tecnicas (la orden y su salida).\n");

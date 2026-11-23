@@ -598,6 +598,42 @@ static int launcher_post(int what, const char *model)
     return r;
 }
 int llm_launcher_stop(void) { return launcher_post(LLM_L_STOP, 0) == 0 ? 0 : -1; }
+
+/* SOMA_278_EMBEDDINGS: el servidor de embeddings (memoria de SOMA). Es independiente del del LLM: arrancarlo o pararlo no lo toca. */
+int llm_launcher_emb_status(void)
+{
+    static struct wn_resp rs; char st[24]; static char det[180]; char mo[LLM_MODEL_MAX];
+    while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
+    int r = launcher_call(LLM_L_EMB_STATUS, 0, &rs);
+    if (r == 0) {
+        if (!llm_proto_launcher_status(rs.body, st, sizeof st, mo, sizeof mo, det, sizeof det)) { set_err("Lanzador: respuesta no valida", ""); r = -1; }
+        else {
+            r = st[0] == 'l' ? 1 : st[0] == 'c' ? 2 : st[0] == 'p' ? 0 : -1;
+            if (r < 0) set_err("Lanzador: ", det[0] ? det : "el servidor de embeddings no arranco");
+        }
+    }
+    wn_free(&rs);
+    __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
+    return r;
+}
+int llm_launcher_emb_stop(void) { return launcher_post(LLM_L_EMB_STOP, 0) == 0 ? 0 : -1; }
+int llm_launcher_emb_start(uint32_t max_wait_ms, void (*progress)(uint32_t secs))
+{
+    if (launcher_post(LLM_L_EMB_START, 0) != 0) return 0;
+    uint64_t t0 = timer_get_uptime_ms();
+    int fails = 0;
+    for (;;) {
+        thread_sleep(1000);
+        uint32_t el = (uint32_t)(timer_get_uptime_ms() - t0);
+        if (progress) progress(el / 1000);
+        int st = llm_launcher_emb_status();
+        if (st == 1) return 1;
+        if (st == 0) { set_err("Lanzador: el servidor de embeddings se ha parado sin llegar a arrancar", ""); return 0; }
+        if (st == -1 || (st == -2 && ++fails > 5)) return 0;
+        if (st == 2) fails = 0;
+        if (el > max_wait_ms) { set_err("Lanzador: el servidor de embeddings no termino de cargar a tiempo", ""); return 0; }
+    }
+}
 /* Arranca llama-server con ese modelo y espera a que este listo (cargar un modelo grande tarda). progress(segundos) se llama cada
  * par de segundos. Si arranca, deja el modelo y el proveedor local elegidos y guardados. 1 = listo. */
 int llm_launcher_start(const char *model, uint32_t max_wait_ms, void (*progress)(uint32_t secs))

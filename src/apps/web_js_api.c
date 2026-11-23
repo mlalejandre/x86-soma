@@ -223,6 +223,8 @@ int wjs_pump(struct wjs *js, uint64_t now_ms, int *ran)
     if (ran) *ran = p.ran;
     return p.next;
 }
+/* SOMA_274_JS: acceso al interprete para que un programa anfitrion (jsrun) registre sus propias funciones nativas */
+struct jrt *wjs_rt(struct wjs *js) { return &js->rt; }
 int wjs_has_timers(struct wjs *js) { return js->rt.timers != 0 || js->rt.mhead != 0; }
 struct dispargs { struct wnode *t; const char *type; int x, y, key, mods; const char *keystr; int res; };
 static void do_dispatch(struct jrt *rt, void *u) { struct dispargs *d = (struct dispargs *)u; d->res = js_dom_dispatch(rt, d->t, d->type, d->x, d->y, d->key, d->keystr, d->mods); js_run_micro(rt); }

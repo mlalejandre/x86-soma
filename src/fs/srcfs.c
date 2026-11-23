@@ -31,6 +31,14 @@
 #define SRCFS_LINE_MAX       160
 
 static uint8_t srcfs_index[SRCFS_INDEX_SECTORS * 512];
+
+/* SOMA_269_RAM: con el modo RAM las fuentes empaquetadas se copian a memoria una vez y ya no se lee el pendrive */
+static uint8_t *ram_img; static uint32_t ram_sect;
+static int srcfs_rd(uint64_t lba, void *buf)
+{
+    if (ram_img && lba >= SRCFS_LBA && lba < (uint64_t)SRCFS_LBA + ram_sect) { memcpy(buf, ram_img + (lba - SRCFS_LBA) * 512u, 512); return 0; }
+    return sysdisk_read(lba, buf);
+}
 static uint8_t srcfs_sec[512];
 static int srcfs_v2;
 
@@ -53,7 +61,7 @@ static int srcfs_file(const uint8_t *e, const uint8_t **data, uint32_t *size)
     uint8_t *raw = (uint8_t *)kmalloc(csize ? csize : 1);
     if (!raw) return -1;
     for (uint32_t p = 0; p < csize; p += 512) {
-        if (sysdisk_read((uint64_t)(lba + p / 512), srcfs_sec) != 0) { kfree(raw); return -1; }
+        if (srcfs_rd((uint64_t)(lba + p / 512), srcfs_sec) != 0) { kfree(raw); return -1; }
         uint32_t take = csize - p < 512 ? csize - p : 512;
         memcpy(raw + p, srcfs_sec, take);
     }
@@ -164,7 +172,7 @@ static int word_is(const char *s, const char *w)
 static int srcfs_load_index(void)
 {
     for (int i = 0; i < SRCFS_INDEX_SECTORS; ++i) {
-        if (sysdisk_read((uint64_t)(SRCFS_LBA + i), srcfs_index + i * 512) != 0) {
+        if (srcfs_rd((uint64_t)(SRCFS_LBA + i), srcfs_index + i * 512) != 0) {
             return -1;
         }
     }
@@ -179,6 +187,28 @@ static int srcfs_load_index(void)
     return (int)(count > cap ? cap : count);
 }
 
+
+/* SOMA_269_RAM: copia a memoria el indice y los datos usados (hasta el final del ultimo archivo). 0 = bien (o ya estaba), <0 = no se pudo
+ * (SOMA sigue leyendo del pendrive). */
+int srcfs_a_ram(void)
+{
+    if (ram_img) return 0;
+    int count = srcfs_load_index();
+    if (count < 0) return -1;
+    uint32_t fin = SRCFS_LBA + SRCFS_INDEX_SECTORS;
+    for (int i = 1; i <= count; ++i) {
+        const uint8_t *e = srcfs_index + i * SRCFS_ENTRY_SIZE;
+        uint32_t lba = le32(e + 48), osize = le32(e + 52), csize = srcfs_v2 ? le32(e + 56) : osize;
+        uint32_t f = lba + (csize + 511) / 512;
+        if (lba >= SRCFS_LBA && f > fin && f <= SOMA_LBA_SRCFS_LIMIT) fin = f;
+    }
+    uint32_t n = fin - SRCFS_LBA;
+    uint8_t *img = (uint8_t *)kmalloc((size_t)n * 512u);
+    if (!img) return -2;
+    for (uint32_t i = 0; i < n; ++i) if (sysdisk_read((uint64_t)(SRCFS_LBA + i), img + (size_t)i * 512u) != 0) { kfree(img); return -3; }
+    ram_img = img; ram_sect = n;
+    return 0;
+}
 
 static const uint8_t *find_entry(int count, const char *name)
 {

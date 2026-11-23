@@ -1,0 +1,237 @@
+{
+ "manifiesto": 1,
+ "origen": "cc (parche 265: compilador de C; SOMA_276_LCM amplia las frases)",
+ "ordenes": [
+  {
+   "id": "cc_compila",
+   "orden": "cc {A}",
+   "peligrosa": false,
+   "frases": [
+    "(compila|compílame|compilame|traduce) [el programa|el código|el archivo|el fichero|el fuente] {A}",
+    "cc {A}",
+    "¿me (compilas|compila|puedes compilar) [el programa|el código|el archivo] {A}?",
+    "(quiero|necesito|tengo que|me gustaría|quisiera) compilar [el programa|el código|el archivo|el fichero] {A}",
+    "(haz|hazme|genera|genérame|crea|créame|dame) (un|el) (ejecutable|binario|programa ejecutable) (de|desde|a partir de) {A}",
+    "pasa {A} a (ejecutable|binario|elf|código máquina)",
+    "convierte {A} en (un ejecutable|un binario|un programa)",
+    "(comprueba|mira|revisa|verifica|a ver) si {A} (compila|se compila|compila bien|se compila bien|tiene errores|da errores|da fallos) [al compilar|al compilarlo|de compilación]",
+    "(comprueba|mira|revisa|verifica) que [el programa|el código] {A} compila [bien|sin errores|sin problemas]",
+    "(prueba|intenta) a compilar [el programa|el código] {A}",
+    "compila en c [el programa|el archivo] {A}",
+    "(lanza|pasa|pásale) el compilador (de c|cc) (a|por|sobre) {A}",
+    "(pasa|pásale|aplica) cc a {A}",
+    "(arregla|prepara|monta) el ejecutable de {A}",
+    "(me|nos) (compilas|compila) (esto|eso|el programa): {A}",
+    "(hay|tiene|habrá) (algún|algun) error (al compilar|de compilación en) {A}",
+    "(a ver|vamos a ver|veamos) si compila {A}",
+    "compila [ya|ahora|rápido] {A}",
+    "(quiero|necesito|quisiera|me gustaría|me interesa) (ver|saber|comprobar|mirar|revisar) si {A} (compila|se compila|compila bien|da errores)",
+    "¿(puedes|podrías|me puedes) (ver|mirar|comprobar|revisar) si {A} (compila|se compila|compila bien) [sin (errores|problemas)]?",
+    "(quiero|necesito|quisiera|me gustaría) (que compiles|compilar|que me compiles) [el código de|el programa de|el fuente de] {A}",
+    "(tengo|he escrito|he hecho) (un programa|un código) en c, {A}, (¿lo compilas?|compílalo|¿puedes compilarlo?)",
+    "(mira|revisa|comprueba|dime) si [el código de|el programa de|el fichero] {A} tiene errores de (compilación|compilar)",
+    "(échale|echale|ponle|pásale) el compilador a {A}",
+    "(hazme|haz|prepárame|prepara|genérame|genera) [el|un] ejecutable [del|de] {A}",
+    "(compila|compílame) [el código de|el programa de] {A} [por favor|porfa]"
+   ],
+   "infinitivos": [
+    "compilar {A}",
+    "compilar el programa {A}",
+    "comprobar que {A} compila"
+   ],
+   "preguntas": [
+    "si {A} compila",
+    "si {A} compila bien",
+    "si el programa {A} tiene errores al compilar"
+   ],
+   "pruebas": [
+    [
+     "a ver, ¿me haces el favor de compilar pelota.c?",
+     "cc pelota.c"
+    ],
+    [
+     "necesito que compiles snake.c",
+     "cc snake.c"
+    ],
+    [
+     "mira si snake.c da errores al compilarlo",
+     "cc snake.c"
+    ],
+    [
+     "convierte pelota.c en un ejecutable",
+     "cc pelota.c"
+    ],
+    [
+     "oye soma, compílame matrices.c",
+     "cc matrices.c"
+    ],
+    [
+     "quiero ver si fractal.c compila",
+     "cc fractal.c"
+    ],
+    [
+     "hazme el ejecutable de ajedrez.c",
+     "cc ajedrez.c"
+    ],
+    [
+     "compila el fichero tetris.c ya",
+     "cc tetris.c"
+    ],
+    [
+     "¿puedes ver si robot.c se compila sin problemas?",
+     "cc robot.c"
+    ],
+    [
+     "genera el binario de planetas.c",
+     "cc planetas.c"
+    ],
+    [
+     "quisiera compilar el código de tren.c",
+     "cc tren.c"
+    ],
+    [
+     "tengo un programa en c, rueda.c, ¿lo compilas?",
+     "cc rueda.c"
+    ],
+    [
+     "dale a compilar a laberinto.c",
+     "cc laberinto.c"
+    ],
+    [
+     "mira a ver si el código de volcan.c tiene errores de compilación",
+     "cc volcan.c"
+    ],
+    [
+     "compila laberinto.c, por favor",
+     "cc laberinto.c"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "hola.c",
+     "suma.c",
+     "juego.c",
+     "calculadora.c",
+     "reloj.c",
+     "main.c",
+     "ventana.c",
+     "primos.c",
+     "tabla.c",
+     "ejemplo.c",
+     "/workspace/prueba.c",
+     "/usuario/programa.c",
+     "bucle.c",
+     "saludo.c",
+     "ordena.c",
+     "hola.elf",
+     "juego.elf"
+    ]
+   }
+  },
+  {
+   "id": "cc_ejecuta",
+   "orden": "cc -run {A}",
+   "peligrosa": true,
+   "frases": [
+    "(compila y ejecuta|compila y lanza|compila y corre|compila y prueba|compila y arranca) [el programa|el código|el archivo] {A}",
+    "(ejecuta|lanza|corre|arranca|prueba|pon en marcha) el programa (en c|de c) {A}",
+    "cc -run {A}",
+    "(ejecuta|lanza|corre|prueba) el (código|archivo|fichero|fuente) (en c|de c) {A}",
+    "(quiero|necesito|me gustaría|tengo que) (compilar y ejecutar|compilar y probar|compilar y correr|probar|ejecutar) [el programa|el código|el archivo] (en c |de c |)(compilándolo|compilado|) {A}",
+    "(compílalo|compilalo|compílame|compilame) y (ejecútalo|ejecutalo|pruébalo|pruebalo|córrelo|correlo|lánzalo|lanzalo): {A}",
+    "(prueba|ejecuta|lanza|corre) {A} (compilándolo|compilandolo|compilándolo antes|después de compilarlo|tras compilarlo)",
+    "(corre|ejecuta|lanza) {A} en c",
+    "(compila|compílame) {A} y (míralo|miralo|dime qué (pasa|sale|hace)) (al ejecutarlo|cuando se ejecute|)",
+    "(monta|construye|prepara) y (ejecuta|lanza|corre|prueba) {A}",
+    "(compila|prepara) {A} y (échalo a andar|ponlo en marcha|déjalo funcionando|arráncalo)",
+    "(ejecuta|lanza) mi programa en c {A}",
+    "(a ver|vamos a ver|veamos) qué hace {A} (compilado|al compilarlo y ejecutarlo)",
+    "(lanza|ejecuta|corre|pon a funcionar) {A} (pero|aunque) (compilándolo|compílalo) (antes|primero)",
+    "(arranca|lanza|ejecuta|corre) el programa de c {A}",
+    "(pruébame|pruebame|pruébalo|pruebalo|prueba) {A} en c",
+    "(ejecuta|lanza|corre) {A}, (compilándolo|compílalo) (si hace falta|si no está compilado|antes si hace falta)",
+    "(compila|compílame|compilame) {A} y (échalo|echalo|ponlo|déjalo|dejalo) (a andar|en marcha|funcionando|a correr)",
+    "(monta|construye|compila) y (lanza|ejecuta|prueba|arranca) [el programa|el código] {A}"
+   ],
+   "infinitivos": [
+    "compilar y ejecutar {A}",
+    "compilar y probar el programa {A}",
+    "ejecutar el programa en c {A}"
+   ],
+   "preguntas": [
+    "qué hace el programa {A} al ejecutarlo"
+   ],
+   "pruebas": [
+    [
+     "compila y ejecuta pelota.c",
+     "cc -run pelota.c"
+    ],
+    [
+     "quiero probar el programa snake.c, compílalo y córrelo",
+     "cc -run snake.c"
+    ],
+    [
+     "lanza fractal.c pero compilándolo antes",
+     "cc -run fractal.c"
+    ],
+    [
+     "¿puedes compilar y ejecutar matrices.c?",
+     "cc -run matrices.c"
+    ],
+    [
+     "arranca el programa de c ajedrez.c",
+     "cc -run ajedrez.c"
+    ],
+    [
+     "pruébame tetris.c en c",
+     "cc -run tetris.c"
+    ],
+    [
+     "compila robot.c y échalo a andar",
+     "cc -run robot.c"
+    ],
+    [
+     "quiero ejecutar mi programa en c planetas.c",
+     "cc -run planetas.c"
+    ],
+    [
+     "monta y lanza tren.c",
+     "cc -run tren.c"
+    ],
+    [
+     "compílame rueda.c y dime qué sale al ejecutarlo",
+     "cc -run rueda.c"
+    ],
+    [
+     "ejecuta laberinto.c, compilándolo si hace falta",
+     "cc -run laberinto.c"
+    ],
+    [
+     "prueba el código en c de volcan.c",
+     "cc -run volcan.c"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "hola.c",
+     "suma.c",
+     "juego.c",
+     "calculadora.c",
+     "reloj.c",
+     "main.c",
+     "ventana.c",
+     "primos.c",
+     "tabla.c",
+     "ejemplo.c",
+     "/workspace/prueba.c",
+     "/usuario/programa.c",
+     "bucle.c",
+     "saludo.c",
+     "ordena.c",
+     "hola.elf",
+     "juego.elf"
+    ]
+   }
+  }
+ ]
+}

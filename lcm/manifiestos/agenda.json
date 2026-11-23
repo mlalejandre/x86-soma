@@ -1,0 +1,562 @@
+{
+ "manifiesto": 1,
+ "origen": "agenda (parche 272: calendario con avisos)",
+ "ordenes": [
+  {
+   "id": "agenda_hoy",
+   "orden": "agenda hoy",
+   "peligrosa": false,
+   "frases": [
+    "(qué|que) tengo hoy",
+    "(qué|que) tengo (en la agenda|apuntado|en el calendario) [para ]hoy",
+    "(dime|muéstrame|enséñame|ver|mira) (mi agenda|el calendario|la agenda) de hoy",
+    "agenda hoy",
+    "(tengo|hay) (algo|alguna cosa|algún plan|algun plan|alguna reunión|alguna cita) hoy",
+    "¿(qué|que) (hay|tengo) [hoy ][en mi agenda|en el calendario|apuntado]",
+    "¿(qué|que) (planes|eventos|citas|reuniones) tengo hoy",
+    "(cuál|cual) es mi agenda [de ]hoy",
+    "(mi agenda|el calendario|mis citas) de hoy",
+    "(dime|cuéntame) (qué|que) (me toca|tengo que hacer) hoy en la agenda"
+   ],
+   "infinitivos": [
+    "ver la agenda de hoy",
+    "mirar qué tengo hoy"
+   ],
+   "preguntas": [
+    "qué tengo hoy",
+    "si tengo algo hoy"
+   ],
+   "pruebas": [
+    [
+     "a ver, ¿qué tengo para hoy en el calendario?",
+     "agenda hoy"
+    ],
+    [
+     "¿tengo alguna cita hoy?",
+     "agenda hoy"
+    ],
+    [
+     "enséñame mi agenda de hoy",
+     "agenda hoy"
+    ],
+    [
+     "oye, qué planes tengo hoy",
+     "agenda hoy"
+    ],
+    [
+     "mira a ver si tengo algo apuntado hoy",
+     "agenda hoy"
+    ],
+    [
+     "qué reuniones tengo hoy",
+     "agenda hoy"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_manana",
+   "orden": "agenda mañana",
+   "peligrosa": false,
+   "frases": [
+    "(qué|que) tengo mañana",
+    "(qué|que) tengo (en la agenda|apuntado|en el calendario) [para ]mañana",
+    "(dime|muéstrame|enséñame|ver|mira) (mi agenda|el calendario|la agenda) de mañana",
+    "agenda mañana",
+    "(tengo|hay) (algo|alguna cosa|algún plan|alguna reunión|alguna cita) mañana",
+    "mañana tengo (alguna|algún) (reunión|cita|plan|evento)",
+    "¿(qué|que) (planes|eventos|citas|reuniones) tengo mañana",
+    "(cuál|cual) es mi agenda [de ]mañana",
+    "(mi agenda|el calendario|mis citas) de mañana",
+    "(dime|cuéntame) (qué|que) (me toca|tengo que hacer) mañana en la agenda"
+   ],
+   "infinitivos": [
+    "ver la agenda de mañana",
+    "mirar qué tengo mañana"
+   ],
+   "preguntas": [
+    "qué tengo mañana",
+    "si tengo algo mañana"
+   ],
+   "pruebas": [
+    [
+     "a ver, ¿qué tengo para mañana en el calendario?",
+     "agenda mañana"
+    ],
+    [
+     "¿tengo alguna cita mañana?",
+     "agenda mañana"
+    ],
+    [
+     "enséñame mi agenda de mañana",
+     "agenda mañana"
+    ],
+    [
+     "oye, qué planes tengo mañana",
+     "agenda mañana"
+    ],
+    [
+     "mañana tengo alguna reunión?",
+     "agenda mañana"
+    ],
+    [
+     "qué reuniones tengo mañana",
+     "agenda mañana"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_semana",
+   "orden": "agenda semana",
+   "peligrosa": false,
+   "frases": [
+    "(qué|que) tengo (esta|la próxima|la proxima) semana",
+    "(dime|muéstrame|enséñame|ver|mira) (mi agenda|el calendario|la agenda) de (esta|la) semana",
+    "agenda semana",
+    "(mi|la) agenda (de|para) (esta|la) semana",
+    "(tengo|hay) (algo|alguna cosa|algún plan|alguna reunión) esta semana",
+    "¿(qué|que) (planes|eventos|citas|reuniones) tengo esta semana",
+    "(cómo|como) (llevo|tengo) la semana de (agenda|citas|reuniones)",
+    "(enséñame|muéstrame|dime) (los eventos|las citas|las reuniones) de la semana",
+    "(qué|que) (me espera|hay apuntado) esta semana"
+   ],
+   "infinitivos": [
+    "ver la agenda de la semana"
+   ],
+   "preguntas": [
+    "qué tengo esta semana"
+   ],
+   "pruebas": [
+    [
+     "¿qué tengo esta semana en el calendario?",
+     "agenda semana"
+    ],
+    [
+     "enséñame mi agenda de esta semana",
+     "agenda semana"
+    ],
+    [
+     "oye, qué planes tengo esta semana",
+     "agenda semana"
+    ],
+    [
+     "¿tengo alguna reunión esta semana?",
+     "agenda semana"
+    ],
+    [
+     "cómo tengo la semana de citas",
+     "agenda semana"
+    ],
+    [
+     "qué hay apuntado esta semana",
+     "agenda semana"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_proximos",
+   "orden": "agenda proximos",
+   "peligrosa": false,
+   "frases": [
+    "(qué|que) (tengo|hay) (próximamente|proximamente|en los próximos días|en los proximos dias)",
+    "(cuáles|cuales) son mis (próximos|proximos) (eventos|compromisos|citas|planes|reuniones)",
+    "agenda (próximos|proximos)",
+    "(dime|muéstrame|enséñame) mis (próximos|proximos) (eventos|compromisos|citas|planes|reuniones)",
+    "(qué|que) (viene|se acerca) en (mi|la) agenda",
+    "(cuál|cual) es mi (próxima|proxima) (cita|reunión|reunion)",
+    "(qué|que) (cosas|eventos) tengo (pendientes|por delante) en el calendario",
+    "(mi|el) calendario de los próximos días"
+   ],
+   "infinitivos": [
+    "ver mis próximos eventos"
+   ],
+   "preguntas": [
+    "cuáles son mis próximos eventos"
+   ],
+   "pruebas": [
+    [
+     "¿qué tengo en los próximos días?",
+     "agenda proximos"
+    ],
+    [
+     "enséñame mis próximos compromisos",
+     "agenda proximos"
+    ],
+    [
+     "cuál es mi próxima reunión",
+     "agenda proximos"
+    ],
+    [
+     "qué se acerca en mi agenda",
+     "agenda proximos"
+    ],
+    [
+     "dime mis próximas citas",
+     "agenda proximos"
+    ],
+    [
+     "qué tengo pendiente en el calendario",
+     "agenda proximos"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_ver",
+   "orden": "agenda ver {T}",
+   "peligrosa": false,
+   "frases": [
+    "(qué|que) tengo {T}",
+    "(qué|que) tengo (en la agenda|apuntado|en el calendario) [para ]{T}",
+    "(dime|muéstrame|enséñame|ver|mira) (mi agenda|el calendario|la agenda) (de|para) {T}",
+    "agenda ver {T}",
+    "(tengo|hay) (algo|alguna cosa|algún plan|alguna reunión|alguna cita) {T}",
+    "¿(qué|que) (planes|eventos|citas|reuniones) tengo {T}",
+    "(mi agenda|el calendario|mis citas) (de|para) {T}",
+    "(estoy libre|tengo hueco|tengo el día libre) {T}"
+   ],
+   "infinitivos": [
+    "ver la agenda de {T}"
+   ],
+   "preguntas": [
+    "qué tengo {T}",
+    "si tengo algo {T}"
+   ],
+   "pruebas": [
+    [
+     "a ver, ¿qué tengo apuntado el jueves 21?",
+     "agenda ver el jueves 21"
+    ],
+    [
+     "¿tengo alguna cita el martes?",
+     "agenda ver el martes"
+    ],
+    [
+     "enséñame mi agenda del 2 de febrero",
+     "agenda ver el 2 de febrero"
+    ],
+    [
+     "qué planes tengo el sábado 8",
+     "agenda ver el sábado 8"
+    ],
+    [
+     "mira si tengo algo el 30 de junio",
+     "agenda ver el 30 de junio"
+    ],
+    [
+     "¿estoy libre el viernes?",
+     "agenda ver el viernes"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "el miércoles",
+     "el miércoles día 6",
+     "el 15 de enero",
+     "el viernes",
+     "el sábado 12",
+     "pasado mañana",
+     "el lunes",
+     "el 3 de marzo",
+     "el domingo",
+     "el día 20",
+     "el jueves",
+     "el 24 de diciembre"
+    ]
+   }
+  },
+  {
+   "id": "agenda_anadir",
+   "orden": "agenda añadir {T}",
+   "peligrosa": false,
+   "frases": [
+    "(apunta|apúntame|anota|añade|añádeme|agenda|agéndame|programa|programame|programa en el calendario|pon|ponme|crea|créame|guarda) [en la agenda|en el calendario|en mi agenda|en mi calendario] {T}",
+    "(apunta|apúntame|anota|añade|añádeme|agenda|agéndame|pon|ponme|crea|créame) [un evento|una cita|una reunión|un recordatorio|un aviso|un plan] [en la agenda|en el calendario] {T}",
+    "(tengo|tengo que ir a|tengo que hacer|tengo que estar en|he quedado|hemos quedado|quedé|quede) {T}",
+    "recuérdame {T}",
+    "(avísame|avisame|recuérdame|recuerdame) (de que|que) {T}",
+    "no [me ](dejes|dejes que me) olvidar {T}",
+    "(añade|apunta) (esto|eso) (a la agenda|al calendario): {T}",
+    "agenda añadir {T}",
+    "(reserva|bloquea) (en el calendario|en la agenda) {T}",
+    "(he|hemos) (quedado|quedamos) {T}",
+    "(me han|nos han) (citado|convocado) {T}"
+   ],
+   "infinitivos": [
+    "apuntar en la agenda {T}",
+    "añadir al calendario {T}"
+   ],
+   "pruebas": [
+    [
+     "apúntame en el calendario el jueves 21 a las 17 dentista",
+     "agenda añadir el jueves 21 a las 17 dentista"
+    ],
+    [
+     "mañana tengo reunión a las 9",
+     "agenda añadir mañana a las 9 reunión"
+    ],
+    [
+     "el miércoles día 6 a las 13 horas tengo un partido de fútbol con los amigos",
+     "agenda añadir el miércoles día 6 a las 13 horas partido de fútbol con los amigos"
+    ],
+    [
+     "recuérdame mañana a las 8 llamar al banco",
+     "agenda añadir mañana a las 8 llamar al banco"
+    ],
+    [
+     "he quedado el sábado a las 14 con Pedro",
+     "agenda añadir el sábado a las 14 con Pedro"
+    ],
+    [
+     "añade a la agenda cada martes a las 19 clase de pintura",
+     "agenda añadir cada martes a las 19 clase de pintura"
+    ],
+    [
+     "pon en mi agenda el 12 de mayo a las 10 cita con el notario",
+     "agenda añadir el 12 de mayo a las 10 cita con el notario"
+    ],
+    [
+     "agéndame una reunión el lunes a las 11 con el equipo",
+     "agenda añadir el lunes a las 11 reunión con el equipo"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "mañana a las 9 reunión con Marta",
+     "el miércoles día 6 a las 13 horas partido de fútbol con los amigos",
+     "el viernes a las 18 cena con los suegros",
+     "el lunes a las 8 gimnasio",
+     "pasado mañana a las 10:30 dentista",
+     "el 15 de enero a las 17 revisión del coche",
+     "hoy a las 20 llamar a mamá",
+     "dentro de 2 horas llamar a Ana",
+     "cada lunes a las 8 gimnasio",
+     "el sábado 12 a las 21 cumpleaños de Laura",
+     "el jueves de 10 a 12 clase de inglés",
+     "mañana a las 7 y media vuelo a Sevilla",
+     "el día 20 a las 16 reunión de equipo",
+     "el domingo a las 14 comida con la familia",
+     "todos los días a las 22 tomar la pastilla",
+     "el 3 de marzo a las 9 examen de matemáticas",
+     "el martes a las 19:30 yoga",
+     "el 24 de diciembre a las 21 cena de Nochebuena",
+     "esta tarde a las 6 médico",
+     "el lunes que viene a las 11 entrevista de trabajo"
+    ]
+   }
+  },
+  {
+   "id": "agenda_borrar",
+   "orden": "agenda borrar {N}",
+   "peligrosa": true,
+   "frases": [
+    "(borra|elimina|quita|cancela|anula) (el evento|la cita|la reunión|el compromiso|el recordatorio) [número |numero |nº |n° |#]{N}",
+    "agenda borrar {N}",
+    "(borra|elimina|quita|cancela|anula) (de la agenda|del calendario) (el evento|la cita) [número |numero ]{N}",
+    "(cancela|anula|borra) (el|la) (evento|cita|reunión) [de la agenda] {N}",
+    "(saca|quita|elimina) (el|la) (evento|cita) {N} (de la agenda|del calendario)",
+    "(ya no (voy|quiero ir)|ya no hace falta) (el|la) (evento|cita) {N}"
+   ],
+   "infinitivos": [
+    "borrar el evento {N}",
+    "cancelar la cita {N}"
+   ],
+   "pruebas": [
+    [
+     "borra la cita número 7 de la agenda",
+     "agenda borrar 7"
+    ],
+    [
+     "cancela el evento 12",
+     "agenda borrar 12"
+    ],
+    [
+     "quita la reunión 3 del calendario",
+     "agenda borrar 3"
+    ],
+    [
+     "elimina el evento número 25",
+     "agenda borrar 25"
+    ],
+    [
+     "anula la cita 9",
+     "agenda borrar 9"
+    ],
+    [
+     "borra del calendario el evento 40",
+     "agenda borrar 40"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_abrir",
+   "orden": "agenda abrir",
+   "peligrosa": false,
+   "frases": [
+    "(abre|abreme|ábreme|muestra|muéstrame|enséñame|lanza|pon) (el|mi) (calendario|agenda)",
+    "(abre|abreme|ábreme|lanza|inicia|arranca) la (agenda|aplicación de calendario|app de calendario|ventana del calendario)",
+    "agenda abrir",
+    "(quiero|necesito|me gustaría) (ver|abrir|mirar) (el|mi) (calendario|agenda)",
+    "(calendario|agenda) por favor",
+    "(enséñame|muéstrame|déjame ver) el calendario del mes",
+    "(ver|abrir) el calendario completo",
+    "(saca|pon) el calendario en pantalla"
+   ],
+   "infinitivos": [
+    "abrir el calendario",
+    "ver mi agenda en pantalla"
+   ],
+   "pruebas": [
+    [
+     "abre el calendario",
+     "agenda abrir"
+    ],
+    [
+     "muéstrame mi agenda",
+     "agenda abrir"
+    ],
+    [
+     "quiero ver el calendario",
+     "agenda abrir"
+    ],
+    [
+     "ábreme la agenda por favor",
+     "agenda abrir"
+    ],
+    [
+     "lanza la aplicación de calendario",
+     "agenda abrir"
+    ],
+    [
+     "déjame ver el calendario del mes",
+     "agenda abrir"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_avisos_si",
+   "orden": "agenda avisos on",
+   "peligrosa": false,
+   "frases": [
+    "(activa|enciende|pon|conecta) (los avisos|las alertas|las notificaciones|los recordatorios) (de la agenda|del calendario|de eventos)",
+    "agenda avisos on",
+    "(avísame|avisame|quiero que me avises) (de|cuando haya) (los eventos|las citas|las reuniones)",
+    "(quiero|necesito) (los avisos|las alertas|los recordatorios) (de la agenda|del calendario)",
+    "(activa|enciende) (el aviso|el recordatorio) de (eventos|citas|reuniones)",
+    "(vuelve a|que vuelvan a) (avisarme|activarse los avisos) de (la agenda|el calendario)"
+   ],
+   "infinitivos": [
+    "activar los avisos del calendario"
+   ],
+   "pruebas": [
+    [
+     "activa los avisos de la agenda",
+     "agenda avisos on"
+    ],
+    [
+     "quiero que me avises de las reuniones",
+     "agenda avisos on"
+    ],
+    [
+     "enciende las alertas del calendario",
+     "agenda avisos on"
+    ],
+    [
+     "pon los recordatorios de eventos",
+     "agenda avisos on"
+    ],
+    [
+     "vuelve a avisarme de las citas",
+     "agenda avisos on"
+    ],
+    [
+     "necesito los avisos del calendario",
+     "agenda avisos on"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_avisos_no",
+   "orden": "agenda avisos off",
+   "peligrosa": false,
+   "frases": [
+    "(desactiva|apaga|quita|silencia|para) (los avisos|las alertas|las notificaciones|los recordatorios) (de la agenda|del calendario|de eventos)",
+    "agenda avisos off",
+    "(no quiero|ya no quiero) (que me avises|los avisos|las alertas) (de la agenda|del calendario|de los eventos)",
+    "(deja de|para de) avisarme de (los eventos|las citas|las reuniones|la agenda)",
+    "(desactiva|apaga) (el aviso|el recordatorio) de (eventos|citas|reuniones)",
+    "(no me avises|no me avises más) de (la agenda|el calendario|las citas)"
+   ],
+   "infinitivos": [
+    "desactivar los avisos del calendario"
+   ],
+   "pruebas": [
+    [
+     "desactiva los avisos de la agenda",
+     "agenda avisos off"
+    ],
+    [
+     "no quiero que me avises de las reuniones",
+     "agenda avisos off"
+    ],
+    [
+     "apaga las alertas del calendario",
+     "agenda avisos off"
+    ],
+    [
+     "quita los recordatorios de eventos",
+     "agenda avisos off"
+    ],
+    [
+     "deja de avisarme de las citas",
+     "agenda avisos off"
+    ],
+    [
+     "silencia las notificaciones del calendario",
+     "agenda avisos off"
+    ]
+   ]
+  },
+  {
+   "id": "agenda_exportar",
+   "orden": "agenda exportar",
+   "peligrosa": false,
+   "frases": [
+    "(exporta|guarda|saca|genera|haz) (mi agenda|el calendario|mis eventos) (a|en|como) [un archivo |un fichero ](ics|icalendar|google calendar|formato ics)",
+    "agenda exportar",
+    "(exporta|pasa) (mi agenda|el calendario) (para|a) (google calendar|outlook|mi móvil|el móvil)",
+    "(quiero|necesito) (exportar|sacar) (mi agenda|el calendario) (a|en) ics",
+    "(haz|hazme|genera|genérame) (un|una) (copia|archivo ics|exportación) (de|del) (calendario|agenda)",
+    "(descarga|baja|saca) (mi agenda|el calendario) en ics"
+   ],
+   "infinitivos": [
+    "exportar la agenda",
+    "exportar el calendario a ics"
+   ],
+   "pruebas": [
+    [
+     "exporta mi agenda a ics",
+     "agenda exportar"
+    ],
+    [
+     "guarda el calendario en formato ics",
+     "agenda exportar"
+    ],
+    [
+     "quiero sacar mi agenda para google calendar",
+     "agenda exportar"
+    ],
+    [
+     "haz una copia del calendario en ics",
+     "agenda exportar"
+    ],
+    [
+     "pasa mi agenda a outlook",
+     "agenda exportar"
+    ],
+    [
+     "genera el archivo ics de mis eventos",
+     "agenda exportar"
+    ]
+   ]
+  }
+ ]
+}

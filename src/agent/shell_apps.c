@@ -298,7 +298,10 @@ static int cmd_disco(const char *args, char *out_buf, uint32_t max_out)
     while (args && *args == ' ') args++;
     const struct usbdisk_info *u = usbdisk_info();
     if (args && args[0] == 's') {
+        uint32_t pend = vfs_sin_guardar();                                  /* SOMA_269_RAM */
+        int g = vfs_sync();
         int r = usbdisk_flush();
+        if (pend) { kprint("disco: "); kprint_dec(pend); kprint(g == 0 ? " archivos guardados\n" : " archivos: ERROR al guardar\n"); }
         kprint(r == 0 ? "disco: cache del pendrive vaciada\n" : "disco: no hay pendrive como disco del sistema\n");
         return 1;
     }
@@ -318,6 +321,7 @@ static int cmd_disco(const char *args, char *out_buf, uint32_t max_out)
     } else {
         kprint("  pendrive: "); kprint(u->why && u->why[0] ? u->why : "no se intento"); kprint("\n");
     }
+    if (vfs_modo_ram_activo()) { kprint("  MODO RAM: activo, archivos sin guardar: "); kprint_dec(vfs_sin_guardar()); kprint(" ('disco sync' los guarda; tambien al apagar)\n"); }   /* SOMA_269_RAM */
     kprint("Unidades del pendrive (tus archivos y los modelos de IA):\n");                 /* SOMA_267_DISCOS */
     usbdisk_unidades_info();
     kprint("uso: disco | disco sync (vacia la cache del pendrive; se hace sola cada 5 s). Archivos: ls /usuario, cat /usuario/...\n");

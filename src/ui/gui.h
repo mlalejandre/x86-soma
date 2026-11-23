@@ -19,6 +19,8 @@ const char *gui_app_title(int app);
 int  gui_app_list(int *apps, int max);
 int  gui_close_app(int app);
 extern const int gui_app_sysmon;
+extern const int gui_app_agenda;                /* SOMA_272_AGENDA */
+void gui_open_agenda(void);                     /* SOMA_272_AGENDA */
 /* PARCHE 091: el agente corre en su hilo; para tocar la pantalla pide turno (0 = no hacia falta) */
 int  gui_enter(void);
 void gui_leave(int tok);

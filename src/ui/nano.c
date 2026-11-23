@@ -121,7 +121,10 @@ void run_nano(const char *filename)
         if (ch == 24) { /* Ctrl+X */
             break;
         } else if (ch == 19) { /* Ctrl+S */
-            if (vfs_write(filename, nano_buf, buf_len) >= 0) {
+            if (!vfs_usuario_puede_escribir(filename)) {                      /* SOMA_268_ACCESO */
+                const char *err = "[Solo puedes guardar en /usuario (y /tmp)]";
+                uint32_t k = 0; while (*err) status_msg[k++] = *err++; status_msg[k] = '\0';
+            } else if (vfs_write(filename, nano_buf, buf_len) >= 0) {
                 dirty = 0;
                 const char *ok = "[Guardado con exito en RamFS / virtio-blk]";
                 uint32_t k = 0; while (*ok) status_msg[k++] = *ok++; status_msg[k] = '\0';

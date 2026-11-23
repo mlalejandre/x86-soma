@@ -1,6 +1,7 @@
 /* SOMA_257_LCM: banco del parche 257 (cc -O1 -Isrc/agent tests/test_lcm_257.c): lcm_soma.inc con imitaciones de las funciones de SOMA. */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include "lcm_ordenes.inc"
 
@@ -21,6 +22,11 @@ static char archivos[4][4096];   /* /etc/lcm.conf, /etc/lcm_aprendido.txt */
 static int fidx(const char *p) { return strstr(p, "aprendido") ? 1 : 0; }
 static int vfs_read(const char *p, char *b, uint32_t n) { uint32_t l = (uint32_t)strlen(archivos[fidx(p)]); if (!l) return -1; if (l > n) l = n; memcpy(b, archivos[fidx(p)], l); return (int)l; }
 static int vfs_write(const char *p, const char *b, uint32_t n) { if (n >= sizeof archivos[0]) n = sizeof archivos[0] - 1; memcpy(archivos[fidx(p)], b, n); archivos[fidx(p)][n] = 0; return (int)n; }
+/* SOMA_271_LCM: paquete de modelo en DATOS (imitacion) */
+static char *paq_ptr = 0; static uint32_t paq_len = 0;
+static int vfs_size(const char *p) { return (p && !strcmp(p, "/lcm/modelo.lcm") && paq_ptr) ? (int)paq_len : -1; }
+static char *vfs_read_alloc(const char *p, uint32_t *l) { if (vfs_size(p) < 0) return 0; char *b = (char *)malloc(paq_len + 1); memcpy(b, paq_ptr, paq_len); b[paq_len] = 0; *l = paq_len; return b; }
+static void kfree(void *p) { free(p); }
 static const char *fecha = "CEST: 2026-11-22 05:45:10 CEST";
 int dispatch_command(const char *c, char *out, uint32_t max)
 {
@@ -111,6 +117,36 @@ static int main2(int argc)
     CK(strstr(dictamen(), "navegador") && strstr(dictamen(), "50"), "frase de las dos: %s", dictamen());
     limpia(); lcm_soma("abre paint y después borra notas.txt"); CK(nej == 0 && !lcm_pendiente[0], "una de ellas pide confirmación: no se hace solo una (%d)", nej);
     lcm_pendiente[0] = 0;
+    /* SOMA_271_LCM: modelo versionado en DATOS (/lcm/modelo.lcm) */
+    {
+        static uint8_t paq[sizeof(lcm_ordenes_blob) + 400];
+        const char *meta = "modelo=lcm-20261122-prueba\nfecha=2026-11-22\nordenes=80\nmanifiestos=cc\npuerta=apto\nexactas=83.0\nerrores=1.60\n";
+        uint32_t lm = (uint32_t)strlen(meta), lb = (uint32_t)sizeof(lcm_ordenes_blob), h = 0x811C9DC5u;
+        for (uint32_t i = 0; i < lb; ++i) { h ^= lcm_ordenes_blob[i]; h *= 0x01000193u; }
+        memcpy(paq, "LCMP", 4); uint32_t cab[4] = { 1, lb, h, lm }; memcpy(paq + 4, cab, 16); memcpy(paq + 20, meta, lm); memcpy(paq + 20 + lm, lcm_ordenes_blob, lb);
+        uint32_t tot = 20 + lm + lb; char o[1500];
+        limpia(); lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "de fabrica") && strstr(o, "No hay ninguno en DATOS"), "sin paquete: %s", o);
+        paq_ptr = (char *)paq; paq_len = tot; lcm_cfg_set(8, 1);
+        lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "de DATOS") && strstr(o, "lcm-20261122-prueba") && strstr(o, "manifiestos: cc") && strstr(o, "exactas: 83.0"), "paquete bueno: %s", o);
+        limpia(); CK(lcm_soma("lista mis archivos") == LCM_HECHO && nej == 1 && !strncmp(ejecutadas[0], "ls", 2), "con el modelo de DATOS traduce igual");
+        lcm_cmd("modelo fabrica", o, sizeof o); CK(strstr(o, "de fabrica") && strstr(archivos[0], "modelo=0"), "fabrica: %s | %s", o, archivos[0]);
+        lcm_cfg_set(1, 1); CK(strstr(archivos[0], "modelo=0") != 0, "la eleccion persiste al guardar otras opciones");
+        lcm_cmd("modelo datos", o, sizeof o); CK(strstr(o, "de DATOS") && !strstr(archivos[0], "modelo=0"), "datos otra vez: %s", o);
+        uint8_t malo[sizeof paq]; memcpy(malo, paq, tot); malo[tot - 100] ^= 0x55; paq_ptr = (char *)malo; lcm_cfg_set(8, 1);
+        lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "de fabrica") && strstr(o, "danado"), "byte cambiado: %s", o);
+        limpia(); CK(lcm_soma("lista mis archivos") == LCM_HECHO, "dañado: sigue funcionando con el de fabrica");
+        paq_len = tot - 1000; paq_ptr = (char *)paq; lcm_cfg_set(8, 1); lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "de fabrica") && strstr(o, "incoherente"), "truncado: %s", o);
+        memcpy(malo, paq, tot); malo[0] = 'X'; paq_ptr = (char *)malo; paq_len = tot; lcm_cfg_set(8, 1); lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "no es un paquete"), "sin magia: %s", o);
+        memcpy(malo, paq, tot); uint32_t fm = 2; memcpy(malo + 4, &fm, 4); lcm_cfg_set(8, 1); lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "de fabrica"), "formato desconocido: %s", o);
+        paq_ptr = 0; lcm_cfg_set(8, 1); lcm_cmd("modelo", o, sizeof o); CK(strstr(o, "de fabrica") && strstr(o, "No hay ninguno"), "borrado: %s", o);
+        limpia(); CK(lcm_soma("lista mis archivos") == LCM_HECHO, "sin paquete sigue igual");
+        if (getenv("LCM_PAQUETE_PRUEBA")) {      /* paquete hecho por tools/lcm_ordenes/reentrena.py (lo comprueba tests/test_lcm_271.py): el C lo acepta */
+            FILE *fp = fopen(getenv("LCM_PAQUETE_PRUEBA"), "rb"); static char ext[8 << 20]; uint32_t ne = fp ? (uint32_t)fread(ext, 1, sizeof ext, fp) : 0; if (fp) fclose(fp);
+            paq_ptr = ext; paq_len = ne; lcm_cfg_set(8, 1); lcm_cmd("modelo", o, sizeof o);
+            CK(ne > 100 && strstr(o, "de DATOS") && strstr(o, "modelo: lcm-"), "paquete de Python aceptado por el C: %s", o);
+            paq_ptr = 0; lcm_cfg_set(8, 1);
+        }
+    }
     printf("%s banco del 257: %d comprobaciones, %d fallos\n", fallos ? "FALLO" : "ok ", n, fallos);
     if (muestra) {
         printf("\nAsi suena (cada linea, una peticion a 'soma'):\n");

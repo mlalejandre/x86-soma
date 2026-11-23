@@ -11,6 +11,12 @@
 #   POST /v1/lanzar    {"modelo": alias}   para lo que hubiera en el puerto y arranca llama-server con ese modelo
 #   POST /v1/parar     para llama-server (libera la VRAM)
 #
+# SOMA_278_EMBEDDINGS: segundo servidor, independiente del anterior, para la memoria de SOMA (bge-m3, en CPU, puerto 8089). Arrancarlo
+# o pararlo NO toca al del LLM:
+#   GET  /v1/embeddings/estado   igual que /v1/estado, para el servidor de embeddings
+#   POST /v1/embeddings/lanzar   arranca llama-server --embeddings con el primer bge-m3*.gguf que haya bajo MODELS_DIR
+#   POST /v1/embeddings/parar    lo para
+#
 # Seguridad: solo atiende a equipos de la red local y toda peticion debe traer la clave (Authorization: Bearer <clave>).
 # La clave se crea la primera vez y se guarda en ~/.config/soma/lanzador.clave (solo legible por el usuario).
 #
@@ -54,6 +60,17 @@ PREDICT = int(os.getenv("REMOTE_PREDICT", "16384"))
 CUDA_DEVICE = os.getenv("CUDA_DEVICE", "0")
 EXTRA_ARGS = os.getenv("LLAMA_EXTRA_ARGS", "")
 
+# SOMA_278_EMBEDDINGS
+EMB_PORT = int(os.getenv("SOMA_EMB_PORT", "8089"))
+EMB_BIN = os.getenv("SOMA_EMB_BIN", "")                    # vacio: /opt/llama.cpp/build/bin/llama-server si existe; si no, LLAMA_SERVER_BIN
+EMB_MODEL = os.getenv("SOMA_EMB_MODEL", "")                # vacio: el primer bge-m3*.gguf bajo MODELS_DIR
+EMB_THREADS = int(os.getenv("SOMA_EMB_THREADS", "4"))
+EMB_CTX = int(os.getenv("SOMA_EMB_CTX", "8192"))
+EMB_EXTRA_ARGS = os.getenv("SOMA_EMB_EXTRA_ARGS", "")
+EMB_PID_FILE = os.getenv("SOMA_EMB_PID_FILE", "/tmp/soma-emb.pid")
+EMB_LOG_FILE = os.getenv("SOMA_EMB_LOG_FILE", "/tmp/soma-emb.log")
+EMB_ALIAS = "bge-m3"
+
 LANZADOR_PORT = int(os.getenv("SOMA_LANZADOR_PORT", "8086"))
 KEY_FILE = Path(os.getenv("SOMA_LANZADOR_CLAVE", str(Path.home() / ".config" / "soma" / "lanzador.clave")))
 KEY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"      # sin l, i, o, 0, 1: hay que teclearla en SOMA
@@ -63,6 +80,8 @@ _lock = threading.Lock()
 _proc: subprocess.Popen | None = None
 _alias = ""
 _started = 0.0
+_eproc: subprocess.Popen | None = None           # SOMA_278_EMBEDDINGS
+_estarted = 0.0
 
 
 def info(msg: str) -> None:
@@ -108,6 +127,8 @@ def list_models() -> list[dict]:
             if not fn.lower().endswith(".gguf") or "mmproj" in fn.lower():
                 continue                              # proyectores de vision: no son modelos autonomos
             path = os.path.join(root, fn)
+            if "/embeddings/" in path.replace(os.sep, "/") or "bge-m3" in fn.lower():
+                continue                              # SOMA_278: los modelos de embeddings no son LLM; se arrancan con /v1/embeddings/lanzar
             try:
                 size = os.path.getsize(path)
             except OSError:
@@ -256,6 +277,131 @@ def status() -> dict:
     return {"estado": "parado", "modelo": "", "detalle": ""}
 
 
+# ---------------------------------------------------------------- SOMA_278_EMBEDDINGS: servidor de embeddings (memoria de SOMA)
+
+def emb_bin() -> str:
+    if EMB_BIN:
+        return EMB_BIN
+    opt = "/opt/llama.cpp/build/bin/llama-server"
+    return opt if os.access(opt, os.X_OK) else LLAMA_SERVER_BIN
+
+
+def emb_model() -> str:
+    if EMB_MODEL:
+        return EMB_MODEL if os.path.isfile(EMB_MODEL) else ""
+    found = []
+    for root, _dirs, files in os.walk(MODELS_DIR, followlinks=True):
+        for fn in files:
+            if fn.lower().endswith(".gguf") and "bge-m3" in fn.lower():
+                found.append(os.path.join(root, fn))
+    q8 = [f for f in found if "q8" in os.path.basename(f).lower()]
+    return sorted(q8 or found)[0] if found else ""
+
+
+def emb_health() -> int | None:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{EMB_PORT}/health", timeout=2.0) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+
+
+def emb_log_tail(chars: int = 150) -> str:
+    try:
+        with open(EMB_LOG_FILE, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 4000))
+            lines = [l.strip() for l in f.read().decode("utf-8", "replace").splitlines() if l.strip()]
+        return " | ".join(lines[-2:])[-chars:]
+    except OSError:
+        return ""
+
+
+def emb_kill() -> None:
+    """Para SOLO el servidor de embeddings (su proceso, su archivo de PID y lo que escuche en su puerto); nunca toca al del LLM."""
+    global _eproc
+    pids: set[int] = set()
+    if _eproc is not None and _eproc.poll() is None:
+        pids.add(_eproc.pid)
+    try:
+        pids.add(int(Path(EMB_PID_FILE).read_text().strip()))
+    except (OSError, ValueError):
+        pass
+    try:
+        r = subprocess.run(["lsof", f"-iTCP:{EMB_PORT}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True, timeout=8)
+        pids.update(int(p) for p in r.stdout.split() if p.isdigit())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    pids.discard(os.getpid())
+    for sig, wait in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.5)):
+        alive = False
+        for p in pids:
+            try:
+                os.kill(p, sig)
+                alive = True
+            except OSError:
+                pass
+        if not alive:
+            break
+        time.sleep(wait)
+    if _eproc is not None:
+        try:
+            _eproc.wait(timeout=3)
+        except subprocess.SubprocessError:
+            pass
+        _eproc = None
+    try:
+        os.remove(EMB_PID_FILE)
+    except OSError:
+        pass
+
+
+def emb_launch() -> tuple[bool, str]:
+    global _eproc, _estarted
+    if EMB_PORT == SERVER_PORT:
+        return False, f"el puerto de embeddings ({EMB_PORT}) es el mismo que el del LLM: cambia SOMA_EMB_PORT"
+    model = emb_model()
+    if not model:
+        return False, f"no encuentro ningun bge-m3*.gguf bajo {MODELS_DIR} (o fija SOMA_EMB_MODEL)"
+    binary = emb_bin()
+    if not os.access(binary, os.X_OK):
+        return False, f"no encuentro llama-server en {binary} (variable SOMA_EMB_BIN)"
+    args = [binary, "-m", model, "--alias", EMB_ALIAS, "--embeddings", "--pooling", "cls", "-ngl", "0", "-c", str(EMB_CTX),
+            "--threads", str(EMB_THREADS), "--host", "0.0.0.0", "--port", str(EMB_PORT)]
+    if EMB_EXTRA_ARGS:
+        args += shlex.split(EMB_EXTRA_ARGS)
+    with _lock:
+        emb_kill()
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES="")           # en CPU: no quita ni un MiB a las GPU del LLM
+        try:
+            log = open(EMB_LOG_FILE, "wb")
+            _eproc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+            log.close()
+        except OSError as e:
+            _eproc = None
+            return False, f"no se pudo lanzar llama-server (embeddings): {e}"
+        Path(EMB_PID_FILE).write_text(f"{_eproc.pid}\n")
+        _estarted = time.time()
+    info(f"servidor de embeddings lanzado con {os.path.basename(model)}, pid {_eproc.pid}, puerto {EMB_PORT}")
+    return True, ""
+
+
+def emb_status() -> dict:
+    h = emb_health()
+    if h == 200:
+        return {"estado": "listo", "modelo": EMB_ALIAS, "detalle": ""}
+    with _lock:
+        ours = _eproc is not None
+        dead = ours and _eproc.poll() is not None
+    if h == 503 or (ours and not dead):
+        return {"estado": "cargando", "modelo": EMB_ALIAS, "detalle": f"{int(time.time() - _estarted)} s" if ours else ""}
+    if dead:
+        return {"estado": "error", "modelo": EMB_ALIAS, "detalle": "llama-server (embeddings) ha terminado: " + (emb_log_tail() or "sin registro")}
+    return {"estado": "parado", "modelo": "", "detalle": ""}
+
+
 # ---------------------------------------------------------------- HTTP
 
 def client_allowed(addr: str) -> bool:
@@ -297,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/v1/estado":
             self._send(200, status())
+        elif self.path == "/v1/embeddings/estado":
+            self._send(200, emb_status())
         elif self.path == "/v1/modelos":
             self._send(200, {"data": [{k: m[k] for k in ("id", "archivo", "gib")} for m in list_models()]})
         else:
@@ -318,6 +466,16 @@ class Handler(BaseHTTPRequestHandler):
                 kill_port()
             info("llama-server parado a peticion de " + self.client_address[0])
             self._send(200, {"ok": True})
+            return
+        if self.path == "/v1/embeddings/parar":              # SOMA_278_EMBEDDINGS
+            with _lock:
+                emb_kill()
+            info("servidor de embeddings parado a peticion de " + self.client_address[0])
+            self._send(200, {"ok": True})
+            return
+        if self.path == "/v1/embeddings/lanzar":
+            ok, why = emb_launch()
+            self._send(200 if ok else 500, {"ok": True, "modelo": EMB_ALIAS} if ok else {"error": why})
             return
         if self.path != "/v1/lanzar":
             self._send(404, {"error": "no existe"})
@@ -354,7 +512,8 @@ def install_service() -> int:
     unit_dir.mkdir(parents=True, exist_ok=True)
     names = ("SERVER_PORT", "SERVER_PORT_4090", "LLAMA_SERVER_BIN", "MODELS_DIR", "REMOTE_MODEL_PATH", "REMOTE_MODEL_ALIAS", "SOMA_PID_FILE",
              "SOMA_LOG_FILE", "REMOTE_CTX", "REMOTE_THREADS", "REMOTE_PREDICT", "CUDA_DEVICE", "LLAMA_EXTRA_ARGS", "SOMA_LANZADOR_PORT",
-             "SOMA_LANZADOR_CLAVE", "LD_LIBRARY_PATH")
+             "SOMA_LANZADOR_CLAVE", "LD_LIBRARY_PATH", "SOMA_EMB_PORT", "SOMA_EMB_BIN", "SOMA_EMB_MODEL", "SOMA_EMB_THREADS",
+             "SOMA_EMB_CTX", "SOMA_EMB_EXTRA_ARGS", "SOMA_EMB_PID_FILE", "SOMA_EMB_LOG_FILE")
     env = "".join(f'Environment="{n}={os.environ[n]}"\n' for n in names if n in os.environ)   # conserva la configuracion de ahora
     unit = unit_dir / "soma-lanzador.service"
     unit.write_text(UNIT.format(python=sys.executable, script=Path(__file__).resolve(), env=env))
@@ -389,6 +548,8 @@ def main() -> int:
     srv.key = key
     info(f"escuchando en el puerto {LANZADOR_PORT}; llama-server ira en el {SERVER_PORT}")
     info(f"modelos en {MODELS_DIR}: {len(list_models())}; llama-server: {LLAMA_SERVER_BIN}")
+    em = emb_model()
+    info(f"embeddings (memoria de SOMA): {os.path.basename(em) if em else 'NO hay bge-m3*.gguf'} en el puerto {EMB_PORT}")
     info(f"CLAVE para SOMA (Ajustes > IA > Lanzador, o  llm-config lanzador clave ...):  {key}")
     try:
         srv.serve_forever()

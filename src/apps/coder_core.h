@@ -51,6 +51,10 @@ struct cc_env {
 #define CC_LESSONS_PY  "/agent/coder_lessons_py.txt"
 #define CC_LANG_C      2      /* SOMA_265_CC: C (TinyCC de SOMA; ventana con soma.h). Usa check_src y run_src como Python */
 #define CC_LESSONS_C   "/agent/coder_lessons_c.txt"
+#define CC_LANG_JS     3      /* SOMA_275_HTML: JavaScript (orden js; ventana con win.*). Usa check_src y run_src como Python */
+#define CC_LESSONS_JS  "/agent/coder_lessons_js.txt"
+#define CC_LANG_HTML   4      /* SOMA_275_HTML: pagina web de un solo archivo (orden html). check_src = comprobar; run_src = comprobar tambien */
+#define CC_LESSONS_HTML "/agent/coder_lessons_html.txt"
 
 struct cc_result {
     int      ok;               /* el archivo se escribio y compila */
@@ -83,5 +87,9 @@ int      cc_py_normalize(char *src, uint32_t *len, uint32_t cap);
 int      cc_mission_wants_c(const char *mission);        /* SOMA_265_CC: "en C", "lenguaje C", "programa.c"... */
 int      cc_c_error(const char *out, uint32_t *line, char *msg, uint32_t cap);    /* SOMA_265_CC: "programa.c:7: error: ..." */
 int      cc_c_normalize(char *src, uint32_t *len, uint32_t cap);                  /* SOMA_265_CC: + los #include que falten */
+int      cc_mission_wants_js(const char *mission);       /* SOMA_275_HTML: "en javascript", "con js", "juego.js"... */
+int      cc_mission_wants_html(const char *mission);     /* SOMA_275_HTML: "pagina web", "en html", "index.html"... */
+int      cc_js_error(const char *out, uint32_t *line, char *msg, uint32_t cap);   /* SOMA_275_HTML: "[error] Uncaught X: ... (programa.js, linea 7)" */
+int      cc_html_normalize(char *src, uint32_t *len, uint32_t cap);                /* SOMA_275_HTML: solo \r */
 int      cc_busy(void);
 #endif

@@ -41,8 +41,8 @@ SECTIONS
        el PMM (16 MiB) en lugar de los ~57 KB de margen de antes. Al alinear a 2 MiB se conserva la pagina grande del
        arranque (sin partir ni cambiar permisos). */
     __virtq_start = ALIGN(0x200000);
-    ASSERT(__kernel_image_end <= 0x01E00000,
-           "ERROR: la imagen del kernel supera 30 MiB: no cabe la virtqueue dentro de la zona baja reservada (32 MiB, PMMC_LOWER)")
+    ASSERT(__kernel_image_end <= 0x02E00000,
+           "ERROR: la imagen del kernel supera 46 MiB (SOMA_282_ZONA_BAJA): no cabe la virtqueue dentro de la zona baja reservada (48 MiB, PMMC_LOWER)")
 
     .virtio_queue __virtq_start (NOLOAD) :
     ALIGN(4096)
@@ -55,8 +55,8 @@ SECTIONS
         SIZEOF(.virtio_queue) <= 12288,
         "ERROR: virtqueue demasiado grande"
     )
-    ASSERT(__virtq_end <= 0x02000000,
-           "ERROR: la virtqueue sale de los 32 MiB reservados por el PMM (PMMC_LOWER)")
+    ASSERT(__virtq_end <= 0x03000000,
+           "ERROR: la virtqueue sale de los 48 MiB reservados por el PMM (PMMC_LOWER)")
 
     /DISCARD/ :
     {

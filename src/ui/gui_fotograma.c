@@ -589,6 +589,7 @@ static void her_render_app_body(enum app_mode app, uint32_t wx, uint32_t wy, uin
     case APP_SETTINGS:      settings_render_window(wx, wy, ww, wh, is_focused); break;
     case APP_PDF:           pdfview_render_window(wx, wy, ww, wh, is_focused); break;   /* PARCHE 088 */
     case APP_SYSMON:        sysmon_render_window(wx, wy, ww, wh, is_focused);  break;   /* PARCHE 089 */
+    case APP_AGENDA:        agenda_gui_render_window(wx, wy, ww, wh, is_focused); break;   /* SOMA_272_AGENDA */
     case APP_RECORDER:      recorder_render_window(wx, wy, ww, wh, is_focused); break;  /* SOMA_177_T480S */
     case APP_CAMERA:        camapp_render_window(wx, wy, ww, wh, is_focused); break;     /* SOMA_178_T480S */
     case APP_CAPTURE:       capapp_render_window(wx, wy, ww, wh, is_focused); break;     /* SOMA_179_T480S */
@@ -719,7 +720,7 @@ struct her_bc { int used; enum app_mode app; int slot; uint32_t x, y, w, h; int 
  * sin limite de tiempo, haya o no actividad del raton, y sin sumas de comprobacion. */
 static int her_app_version(enum app_mode a, uint32_t *v)
 {
-    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; default: return 0; }
+    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; default: return 0; }   /* SOMA_283_MEMORIA_APP */
 }
 static uint32_t her_bc_gen(void) { return wf_ui_gen() ^ ((uint32_t)settings_opacity() << 20) ^ ((uint32_t)settings_active_opaque() << 28); }
 static struct her_bc her_bcs[HER_MAX_WINDOWS];
@@ -727,7 +728,7 @@ static int her_bc_base_ok; static uint64_t her_bc_input_ms;
 static int her_bc_app_ok(enum app_mode a)
 {
     return a == APP_TERMINAL_SHELL || a == APP_NOTEPAD || a == APP_FILE_MANAGER || a == APP_IMAGE_VIEWER || a == APP_AGENT_CHAT ||
-           a == APP_AGENT_MEMORY || a == APP_AGENTS || a == APP_SETTINGS || a == APP_PDF || a == APP_LAYOUT || a == APP_SYSMON;
+           a == APP_AGENT_MEMORY || a == APP_AGENTS || a == APP_SETTINGS || a == APP_PDF || a == APP_LAYOUT || a == APP_SYSMON || a == APP_AGENDA;
 }
 static struct her_bc *her_bc_find(enum app_mode app, int slot, int create)
 {
@@ -923,9 +924,9 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     her_windows[idx].w = her_win_w;
     her_windows[idx].h = her_win_h;
     {   /* SOMA_PARCHE_V2_GUI: tamano minimo por aplicacion al abrir */
-        uint32_t mw = her_app_min_w(app), mh = (app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) ? 600u : HER_MIN_H + 60u;
+        uint32_t mw = her_app_min_w(app), mh = (app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) ? 600u : HER_MIN_H + 60u;
         if (cur_w > 64u && mw > cur_w - 32u) mw = cur_w - 32u;
-        if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
+        if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
         if (her_windows[idx].w < mw) her_windows[idx].w = mw;
         if (cur_h > 96u && mh <= cur_h - 48u && her_windows[idx].h < mh) her_windows[idx].h = mh;
         if ((app == APP_WEB_BROWSER || app == APP_PDF || app == APP_IMAGE_VIEWER || app == APP_SYSMON || app == APP_CODER_APP || app == APP_YOUTUBE) && cur_w > 400u && cur_h > 300u) {   /* PARCHE 088: tambien PDF e imagenes */   /* PARCHE 086: el navegador abre grande (2/3 de ancho, 85 % de alto) */
@@ -973,6 +974,7 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     case APP_LAYOUT:       layout_init();   break;          /* PARCHE 084: conserva el documento abierto */
     case APP_PDF:          pdfview_init();  break;          /* PARCHE 088 */
     case APP_SYSMON:       sysmon_init();   break;          /* PARCHE 089 */
+    case APP_AGENDA:       agenda_gui_init(); break;        /* SOMA_272_AGENDA */
     case APP_RECORDER:     recorder_init(); break;          /* SOMA_177_T480S */
     case APP_CAMERA:       camapp_init(); break;            /* SOMA_178_T480S */
     case APP_CAPTURE:      capapp_init(); break;            /* SOMA_179_T480S */

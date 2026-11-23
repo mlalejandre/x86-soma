@@ -315,3 +315,7 @@ for _it, _fr in _MAS.items():
             I[_k] = (_x[0], _x[1], _x[2], _x[3] + _fr)
 # Orden sin datos + para que la quieres: "abre los ajustes que quiero quitar la transparencia" (se marca todo como fuera de la orden)
 PROPOSITO = ["que quiero", "q kiero", "que necesito", "porque quiero", "para", "que voy a", "que tengo que", "porque tengo que", "que me apetece", "y así puedo"]
+
+# SOMA_271_LCM: lo declarado en lcm/manifiestos/*.json se suma al catálogo (cada comando/aplicación nueva se enseña ahí)
+from .manifiestos import aplica as _aplica_manifiestos
+_aplica_manifiestos(globals())

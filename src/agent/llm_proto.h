@@ -55,7 +55,8 @@ int  llm_proto_model_list(const struct llm_conf *c, const char *json, char *out,
 /* SOMA_196: lanzador. El servidor llama.cpp de la red local no siempre esta encendido; en el equipo que lo aloja corre un servicio
  * pequeno (tools/soma_lanzador.py) que lista los modelos .gguf y arranca o para llama-server. Campos de llm_conf_set (prov se ignora):
  * "lanzador" (direccion) y "clave-lanzador". */
-enum { LLM_L_STATUS = 0, LLM_L_MODELS, LLM_L_START, LLM_L_STOP };
+enum { LLM_L_STATUS = 0, LLM_L_MODELS, LLM_L_START, LLM_L_STOP,
+       LLM_L_EMB_STATUS, LLM_L_EMB_START, LLM_L_EMB_STOP };      /* SOMA_278_EMBEDDINGS: servidor de embeddings de la memoria */
 void llm_launcher_base(const struct llm_conf *c, char *out, uint32_t max);    /* direccion efectiva del lanzador */
 /* Peticion al lanzador. Devuelve la longitud del cuerpo (0 en los GET) o un LLM_P_* negativo. */
 int  llm_proto_launcher(const struct llm_conf *c, int what, const char *model, char *body, uint32_t max, struct llm_http *h);

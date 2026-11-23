@@ -10,6 +10,7 @@ int srcfs_ls(char *out, uint32_t max);
 int srcfs_ls_filter(const char *prefix, char *out, uint32_t max);   /* prefix NULL o "" = todo */
 int srcfs_cat(const char *name, uint32_t offset, char *out, uint32_t max);
 int srcfs_grep(const char *name, const char *pat, char *out, uint32_t max);
+int  srcfs_a_ram(void);                       /* SOMA_269_RAM: copia las fuentes a memoria; 0 = bien */
 int src_tool(const char *cmd, char *out, uint32_t max);
 
 #endif

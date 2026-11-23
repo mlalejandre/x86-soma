@@ -1,6 +1,7 @@
 /* SOMA_266_AVISO: el aviso inmediato del LCM antes del modelo de lenguaje (lcm_soma.inc con las imitaciones del banco del 257). */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include "lcm_ordenes.inc"
 
@@ -21,6 +22,11 @@ static char archivos[4][4096];   /* /etc/lcm.conf, /etc/lcm_aprendido.txt */
 static int fidx(const char *p) { return strstr(p, "aprendido") ? 1 : 0; }
 static int vfs_read(const char *p, char *b, uint32_t n) { uint32_t l = (uint32_t)strlen(archivos[fidx(p)]); if (!l) return -1; if (l > n) l = n; memcpy(b, archivos[fidx(p)], l); return (int)l; }
 static int vfs_write(const char *p, const char *b, uint32_t n) { if (n >= sizeof archivos[0]) n = sizeof archivos[0] - 1; memcpy(archivos[fidx(p)], b, n); archivos[fidx(p)][n] = 0; return (int)n; }
+/* SOMA_271_LCM: paquete de modelo en DATOS (imitacion) */
+static char *paq_ptr = 0; static uint32_t paq_len = 0;
+static int vfs_size(const char *p) { return (p && !strcmp(p, "/lcm/modelo.lcm") && paq_ptr) ? (int)paq_len : -1; }
+static char *vfs_read_alloc(const char *p, uint32_t *l) { if (vfs_size(p) < 0) return 0; char *b = (char *)malloc(paq_len + 1); memcpy(b, paq_ptr, paq_len); b[paq_len] = 0; *l = paq_len; return b; }
+static void kfree(void *p) { free(p); }
 static const char *fecha = "CEST: 2026-11-22 05:45:10 CEST";
 int dispatch_command(const char *c, char *out, uint32_t max)
 {

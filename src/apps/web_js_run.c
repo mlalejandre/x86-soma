@@ -136,7 +136,7 @@ void js_step(struct jrt *rt)
     static uint64_t last_yield;          /* SOMA_PARCHE_028_UI: cesion por tiempo (los scripts no congelan la GUI) */
     rt->steps = 0;
     { uint64_t t = web_now_ms(); if (t - last_yield >= 4) { last_yield = t; web_yield(); } }
-    if (!rt->halted && rt->task_start && web_now_ms() - rt->task_start > 12000) { rt->halted = 1; rt->timed_out = 1; wu_copy(rt->errbuf, "tiempo de ejecucion del script excedido", sizeof rt->errbuf); }
+    if (!rt->halted && rt->task_start && web_now_ms() - rt->task_start > (rt->task_ms ? rt->task_ms : 12000u)) { rt->halted = 1; rt->timed_out = 1; wu_copy(rt->errbuf, "tiempo de ejecucion del script excedido", sizeof rt->errbuf); }   /* SOMA_274_JS: limite configurable */
     if (rt->halted) {                               /* script detenido: salta al marco externo saltandose los try/catch del script */
         if (rt->base_try) rt->try_top = rt->base_try;
         js_throw_err(rt, E_ERROR, "%s", rt->errbuf[0] ? rt->errbuf : "script detenido");

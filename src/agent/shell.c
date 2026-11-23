@@ -49,6 +49,7 @@ int browser_r3_wanted(void); int browser_r3_active(void);
 #include "console.h"
 #include "fs.h"
 #include "coder_app.h"
+#include "coder_core.h"            /* SOMA_275_HTML: cc_js_error */
 #include "docagent.h"   /* SOMA_248_DOC */
 #include "busca_web.h"  /* SOMA_251_RUTAS */
 #include "coder_demo.h"
@@ -106,6 +107,7 @@ int browser_r3_wanted(void); int browser_r3_active(void);
 #include "rtc.h"
 #include "nano.h"
 #include "agent.h"
+#include "memoria.h"   /* SOMA_277_MEMORIA */
 #include "llm.h"
 #include "io.h"
 #include "arch.h"
@@ -306,6 +308,12 @@ int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out);
 volatile uint32_t agent_denied_writes;
 static int agent_write_denied(const char *path, const char *cmd, char *out_buf, uint32_t max_out)
 {
+    /* SOMA_268_ACCESO: la persona en el terminal solo escribe en su unidad (/usuario) y en /tmp */
+    if (!agent_dispatch_mode && !vfs_usuario_puede_escribir(path)) {
+        kprint(cmd); kprint(": solo puedes escribir en /usuario (y /tmp). La configuracion y la memoria se cambian desde sus programas (Ajustes...).\n");
+        if (out_buf && max_out) { uint32_t pp = 0; soma_str_put(out_buf, max_out, &pp, "Error: solo puedes escribir en /usuario (y /tmp)."); }
+        return 1;
+    }
     /* SOMA_193: tampoco /www ni /public: lo que hay ahi lo sirve httpd a toda la red (seria publicar datos del usuario) */
     int published = agent_dispatch_mode && path && (agent_path_has_prefix(path, "/www") || agent_path_has_prefix(path, "/public"));
     if (!agent_dispatch_mode || (!agent_path_protected(path) && !published)) return 0;
@@ -371,6 +379,15 @@ static int agent_cmd_is_external(const char *c)
     return 1;
 }
 int shell_agent_mode(void) { return agent_dispatch_mode; }
+
+/* SOMA_268_ACCESO: lo que escribe la persona en el terminal (GUI o de texto): se ejecuta en sesion de usuario */
+int dispatch_command_usuario(const char *cmd_line, char *out_buf, uint32_t max_out)
+{
+    int antes = vfs_sesion_usuario(1);
+    int r = dispatch_command(cmd_line, out_buf, max_out);
+    vfs_sesion_usuario(antes);
+    return r;
+}
 
 int dispatch_agent_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
@@ -674,6 +691,9 @@ static int cmd_help(const char *args, char *out_buf, uint32_t max_out);
 #include "shell_red.c"             /* red */
 #include "shell_agente.c"          /* agentes y modelo */
 #include "shell_apps.c"            /* aplicaciones y portatil */
+#include "shell_agenda.c"          /* SOMA_272_AGENDA: calendario */
+#include "shell_js.c"              /* SOMA_274_JS: JavaScript (orden js) */
+#include "shell_html.c"            /* SOMA_275_HTML: webs (orden html) */
 #include "shell_utilidades.c"      /* utilidades de terminal */
 #include "lcm_ordenes_shell.inc"    /* SOMA_258_LCM: ordenes cerrar y contiene (despues de las utilidades: usa sus ayudantes) */
 #include "llm_limites_shell.inc"    /* SOMA_260_LLM_TAM: orden llm-limites */
@@ -754,6 +774,8 @@ static const struct command_entry cmd_table[] = {
     { "voz",          cmd_voz,          CMD_F_NORMAL, "Voz a texto (whisper.cpp, espanol): voz archivo.wav | voz ultima | voz instalar | voz modelo. Opciones: -T marcas de tiempo, -l idioma, -v detalles" },
     { "python",       cmd_python,       CMD_F_NORMAL, "Python (MicroPython en ring 3; ventanas con from soma import win): python | python script.py [args] | python -c \"codigo\". Rutas relativas: /workspace" },
     { "cc",           cmd_cc,           CMD_F_NORMAL, "Compilador de C (TinyCC en ring 3; ventanas con #include <soma.h>): cc hola.c | cc -run hola.c [args] | cc -run hola.elf | cc a.c b.c -o x.elf. Rutas relativas: /workspace" },   /* SOMA_265_CC */
+    { "html",         cmd_html,         CMD_F_NORMAL, "Webs: html nuevo NOMBRE [basica|app|juego] | html comprobar ARCHIVO | html empaquetar ARCHIVO [SALIDA] | html abrir ARCHIVO (rutas relativas: /workspace)" },
+    { "js",           cmd_js,           CMD_F_NORMAL, "JavaScript (el motor del navegador en ring 3; ventanas con win.create): js archivo.js [args] | js -c \"codigo\". Rutas relativas: /workspace" },
     { "procs",        cmd_procs,        CMD_F_NORMAL, "Lista los procesos de usuario (libera los terminados)" },
     { "usertest",     cmd_usertest,     CMD_F_NORMAL, "DEPURACION: ejecuta programas de prueba en ring 3 (syscalls, aislamiento, plazo)" },
     { "fbverify",     cmd_fbverify,     CMD_F_NORMAL, "DEPURACION: fbverify on|off — verifica el dano del renderizado" },
@@ -855,7 +877,7 @@ static const struct command_entry cmd_table[] = {
     { "buscador",     cmd_buscador,     CMD_F_NORMAL, "Invoca al Agente Buscador (Web & System Research)" },
     { "agent",        cmd_agent,        CMD_F_NORMAL, "Despacha misiones a agentes (soma, buscador, etc.)" },
     { "mayordomo",    cmd_mayordomo,     CMD_F_NORMAL, "Agente directo para operaciones del sistema" },
-    { "lcm",          cmd_lcm,           CMD_F_NORMAL, "Traductor del LCM: lcm <frase> (que orden entenderia, sin ejecutar) | lcm estado | lcm encender | lcm apagar" },   /* SOMA_253_LCM */
+    { "lcm",          cmd_lcm,           CMD_F_NORMAL, "Traductor del LCM: lcm <frase> (que orden entenderia, sin ejecutar) | lcm estado | lcm encender | lcm apagar | lcm modelo [fabrica|datos]" },   /* SOMA_253_LCM SOMA_271_LCM */
     { "cerrar",       cmd_cerrar,        CMD_F_NORMAL, "Cierra aplicaciones: cerrar (la ventana de delante) | cerrar todo | cerrar <aplicacion> (navegador, paint, notas, youtube...)" },   /* SOMA_258_LCM */
     { "contiene",     cmd_contiene,      CMD_F_SAFE,   "Que archivos tienen un texto dentro: contiene <texto> [ruta] [-a]" },   /* SOMA_258_LCM */
     { "llm-limites",  cmd_llm_limites,   CMD_F_NORMAL, "Tamanos del dialogo con el modelo: llm-limites | contexto <tokens> | salida <tokens> | como-antes" },   /* SOMA_260_LLM_TAM */
@@ -863,6 +885,7 @@ static const struct command_entry cmd_table[] = {
     { "myos",         cmd_soma,         CMD_F_ALIAS,  "Alias de soma" },
 
     /* Memoria Estructurada en Árbol */
+    { "memoria",      memoria_cmd,      CMD_F_NORMAL, "La memoria de SOMA (hechos, mensajes, embeddings): memoria estado | recordar | buscar | ver | olvidar | probar | servidor | config | importar" },   /* SOMA_277_MEMORIA, SOMA_278_EMBEDDINGS */
     { "mem_tree",     mem_tree_cmd,     CMD_F_SAFE,   "Muestra la jerarquia de temas del arbol de memoria" },
     { "mem_read",     mem_read_cmd,     CMD_F_SAFE,   "Lee un nodo tematico del arbol de memoria" },
     { "mem_write",    mem_write_cmd,    CMD_F_SAFE,   "Escribe o actualiza un nodo en el arbol de memoria" },
@@ -885,6 +908,7 @@ static const struct command_entry cmd_table[] = {
     { "media",        cmd_media,        CMD_F_SAFE,   "Reproductor multimedia (video AVI y audio WAV del almacen BIGFS): media gui|list|play|pause|stop|seek|status" },
     { "youtube",      cmd_youtube,      CMD_F_NORMAL, "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | modo nativo|servicio | mp4 <direccion> | ia on|off | ver N | transcribir | subtitulos | resumen | pregunta <texto> | idioma X | minutos N | contexto N | estado" },
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
+    { "agenda",       cmd_agenda,       CMD_F_SAFE,   "Calendario: agenda a\xC3\xB1" "adir el miercoles dia 6 a las 13 horas futbol | hoy | ma\xC3\xB1" "ana | semana | mes | borrar N | abrir | avisos | exportar | importar" },
     { "imagen",       cmd_imagen,       CMD_F_SAFE,   "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)" },
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
     { "traza",        cmd_traza,        CMD_F_SAFE,   "Tiempos y tokens de las ultimas llamadas al modelo (/agent/traza.txt)" },
@@ -981,8 +1005,9 @@ static const struct help_usage help_usages[] = {
     { "kill",       "kill <TID>" },
     { "delegate",   "delegate <agente> \"<mision>\"" },
     { "mem_search", "mem_search <palabras clave>" },
+    { "memoria",    "memoria [estado|recordar TEXTO|buscar CONSULTA|ver N|olvidar N|probar|servidor arrancar|parar|config|importar|guardar|ayuda]" },
     { "mayordomo",  "mayordomo <tarea>   p. ej. 'muestra la RAM', 'que procesos hay', 'ayuda ram'" },
-    { "lcm",        "lcm <frase> | estado | encender | apagar | voz natural|tecnica | umbral N | aprendido | aprende <frase> => <orden> | olvida N|todo" },   /* SOMA_253_LCM SOMA_257_LCM */
+    { "lcm",        "lcm <frase> | estado | encender | apagar | modelo [fabrica|datos] | voz natural|tecnica | umbral N | aprendido | aprende <frase> => <orden> | olvida N|todo" },   /* SOMA_253_LCM SOMA_257_LCM SOMA_271_LCM */
     { "font",       "font [nombre | id]" },
     { "cursor",     "cursor [nombre | id]" },
 };
@@ -1667,7 +1692,7 @@ void shell_run(void)
         if (*s0 == '\0') continue;
 
         static char shell_buf[2048];
-        if (!dispatch_command(s0, shell_buf, sizeof(shell_buf))) {
+        if (!dispatch_command_usuario(s0, shell_buf, sizeof(shell_buf))) {
             extern int lcm_terminal(const char *linea);   /* SOMA_253_LCM: una frase en vez de una orden */
             if (!lcm_terminal(s0)) { kprint("Comando desconocido: '"); kprint(s0); kprint("'. Escribe 'help'.\n"); }
         }

@@ -221,11 +221,96 @@ static const char EX_CLI_C[] =
     "    return 0;\n"
     "}\n";
 
+
+/* SOMA_275_HTML: el mismo programador, en JavaScript (orden js: el motor del navegador en ring 3; ventana con win.*) y en HTML (una pagina web
+ * de un solo archivo). Los ejemplos se ejecutan en tests/test_coder_js_275.c. */
+static const char REF_JS[] =
+    "REFERENCIA: JavaScript de SOMA (el motor del navegador SIN pagina; programa de un solo archivo; ES2015+: let/const, flechas, clases, async/await,\n"
+    "generadores, destructuring, plantillas, Map/Set, JSON, BigInt, regex):\n"
+    "- Salida: console.log(...) o print(...). Entrada: input(\"pregunta\") devuelve una cadena (o null si no hay mas entrada): convierte con Number(...).\n"
+    "- NO hay: require('fs'), process, readline, import/export de ES, document/window/DOM, alert, prompt, fetch ni red. (require(\"./otro.js\") si.)\n"
+    "- Archivos: fs.read(ruta) -> cadena o null; fs.write(ruta, texto) -> true/false; fs.exists(ruta). Solo se escribe en /workspace.\n"
+    "- Tiempo: Date.now() y new Date() (la hora del equipo); sleep(ms) bloquea; setTimeout/setInterval, promesas y async/await funcionan; exit(n) termina.\n"
+    "- Azar: Math.random().  Un programa de consola termina cuando no quedan temporizadores pendientes.\n"
+    "- Ventana (UNA por programa): win.create(\"titulo\", ancho, alto)   win.clear(color)   win.rect(x, y, w, h, color)\n"
+    "  win.text(x, y, \"texto\", color)   win.line(x1, y1, x2, y2, color)   win.circle(x, y, r, color)   win.pixel(x, y, color)\n"
+    "  win.present()   win.active() (false al cerrarla)   win.close()   win.rgb(r, g, b)   win.size() -> [ancho, alto]\n"
+    "  const m = win.mouse();  m.x m.y m.clicked (clic desde la ultima vez) m.button (pulsado) m.inside\n"
+    "  const k = win.key();  0 si no hay tecla; flechas win.UP win.DOWN win.LEFT win.RIGHT; Intro 10, espacio 32, letras: 'a'.charCodeAt(0).\n"
+    "  Colores 0xRRGGBB. Texto: 8x8 pixeles por caracter. Esc cierra la ventana.\n"
+    "  Bucle obligatorio: while (win.active()) { leer raton/teclas; dibujar todo; win.present(); sleep(16); }\n"
+    "- Un programa con ventana NO usa input(): todo con el raton y el teclado de la ventana.\n";
+
+static const char EX_GUI_JS[] =
+    "// Contador grafico con botones\n"
+    "win.create(\"Contador\", 320, 200);\n"
+    "let n = 0;\n"
+    "while (win.active()) {\n"
+    "  const m = win.mouse();\n"
+    "  if (m.clicked) {\n"
+    "    if (m.x >= 20 && m.x < 140 && m.y >= 120 && m.y < 160) n++;\n"
+    "    if (m.x >= 180 && m.x < 300 && m.y >= 120 && m.y < 160) n = 0;\n"
+    "  }\n"
+    "  if (win.key() === 32) n++;\n"
+    "  win.clear(0x101828);\n"
+    "  win.text(20, 30, `Pulsaciones: ${n}`, 0xFFFFFF);\n"
+    "  win.rect(20, 120, 120, 40, 0x2563EB);\n"
+    "  win.text(70, 136, \"+1\", 0xFFFFFF);\n"
+    "  win.rect(180, 120, 120, 40, 0xDC2626);\n"
+    "  win.text(220, 136, \"Reset\", 0xFFFFFF);\n"
+    "  win.present();\n"
+    "  sleep(16);\n"
+    "}\n";
+
+static const char EX_CLI_JS[] =
+    "// Suma de un array y paridad\n"
+    "const suma = (a) => a.reduce((t, x) => t + x, 0);\n"
+    "const nums = [3, 5, 7, 10];\n"
+    "console.log(\"Suma:\", suma(nums));\n"
+    "for (let k = 1; k <= 3; k++) console.log(k, k % 2 === 0 ? \"es par\" : \"es impar\");\n";
+
+static const char REF_HTML[] =
+    "REFERENCIA: HTML de SOMA (UNA pagina web de UN SOLO archivo .html que se abre en el navegador de SOMA; todo dentro del archivo):\n"
+    "- Estructura: <!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>..</title><style>CSS</style></head><body>..<script>JS</script></body></html>\n"
+    "- El CSS y el JavaScript van EN EL MISMO ARCHIVO (<style> y <script> en linea). Sin archivos externos, sin CDN, sin internet (nada de http:// ni\n"
+    "  https://), sin fuentes ni librerias (no hay jQuery, React, Bootstrap ni Google Fonts).\n"
+    "- Funciona: HTML5 semantico, formularios, CSS (flexbox, grid, variables, transiciones, @media), JavaScript moderno (clases, async/await,\n"
+    "  localStorage, setTimeout/setInterval, JSON, Math, Date), eventos (click, input, submit, keydown), DOM (getElementById, querySelector, createElement,\n"
+    "  innerHTML, classList, style, addEventListener).\n"
+    "- NO funciona todavia: <canvas> (getContext), WebGL, audio/video, workers, fetch a la red. Para dibujar usa div con CSS o SVG en linea.\n"
+    "- Cada etiqueta cerrada, ids unicos, <img> con alt. Imagenes: SVG en linea o emojis; no hay archivos de imagen.\n";
+
+static const char EX_HTML[] =
+    "<!DOCTYPE html>\n"
+    "<html lang=\"es\">\n"
+    "<head>\n"
+    "<meta charset=\"utf-8\">\n"
+    "<title>Contador</title>\n"
+    "<style>\n"
+    "  body { font-family: sans-serif; background: #0f172a; color: #e2e8f0; text-align: center; padding-top: 40px; }\n"
+    "  button { background: #0ea5e9; color: #fff; border: 0; border-radius: 6px; padding: 10px 20px; font-size: 18px; cursor: pointer; }\n"
+    "  #n { font-size: 48px; margin: 20px; }\n"
+    "</style>\n"
+    "</head>\n"
+    "<body>\n"
+    "<h1>Contador</h1>\n"
+    "<div id=\"n\">0</div>\n"
+    "<button id=\"mas\">+1</button> <button id=\"cero\">Reiniciar</button>\n"
+    "<script>\n"
+    "  let n = 0;\n"
+    "  const pinta = () => { document.getElementById('n').textContent = n; };\n"
+    "  document.getElementById('mas').addEventListener('click', () => { n++; pinta(); });\n"
+    "  document.getElementById('cero').addEventListener('click', () => { n = 0; pinta(); });\n"
+    "</script>\n"
+    "</body>\n"
+    "</html>\n";
+
 static int g_py;                                                          /* el trabajo en curso es Python (o C: ver g_c) */
 static int g_c;                                                           /* SOMA_265_CC: C (usa el mismo camino que Python: check_src/run_src) */
-static const char *ref_txt(void) { return g_c ? REF_C : g_py ? REF_PY : REF; }
-static const char *lang_name(void) { return g_c ? "C (el de SOMA)" : g_py ? "Python (el de SOMA)" : "SOMA-LANG"; }
-static const char *fence_tag(void) { return g_c ? "c" : g_py ? "python" : "soma"; }
+static int g_js, g_html;                                                  /* SOMA_275_HTML: JavaScript y HTML (tambien por el camino de Python) */
+static const char *ref_txt(void) { return g_html ? REF_HTML : g_js ? REF_JS : g_c ? REF_C : g_py ? REF_PY : REF; }
+static const char *lang_name(void) { return g_html ? "HTML (pagina web de un solo archivo para el navegador de SOMA)" : g_js ? "JavaScript (el de SOMA)" : g_c ? "C (el de SOMA)" : g_py ? "Python (el de SOMA)" : "SOMA-LANG"; }
+static const char *fence_tag(void) { return g_html ? "html" : g_js ? "javascript" : g_c ? "c" : g_py ? "python" : "soma"; }
 
 /* SOMA_265_CC: "en C", "en lenguaje C", "con C", "programa.c"... (C como palabra suelta: "en casa" no cuenta) */
 int cc_mission_wants_c(const char *m)
@@ -303,6 +388,61 @@ int cc_c_normalize(char *src, uint32_t *len, uint32_t cap)
     uint32_t k = cl(add);
     if (k && *len + k + 1 < cap) { cmove(src + k, src, *len + 1); for (uint32_t i = 0; i < k; i++) src[i] = add[i]; *len += k; }
     return fix;
+}
+
+
+/* SOMA_275_HTML: "juego.js" / "index.html" (la extension tras un nombre y sin letras detras: ".json" no cuenta) */
+static int ci_has_ext(const char *m, const char *ext)
+{
+    uint32_t k = cl(ext);
+    for (const char *h = m; *h; h++) {
+        uint32_t i = 0; while (i < k && h[i] && ((h[i] >= 'A' && h[i] <= 'Z') ? h[i] + 32 : h[i]) == ext[i]) i++;
+        if (i == k && h > m && is_id(h[-1]) && !is_id(h[k])) return 1;
+    }
+    return 0;
+}
+/* SOMA_275_HTML: "en javascript", "con js", "juego.js"... ("en java" y ".json" no cuentan) */
+int cc_mission_wants_js(const char *m)
+{
+    if (!m) return 0;
+    return ci_has(m, "en javascript") || ci_has(m, "con javascript") || ci_has(m, "usando javascript") || ci_has(m, "lenguaje javascript")
+        || ci_has(m, "javascript:") || ci_has(m, "en js ") || ci_has(m, "con js ") || ci_has(m, "con js,") || ci_has(m, "con js.") || ci_has(m, "con js:") || ci_has(m, "en js,") || ci_has(m, "en js.") || ci_has(m, "en js:")
+        || ci_has(m, "usando js") || ci_has(m, "con node") || ci_has(m, "script de js") || ci_has(m, "programa js") || ci_has(m, "programa en js")
+        || ci_has_ext(m, ".js");
+}
+/* SOMA_275_HTML: "pagina web", "en html", "index.html"... */
+int cc_mission_wants_html(const char *m)
+{
+    if (!m) return 0;
+    return ci_has(m, "en html") || ci_has(m, "con html") || ci_has(m, "usando html") || ci_has(m, "lenguaje html") || ci_has(m, "html:")
+        || ci_has(m, "pagina web") || ci_has(m, "página web") || ci_has(m, "sitio web") || ci_has(m, "web app") || ci_has(m, "aplicacion web")
+        || ci_has(m, "aplicación web") || ci_has(m, "landing") || ci_has(m, "html y css") || ci_has(m, "html, css") || ci_has_ext(m, ".html")
+        || ci_has_ext(m, ".htm");
+}
+/* "[error] Uncaught SyntaxError: token inesperado (col 1: ...) (programa.js, linea 3) en <anonymous>" o "... (l:5) en <cadena>:5" -> 3 y "SyntaxError: token inesperado" */
+int cc_js_error(const char *out, uint32_t *line, char *msg, uint32_t cap)
+{
+    *line = 0; if (cap) msg[0] = 0;
+    if (!out) return 0;
+    const char *u = cfind(out, "Uncaught ");
+    if (!u) { u = cfind(out, "[error] "); if (u) u += 8; } else u += 9;
+    if (!u) return 0;
+    const char *e = u; while (*e && *e != '\n') e++;
+    const char *stop = e;
+    for (const char *p = u; p < e; p++)                                   /* el mensaje acaba donde empiezan " (col " o " (l:" */
+        if (p[0] == ' ' && p[1] == '(' && ((p[2] == 'c' && p[3] == 'o' && p[4] == 'l' && p[5] == ' ') || (p[2] == 'l' && p[3] == ':'))) { stop = p; break; }
+    ccatn(msg, cap, u, (uint32_t)(stop - u));
+    for (const char *p = u; p < e; p++) {
+        if (p[0] == 'l' && p[1] == 'i' && p[2] == 'n' && p[3] == 'e' && p[4] == 'a' && p[5] == ' ') { const char *d = p + 6; uint32_t v = 0; while (*d >= '0' && *d <= '9') { v = v * 10 + (uint32_t)(*d - '0'); d++; } if (d > p + 6) { *line = v; break; } }
+        if (p[0] == '(' && p[1] == 'l' && p[2] == ':') { const char *d = p + 3; uint32_t v = 0; while (*d >= '0' && *d <= '9') { v = v * 10 + (uint32_t)(*d - '0'); d++; } if (d > p + 3) *line = v; }
+    }
+    return 1;
+}
+int cc_html_normalize(char *src, uint32_t *len, uint32_t cap)
+{
+    (void)cap; uint32_t n = 0, fix = 0;
+    for (uint32_t i = 0; i < *len; i++) { if (src[i] == '\r') { fix++; continue; } src[n++] = src[i]; }
+    src[n] = 0; *len = n; return (int)fix;
 }
 
 int cc_mission_wants_python(const char *m)
@@ -680,7 +820,7 @@ static const char *g_mission = "";                                       /* SOMA
 /* SOMA_239_PYTHON_GRAFICO: verificacion de un programa Python: compilarlo de verdad (python -s en un proceso), comprobaciones de
  * la tarea y, en los de consola, las pruebas ejecutandolo (python -x con la entrada de cada caso). Resultados en cache por huella. */
 static char g_pyout[2048];
-static int ext_error(const char *out, uint32_t *line, char *msg, uint32_t cap) { return g_c ? cc_c_error(out, line, msg, cap) : cc_py_error(out, line, msg, cap); }   /* SOMA_265_CC */
+static int ext_error(const char *out, uint32_t *line, char *msg, uint32_t cap) { return g_html ? cc_c_error(out, line, msg, cap) : g_js ? cc_js_error(out, line, msg, cap) : g_c ? cc_c_error(out, line, msg, cap) : cc_py_error(out, line, msg, cap); }   /* SOMA_265_CC */
 static uint32_t g_pc_hash; static int g_pc_valid, g_pc_ok; static uint32_t g_pc_line; static char g_pc_msg[160];
 static void run_tests_py(const char *src, uint32_t n, struct verdict *v)
 {
@@ -737,6 +877,37 @@ static void verify_c_task(const char *src, int gui, struct verdict *v)
         ccat(v->issue, sizeof v->issue, "soma_ms() es el tiempo desde que arranco el equipo, no la hora: usa time(NULL) y localtime(). "); v->issues++;
     }
 }
+/* SOMA_275_HTML: lo que parece JavaScript pero no funciona en SOMA (js) */
+static void verify_js_task(const char *src, int gui, struct verdict *v)
+{
+    static const char *const banned[] = { "require('fs')", "require(\"fs\")", "require('readline')", "require(\"readline\")", "process.argv", "process.stdin",
+                                          "process.stdout", "import ", "export ", "alert(", "prompt(", "fetch(", "XMLHttpRequest", "document.", "window.", 0 };
+    for (int i = 0; banned[i]; i++) if (cfind(src, banned[i])) {
+        ccat(v->issue, sizeof v->issue, "Usa '"); ccat(v->issue, sizeof v->issue, banned[i]);
+        ccat(v->issue, sizeof v->issue, "', que no existe en el JavaScript de SOMA (sin pagina, sin Node): salida con console.log/print, entrada con input(), archivos con fs.read/fs.write, graficos con win.*. "); v->issues++; break;
+    }
+    if (gui && !cfind(src, "win.create")) { ccat(v->issue, sizeof v->issue, "La tarea pide una ventana grafica y no hay win.create(). "); v->issues++; }
+    if (cfind(src, "win.create") && !cfind(src, "win.present")) { ccat(v->issue, sizeof v->issue, "Falta win.present() en el bucle de dibujo. "); v->issues++; }
+    if (cfind(src, "win.create") && !cfind(src, "win.active")) { ccat(v->issue, sizeof v->issue, "Falta el bucle while (win.active()) { ... }. "); v->issues++; }
+    if (cfind(src, "win.create") && cfind(src, "input(")) { ccat(v->issue, sizeof v->issue, "Un programa con ventana no puede usar input(): usa win.key() y win.mouse(). "); v->issues++; }
+    if (ci_has(g_mission, "flecha") && cfind(src, "win.key") && !cfind(src, "win.UP") && !cfind(src, "win.DOWN") && !cfind(src, "win.LEFT") && !cfind(src, "win.RIGHT")
+        && !cfind(src, "=== 16") && !cfind(src, "== 16")) {
+        ccat(v->issue, sizeof v->issue, "La tarea usa las FLECHAS: compara win.key() con win.UP, win.DOWN, win.LEFT y win.RIGHT. "); v->issues++;
+    }
+}
+/* SOMA_275_HTML: lo que no funciona en una pagina web de un solo archivo en SOMA (html) */
+static void verify_html_task(const char *src, struct verdict *v)
+{
+    static const char *const ext[] = { "src=\"http", "src='http", "href=\"http", "href='http", "src=\"//", "href=\"//", "@import", "fonts.googleapis", "cdn.", 0 };
+    for (int i = 0; ext[i]; i++) if (cfind(src, ext[i])) {
+        ccat(v->issue, sizeof v->issue, "Carga recursos de internet ('"); ccat(v->issue, sizeof v->issue, ext[i]);
+        ccat(v->issue, sizeof v->issue, "'): SOMA no tiene red en las paginas; pon todo el CSS y el JavaScript en linea, sin CDN ni fuentes externas. "); v->issues++; break;
+    }
+    if (cfind(src, "getContext")) { ccat(v->issue, sizeof v->issue, "getContext(): el canvas 2D aun no funciona en el navegador de SOMA; dibuja con div y CSS o con SVG en linea. "); v->issues++; }
+    if (!cfind(src, "<html") && !cfind(src, "<body") && !cfind(src, "<!DOCTYPE") && !cfind(src, "<!doctype")) { ccat(v->issue, sizeof v->issue, "No es una pagina HTML completa: empieza con <!DOCTYPE html><html lang=\"es\">. "); v->issues++; }
+    if (cfind(src, "<link rel=\"stylesheet\"") || cfind(src, "<link rel=stylesheet")) { ccat(v->issue, sizeof v->issue, "Hay un <link> a una hoja de estilos: es UN solo archivo, pon el CSS dentro de <style>. "); v->issues++; }
+    for (const char *p = src; (p = cfind(p, "<script")) != 0; p += 7) { const char *e = p; while (*e && *e != '>') e++; const char *sr = cfind(p, "src="); if (sr && sr < e) { ccat(v->issue, sizeof v->issue, "Hay un <script src=...>: es UN solo archivo, pon el JavaScript dentro de <script>. "); v->issues++; break; } }
+}
 static void verify_py(const char *src, uint32_t n, int gui, const char *orig, uint32_t orig_n, struct verdict *v)
 {
     const struct cc_env *e = g_te;
@@ -763,7 +934,7 @@ static void verify_py(const char *src, uint32_t n, int gui, const char *orig, ui
         int prose = 0, code = 0; const char *p = src, *end = src + n;
         while (p < end) {
             const char *ls = p; int words = 0, inw = 0, sym = 0;
-            while (p < end && *p != '\n') { char c = *p; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) { if (!inw) words++; inw = 1; } else { inw = 0; if (c == ':' || c == '(' || c == '=' || c == '[' || c == ';' || c == '{' || c == '}') sym = 1; } p++; }
+            while (p < end && *p != '\n') { char c = *p; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) { if (!inw) words++; inw = 1; } else { inw = 0; if (c == '<' || c == ':' || c == '(' || c == '=' || c == '[' || c == ';' || c == '{' || c == '}') sym = 1; } p++; }
             if (p < end) p++;
             while (ls < p && *ls == ' ') ls++;
             if (ls[0] == '#' || (ls[0] == '/' && (ls[1] == '/' || ls[1] == '*')) || (ls[0] == '*' && g_c)) continue;
@@ -772,6 +943,8 @@ static void verify_py(const char *src, uint32_t n, int gui, const char *orig, ui
         if (prose > code) { ccat(v->issue, sizeof v->issue, "La respuesta es TEXTO (razonamiento o explicacion), no un programa. "); v->issues += 3; }
     }
     if (g_c) { verify_c_task(src, gui, v); goto comun; }                   /* SOMA_265_CC */
+    if (g_js) { verify_js_task(src, gui, v); goto comun; }                 /* SOMA_275_HTML */
+    if (g_html) { verify_html_task(src, v); goto comun; }
     static const char *const banned[] = { "import pygame", "import tkinter", "from tkinter", "import turtle", "import os", "from os ",
                                           "import threading", "import numpy", "import subprocess", "import curses", 0 };
     for (int i = 0; banned[i]; i++) if (cfind(src, banned[i])) {
@@ -793,7 +966,7 @@ static void verify_py(const char *src, uint32_t n, int gui, const char *orig, ui
     }
 comun:
     if (orig && orig_n && orig_n == n) { uint32_t i = 0; while (i < n && orig[i] == src[i]) i++; if (i == n) { v->unchanged = 1; ccat(v->issue, sizeof v->issue, "El codigo es IDENTICO al original: no se aplico el cambio pedido. "); v->issues++; } }
-    if (v->compiles && !gui && !cfind(src, "win.create") && !cfind(src, "soma_win_create")) run_tests_py(src, n, v);
+    if (v->compiles && !gui && !g_html && !cfind(src, "win.create") && !cfind(src, "soma_win_create")) run_tests_py(src, n, v);
     v->score = (v->compiles ? 0 : 1000) + v->issues * 60 + v->tfail * 300;
 }
 static void verify(const char *src, uint32_t n, int gui, const char *orig, uint32_t orig_n, struct verdict *v)
@@ -887,8 +1060,33 @@ static const char *hint_for_c(const struct verdict *v)
     if (v->unchanged) return "Aplica el cambio pedido: el codigo devuelto es igual que el original.";
     return "Corrige solo lo necesario y conserva el resto.";
 }
+/* SOMA_275_HTML */
+static const char *hint_for_js(const struct verdict *v)
+{
+    const char *m = v->msg;
+    if (v->tfail) return "El programa se ejecuta pero no produce la salida esperada en las pruebas: compara la salida obtenida con la esperada y corrige la logica o el formato (console.log pone un espacio entre argumentos y un salto de linea al final).";
+    if (cfind(m, "is not defined") || cfind(m, "no esta definid") || cfind(m, "ReferenceError")) return "Usas un nombre que no existe: declaralo con let/const antes de usarlo. Lo del sistema: console.log, print, input, fs, win, sleep, exit, Math, JSON, Date.";
+    if (cfind(m, "SyntaxError") || cfind(m, "token inesperado") || cfind(m, "se esperaba")) return "Error de sintaxis de JavaScript: revisa llaves, parentesis, corchetes y comillas sin cerrar, las comas entre elementos y los ';'.";
+    if (cfind(m, "TypeError")) return "Llamas a algo que no es una funcion o lees una propiedad de undefined/null: comprueba que la variable existe y tiene ese tipo.";
+    if (cfind(m, "modulos ES")) return "No hay import/export de ES: para varios archivos usa require(\"./otro.js\") y module.exports.";
+    if (v->unchanged) return "Aplica el cambio pedido: el codigo devuelto es igual que el original.";
+    return "Corrige solo lo necesario y conserva el resto.";
+}
+static const char *hint_for_html(const struct verdict *v)
+{
+    const char *m = v->msg;
+    if (cfind(m, "sin cerrar")) return "Hay una etiqueta sin cerrar: cada <div>, <span>, <ul>, <button>, <script>, <style>... necesita su cierre; revisa la anidacion.";
+    if (cfind(m, "sin etiqueta de apertura")) return "Sobra una etiqueta de cierre o esta mal anidada: cierra siempre en el orden inverso al de apertura.";
+    if (cfind(m, "id repetido")) return "Cada id debe ser unico en la pagina: cambia o quita el repetido.";
+    if (cfind(m, "error en el script")) return "Hay un error de sintaxis en el JavaScript de la pagina: revisa llaves, parentesis y comillas dentro del <script>.";
+    if (v->issue[0]) return "Corrige lo que se indica y deja la pagina completa en UN solo archivo, con CSS y JavaScript en linea.";
+    if (v->unchanged) return "Aplica el cambio pedido: la pagina devuelta es igual que la original.";
+    return "Corrige solo lo necesario y conserva el resto.";
+}
 static const char *hint_for(const struct verdict *v)
 {
+    if (g_html) return hint_for_html(v);
+    if (g_js) return hint_for_js(v);
     if (g_c) return hint_for_c(v);
     if (g_py) return hint_for_py(v);
     const char *m = v->msg;
@@ -952,13 +1150,15 @@ static void add_tests(void)       /* PARCHE 116: los casos de prueba forman part
 static void build_gen(const char *mission, const char *plan, int gui, int edit, const char *retry_note)
 {
     g_prompt[0] = 0;
-    if (g_c) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en C. Escribe para el C de SOMA OS (TinyCC, sin POSIX) codigo correcto a la primera.\n\n");   /* SOMA_265_CC */
+    if (g_html) ccat(g_prompt, sizeof g_prompt, "Eres un desarrollador web experto. Escribe para el navegador de SOMA OS una pagina HTML completa de UN solo archivo (CSS y JavaScript en linea), correcta a la primera.\n\n");
+    else if (g_js) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en JavaScript. Escribe para el JavaScript de SOMA OS (el motor del navegador sin pagina, sin Node) codigo correcto a la primera.\n\n");
+    else if (g_c) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en C. Escribe para el C de SOMA OS (TinyCC, sin POSIX) codigo correcto a la primera.\n\n");   /* SOMA_265_CC */
     else if (g_py) ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en Python. Escribe para el Python de SOMA OS (MicroPython) codigo correcto a la primera.\n\n");
     else ccat(g_prompt, sizeof g_prompt, "Eres un programador experto en SOMA-LANG, el lenguaje de SOMA OS. Escribe codigo correcto a la primera.\n\n");
     ccat(g_prompt, sizeof g_prompt, ref_txt());
     ccat(g_prompt, sizeof g_prompt, "\nEJEMPLO VERIFICADO (funciona en "); ccat(g_prompt, sizeof g_prompt, lang_name()); ccat(g_prompt, sizeof g_prompt, "):\n```");
     ccat(g_prompt, sizeof g_prompt, fence_tag()); ccat(g_prompt, sizeof g_prompt, "\n");
-    ccat(g_prompt, sizeof g_prompt, g_c ? (gui ? EX_GUI_C : EX_CLI_C) : g_py ? (gui ? EX_GUI_PY : EX_CLI_PY) : (gui ? EX_GUI : EX_CLI));
+    ccat(g_prompt, sizeof g_prompt, g_html ? EX_HTML : g_js ? (gui ? EX_GUI_JS : EX_CLI_JS) : g_c ? (gui ? EX_GUI_C : EX_CLI_C) : g_py ? (gui ? EX_GUI_PY : EX_CLI_PY) : (gui ? EX_GUI : EX_CLI));
     ccat(g_prompt, sizeof g_prompt, "```\n");
     add_lessons();
     if (edit) {
@@ -983,7 +1183,7 @@ static void build_repair(const char *mission, const char *cand, uint32_t n, cons
     add_tests();
     ccat(g_prompt, sizeof g_prompt, "\n\nPROBLEMAS DETECTADOS:\n");
     if (!v->compiles) {
-        ccat(g_prompt, sizeof g_prompt, g_c ? "- Error del compilador de C en la linea " : g_py ? "- Error de Python en la linea " : "- Error del compilador en la linea "); cnum(g_prompt, sizeof g_prompt, v->line);
+        ccat(g_prompt, sizeof g_prompt, g_html ? "- Error al comprobar la pagina en la linea " : g_js ? "- Error de JavaScript en la linea " : g_c ? "- Error del compilador de C en la linea " : g_py ? "- Error de Python en la linea " : "- Error del compilador en la linea "); cnum(g_prompt, sizeof g_prompt, v->line);
         ccat(g_prompt, sizeof g_prompt, ": "); ccat(g_prompt, sizeof g_prompt, v->msg);
         if (v->token[0]) { ccat(g_prompt, sizeof g_prompt, " (cerca de '"); ccat(g_prompt, sizeof g_prompt, v->token); ccat(g_prompt, sizeof g_prompt, "')"); }
         ccat(g_prompt, sizeof g_prompt, "\n");
@@ -1001,7 +1201,7 @@ static void lessons_load(const struct cc_env *e)
 {
     g_lessons[0] = 0;
     if (!e->read) return;
-    int r = e->read(g_c ? CC_LESSONS_C : g_py ? CC_LESSONS_PY : CC_LESSONS, g_lessons, sizeof g_lessons - 1);
+    int r = e->read(g_html ? CC_LESSONS_HTML : g_js ? CC_LESSONS_JS : g_c ? CC_LESSONS_C : g_py ? CC_LESSONS_PY : CC_LESSONS, g_lessons, sizeof g_lessons - 1);
     if (r < 0) r = 0;
     g_lessons[r] = 0;
 }
@@ -1019,7 +1219,7 @@ static void lessons_add(const struct cc_env *e, const struct verdict *v)
     const char *p = g_lessons;
     while (total > 1600 && *p) { while (*p && *p != '\n') { p++; total--; } if (*p) { p++; total--; } }   /* se olvidan las mas viejas */
     ccat(nb, sizeof nb, p); ccat(nb, sizeof nb, line);
-    e->write(g_c ? CC_LESSONS_C : g_py ? CC_LESSONS_PY : CC_LESSONS, nb, cl(nb));
+    e->write(g_html ? CC_LESSONS_HTML : g_js ? CC_LESSONS_JS : g_c ? CC_LESSONS_C : g_py ? CC_LESSONS_PY : CC_LESSONS, nb, cl(nb));
     ccpy(g_lessons, sizeof g_lessons, nb);
 }
 
@@ -1065,7 +1265,7 @@ static uint32_t take(const struct cc_env *e, struct cc_result *r, int gui, int e
             const char *q = fence(s, g_reply);
             uint32_t n = q ? (uint32_t)(q - s) : cl(s); if (n >= CC_SRC_MAX) n = CC_SRC_MAX - 1;
             cmove(g_tmp, s, n); g_tmp[n] = 0;
-            int f = g_c ? cc_c_normalize(g_tmp, &n, CC_SRC_MAX) : g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
+            int f = g_html ? cc_html_normalize(g_tmp, &n, CC_SRC_MAX) : g_js ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : g_c ? cc_c_normalize(g_tmp, &n, CC_SRC_MAX) : g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
             verify(g_tmp, n, gui, edit ? g_orig : 0, edit ? cl(g_orig) : 0, &tv);
             if (!have || tv.score < v->score) { *v = tv; cmove(g_cand, g_tmp, n + 1); best_n = n; best_fix = f; have = 1; }
             if (!q) break;
@@ -1075,14 +1275,14 @@ static uint32_t take(const struct cc_env *e, struct cc_result *r, int gui, int e
     {   /* sin bloques (o como alternativa): prosa recortada */
         uint32_t n = cc_extract_code(base, g_tmp, CC_SRC_MAX);
         const char *f3 = cfind(g_tmp, "```"); if (f3) { n = (uint32_t)(f3 - g_tmp); g_tmp[n] = 0; }
-        int f = g_c ? cc_c_normalize(g_tmp, &n, CC_SRC_MAX) : g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
+        int f = g_html ? cc_html_normalize(g_tmp, &n, CC_SRC_MAX) : g_js ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : g_c ? cc_c_normalize(g_tmp, &n, CC_SRC_MAX) : g_py ? cc_py_normalize(g_tmp, &n, CC_SRC_MAX) : cc_normalize(g_tmp, &n, CC_SRC_MAX);
         verify(g_tmp, n, gui, edit ? g_orig : 0, edit ? cl(g_orig) : 0, &tv);
         if (!have || tv.score < v->score) { *v = tv; cmove(g_cand, g_tmp, n + 1); best_n = n; best_fix = f; have = 1; }
     }
     if (best_fix) { char m[96]; m[0] = 0; ccat(m, sizeof m, "Normalizador: "); cnum(m, sizeof m, (uint32_t)best_fix); ccat(m, sizeof m, " correcciones automaticas sin gastar llamadas."); say(e, m); r->auto_fixes += best_fix; }
     /* deja g_rep coherente con el candidato elegido (la reparacion lista sus errores) */
     verify(g_cand, best_n, gui, edit ? g_orig : 0, edit ? cl(g_orig) : 0, &tv);
-    if (!v->compiles) { char m[220]; m[0] = 0; ccat(m, sizeof m, g_c ? "Candidato (C): linea " : g_py ? "Candidato (Python): linea " : "Candidato: linea "); cnum(m, sizeof m, v->line); ccat(m, sizeof m, ": "); ccat(m, sizeof m, v->msg); if (v->ltext[0]) { ccat(m, sizeof m, "  |  "); ccatn(m, sizeof m, v->ltext, 70); } say(e, m); }
+    if (!v->compiles) { char m[220]; m[0] = 0; ccat(m, sizeof m, g_html ? "Candidato (HTML): linea " : g_js ? "Candidato (JavaScript): linea " : g_c ? "Candidato (C): linea " : g_py ? "Candidato (Python): linea " : "Candidato: linea "); cnum(m, sizeof m, v->line); ccat(m, sizeof m, ": "); ccat(m, sizeof m, v->msg); if (v->ltext[0]) { ccat(m, sizeof m, "  |  "); ccatn(m, sizeof m, v->ltext, 70); } say(e, m); }
     else if (v->issue[0]) { char m[320]; m[0] = 0; ccat(m, sizeof m, "Candidato compila; aviso: "); ccatn(m, sizeof m, v->issue, 280); say(e, m); }
     else say(e, "Candidato correcto (compila y pasa las comprobaciones).");
     if (v->compiles && (g_py ? e->run_src != 0 : e->run != 0) && e->tests && e->ntests > 0) { char m[96]; m[0] = 0; ccat(m, sizeof m, "Pruebas de comportamiento: "); cnum(m, sizeof m, (uint32_t)v->tpass); ccat(m, sizeof m, "/"); cnum(m, sizeof m, (uint32_t)e->ntests); ccat(m, sizeof m, " superadas."); say(e, m); }
@@ -1097,10 +1297,11 @@ int cc_run(const struct cc_env *e, const char *target, const char *mission, stru
     if (g_busy) { for (uint32_t i = 0; i < sizeof *r; i++) ((char *)r)[i] = 0; ccpy(r->summary, sizeof r->summary, "El programador ya esta trabajando en otra tarea; espera a que termine."); return 0; }
     g_busy = 1;
     g_te = e; g_tm_valid = 0; g_pc_valid = 0;
-    g_py = e->lang == CC_LANG_PYTHON || e->lang == CC_LANG_C;             /* SOMA_239; SOMA_265_CC: C va por el mismo camino */
+    g_py = e->lang == CC_LANG_PYTHON || e->lang == CC_LANG_C || e->lang == CC_LANG_JS || e->lang == CC_LANG_HTML;   /* SOMA_239; SOMA_265_CC: C; SOMA_275_HTML: JS y HTML por el mismo camino */
     g_c = e->lang == CC_LANG_C;
+    g_js = e->lang == CC_LANG_JS; g_html = e->lang == CC_LANG_HTML;
     int ok = cc_run_inner(e, target, mission, r);
-    g_py = g_c = 0;
+    g_py = g_c = g_js = g_html = 0;
     g_te = 0;
     g_busy = 0;
     return ok;
@@ -1121,11 +1322,14 @@ static int cc_run_inner(const struct cc_env *e, const char *target, const char *
     g_orig[ol] = 0;
     edit = ol > 0;
     gui = cc_mission_is_gui(mission) || (edit && (cfind(g_orig, "win.create") != 0 || cfind(g_orig, "soma_win_create") != 0));
+    if (g_html) gui = 0;                                                   /* SOMA_275_HTML: una pagina web no es una ventana de win.* */
     g_mission = mission ? mission : "";
     lessons_load(e);
     st(e, 1, "Fase 1/6: Analizando la tarea y preparando el contexto...", edit ? "Modificacion de un programa existente: se le pasa completo al modelo." : (gui ? "Programa nuevo con ventana grafica." : "Programa nuevo de consola."));
     say(e, edit ? "Tarea: MODIFICAR programa existente." : "Tarea: CREAR programa nuevo.");
-    if (g_c) say(e, "Lenguaje: C (TinyCC de SOMA; ventana con soma.h).");
+    if (g_html) say(e, "Lenguaje: HTML (pagina web de un solo archivo; CSS y JavaScript en linea).");
+    else if (g_js) say(e, "Lenguaje: JavaScript (el de SOMA; ventana con win.*).");
+    else if (g_c) say(e, "Lenguaje: C (TinyCC de SOMA; ventana con soma.h).");
     else if (g_py) say(e, "Lenguaje: Python (MicroPython de SOMA; ventana con soma.win).");
     say(e, gui ? "Tipo: aplicacion grafica (ejemplo de ventana como referencia)." : "Tipo: programa de consola (ejemplo de consola como referencia).");
     if (g_lessons[0]) say(e, "Lecciones de trabajos anteriores incluidas en el contexto.");

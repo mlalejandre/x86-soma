@@ -2,6 +2,8 @@
  * de dejar opaca la activa). SOMA_184: pagina Fuentes: fuente del escritorio, de la interfaz y los documentos (90-120 %) y del editor de
  * texto, elegidas del catalogo general (las mismas fuentes que usa el navegador). Los cambios se aplican al momento y se guardan. */
 #include "settings.h"
+#include "agenda.h"                    /* SOMA_272_AGENDA */
+#include "agenda_gui.h"
 #include "fb.h"
 #include "fs.h"
 #include "web_font.h"
@@ -295,7 +297,8 @@ __attribute__((unused)) static void button(int x, int y, int w, const char *t, i
 #define PAGE_SONIDO  7     /* SOMA_250_TTS */
 #define PAGE_SISTEMA 8
 #define PAGE_ACERCA  9
-#define NITEMS 11       /* SOMA_257_LCM: + LCM */
+#define NITEMS 12       /* SOMA_257_LCM: + LCM; SOMA_272_AGENDA: + Avisos */
+#define PAGE_AVISOS 11  /* SOMA_272_AGENDA */
 #define PAGE_LCM 10     /* SOMA_257_LCM */
 static struct llm_conf g_ia;                          /* copia de trabajo; se guarda con "Guardar y probar" */
 static char g_ia_f[4][LLM_KEY_MAX];                   /* lo que se esta escribiendo: servidor, modelo, clave y (SOMA_196) clave del lanzador */
@@ -721,7 +724,7 @@ static int sb_y(const struct sl *L, int i) { return L->y + (sb_step(L) < 40 ? 52
 static void render_sidebar(const struct sl *L)
 {
     tx(L->x + 18, L->y + 14, 30, "Ajustes", 18, KC_TXT, 1);
-    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de", "LCM" };   /* SOMA_257_LCM */   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
+    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de", "LCM", "Avisos" };   /* SOMA_257_LCM */   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
     for (int i = 0; i < NITEMS; i++) {
         int st = sb_step(L), ih = st - 6, iy = sb_y(L, i), on = i == g_page;
         if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, ih, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + ih / 2 - 9, 3, 18, 1, KC_ACC); }
@@ -736,6 +739,7 @@ static void render_sidebar(const struct sl *L)
         else if (i == PAGE_SONIDO) { fb_fill_rect((uint32_t)(ix - 8), (uint32_t)(icy - 3), 4, 6, ic & 0xFFFFFF); fb_line_aa((ix - 4) * 16, (icy - 3) * 16, (ix + 1) * 16, (icy - 8) * 16, 22, ic); fb_line_aa((ix + 1) * 16, (icy - 8) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_line_aa((ix - 4) * 16, (icy + 3) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_stroke_rrect_aa(ix + 3, icy - 4, 6, 8, 4, ic); }   /* altavoz */
         else if (i == PAGE_SISTEMA) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
         else if (i == PAGE_LCM) { fb_stroke_rrect_aa(ix - 8, icy - 7, 16, 14, 5, ic); tx(ix - 4, iy, ih, "L", 11, ic & 0xFFFFFF, 1); }   /* SOMA_257_LCM */
+        else if (i == PAGE_AVISOS) { fb_stroke_rrect_aa(ix - 7, icy - 8, 14, 12, 6, ic); fb_fill_rect((uint32_t)(ix - 9), (uint32_t)(icy + 4), 18, 2, ic & 0xFFFFFF); fb_fill_rrect_aa(ix - 2, icy + 7, 5, 3, 1, ic); }   /* SOMA_272_AGENDA: campana */
         else { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 1, 2, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 5, 2, 2, ic & 0xFFFFFF); }
         tx(L->x + 46, iy, ih, items[i], 13, on ? 0x00FFFFFF : KC_DIM, on);
     }
@@ -1711,6 +1715,46 @@ static int key_lcm(char c)
     if (((unsigned char)c >= 32 && (unsigned char)c != 127) && n + 1 < (int)sizeof g_lcm_f) { g_lcm_f[n] = c; g_lcm_f[n + 1] = 0; return 1; }
     return 0;
 }
+/* SOMA_272_AGENDA: pagina de avisos del calendario (los eventos que van a empezar se avisan solos, hablado y en pantalla). */
+static const int AV_ANTES[5] = { 5, 10, 15, 30, 60 };
+static void av_ys(const struct sl *L, int *c, int *s1, int *s2, int *s3, int *s4, int *b)
+{
+    int y0 = L->y + 84; *c = y0; *s1 = y0 + 64; *s2 = y0 + 132; *s3 = y0 + 200; *s4 = y0 + 268; *b = y0 + 330;
+}
+static void render_avisos(const struct sl *L)
+{
+    int c, s1, s2, s3, s4, b; av_ys(L, &c, &s1, &s2, &s3, &s4, &b); struct agenda_conf cf; agenda_conf_get(&cf);
+    tx(L->cx, L->y + 18, 30, "Avisos del calendario", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "SOMA te avisa antes de que empiece un evento de tu agenda, sin que se lo pidas.", 12, KC_DIM, 0);
+    card(L->cx, c, L->cw, 390);
+    static const char *const onoff[2] = { "Apagados", "Activados" };
+    tx(L->cx + 20, c + 14, 22, "Avisar de los eventos que van a empezar", 13, KC_TXT, 0);
+    seg(L->cx + 20, s1, L->seg_w, 2, cf.avisos ? 1 : 0, onoff);
+    static const char *const sn[2] = { "No", "Si" };
+    tx(L->cx + 20, s2 - 28, 22, "Aviso hablado (necesita la voz instalada, en la pagina Voz)", 13, KC_TXT, 0);
+    seg(L->cx + 20, s2, L->seg_w, 2, cf.voz ? 1 : 0, sn);
+    tx(L->cx + 20, s3 - 28, 22, "Aviso en pantalla", 13, KC_TXT, 0);
+    seg(L->cx + 20, s3, L->seg_w, 2, cf.visual ? 1 : 0, sn);
+    tx(L->cx + 20, s4 - 28, 22, "Con cuanta antelacion (cada evento puede tener la suya)", 13, KC_TXT, 0);
+    static const char *const an[5] = { "5 min", "10 min", "15 min", "30 min", "1 hora" };
+    int sa = 1; for (int k = 0; k < 5; k++) if (cf.antes == AV_ANTES[k]) sa = k;
+    seg(L->cx + 20, s4, L->seg_w, 5, sa, an);
+    fb_fill_rounded_rect(L->cx + 20, b, 160, 30, 8, 0x00283449); tx(L->cx + 20 + (160 - tw("Probar aviso", 12, 1)) / 2, b + 1, 28, "Probar aviso", 12, 0x00FFFFFF, 1);
+    tx(L->cx + 20, b + 40, 20, "Los eventos se apuntan en la ventana Calendario o con la orden: agenda a\xC3\xB1" "adir ma\xC3\xB1" "ana a las 9 reunion", 11, KC_DIM, 0);
+}
+static int click_avisos(const struct sl *L, int32_t mx, int32_t my)
+{
+    int c, s1, s2, s3, s4, b; av_ys(L, &c, &s1, &s2, &s3, &s4, &b); struct agenda_conf cf; agenda_conf_get(&cf);
+    int in_seg = mx >= L->cx + 20 && mx < L->cx + 20 + L->seg_w;
+    if (in_seg && my >= s1 && my < s1 + 32) { cf.avisos = seg_index(L, mx, 2); agenda_conf_set(&cf); return 1; }
+    if (in_seg && my >= s2 && my < s2 + 32) { cf.voz = seg_index(L, mx, 2); agenda_conf_set(&cf); return 1; }
+    if (in_seg && my >= s3 && my < s3 + 32) { cf.visual = seg_index(L, mx, 2); agenda_conf_set(&cf); return 1; }
+    if (in_seg && my >= s4 && my < s4 + 32) { cf.antes = AV_ANTES[seg_index(L, mx, 5)]; agenda_conf_set(&cf); return 1; }
+    if (mx >= L->cx + 20 && mx < L->cx + 180 && my >= b && my < b + 30) { agenda_gui_probar(); return 1; }
+    return 0;
+}
+void settings_goto_avisos(void) { g_page = PAGE_AVISOS; }
+/* SOMA_272_AGENDA fin */
 void settings_goto_lcm(void) { g_page = PAGE_LCM; }
 /* SOMA_257_LCM fin */
 
@@ -1745,6 +1789,7 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     case PAGE_SISTEMA:  render_sistema(&C); break;
     case PAGE_ACERCA:   render_acerca(&C); break;
     case PAGE_LCM:      render_lcm(&C); break;          /* SOMA_257_LCM */
+    case PAGE_AVISOS:   render_avisos(&C); break;       /* SOMA_272_AGENDA */
     default:            render_apariencia(&C); break;
     }
     g_clon = 0; (fb_reset_clip)();
@@ -1846,6 +1891,7 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     if (g_page == PAGE_VOZ) return click_voz(&L, mx, my);              /* SOMA_246_VOZ_MODELOS */
     if (g_page == PAGE_SONIDO) return click_sonido(&L, mx, my);        /* SOMA_250_TTS */
     if (g_page == PAGE_LCM) return click_lcm(&L, mx, my);              /* SOMA_257_LCM */
+    if (g_page == PAGE_AVISOS) return click_avisos(&L, mx, my);        /* SOMA_272_AGENDA */
     if (my >= L.sl_y - 6 && my < L.sl_y + 26 && mx >= L.sl_x - 12 && mx < L.sl_x + L.sl_w + 12) { g_drag = 1; int c = set_opacity_from(&L, mx); if (c) save(); return c; }
     if (mx >= L.tg_x && mx < L.tg_x + 44 && my >= L.tg_y && my < L.tg_y + 24) { g_active_opaque = !g_active_opaque; save(); return 1; }
     if (click_reset(&L, mx, my, L.reset_y)) return 1;

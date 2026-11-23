@@ -62,8 +62,11 @@ int host_disk_load(const char *path)
     return n == sizeof(g_disk) ? 0 : -1;
 }
 
+static int g_reads;                                  /* SOMA_269_RAM */
+int host_disk_reads(void) { return g_reads; }
 int sysdisk_read(uint64_t sector, void *buf)
 {
+    g_reads++;
     if (sector >= DISK_SECTORS) return -1;
     memcpy(buf, g_disk + sector * 512u, 512);
     return 0;

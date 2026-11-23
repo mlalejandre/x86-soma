@@ -140,6 +140,7 @@ void gui_open_pdf(const char *path)   /* PARCHE 091: el hilo del agente pide tur
 
 /* PARCHE 089: para el Monitor del sistema */
 const int gui_app_sysmon = APP_SYSMON;
+const int gui_app_agenda = APP_AGENDA;     /* SOMA_272_AGENDA */
 const char *gui_app_title(int app)
 {
     switch ((enum app_mode)app) {
@@ -147,7 +148,7 @@ const char *gui_app_title(int app)
     case APP_FILE_MANAGER: return "Archivos"; case APP_IMAGE_VIEWER: return "Imagenes"; case APP_NOTEPAD: return "Bloc de notas";
     case APP_AGENT_MEMORY: return "Memoria de agentes"; case APP_LAYOUT: return "Maquetador"; case APP_AGENTS: return "Agentes";
     case APP_PAINT: return "Paint"; case APP_CODER_APP: return "Coder"; case APP_MEDIA: return "Media"; case APP_SETTINGS: return "Ajustes";
-    case APP_PDF: return "Lector PDF"; case APP_SYSMON: return "Monitor del sistema"; case APP_RECORDER: return "Grabadora"; case APP_CAMERA: return "Camara"; case APP_CAPTURE: return "Captura"; case APP_YOUTUBE: return "YouTube"; case APP_SOMA_APP: return "Programa SOMA"; case APP_DESKTOP: return "Escritorio";
+    case APP_PDF: return "Lector PDF"; case APP_SYSMON: return "Monitor del sistema"; case APP_AGENDA: return "Calendario"; case APP_RECORDER: return "Grabadora"; case APP_CAMERA: return "Camara"; case APP_CAPTURE: return "Captura"; case APP_YOUTUBE: return "YouTube"; case APP_SOMA_APP: return "Programa SOMA"; case APP_DESKTOP: return "Escritorio";
     default: return "Aplicacion";
     }
 }
@@ -166,6 +167,20 @@ static void gui_open_sysmon__impl(void)
     g_pending_app = APP_SYSMON;
     cmd_vsoma("", 0, 0);
     g_pending_app = APP_DESKTOP;
+}
+static void gui_open_agenda__impl(void)
+{
+    if (gui_win_open(APP_AGENDA)) return;
+    ensure_window_geom();
+    g_pending_app = APP_AGENDA;
+    cmd_vsoma("", 0, 0);
+    g_pending_app = APP_DESKTOP;
+}
+void gui_open_agenda(void)   /* SOMA_272_AGENDA */
+{
+    int tok = gui_enter();
+    gui_open_agenda__impl();
+    gui_leave(tok);
 }
 void gui_open_sysmon(void)   /* PARCHE 091: el hilo del agente pide turno de pantalla */
 {

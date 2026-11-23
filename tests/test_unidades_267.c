@@ -80,6 +80,23 @@ int main(int argc, char **argv)
         static struct exfat_dirent lst[16]; int tot = 0;
         int k = unid_listar("/usuario", lst, 16, &tot);
         CK(k == 6 && tot == 6, "USUARIO lista sus 6 carpetas (%d)", k);
+        /* SOMA_268_ACCESO: borrar carpetas con todo dentro (el gestor de archivos) */
+        CK(unid_mkdir("/usuario/Proyectos/juego/niveles", 0) == 0 && unid_mkdir("/usuario/Proyectos/juego/niveles/uno", 0) == 0 &&
+           unid_escribir("/usuario/Proyectos/juego/niveles/uno/mapa.txt", "mapa", 4, 0) == 0 && unid_escribir("/usuario/Proyectos/leeme.txt", "leeme", 5, 0) == 0, "arbol de prueba");
+        for (int i = 0; i < 40; i++) { char nm[96]; snprintf(nm, sizeof nm, "/usuario/Proyectos/juego/f%02d.dat", i); CK(unid_escribir(nm, "x", 1, 0) == 0, "relleno %d", i); }
+        CK(unid_borrar_rec("/usuario", 0) == EXFAT_E_ARG && unid_borrar_rec("/usuario/", 0) == EXFAT_E_ARG && unid_borrar_rec("/workspace/x", 0) == EXFAT_E_ARG, "la raiz de la unidad no se borra");
+        CK(unid_borrar_rec("/modelos/voz", 0) == EXFAT_E_RO && unid_tam("/modelos/voz", &sz, &dir) == 0, "MODELOS sigue siendo de solo lectura tambien para borrar carpetas");
+        CK(unid_borrar_rec("/usuario/Proyectos/leeme.txt", 0) == 0 && unid_tam("/usuario/Proyectos/leeme.txt", &sz, 0) < 0, "borrar_rec de un archivo");
+        CK(unid_borrar_rec("/usuario/Proyectos/juego", 0) == 0 && unid_tam("/usuario/Proyectos/juego", &sz, 0) < 0 && unid_tam("/usuario/Proyectos", &sz, &dir) == 0 && dir, "borrar una carpeta con subcarpetas y 40 archivos");
+        CK(unid_borrar_rec("/usuario/Proyectos", 0) == 0 && unid_tam("/usuario/Proyectos", &sz, 0) < 0, "y la carpeta ya vacia");
+        CK(unid_borrar_rec("/usuario/NoExiste", 0) < 0, "una carpeta que no existe da error");
+        { char prof[400] = "/usuario/p"; int ok = unid_mkdir(prof, 0) == 0;
+          for (int i = 0; ok && i < 10; i++) { strcat(prof, "/d"); ok = unid_mkdir(prof, 0) == 0; }
+          CK(ok && unid_borrar_rec("/usuario/p", 0) == EXFAT_E_ARG && unid_tam("/usuario/p", &sz, 0) == 0, "demasiado profundo (11 niveles): se rechaza sin borrar a medias la raiz de la carpeta");
+          for (int i = 10; i >= 0; i--) { char q[400] = "/usuario/p"; for (int j = 0; j < i; j++) strcat(q, "/d"); unid_borrar(q, 0); }
+          CK(unid_tam("/usuario/p", &sz, 0) < 0, "limpieza a mano"); }
+        k = unid_listar("/usuario", lst, 16, &tot);
+        CK(k == 5 && tot == 5, "USUARIO vuelve a tener 5 carpetas (%d)", k);
         struct unid_fd fd; static uint8_t grande[300000], vuelta[300000];
         for (uint32_t i = 0; i < sizeof grande; i++) grande[i] = (uint8_t)(i * 31 + 7);
         CK(unid_escribir("/modelos/voz/ggml-grande.bin", grande, sizeof grande, 1) == 0 && unid_abrir("/modelos/voz/ggml-grande.bin", &fd) == 0 && unid_fd_tam(&fd) == (int64_t)sizeof grande, "abrir un archivo de MODELOS");

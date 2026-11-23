@@ -15,7 +15,7 @@
 #include "pmm_scan.h"
 
 #define PMMC_FRAME        4096ULL
-#define PMMC_LOWER        (32ULL << 20)          /* zona reservada al principio (nucleo, virtqueues, BIOS). SOMA_202: 32 MiB (eran 16):
+#define PMMC_LOWER        (48ULL << 20)          /* zona reservada al principio (nucleo, virtqueues, BIOS). SOMA_282_ZONA_BAJA: 48 MiB (eran 32; antes 16, SOMA_202):
                                                   * la imagen del nucleo lleva dentro el programa del navegador aislado y ya no cabia */
 #define PMMC_LOW_LIMIT    (512ULL << 20)         /* fin de la reserva baja (accesible por identidad) */
 #define PMMC_MAX_PHYS     (64ULL << 30)          /* tope de seguridad del mapa */

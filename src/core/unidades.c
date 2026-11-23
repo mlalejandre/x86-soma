@@ -158,6 +158,38 @@ int unid_renombrar(const char *de, const char *a, int priv)
     else e = !escribible(u, priv) ? EXFAT_E_RO : exfat_rename(&g_vol[u], r1, r2);
     ulk(); return e;
 }
+/* SOMA_268_ACCESO: borrar una carpeta con todo lo que contiene (el gestor de archivos). De a una entrada por vuelta y con poca pila:
+ * la profundidad maxima es 8 y cada nivel gasta ~1,6 KB de pila (hilos de 60 KiB). */
+static int borra_rec(const char *ruta, int priv, int prof)
+{
+    uint64_t t = 0; int dir = 0, e = unid_tam(ruta, &t, &dir);
+    if (e) return e;
+    if (!dir) return unid_borrar(ruta, priv);
+    if (prof >= 8) return EXFAT_E_ARG;
+    for (uint32_t vuelta = 0; vuelta < 1000000u; ++vuelta) {
+        struct exfat_dirent d; int total = 0, n = unid_listar(ruta, &d, 1, &total);
+        if (n < 0) return n;
+        if (n == 0) break;
+        char hijo[800]; uint32_t p = 0, l = 0, nl = 0;
+        while (ruta[l]) l++;
+        while (d.name[nl]) nl++;
+        if (l + 1 + nl + 1 > sizeof hijo) return EXFAT_E_NAME;
+        for (uint32_t k = 0; k < l; ++k) hijo[p++] = ruta[k];
+        if (p && hijo[p - 1] != '/') hijo[p++] = '/';
+        for (const char *s = d.name; *s && p + 1 < sizeof hijo; ++s) hijo[p++] = *s;
+        hijo[p] = 0;
+        e = borra_rec(hijo, priv, prof + 1);
+        if (e) return e;
+    }
+    return unid_borrar(ruta, priv);
+}
+int unid_borrar_rec(const char *ruta, int priv)
+{
+    const char *r;
+    if (unid_ruta(ruta, &r) < 0) return EXFAT_E_ARG;
+    if (!r[0] || (r[0] == '/' && !r[1])) return EXFAT_E_ARG;               /* la raiz de la unidad no se borra */
+    return borra_rec(ruta, priv, 0);
+}
 int unid_listar(const char *ruta, struct exfat_dirent *out, int max, int *total)
 {
     const char *r; lk(); int u = prep(ruta, &r);

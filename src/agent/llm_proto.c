@@ -321,9 +321,10 @@ void llm_launcher_base(const struct llm_conf *c, char *out, uint32_t max)
 }
 int llm_proto_launcher(const struct llm_conf *c, int what, const char *model, char *body, uint32_t max, struct llm_http *h)
 {
-    static const char *const PATH[4] = { "/v1/estado", "/v1/modelos", "/v1/lanzar", "/v1/parar" };
+    static const char *const PATH[7] = { "/v1/estado", "/v1/modelos", "/v1/lanzar", "/v1/parar",
+                                         "/v1/embeddings/estado", "/v1/embeddings/lanzar", "/v1/embeddings/parar" };   /* SOMA_278_EMBEDDINGS */
     char base[LLM_BASE_MAX]; uint32_t hl; int https;
-    if (what < 0 || what > LLM_L_STOP) return LLM_P_BADURL;
+    if (what < 0 || what > LLM_L_EMB_STOP) return LLM_P_BADURL;
     llm_launcher_base(c, base, sizeof base);
     if (!base_host(base, &hl, &https)) return LLM_P_BADURL;
     if (!c->launcher_key[0]) return LLM_P_NOLKEY;
@@ -333,9 +334,10 @@ int llm_proto_launcher(const struct llm_conf *c, int what, const char *model, ch
     h->headers[hd.n] = 0;
     struct sb u = { h->url, 0, sizeof h->url, 0 };
     sb_s(&u, base); sb_s(&u, PATH[what]); h->url[u.n] = 0;
-    h->method = what >= LLM_L_START ? "POST" : "GET";
+    int post = what == LLM_L_START || what == LLM_L_STOP || what == LLM_L_EMB_START || what == LLM_L_EMB_STOP;
+    h->method = post ? "POST" : "GET";
     if (hd.over || u.over) return LLM_P_TOOBIG;
-    if (what < LLM_L_START) return 0;
+    if (!post) return 0;
     struct sb b = { body, 0, max, 0 };
     if (what == LLM_L_START) { if (!model || !model[0]) return LLM_P_NOMODEL; sb_s(&b, "{\"modelo\":\""); sb_json(&b, model); sb_s(&b, "\"}"); }
     else sb_s(&b, "{}");

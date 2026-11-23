@@ -10,6 +10,10 @@ int dispatch_command(const char *c, char *out, uint32_t max);
 int shell_command_info(const char *n, uint32_t *f, const char **h);
 int vfs_read(const char *p, char *b, uint32_t n);
 int vfs_write(const char *p, const char *b, uint32_t n);
+/* SOMA_271_LCM: modelo de DATOS */
+int vfs_size(const char *name);
+char *vfs_read_alloc(const char *name, uint32_t *len_out);
+void kfree(void *ptr);
 static void fb_puts(char *out, uint32_t max, uint32_t *pos, const char *s) { while (*s && *pos + 1 < max) out[(*pos)++] = *s++; if (max) out[*pos < max ? *pos : max - 1] = 0; }
 static void fb_put_dec(char *out, uint32_t max, uint32_t *pos, uint64_t v) { char b[24]; int n = 0; do { b[n++] = (char)('0' + v % 10); v /= 10; } while (v && n < 23); while (n) { char c[2] = { b[--n], 0 }; fb_puts(out, max, pos, c); } }
 static char mayordomo_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
