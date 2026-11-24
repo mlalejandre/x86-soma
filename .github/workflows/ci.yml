@@ -1,3 +1,4 @@
+# SOMA_298_CI: los name con «: » van entre comillas (si no, el YAML es invalido)
 name: CI
 
 on:
@@ -31,7 +32,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc make binutils grub-pc-bin grub-common xorriso mtools \
             qemu-system-x86 qemu-system-arm gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-      - name: Compilar (sin warnings: -Werror)
+      - name: 'Compilar (sin warnings: -Werror)'
         run: make ARCH=${{ matrix.arch }} WERROR=1
       - name: Arranque en QEMU
         run: make ARCH=${{ matrix.arch }} boot-smoke
