@@ -87,7 +87,7 @@ def escucha(port, proc, seg=40):
     return False
 
 
-def espera(base, key, quiere, seg=15):
+def espera(base, key, quiere, seg=40):   # SOMA_304_CI: la CI de macOS es lenta
     t0 = time.time()
     while time.time() - t0 < seg:
         _, j = pide(base, key, "GET", "/v1/embeddings/estado")
@@ -104,7 +104,8 @@ def main():
         open(modelo, "wb").write(b"x")
         open(d + "/models/otro-llm-Q4.gguf", "wb").write(b"x")
         falso = d + "/llama-server"
-        open(falso, "w").write(FALSO)
+        # SOMA_304_CI: con el Python que corre la prueba; en macOS "/usr/bin/env python3" puede dar con el python3 de Xcode, que no arranca
+        open(falso, "w").write(FALSO.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))
         os.chmod(falso, 0o755)
         p_l, p_e, p_llm = libre(), libre(), libre()
         dummy = HTTPServer(("127.0.0.1", p_llm), Dummy)

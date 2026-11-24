@@ -149,7 +149,7 @@ def camino_real(base):
         threading.Thread(target=web.serve_forever, daemon=True).start()
         falso = os.path.join(d, "yt-dlp-de-pega")
         with open(falso, "w") as f:
-            f.write(FALSO_YTDLP)
+            f.write(FALSO_YTDLP.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1))   # SOMA_304_CI: el mismo Python (en macOS el de Xcode puede no arrancar)
         os.chmod(falso, 0o755)
         os.environ["PRUEBA_BASE"] = "http://127.0.0.1:%d" % web.server_address[1]
         os.environ["PRUEBA_DIR"] = d

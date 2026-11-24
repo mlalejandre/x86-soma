@@ -6,6 +6,12 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_304_CI -->
+### Los servidores falsos de las pruebas con el mismo Python (304)
+- Las pruebas que crean un `llama-server` o un `yt-dlp` falsos los escribían con `#!/usr/bin/env python3`. En el Mac de GitHub
+  ese `python3` no llegaba a servir (el falso se quedaba «cargando»). Ahora usan el mismo Python que corre la prueba, y la espera
+  de la prueba del lanzador sube a 40 s.
+
 <!-- SOMA_303_CI -->
 ### La prueba del lanzador en macOS (303)
 - `test_lanzador_emb_278` esperaba al lanzador 10 s a ciegas, y en la CI de macOS no llegaba a conectar. Ahora espera hasta 40 s a que
