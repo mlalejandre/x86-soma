@@ -15,7 +15,7 @@ enum { AI_OFF = 0, AI_THINK, AI_SEARCH, AI_SUMMING, AI_DONE, AI_PLAIN };   /* AI
 
 #define IA_CAP     200000u          /* respuestas del servicio y salida de whisper */
 #define TX_CAP     160000u          /* transcripcion (unas dos horas de habla) */
-#define CHAT_CAP   12000u
+#define CHAT_CAP   48000u          /* SOMA_286_YOUTUBE: antes 12000 (respuestas en Markdown, mas largas) */
 #define DESC_CAP   6200u
 #define WAV_PATH   "/yt_audio.wav"
 
@@ -134,10 +134,30 @@ static const char SYS_PICK[] =
     "y principio de la descripcion). Escribe en espanol, en 3 o 4 frases seguidas y sin listas ni Markdown: que se ha encontrado y "
     "que videos recomiendas ver primero y por que, citando su numero entre parentesis, por ejemplo (2). No inventes nada que no "
     "este en los datos.";
-static const char SYS_VID[] =
-    "Eres el asistente de video de SOMA. Respondes en el idioma de la pregunta, claro y breve, sin Markdown. Usa SOLO la "
-    "informacion del video que se te da (titulo, descripcion y transcripcion); si algo no aparece ahi, dilo. Las marcas [m:ss] de "
-    "la transcripcion son el minuto del video: citalas cuando ayuden a encontrar el momento.";
+static const char SYS_VID[] =     /* SOMA_286_YOUTUBE: con Markdown (la pestana IA lo dibuja) y conversacion de varios turnos */
+    "Eres el asistente de video de SOMA. Respondes en el idioma de la pregunta, claro y bien organizado. Puedes usar Markdown "
+    "(listas, **negrita**, tablas, codigo) y LaTeX ($...$) si ayuda; para respuestas cortas, escribe corto. Usa SOLO la "
+    "informacion del video que se te da abajo (titulo, descripcion y transcripcion); si algo no aparece ahi, dilo. Las marcas "
+    "[m:ss] de la transcripcion son el minuto del video: citalas tal cual, entre corchetes (por ejemplo [3:25]), cuando ayuden a "
+    "encontrar el momento: el usuario puede pulsarlas para saltar ahi.";
+static volatile int ia_voz;                          /* SOMA_286_YOUTUBE: la peticion vino del orbe: leer la respuesta en voz alta */
+static void ia_habla(const char *t)
+{
+#ifdef __x86_64__
+    if (ia_voz && t && *t) (void)voz_speak_reply(t);
+#else
+    (void)t;
+#endif
+    ia_voz = 0;
+}
+/* SOMA_286_YOUTUBE: limpia una respuesta en Markdown (sin tocar las marcas: las dibuja la pestana IA) */
+static void md_limpia(char *s)
+{
+    uint32_t o = 0;
+    for (uint32_t i = 0; s[i]; ++i) { unsigned char c = (unsigned char)s[i]; if (c == '\r') continue; if (c < 32 && c != '\n' && c != '\t') c = ' '; s[o++] = (char)c; }
+    while (o && (s[o - 1] == '\n' || s[o - 1] == ' ')) o--;
+    s[o] = 0;
+}
 
 static void search_launch(const char q[][YT_AI_QLEN], int n, const char *shown);
 
@@ -154,7 +174,7 @@ static void job_nl(const char *text)
     yt_scopy(ai_ask, sizeof ai_ask, text); ai_nq = 0; ai_sum[0] = 0; ai_why[0] = 0; ai_ver++;
     ai_state = AI_THINK; ia_seq++;
     reply[0] = 0;
-    int ok = llm_chat_ex(SYS_NL, text, 0, 0, 200, reply, sizeof reply, 45000u);
+    int ok = llm_chat_ex(SYS_NL, text, 0, 0, 200, reply, sizeof reply, 120000u);   /* SOMA_286_YOUTUBE: 120 s (un modelo local tarda en cargar) */
     if (nl_cancel) return;
     if (ok == 1) { yt_plain(reply); n = yt_ai_queries(reply, q); }
     if (!n) {                                                    /* sin LLM (o respuesta inservible): el texto, tal cual */
@@ -186,7 +206,7 @@ static void job_nl(const char *text)
         yt_put(pr, cap, &p, "\n");
     }
     reply[0] = 0;
-    ok = llm_chat_ex(SYS_PICK, pr, 0, 0, 400, reply, sizeof reply, 90000u);
+    ok = llm_chat_ex(SYS_PICK, pr, 0, 0, 400, reply, sizeof reply, 180000u);
     kfree(pr);
     if (nl_cancel || net_req != g) return;
     if (ok == 1) { yt_plain(reply); for (char *c = reply; *c; ++c) if (*c == '\n') *c = ' '; yt_scopy(ai_sum, sizeof ai_sum, reply); }
@@ -257,59 +277,106 @@ static char *video_prompt(const char *tail_label, const char *tail, const char *
     return pr;
 }
 
+/* SOMA_286_YOUTUBE: la conversacion anterior como mensajes (usuario / asistente) a partir de chat[] hasta 'end'.
+ * \1 pregunta -> usuario; \2 titulo + texto -> asistente (con una peticion del usuario delante); texto suelto -> asistente; \3 errores fuera. */
+static int hist_msgs(uint32_t end, struct llm_msg *m, int max, char *buf, uint32_t cap)
+{
+    int n = 0; uint32_t bp = 0, i = 0;
+    while (i < end && n < max - 2) {
+        uint32_t e = i; while (e < end && chat[e] != '\n') e++;
+        char k = chat[i];
+        if (k == 3) { i = e + 1; continue; }
+        if (k == 1 || k == 2) {
+            int rol = k == 1 ? LLM_ROL_USER : LLM_ROL_ASSISTANT;
+            if (k == 2) {                                                /* resumen: lo pidio el usuario */
+                const char *q = "Resume el video."; uint32_t ql = yt_slen(q);
+                if (bp + ql + 1 < cap) { for (uint32_t t = 0; t < ql; ++t) buf[bp + t] = q[t]; buf[bp + ql] = 0; m[n].rol = LLM_ROL_USER; m[n].text = buf + bp; n++; bp += ql + 1; }
+            }
+            /* la linea (sin la marca) y, para el asistente, las lineas sueltas que la siguen */
+            uint32_t s0 = i + 1, s1 = e;
+            if (rol == LLM_ROL_ASSISTANT) { uint32_t q = e; while (q < end && q + 1 < end && chat[q + 1] != 1 && chat[q + 1] != 2 && chat[q + 1] != 3) { q++; while (q < end && chat[q] != '\n') q++; } s1 = q; }
+            if (s1 > end) s1 = end;
+            if (bp + (s1 - s0) + 1 >= cap) break;
+            for (uint32_t t = s0; t < s1; ++t) buf[bp + t - s0] = chat[t] < 4 && chat[t] > 0 ? ' ' : chat[t];
+            buf[bp + (s1 - s0)] = 0; m[n].rol = rol; m[n].text = buf + bp; n++; bp += s1 - s0 + 1;
+            i = s1 + 1; continue;
+        }
+        /* texto suelto: respuesta */
+        uint32_t q = e; while (q < end && q + 1 < end && chat[q + 1] != 1 && chat[q + 1] != 2 && chat[q + 1] != 3) { q++; while (q < end && chat[q] != '\n') q++; }
+        if (q > end) q = end;
+        if (bp + (q - i) + 1 >= cap) break;
+        for (uint32_t t = i; t < q; ++t) buf[bp + t - i] = chat[t];
+        buf[bp + (q - i)] = 0; m[n].rol = LLM_ROL_ASSISTANT; m[n].text = buf + bp; n++; bp += q - i + 1;
+        i = q + 1;
+    }
+    return n;
+}
+/* sin transcripcion y con el servicio externo: se piden los subtitulos de YouTube antes de contestar (es inmediato) */
+static void job_subs(const char *id);
+static void subs_si_faltan(const char *id)
+{
+    if (tx_len || native_mode() || !ia_mine(id)) return;
+    if (vd_state == 1 && !vd_info.subs[0]) return;                       /* la ficha dice que no tiene */
+    job_subs(id);
+}
+static int pide_llm(const char *id, const char *tarea, const char *pregunta, uint32_t chat_end, char *reply, uint32_t rmax)
+{
+    char *ctx = video_prompt(tarea ? "Tarea: " : "", tarea ? tarea : "", 0);
+    if (!ctx) return -1;
+    uint32_t cap = yt_slen(SYS_VID) + yt_slen(ctx) + 8;
+    char *sys = (char *)kmalloc(cap);
+    char *hb = (char *)kmalloc(CHAT_CAP + 256);
+    struct llm_msg *m = (struct llm_msg *)kmalloc(sizeof(struct llm_msg) * 40);
+    int ok = -1;
+    if (sys && hb && m) {
+        uint32_t p = 0; yt_put(sys, cap, &p, SYS_VID); yt_put(sys, cap, &p, "\n\n"); yt_put(sys, cap, &p, ctx);
+        int n = pregunta ? hist_msgs(chat_end, m, 38, hb, CHAT_CAP + 200) : 0;
+        m[n].rol = LLM_ROL_USER; m[n].text = pregunta ? pregunta : (tarea ? tarea : "Resume el video."); n++;
+        reply[0] = 0;
+        ok = llm_chat_hist(sys, m, n, 0, 0, 0, reply, rmax, 300000u, &ia_cancel);
+    }
+    (void)id;
+    kfree(ctx); if (sys) kfree(sys); if (hb) kfree(hb); if (m) kfree(m);
+    return ok;
+}
+static char ia_reply[16000];
 static void job_sum(const char *id)
 {
-    static char reply[4000];
     ia_set("Leyendo la ficha del video", 0);
     (void)ensure_info(id);
     if (!ia_mine(id)) return;
-    if (!tx_len && !(vd_state == 1 && vd_desc[0])) { ia_set("No hay de donde resumir: el video no tiene descripcion. Transcribelo antes (pestana Texto).", 1); return; }
+    if (!tx_len) { ia_set("Buscando subtitulos para resumir mejor", 0); subs_si_faltan(id); if (!ia_mine(id)) return; }
+    if (!tx_len && !(vd_state == 1 && vd_desc[0])) { ia_set("No hay de donde resumir: el video no tiene descripcion ni subtitulos. Transcribelo antes (pestana Texto).", 1); ia_habla("No puedo resumirlo: el vídeo no tiene descripción ni subtítulos."); return; }
     ia_set(tx_len ? "Resumiendo la transcripcion" : "Resumiendo a partir de la descripcion", 0);
-    char *pr = video_prompt("Tarea: ", "resume este video en espanol: primero de que trata en dos frases y despues sus puntos clave, "
-                            "uno por linea empezando por un guion (como mucho siete). No anadas nada que no este arriba.", 0);
-    if (!pr) { ia_set("Sin memoria", 1); return; }
-    reply[0] = 0;
-    int ok = llm_chat_ex(SYS_VID, pr, 0, 0, 700, reply, sizeof reply, 180000u);
-    kfree(pr);
+    int ok = pide_llm(id, "resume este video en espanol: primero de que trata en dos frases y despues sus puntos clave como lista (como mucho siete), "
+                          "con el minuto [m:ss] de cada uno si se sabe. No anadas nada que no este arriba.", 0, 0, ia_reply, sizeof ia_reply);
     if (!ia_mine(id)) return;
-    if (ok != 1) { char w[200]; llm_why(w, sizeof w); chat_add(3, w); ia_set(w, 1); return; }
-    yt_plain(reply);
+    if (ok != 1) { char w[200]; llm_why(w, sizeof w); chat_add(3, w); ia_set(w, 1); ia_voz = 0; return; }
+    md_limpia(ia_reply);
     chat_add(2, tx_len ? "Resumen (de la transcripcion)" : "Resumen (solo de la descripcion: transcribe el video para uno mas fiel)");
-    chat_add(0, reply);
+    chat_add(0, ia_reply);
     ia_set("", 0);
+    ia_habla(ia_reply);
 }
 
 static void job_ask(const char *id, const char *question)
 {
-    static char reply[4000]; static char hist[1800];
-    /* lo ultimo de la conversacion (sin la pregunta recien anadida), como contexto */
+    /* la conversacion anterior, sin la pregunta recien anadida (la ultima linea con \1) */
     uint32_t end = chat_len, qn = yt_slen(question);
     if (end >= qn + 2) end -= qn + 2;
-    if (end && chat[end - 1] == '\n' && end >= 2 && chat[end - 2] == '\n') end--;
-    uint32_t start = end > sizeof hist - 1 ? end - (sizeof hist - 1) : 0, hp = 0;
-    while (start && start < end && chat[start - 1] != '\n') start++;
-    for (uint32_t i = start; i < end; ++i) {
-        char c = chat[i];
-        if (hp >= sizeof hist - 16) break;
-        if (c == 1) { static const char u[] = "Usuario: "; for (uint32_t k = 0; u[k]; ++k) hist[hp++] = u[k]; continue; }
-        if (c == 2 || c == 3) continue;
-        hist[hp++] = c;
-    }
-    hist[hp < sizeof hist ? hp : sizeof hist - 1] = 0;
+    while (end && (chat[end - 1] == '\n')) end--;
     ia_set("Leyendo la ficha del video", 0);
     (void)ensure_info(id);
     if (!ia_mine(id)) return;
+    if (!tx_len) { ia_set("Buscando subtitulos del video", 0); subs_si_faltan(id); if (!ia_mine(id)) return; }
     ia_set(tx_len ? "Pensando (con la transcripcion)" : "Pensando (sin transcripcion: solo titulo y descripcion)", 0);
-    char *pr = video_prompt("Pregunta del usuario: ", question, hist);
-    if (!pr) { ia_set("Sin memoria", 1); return; }
-    reply[0] = 0;
-    int ok = llm_chat_ex(SYS_VID, pr, 0, 0, 700, reply, sizeof reply, 180000u);
-    kfree(pr);
+    int ok = pide_llm(id, 0, question, end, ia_reply, sizeof ia_reply);
     if (!ia_mine(id)) return;
-    if (ok != 1) { char w[200]; llm_why(w, sizeof w); chat_add(3, w); ia_set(w, 1); return; }
-    yt_plain(reply);
-    chat_add(0, reply);
+    if (ok != 1) { char w[200]; llm_why(w, sizeof w); chat_add(3, w); ia_set(w, 1); ia_voz = 0; return; }
+    md_limpia(ia_reply);
+    chat_add(0, ia_reply);
     ia_set("", 0);
+    ia_habla(ia_reply);
 }
 
 static void job_subs(const char *id)

@@ -215,7 +215,7 @@ int main(int argc, char **argv)
     /* ---- teclado: numeros, Tab, flechas, rueda */
     tecla('1'); CKE(g_tab, T_MON); tecla('\t'); CKE(g_tab, T_EXP); g_shift = 1; tecla('\t'); g_shift = 0; CKE(g_tab, T_MON);
     tecla('/'); CK(g_tab == T_BUS && g_foco == &f_busca); tecla(27);
-    tecla('2'); pulsa(A_VISTA, V_EPI); { int c0 = g_cscroll; memview_mouse(900, 500, 0, 0, (uint32_t)W, (uint32_t)Hh, 1, 0); memview_render_window(0, 0, (uint32_t)W, (uint32_t)Hh, 1); CK(g_cscroll > c0); }
+    tecla('2'); pulsa(A_VISTA, V_EPI); { int c0 = g_cscroll; memview_mouse(900, 500, 0, 0, (uint32_t)W, (uint32_t)Hh, -1, 0); memview_render_window(0, 0, (uint32_t)W, (uint32_t)Hh, 1); CK(g_cscroll > c0); }   /* SOMA_286_YOUTUBE: rueda hacia abajo (negativo) baja */
     /* la version cambia con lo que se dibuja */
     { uint32_t v = memview_version(); tecla('3'); CK(memview_version() != v); tecla(27); }
     /* ventana estrecha */

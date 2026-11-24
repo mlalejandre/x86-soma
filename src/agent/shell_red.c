@@ -130,6 +130,23 @@ static int cmd_search(const char *args, char *out_buf, uint32_t max_out)
     }
     kprint("\n--- Resultados Web ---\n"); kprint(res); kprint("\n------------------------------------\n");
     soma_str_put(out_buf, max_out, &pos, res);
+    /* SOMA_288_INVESTIGA: ademas, el texto limpio de la primera pagina util (los resumenes de los resultados se quedan cortos) */
+    {
+        static char su[3][300]; static char tx[16384]; char tt[160];
+        int nu = wl_urls(res, su, 3);
+        for (int i = 0; i < nu && i < 2; i++) {
+            uint32_t n = sw_lee(su[i], tx, sizeof tx, tt, sizeof tt, 7000);
+            if (n < 300) continue;
+            int corto = 0;
+            if (n > 1800) { corto = 1; n = 1800; while (n > 900 && tx[n] != '\n' && tx[n] != ' ') n--; while (n > 0 && ((unsigned char)tx[n] & 0xC0) == 0x80) n--; tx[n] = 0; }
+            soma_str_put(out_buf, max_out, &pos, "\nTexto de la primera pagina (");
+            soma_str_put(out_buf, max_out, &pos, su[i]);
+            soma_str_put(out_buf, max_out, &pos, "):\n");
+            soma_str_put(out_buf, max_out, &pos, tx);
+            soma_str_put(out_buf, max_out, &pos, corto ? "...\n(para un informe completo con varias fuentes: investiga <pregunta>)" : "");
+            break;
+        }
+    }
     return 1;
 }
 

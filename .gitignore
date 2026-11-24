@@ -76,3 +76,10 @@ exporta_soma_*.py
 # SOMA_284_GITHUB: lo que exporta tools/exporta_memoria.py es tu memoria personal: no se sube
 memoria-export/
 *.smem
+
+# SOMA_297_GITHUB: el correo guarda tu clave en correo.conf; tampoco se suben claves ni certificados sueltos
+correo.conf
+*.pem
+*.key
+*.p12
+*.pfx

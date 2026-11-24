@@ -83,9 +83,11 @@ void tf_render(struct tfield *t, int x, int y, int w, int h, int focused, const 
 {
     tf_font();
     t->x = x; t->y = y; t->w = w; t->h = h;
-    fb_fill_rounded_rect(x, y, w, h, 8, 0x00070C17u);
-    fb_stroke_rrect_aa(x, y, w, h, 8, focused ? 0xFF38BDF8u : 0xFF243044u);
-    if (focused) fb_stroke_rrect_aa(x - 1, y - 1, w + 2, h + 2, 9, 0x5038BDF8u);
+    if (!t->bare) {                                            /* SOMA_285_CHAT: el chat pinta su propia caja */
+        fb_fill_rounded_rect(x, y, w, h, 8, 0x00070C17u);
+        fb_stroke_rrect_aa(x, y, w, h, 8, focused ? 0xFF38BDF8u : 0xFF243044u);
+        if (focused) fb_stroke_rrect_aa(x - 1, y - 1, w + 2, h + 2, 9, 0x5038BDF8u);
+    }
     const char *s = t->buf; uint32_t n = slen(s), a, b; sel(t, &a, &b);
     if (t->cur > n) t->cur = n;
     if (t->anc > n) t->anc = n;
@@ -249,3 +251,12 @@ int tf_clip(struct tfield *t, int op)
     if (op == CLIP_OP_CUT && b > a && !t->readonly) { del_range(t, a, b); t->cur = t->anc = a; }
     return 1;
 }
+/* SOMA_285_CHAT: lo que necesita el cuadro de texto del chat (crece con el texto, pega textos largos) */
+int tf_lines(struct tfield *t, int w)
+{
+    tf_font();
+    int ow = t->w; t->w = w; layout(t, cols_of(t)); t->w = ow;
+    return g_nl;
+}
+void tf_insert(struct tfield *t, const char *s, uint32_t n) { tf_font(); insert(t, s, n); }
+int tf_line_h(void) { return TF_LH; }

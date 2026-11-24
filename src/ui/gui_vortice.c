@@ -423,7 +423,12 @@ static void her_finish_turn(const char *resp)
                                      her_ans, HER_ANS_MAX);
     }
 #if defined(__x86_64__)
-    if (*ans) (void)voz_speak_reply(ans);              /* SOMA_250_TTS: el orbe lee su respuesta (Ajustes > Voz) */
+    {   /* SOMA_250_TTS: el orbe lee su respuesta (Ajustes > Voz). SOMA_290_VOZ_CODIGO: si el agente dejo un texto para decir (el resumen
+         * hablado del programador), se dice ese en vez de leer el informe */
+        extern const char *agent_voz_toma(void);
+        const char *vz = agent_voz_toma();
+        if (*vz) (void)voz_speak_reply(vz); else if (*ans) (void)voz_speak_reply(ans);
+    }
 #endif
     her_pr_fin(resp);                                  /* SOMA_259_ORBE */
 }

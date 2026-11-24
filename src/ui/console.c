@@ -6,6 +6,8 @@ volatile int console_muted = 0;
 #include "arch.h"
 #include "thread.h"
 #include "console.h"
+int fb_is_active(void);   /* SOMA_287_FLUIDEZ */
+uint64_t timer_get_uptime_ms(void);
 #include "mem.h"      /* SOMA_156: kmalloc para el registro */
 #include "shell.h"
 #include "io.h"
@@ -326,7 +328,9 @@ void kputc(char c)
         else outb(COM1, (uint8_t)c);
     }
     if (bootfb_use_firmware()) bootfb_putc(c);   /* SOMA_154_T480S: en UEFI no hay modo texto VGA */
-    else vga_putc(c);
+    else if (!fb_is_active()) vga_putc(c);       /* SOMA_287_FLUIDEZ: con el escritorio grafico el modo texto no se ve; en QEMU cada
+                                                  * escritura en 0xB8000 (y el desplazamiento de 4000 bytes por linea) es una salida de la
+                                                  * maquina virtual: el agente imprimiendo su respuesta paraba la animacion del orbe */
 #else
     if (!uart_dead) {
         unsigned spin = 0;
@@ -338,10 +342,33 @@ void kputc(char c)
 #endif
 }
 
+/* SOMA_287_FLUIDEZ: un texto largo (la respuesta del LLM, la salida de una orden) sale caracter a caracter por el puerto serie, que
+ * espera en bucle a la UART, y el planificador del nucleo es cooperativo: mientras el agente escribia, la GUI no avanzaba y el orbe
+ * iba a tirones. Desde el hilo del agente (que no tiene cerrojos de espera activa al imprimir) se cede la CPU cada pocos
+ * milisegundos, solo con las interrupciones activas (fuera de manejadores y secciones criticas). */
+static int kp_puede_ceder(void)
+{
+#ifdef __x86_64__
+    uint64_t fl; __asm__ volatile ("pushfq; popq %0" : "=r"(fl));
+    if (!(fl & 0x200u)) return 0;
+    struct tcb *t = thread_current();
+    if (!t) return 0;
+    const char *n = t->name, *a = "soma_agente";
+    while (*a && *n == *a) { ++n; ++a; }
+    return !*a && !*n;
+#else
+    return 0;
+#endif
+}
 void kprint(const char *s)
 {
+    uint32_t k = 0;
     for (; *s; ++s) {
         kputc(*s);
+        if ((++k & 127u) == 0 && kp_puede_ceder()) {
+            static uint64_t ult; uint64_t t = timer_get_uptime_ms();
+            if (t - ult >= 4) { ult = t; thread_yield(); }
+        }
     }
 }
 
@@ -624,6 +651,10 @@ extern void hotkey_post(int code) __attribute__((weak));   /* SOMA_168_T480S: ba
 static volatile uint32_t kbd_super_count;
 static int lalt_down, lalt_other;
 uint32_t console_take_super(void) { return __sync_lock_test_and_set(&kbd_super_count, 0); }
+/* SOMA_294_AYUDA: F1 (0x3B; el teclado USB llega con el mismo codigo) muestra u oculta la ayuda rapida del escritorio. Antes no
+ * hacia nada. La GUI lo recoge, como la tecla Windows. */
+static volatile uint32_t kbd_help_count;
+uint32_t console_take_help(void) { return __sync_lock_test_and_set(&kbd_help_count, 0); }
 /* SOMA_245_PTT: el Alt izquierdo es "pulsar para hablar" en todo el sistema. Con el modo encendido (console_set_alt_voice), el
  * teclado solo informa: Alt abajo/arriba, numero de pulsaciones y si se toco otra tecla con Alt (atajo: no es dictado). La GUI
  * graba mientras esta pulsado y, si fue solo un toque, llama al orbe como antes (console_post_super). */
@@ -713,6 +744,7 @@ static void keyboard_scancode(uint8_t sc)
         caps_active = !caps_active;
         return;
     }
+    if (sc == 0x3B) { kbd_help_count++; kbd_events++; return; }                        /* SOMA_294_AYUDA: F1 */
     if (sc & 0x80) {
         return;
     }

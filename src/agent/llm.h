@@ -43,6 +43,10 @@ struct llm_img;
 int  llm_chat_ex(const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
                  char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
 int  llm_vision_unsupported(void);
+/* SOMA_285_CHAT: conversacion de varios turnos (struct llm_msg de llm_proto.h); cancel != NULL corta la espera si pasa a 1. */
+struct llm_msg;
+int  llm_chat_hist(const char *system, const struct llm_msg *msgs, int nmsg, const struct llm_img *img, int nimg, int max_tokens,
+                   char *reply_out, uint32_t reply_max, uint32_t timeout_ms, const volatile int *cancel);
 /* SOMA_251_RUTAS: quien hace la proxima llamada (para /agent/traza.txt: tiempo, tamanos y tokens de cada llamada) */
 void llm_trace_tag(const char *tag);
 

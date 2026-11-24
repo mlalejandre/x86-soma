@@ -22,4 +22,6 @@ void coder_app_inst_drop(int slot);
 int  coder_app_inst_find(const char *path);
 const char *coder_app_inst_name(int slot);
 void coder_app_open_path(const char *path);
+/* SOMA_290_VOZ_CODIGO: si no es NULL, coder_run_mission le pasa cada fase (1 analizar, 2 generar, 4 reparar, 5 revisar) */
+extern void (*coder_narrador)(int fase, const char *desc, const char *detalle);
 #endif

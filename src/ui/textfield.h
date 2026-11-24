@@ -23,6 +23,7 @@ struct tfield {
     uint64_t  last_click; uint32_t last_pos; int clicks;
     uint8_t   u8[4]; int u8n, u8need;
     int       readonly;
+    int       bare;              /* SOMA_285_CHAT: sin fondo ni borde (lo pinta quien aloja el campo) */
 };
 
 void tf_init(struct tfield *t, char *buf, uint32_t cap, int multiline);
@@ -35,4 +36,8 @@ void tf_press(struct tfield *t, int mx, int my, int shift);
 int  tf_drag(struct tfield *t, int mx, int my, int held);    /* 1 = redibujar */
 int  tf_key(struct tfield *t, char c, int ctrl, int shift);
 int  tf_clip(struct tfield *t, int op);                       /* CLIP_OP_* */
+/* SOMA_285_CHAT */
+int  tf_lines(struct tfield *t, int w);                       /* lineas que ocupa el texto con ese ancho (multilinea) */
+void tf_insert(struct tfield *t, const char *s, uint32_t n);  /* inserta en el cursor (cualquier longitud que quepa) */
+int  tf_line_h(void);                                         /* alto de una linea en px */
 #endif

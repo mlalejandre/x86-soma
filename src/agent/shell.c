@@ -374,7 +374,7 @@ static int agent_net_denied(const char *cmd, const char *args, char *out_buf, ui
 static int agent_cmd_is_external(const char *c)
 {
     while (*c == ' ') c++;
-    if (!(shell_starts_with(c, "search ") || shell_starts_with(c, "ddg ") || shell_starts_with(c, "curl ") || shell_starts_with(c, "descargar "))) return 0;
+    if (!(shell_starts_with(c, "search ") || shell_starts_with(c, "investiga ") /* SOMA_288_INVESTIGA */ || shell_starts_with(c, "ddg ") || shell_starts_with(c, "curl ") || shell_starts_with(c, "descargar "))) return 0;
     for (const char *p = c; *p; ++p) if (*p == ';' || *p == '|' || *p == '&' || *p == '>' || *p == '<' || *p == '`' || *p == '$') return 0;
     return 1;
 }
@@ -688,10 +688,12 @@ static int cmd_help(const char *args, char *out_buf, uint32_t max_out);
 #include "shell_diagnostico.c"     /* diagnostico y pruebas */
 #include "shell_procesos.c"        /* programas y procesos */
 #include "shell_archivos.c"        /* archivos */
+#include "shell_investiga.c"       /* SOMA_288_INVESTIGA: investigacion en internet (antes que shell_red.c) */
 #include "shell_red.c"             /* red */
 #include "shell_agente.c"          /* agentes y modelo */
 #include "shell_apps.c"            /* aplicaciones y portatil */
 #include "shell_agenda.c"          /* SOMA_272_AGENDA: calendario */
+#include "shell_correo.c"          /* SOMA_295_CORREO: correo electronico */
 #include "shell_js.c"              /* SOMA_274_JS: JavaScript (orden js) */
 #include "shell_html.c"            /* SOMA_275_HTML: webs (orden html) */
 #include "shell_utilidades.c"      /* utilidades de terminal */
@@ -869,7 +871,8 @@ static const struct command_entry cmd_table[] = {
     { "ping",         cmd_ping,         CMD_F_SAFE,   "Envia peticiones ICMP Echo a una IP destino" },
     { "dns",          cmd_dns,          CMD_F_SAFE,   "Resolucion dinamica de nombres de dominio DNS" },
     { "curl",         cmd_curl,         CMD_F_SAFE,   "Cliente HTTP/1.1 con resolucion y cabeceras" },
-    { "search",       cmd_search,       CMD_F_SAFE,   "Busqueda web DuckDuckGo Instant Answer" },
+    { "search",       cmd_search,       CMD_F_SAFE,   "Busqueda web (Wikipedia y DuckDuckGo) con el texto de la primera pagina" },
+    { "investiga",    cmd_investiga,    CMD_F_SAFE,   "Investiga en internet: busca, lee varias paginas y escribe un informe con fuentes citadas" },   /* SOMA_288_INVESTIGA */
     { "ddg",          cmd_search,       CMD_F_ALIAS,  "Alias de search" },
 
     /* Inteligencia Artificial y Sistema Multi-Agente */
@@ -909,6 +912,7 @@ static const struct command_entry cmd_table[] = {
     { "youtube",      cmd_youtube,      CMD_F_NORMAL, "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | modo nativo|servicio | mp4 <direccion> | ia on|off | ver N | transcribir | subtitulos | resumen | pregunta <texto> | idioma X | minutos N | contexto N | estado" },
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
     { "agenda",       cmd_agenda,       CMD_F_SAFE,   "Calendario: agenda a\xC3\xB1" "adir el miercoles dia 6 a las 13 horas futbol | hoy | ma\xC3\xB1" "ana | semana | mes | borrar N | abrir | avisos | exportar | importar" },
+    { "correo",       cmd_correo,       CMD_F_SAFE,   "Correo electr\xC3\xB3nico (IMAP/SMTP con IA): correo [abrir] | estado | sincroniza | busca <texto>" },   /* SOMA_295_CORREO */
     { "imagen",       cmd_imagen,       CMD_F_SAFE,   "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)" },
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
     { "traza",        cmd_traza,        CMD_F_SAFE,   "Tiempos y tokens de las ultimas llamadas al modelo (/agent/traza.txt)" },
@@ -1001,6 +1005,7 @@ static const struct help_usage help_usages[] = {
     { "write",      "write <ruta> \"<texto>\"   (\\n = salto de linea)" },
     { "curl",       "curl <url> | curl <host> [puerto] [ruta]" },
     { "search",     "search <consulta>" },
+    { "investiga",  "investiga <pregunta o tema>   (varias busquedas, lee las paginas y escribe un informe con fuentes)" },
     { "spawn",      "spawn <comando>   (segundo plano; log en /tmp/job_<TID>.log)" },
     { "kill",       "kill <TID>" },
     { "delegate",   "delegate <agente> \"<mision>\"" },

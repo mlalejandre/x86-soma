@@ -37,7 +37,8 @@ enum soma_icon_id {
     ICON_SCR = 17,         /* SOMA_179_T480S: captura de pantalla (vectorial) */
     ICON_YOUTUBE = 18,     /* SOMA_250_YOUTUBE: YouTube (vectorial) */
     ICON_AGENDA = 19,      /* SOMA_272_AGENDA: calendario (vectorial) */
-    ICON_COUNT = 20
+    ICON_CORREO = 20,      /* SOMA_295_CORREO: sobre (vectorial) */
+    ICON_COUNT = 21
 };
 
 static inline const uint8_t (*icon_get_data(int id))[16]

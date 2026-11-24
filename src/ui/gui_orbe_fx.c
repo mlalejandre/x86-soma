@@ -175,6 +175,7 @@ static uint32_t ofx_app_color(int app)
     switch (app) {
     case APP_TERMINAL_SHELL: return 0x0010B981u;
     case APP_AGENT_CHAT:     return 0x0038BDF8u;
+    case APP_CORREO:         return 0x0022D3EEu;   /* SOMA_295_CORREO */
     case APP_WEB_BROWSER:    return 0x00F59E0Bu;
     case APP_FILE_MANAGER:   return 0x0038BDF8u;
     case APP_IMAGE_VIEWER:   return 0x0010B981u;

@@ -58,6 +58,11 @@ TEMAS = {
     "github": (["README.md", "CHANGELOG.md", ".gitignore", ".gitattributes", "subir_github.py", ".github/workflows/*.yml", "Makefile",
                 "construyeimagen.py", "imagen/LEEME.md", "tools/exporta_para_claude.py"],
                "publicacion: README, CHANGELOG, .gitignore, subir_github.py, CI"),
+    "correo": (["src/apps/correo.[ch]", "src/apps/correo_core.[ch]", "src/apps/correo_red.[ch]", "src/agent/shell_correo.c",
+                "tests/test_correo*_295.*", "tests/correo_servidores_295.py", "docs/PARCHE_295_CORREO.md"],
+               "el correo: IMAP/SMTP, la IA del correo y el orbe"),   # SOMA_297_GITHUB
+    "ayuda": (["src/ui/ayuda.h", "src/ui/gui_ayuda.c", "tests/test_ayuda*_294.c", "docs/PARCHE_294_AYUDA.md"],
+              "la bienvenida del orbe y la ayuda rapida (F1)"),   # SOMA_297_GITHUB
     "compilar": (["Makefile", "ejecutar.py", "construyeimagen.py", "Dockerfile", "linker_*.ld", "protected.txt"],
                  "compilacion y arranque"),
 }

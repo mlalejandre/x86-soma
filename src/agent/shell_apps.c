@@ -834,7 +834,9 @@ static int cmd_youtube(const char *args, char *out_buf, uint32_t max_out)
 {
     while (*args == ' ') args++;
     if (out_buf && max_out) out_buf[0] = 0;
+    { extern int gui_agent_busy(void); youtube_hablar(gui_agent_busy()); }   /* SOMA_286_YOUTUBE: desde el orbe, resultados y respuestas en voz alta */
     int r = youtube_command(args, out_buf, max_out);
+    if (r == 3) { gui_open_youtube(""); return 1; }               /* SOMA_286_YOUTUBE: ver, pausa, resumen, pregunta...: la ventana delante */
     if (r == 1) return 1;
     if (r == 2) args = "";                                       /* SOMA_252: "youtube mp4 <direccion>": abrir la ventana sin buscar */
     gui_open_youtube(args);

@@ -304,6 +304,25 @@ int pdfview_open_file(const char *path)
     char m[120] = "Abierto: "; s_cat(m, path, sizeof m); say(m, 1);
     return 0;
 }
+/* SOMA_289_VISOR: un PDF que ya esta en memoria (el navegador lo ha descargado). El visor se queda con 'data' (kmalloc): lo libera el. */
+int pdfview_open_data(const char *name, uint8_t *data, uint32_t len)
+{
+    pv_boot();
+    close_doc();
+    s_cpy(g_path, name ? name : "documento.pdf", sizeof g_path);
+    if (!data || !len) { s_cpy(g_err, "Documento vacio", sizeof g_err); say(g_err, 0); if (data) kfree(data); return -1; }
+    g_data = data; g_len = len;
+    g_pdf = pdf_open(data, len, g_err, sizeof g_err);
+    if (!g_pdf) { say(g_err, 0); kfree(g_data); g_data = 0; g_len = 0; return -1; }
+    g_np = pdf_page_count(g_pdf); g_page = 0; g_scroll = 0; g_picker = 0; g_side_scroll = 0;
+    pdf_title(g_pdf, g_title, sizeof g_title);
+    say("Documento abierto", 1);
+    return 0;
+}
+int pdfview_selected(void) { pv_boot(); for (int k = 1; k <= PV_INST_MAX; ++k) if (PV == &pv_insts[k]) return k; return 1; }
+const char *pdfview_doc_title(void) { pv_boot(); return g_title; }
+int pdfview_pages(void) { pv_boot(); return g_pdf ? g_np : 0; }
+const char *pdfview_error(void) { pv_boot(); return g_err; }
 void pdfview_init(void) { pv_boot(); (void)has_wf(); }
 
 /* escala (px por punto * 256) para el modo de zoom y el area dada */

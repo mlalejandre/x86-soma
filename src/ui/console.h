@@ -50,6 +50,7 @@ void console_serial_probe(void);             /* SOMA_155B_T480S: COM1 existe? (l
 int  console_serial_present(void);
 uint32_t console_kbd_events(void);
 uint32_t console_take_super(void);              /* SOMA_168B_ORBE: pulsaciones de la tecla Windows (u Option sola) */
+uint32_t console_take_help(void);               /* SOMA_294_AYUDA: pulsaciones de F1 (ayuda rapida) */
 /* SOMA_156_T480S: registro del nucleo (dmesg) */
 void klog_grow(void);                        /* tras kheap_init: pasa de 16 KiB a 256 KiB */
 uint32_t klog_snapshot(char *out, uint32_t max);

@@ -567,13 +567,7 @@ static void her_render_app_body(enum app_mode app, uint32_t wx, uint32_t wy, uin
     case APP_TERMINAL_SHELL:
         render_real_terminal(wx, wy, ww, wh, cur_cmd, cur_cmd_len, cur_cursor_pos, is_focused);
         break;
-    case APP_AGENT_CHAT:
-        render_log_window_chat(agent_log, agent_log_count, wx, wy, ww,
-                               wh > 56 ? wh - 56 : wh);
-        render_input_bar_chat("soma> ", COLOR_CYAN, wx, wy + wh - 46, ww, 46,
-                              agent_global_cmd, agent_global_len,
-                              agent_global_cursor, is_focused && agent_global_focus);
-        break;
+    case APP_AGENT_CHAT:    chat_render_window(wx, wy, ww, wh, is_focused); break;   /* SOMA_285_CHAT: el chat nuevo */
     case APP_WEB_BROWSER:   browser_render_window(wx, wy, ww, wh, is_focused); break;
     case APP_IMAGE_VIEWER:  imgview_render_window(wx, wy, ww, wh, is_focused); break;
     case APP_FILE_MANAGER:  fm_render_window(wx, wy, ww, wh, is_focused);      break;
@@ -590,6 +584,7 @@ static void her_render_app_body(enum app_mode app, uint32_t wx, uint32_t wy, uin
     case APP_PDF:           pdfview_render_window(wx, wy, ww, wh, is_focused); break;   /* PARCHE 088 */
     case APP_SYSMON:        sysmon_render_window(wx, wy, ww, wh, is_focused);  break;   /* PARCHE 089 */
     case APP_AGENDA:        agenda_gui_render_window(wx, wy, ww, wh, is_focused); break;   /* SOMA_272_AGENDA */
+    case APP_CORREO:        correo_render_window(wx, wy, ww, wh, is_focused); break;       /* SOMA_295_CORREO */
     case APP_RECORDER:      recorder_render_window(wx, wy, ww, wh, is_focused); break;  /* SOMA_177_T480S */
     case APP_CAMERA:        camapp_render_window(wx, wy, ww, wh, is_focused); break;     /* SOMA_178_T480S */
     case APP_CAPTURE:       capapp_render_window(wx, wy, ww, wh, is_focused); break;     /* SOMA_179_T480S */
@@ -720,7 +715,7 @@ struct her_bc { int used; enum app_mode app; int slot; uint32_t x, y, w, h; int 
  * sin limite de tiempo, haya o no actividad del raton, y sin sumas de comprobacion. */
 static int her_app_version(enum app_mode a, uint32_t *v)
 {
-    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; default: return 0; }   /* SOMA_283_MEMORIA_APP */
+    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; case APP_AGENT_CHAT: *v = chat_version(); return 1; case APP_CORREO: *v = correo_version(); return 1; default: return 0; }   /* SOMA_295_CORREO */   /* SOMA_283_MEMORIA_APP; SOMA_285_CHAT */
 }
 static uint32_t her_bc_gen(void) { return wf_ui_gen() ^ ((uint32_t)settings_opacity() << 20) ^ ((uint32_t)settings_active_opaque() << 28); }
 static struct her_bc her_bcs[HER_MAX_WINDOWS];
@@ -728,7 +723,7 @@ static int her_bc_base_ok; static uint64_t her_bc_input_ms;
 static int her_bc_app_ok(enum app_mode a)
 {
     return a == APP_TERMINAL_SHELL || a == APP_NOTEPAD || a == APP_FILE_MANAGER || a == APP_IMAGE_VIEWER || a == APP_AGENT_CHAT ||
-           a == APP_AGENT_MEMORY || a == APP_AGENTS || a == APP_SETTINGS || a == APP_PDF || a == APP_LAYOUT || a == APP_SYSMON || a == APP_AGENDA;
+           a == APP_AGENT_MEMORY || a == APP_AGENTS || a == APP_SETTINGS || a == APP_PDF || a == APP_LAYOUT || a == APP_SYSMON || a == APP_AGENDA || a == APP_CORREO;   /* SOMA_295_CORREO */
 }
 static struct her_bc *her_bc_find(enum app_mode app, int slot, int create)
 {
@@ -890,7 +885,7 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     int existing = her_multi_app(app) ? -1 : her_find_window(app);
     if (existing >= 0) {
         her_bring_to_front(existing);
-        agent_global_focus = (app == APP_AGENT_CHAT) ? 1 : 0;
+        agent_global_focus = 0;   /* SOMA_285_CHAT: el chat tiene su propio cuadro de texto (el orbe no se queda las teclas) */
         return;
     }
     if (!her_multi_app(app)) {
@@ -929,7 +924,7 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
         if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
         if (her_windows[idx].w < mw) her_windows[idx].w = mw;
         if (cur_h > 96u && mh <= cur_h - 48u && her_windows[idx].h < mh) her_windows[idx].h = mh;
-        if ((app == APP_WEB_BROWSER || app == APP_PDF || app == APP_IMAGE_VIEWER || app == APP_SYSMON || app == APP_CODER_APP || app == APP_YOUTUBE) && cur_w > 400u && cur_h > 300u) {   /* PARCHE 088: tambien PDF e imagenes */   /* PARCHE 086: el navegador abre grande (2/3 de ancho, 85 % de alto) */
+        if ((app == APP_WEB_BROWSER || app == APP_PDF || app == APP_IMAGE_VIEWER || app == APP_SYSMON || app == APP_CODER_APP || app == APP_YOUTUBE || app == APP_AGENT_CHAT || app == APP_CORREO) && cur_w > 400u && cur_h > 300u) {   /* SOMA_285_CHAT: el chat tambien abre grande */   /* PARCHE 088: tambien PDF e imagenes */   /* PARCHE 086: el navegador abre grande (2/3 de ancho, 85 % de alto) */
             uint32_t bw = cur_w * 2u / 3u, bh = cur_h * 85u / 100u;
             if (bw > 1400u) bw = 1400u;
             if (bw < mw) bw = mw;
@@ -961,7 +956,7 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
 
     her_active_win_idx = idx;
     current_app = app;
-    agent_global_focus = (app == APP_AGENT_CHAT) ? 1 : 0;
+    agent_global_focus = 0;   /* SOMA_285_CHAT: el chat tiene su propio cuadro de texto (el orbe no se queda las teclas) */
     her_win_focus(app, terminal_slot);
     if (terminal_slot && app == APP_TERMINAL_SHELL) term_init_banner(0); /* Historia nueva solo en una instancia nueva. */
 
@@ -971,10 +966,12 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     case APP_IMAGE_VIEWER: if (!her_open_noinit) imgview_init(); break;   /* SOMA_212: no cargar la de muestra si viene un archivo */
     case APP_NOTEPAD:      notepad_init();  break;
     case APP_AGENT_MEMORY: memview_init();  break;
+    case APP_AGENT_CHAT:   chat_init();     break;          /* SOMA_285_CHAT */
     case APP_LAYOUT:       layout_init();   break;          /* PARCHE 084: conserva el documento abierto */
     case APP_PDF:          pdfview_init();  break;          /* PARCHE 088 */
     case APP_SYSMON:       sysmon_init();   break;          /* PARCHE 089 */
     case APP_AGENDA:       agenda_gui_init(); break;        /* SOMA_272_AGENDA */
+    case APP_CORREO:       correo_init(); break;            /* SOMA_295_CORREO */
     case APP_RECORDER:     recorder_init(); break;          /* SOMA_177_T480S */
     case APP_CAMERA:       camapp_init(); break;            /* SOMA_178_T480S */
     case APP_CAPTURE:      capapp_init(); break;            /* SOMA_179_T480S */

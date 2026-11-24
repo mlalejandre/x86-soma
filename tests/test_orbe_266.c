@@ -39,6 +39,8 @@ static void si_icon(int i, int32_t x, int32_t y, int32_t s, uint32_t c) { (void)
 static void si_text_c(int32_t x, int32_t t, int32_t w, int32_t h, const char *s, int px, uint32_t c, int b) { (void)x; (void)t; (void)w; (void)h; (void)s; (void)px; (void)c; (void)b; if (niconos < 16) iconos[niconos++] = 99; }
 static int letra = 2;
 int lcm_cfg_get(int q) { return q == 6 ? letra : 0; }
+static void chat_fase(const char *q) { (void)q; }                 /* SOMA_285_CHAT: el chat no esta en este banco */
+static void chat_fase_orden(const char *l) { (void)l; }
 #include "gui_prompter.c"
 
 

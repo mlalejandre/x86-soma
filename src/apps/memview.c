@@ -1289,7 +1289,7 @@ int memview_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, ui
     }
     if (held && g_foco && tf_drag(g_foco, mx, my, held)) r = 1;
     if (wheel && dentro && !g_modal) {
-        int d = wheel > 0 ? 1 : -1;
+        int d = wheel > 0 ? -1 : 1;                              /* SOMA_286_YOUTUBE: positivo = rueda hacia arriba (mouse.c): sube */
         if (g_tab == T_EXP) {
             int lw = g_ww - 32 >= 1000 ? 320 : (g_ww - 32) * 34 / 100;
             if (mx < g_wx + 16 + lw) g_tscroll += d * 3; else g_cscroll += d * 3 * (CARD_H + CARD_G) / 2;

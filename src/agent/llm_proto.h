@@ -46,6 +46,12 @@ uint32_t llm_proto_chat_ex_size(const char *system, const char *prompt, const st
 int  llm_proto_chat_ex(const struct llm_conf *c, const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
                        char *body, uint32_t max, struct llm_http *h);
 int  llm_proto_no_vision(int status, const char *err);
+/* SOMA_285_CHAT: conversacion de varios turnos. rol LLM_ROL_USER / LLM_ROL_ASSISTANT; las imagenes van con el ultimo mensaje del usuario. */
+enum { LLM_ROL_USER = 0, LLM_ROL_ASSISTANT = 1 };
+struct llm_msg { int rol; const char *text; };
+uint32_t llm_proto_chat_hist_size(const char *system, const struct llm_msg *m, int nm, const struct llm_img *img, int nimg);
+int  llm_proto_chat_hist(const struct llm_conf *c, const char *system, const struct llm_msg *m, int nm, const struct llm_img *img, int nimg,
+                         int max_tokens, char *body, uint32_t max, struct llm_http *h);
 int  llm_proto_models(const struct llm_conf *c, struct llm_http *h);         /* peticion GET de la lista de modelos; LLM_P_* */
 /* Texto de la respuesta del modelo. 1 = extraido. */
 int  llm_proto_reply(const struct llm_conf *c, const char *json, char *out, uint32_t max);

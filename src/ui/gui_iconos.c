@@ -5,7 +5,7 @@
 /* SOMA ASYNC MATERIALIZE PATCH v4 */
 /* SOMA ORBITAL CALM PATCH v3 */
 /* SOMA ORBITAL ICONS PATCH v2: iconos como cuerpos en orbita estable. */
-#define HER_DOCK_ITEM_COUNT 20     /* SOMA_272_AGENDA: +1 (la agenda va al final para no mover las posiciones guardadas) */
+#define HER_DOCK_ITEM_COUNT 21     /* SOMA_272_AGENDA: +1 (la agenda va al final para no mover las posiciones guardadas); SOMA_295_CORREO: +1 (el correo, tambien al final) */
 #define HER_ICON_ANIM_MAX   256u
 #define HER_ICON_BOX_SIZE   44
 
@@ -37,6 +37,7 @@ static const struct her_dock_item her_dock_items[HER_DOCK_ITEM_COUNT] = {
     { ICON_SETTINGS, 0x0094A3B8,  "AJUSTES", APP_SETTINGS },        /* PARCHE 085: engranaje */
     { ICON_YOUTUBE,  0x00FF4444,  "YOUTUBE", APP_YOUTUBE },         /* SOMA_250_YOUTUBE: videos de YouTube */
     { ICON_AGENDA,   0x0034D399,  "AGENDA",  APP_AGENDA },          /* SOMA_272_AGENDA: calendario */
+    { ICON_CORREO,   0x0022D3EE,  "CORREO",  APP_CORREO },          /* SOMA_295_CORREO: correo electronico */
 };
 
 /* La aparicion se escalona ligeramente para que los iconos escapen uno tras
@@ -110,10 +111,10 @@ static void her_place_window_corner(uint32_t cur_w, uint32_t cur_h, int corner)
  * 0: asistentes, 1: sistema/desarrollo, 2: trabajo,
  * 3: multimedia, 4: captura/red. Posiciones estaticas en el escritorio. */
 static const uint8_t her_group_col[HER_DOCK_ITEM_COUNT] = {
-    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4,0
+    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4,0,2   /* SOMA_295_CORREO: el correo, con el trabajo */
 };
 static const uint8_t her_group_row[HER_DOCK_ITEM_COUNT] = {
-    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3,3
+    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3,3,4
 };
 /* SOMA_208_ESCRITORIO: disposicion del usuario. Cada icono guarda su posicion en milesimas de pantalla (+1; 0 = la del grupo) para
  * que sirva a cualquier resolucion. Se guarda en /etc/escritorio.conf. */
@@ -405,6 +406,11 @@ static void her_icon_dist(int icon, int32_t X, int32_t Y, int32_t *dm, int32_t *
         IC_M(ic_rbox(X, Y, 32, 32, 25, 18, 9));
         IC_A(ic_seg(X, Y, 28, 25, 28, 39, 26)); IC_A(ic_seg(X, Y, 28, 25, 40, 32, 26)); IC_A(ic_seg(X, Y, 28, 39, 40, 32, 26));
         IC_A(ic_circ(X, Y, 32, 32, 5));
+        break;
+    case ICON_CORREO:                                    /* SOMA_295_CORREO: sobre con la solapa y un destello de IA */
+        IC_M(ic_seg(X, Y, 12, 20, 52, 20, 20)); IC_M(ic_seg(X, Y, 52, 20, 52, 46, 20)); IC_M(ic_seg(X, Y, 52, 46, 12, 46, 20)); IC_M(ic_seg(X, Y, 12, 46, 12, 20, 20));
+        IC_M(ic_seg(X, Y, 13, 21, 32, 35, 18)); IC_M(ic_seg(X, Y, 51, 21, 32, 35, 18));
+        IC_A(ic_circ(X, Y, 50, 15, 5));
         break;
     case ICON_AGENDA:                                    /* SOMA_272_AGENDA: hoja de calendario con anillas y dos dias marcados */
         IC_M(ic_seg(X, Y, 14, 18, 50, 18, 20)); IC_M(ic_seg(X, Y, 50, 18, 50, 52, 20)); IC_M(ic_seg(X, Y, 50, 52, 14, 52, 20)); IC_M(ic_seg(X, Y, 14, 52, 14, 18, 20));
@@ -1021,7 +1027,13 @@ static void her_draw_hover_tooltip(uint32_t cur_w, uint32_t cur_h, uint64_t now_
         if (mi >= 0) {
             int id = her_min_dock_index(her_minimized[mi].app);
             int32_t x, y; her_min_orbit_position(mi, cur_w, cur_h, now_ms, &x, &y);
-            her_tip_box(x, y + 28, id >= 0 ? her_dock_items[id].label : "APP");
+            {   /* SOMA_291_CERRAR_ORBITA: como se abre y como se cierra */
+                char t[64]; int n = 0;
+                for (const char *c = id >= 0 ? her_dock_items[id].label : "APP"; *c && n < 30; ++c) t[n++] = *c;
+                for (const char *c = "  (boton derecho: cerrar)"; *c && n < (int)sizeof t - 1; ++c) t[n++] = *c;
+                t[n] = 0;
+                her_tip_box(x, y + 28, t);
+            }
         }
     }
     if (her_hint_msg && now_ms < her_hint_until)

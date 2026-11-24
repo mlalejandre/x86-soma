@@ -183,8 +183,10 @@ static int her_voz_escape(void)
 }
 
 /* Pastilla global (la llama fb_present en cada volcado, encima de cualquier ventana). */
+static void her_ayuda_draw(void);                /* SOMA_294_AYUDA: src/ui/gui_ayuda.c (debajo de la pastilla) */
 void voz_ptt_overlay_draw(void)
 {
+    her_ayuda_draw();                            /* SOMA_294_AYUDA */
     int kind = her_voz_shown_kind;
     if (!kind) return;
     uint32_t sw = fb_get_width(), sh = fb_get_height();

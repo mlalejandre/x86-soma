@@ -15,4 +15,11 @@ void pdfview_select(int slot);
 void pdfview_inst_drop(int slot);
 int  pdfview_inst_find(const char *path);
 const char *pdfview_inst_name(int slot);
+/* SOMA_289_VISOR: el navegador abre en una instancia propia un PDF descargado (se queda con data, de kmalloc) y deja la que
+ * estuviera seleccionada como estaba (pdfview_selected). */
+int  pdfview_open_data(const char *name, uint8_t *data, uint32_t len);
+int  pdfview_selected(void);
+const char *pdfview_doc_title(void);
+int  pdfview_pages(void);
+const char *pdfview_error(void);
 #endif

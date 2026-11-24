@@ -211,6 +211,7 @@ static void her_draw_one_window_chrome(struct her_win_node *win, int is_active)
         case APP_SETTINGS:       title = "Ajustes"; break;
         case APP_SYSMON:         title = "Monitor del sistema"; break;
         case APP_AGENDA:         title = "Calendario"; break;                /* SOMA_272_AGENDA */
+        case APP_CORREO:         title = "Correo"; break;                    /* SOMA_295_CORREO */
         case APP_RECORDER:       title = "Grabadora"; break;
         case APP_CAMERA:         title = "Camara"; break;                     /* SOMA_178_T480S */
         case APP_CAPTURE:        title = "Captura"; break;                    /* SOMA_179_T480S */
@@ -549,7 +550,8 @@ static void render_real_terminal(uint32_t lx, uint32_t ly, uint32_t lw, uint32_t
     term_render(lx, ly, lw, lh, cmd, cmd_len, cursor_pos, show_cursor);
 }
 
-static void render_log_window_chat(struct gui_chat_line *lines, int count, uint32_t lx, uint32_t ly, uint32_t lw, uint32_t lh) {
+/* SOMA_285_CHAT: el chat antiguo ya no se pinta (lo sustituye src/apps/chat.c) */
+__attribute__((unused)) static void render_log_window_chat(struct gui_chat_line *lines, int count, uint32_t lx, uint32_t ly, uint32_t lw, uint32_t lh) {
     fb_fill_rect(lx, ly, lw, lh, 0x0004070E); fb_draw_rect(lx, ly, lw, lh, COLOR_CYAN);
     fb_fill_rect(lx, ly, lw, 36, 0x001E293B); fb_draw_rect(lx, ly, lw, 36, 0x00334155);
     font_draw_string(lx + 16, ly + 14, "SOMA v0.2 :: Agente IA (ReAct & LLM)", 0x00F8FAFC, 1);

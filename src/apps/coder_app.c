@@ -2143,10 +2143,12 @@ static void cm_trace_cb(const char *kind, const char *prompt, const char *reply)
     vfs_write("/agent/coder_ultimo.txt", cm_trace, cm_trace_n);
 }
 static void cm_log(const char *m) { kprint("[PROGRAMADOR] "); kprint(m); kprint("\n"); cdr_log(m); cm_tr_add("# ", 2); cm_tr_add(m, 300); cm_tr_add("\n", 2); }
+void (*coder_narrador)(int fase, const char *desc, const char *detalle);   /* SOMA_290_VOZ_CODIGO: el agente cuenta en voz alta las fases */
 static void cm_status(int phase, const char *desc, const char *thought)
 {
-    (void)phase; kprint("[PROGRAMADOR] "); kprint(desc); if (thought && thought[0]) { kprint("  ("); kprint(thought); kprint(")"); } kprint("\n");
+    kprint("[PROGRAMADOR] "); kprint(desc); if (thought && thought[0]) { kprint("  ("); kprint(thought); kprint(")"); } kprint("\n");
     gui_thought_update(desc);
+    if (coder_narrador) coder_narrador(phase, desc, thought);
 }
 static int cm_never(void) { return 0; }
 

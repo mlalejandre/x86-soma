@@ -24,6 +24,8 @@ void fb_set_clip(int32_t x, int32_t y, int32_t w, int32_t h);
 void fb_reset_clip(void);
 #include "sysicon.h"
 #include "web_font.h"
+static void chat_fase(const char *q) { (void)q; }                 /* SOMA_285_CHAT: el chat no esta en este banco */
+static void chat_fase_orden(const char *l) { (void)l; }
 #include "gui_prompter.c"
 int uso(void);
 int uso(void) { her_pr_turno(); her_pr_pensamiento("a"); her_pr_stream_ini(); her_pr_stream("b"); her_pr_fin("c"); her_pr_raton(1); her_pr_rueda(1); gui_fase_orden("ls"); return her_pr_dibuja(800, 600, 300); }

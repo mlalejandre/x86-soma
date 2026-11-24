@@ -23,6 +23,7 @@ int  youtube_escape(void);                  /* Esc: 1 = lo ha usado la aplicacio
 int  youtube_clip_op(int op);               /* CLIP_OP_* sobre la caja de busqueda */
 int  youtube_tick(void);                    /* 1 = hay que repintar (fotograma nuevo, resultados, estado) */
 void youtube_search(const char *query);     /* lanza una busqueda (la orden `youtube <texto>`) */
-int  youtube_command(const char *args, char *out, uint32_t max);   /* orden de shell 'youtube ...'; 0 = hay que abrir la ventana */
+int  youtube_command(const char *args, char *out, uint32_t max);   /* orden de shell 'youtube ...'; 0 = hay que abrir la ventana; 3 = hecho y hay que traerla delante (SOMA_286) */
+void youtube_hablar(int on);                /* SOMA_286_YOUTUBE: la proxima busqueda o respuesta de la IA se lee en voz alta (peticion del orbe) */
 
 #endif

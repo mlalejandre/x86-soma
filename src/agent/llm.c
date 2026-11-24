@@ -500,9 +500,16 @@ int llm_vision_unsupported(void)
 int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
                 char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
+    struct llm_msg m = { LLM_ROL_USER, prompt ? prompt : "" };
+    return llm_chat_hist(system, &m, 1, img, nimg, max_tokens, reply_out, reply_max, timeout_ms, 0);
+}
+/* SOMA_285_CHAT: conversacion de varios turnos (la aplicacion de chat). cancel != NULL: se puede cortar la espera (*cancel = 1). */
+int llm_chat_hist(const char *system, const struct llm_msg *msgs, int nmsg, const struct llm_img *img, int nimg, int max_tokens,
+                  char *reply_out, uint32_t reply_max, uint32_t timeout_ms, const volatile int *cancel)
+{
     const struct llm_conf *c = llm_conf_get();
     if (nimg > 0 && llm_vision_unsupported()) { set_err("LLM: el modelo no admite imagenes", ""); return -2; }
-    uint32_t cap = llm_proto_chat_ex_size(system, prompt, img, nimg);
+    uint32_t cap = llm_proto_chat_hist_size(system, msgs, nmsg, img, nimg);
     char *body = (char *)kmalloc(cap);
     if (!body) { set_err("LLM: sin memoria para la peticion", ""); return 0; }
     static struct llm_http h;
@@ -512,14 +519,46 @@ int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *im
     llm_recortada = 0;
     { const struct llm_tam *t = llm_tam();                    /* SOMA_260_LLM_TAM: la salida elegida en llm-limites manda si es mayor */
       if (max_tokens <= 0) max_tokens = (int)t->salida; else if (t->salida_fijada && (uint32_t)max_tokens < t->salida) max_tokens = (int)t->salida; }
-    int blen = llm_proto_chat_ex(c, system, prompt, img, nimg, max_tokens, body, cap, &h);
+    int blen = llm_proto_chat_hist(c, system, msgs, nmsg, img, nimg, max_tokens, body, cap, &h);
     if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); goto out; }
+    {   /* SOMA_286_YOUTUBE: el servidor local (http://IP:puerto sin clave) va por el mismo camino que el agente (llm_request), el que
+         * funciona en la red de casa. Antes iba por el cliente del navegador y YouTube y el chat decian "sin conexion con el servidor". */
+        uint8_t lip[4]; uint16_t lport;
+        if (conf_legacy(lip, &lport)) {
+            uint64_t t_start = timer_get_uptime_ms();
+            uint32_t pchars = slen_(system); for (int k = 0; k < nmsg; k++) pchars += slen_(msgs[k].text);
+            if (!ensure_llm_buffers_ex(1)) { set_err("LLM: sin memoria para la respuesta", ""); goto out; }
+            struct http_response resp; memset(&resp, 0, sizeof resp);
+            net_client_lock();
+            int code = http_post_json(lip, lport, "/v1/chat/completions", body, http_resp_buf, g_resp_cap, &resp, timeout_ms);
+            net_client_unlock();
+            if (cancel && *cancel) { set_err("LLM: cancelado", ""); ok = 0; }
+            else if (code != 200) {
+                static char m[200]; m[0] = 0;
+                if (resp.body && code > 0) (void)llm_proto_error(resp.body, m, sizeof m);
+                if (code > 0 && nimg > 0 && llm_proto_no_vision(code, m[0] ? m : resp.body)) {
+                    g_novis_prov = c->prov; for (int i = 0; i < LLM_MODEL_MAX; i++) { g_novis_model[i] = c->model[c->prov][i]; if (!g_novis_model[i]) break; }
+                    set_err("LLM: el modelo no admite imagenes: ", m); ok = -2;
+                } else if (code > 0 && m[0]) set_err("LLM: el servidor responde: ", m);
+                else if (code > 0) set_err("LLM: el servidor local no responde bien en ", c->base[LLM_LOCAL]);
+                else set_err("LLM: no hay respuesta del servidor local en ", c->base[LLM_LOCAL]);
+                kprint(llm_last_error); kprint("\n");
+            }
+            else if (!resp.body) set_err("LLM: respuesta vacia", "");
+            else if (!llm_proto_reply(c, resp.body, reply_out, reply_max) && !extract_json_content(resp.body, reply_out, reply_max)) set_err("LLM: no se pudo leer la respuesta del servidor", "");
+            else ok = 1;
+            if (ok == 1) llm_marca_recorte(reply_out, reply_max);
+            trace_record(t_start, pchars, code == 200 ? resp.body : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
+            goto out;
+        }
+    }
     {
         static struct wn_resp rs;
         struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
         rq.url = h.url; rq.method = h.method; rq.body = body; rq.body_len = (uint32_t)blen; rq.ctype = "application/json"; rq.accept = "application/json";
-        rq.timeout_ms = timeout_ms; rq.max_body = tam_max(1u << 20, llm_tam()->http); rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1;
+        rq.timeout_ms = timeout_ms; rq.max_body = tam_max(1u << 20, llm_tam()->http); rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1; rq.cancel = cancel;
         uint64_t t_start = timer_get_uptime_ms();
+        uint32_t pchars = slen_(system); for (int k = 0; k < nmsg; k++) pchars += slen_(msgs[k].text);
         int rc = wn_fetch(&rq, &rs);
         if (rc != 0 || rs.status != 200 || !rs.body) {
             static char m[200]; m[0] = 0;
@@ -532,7 +571,7 @@ int llm_chat_ex(const char *system, const char *prompt, const struct llm_img *im
         } else if (!llm_proto_reply(c, rs.body, reply_out, reply_max)) { set_err("LLM: la respuesta no trae texto (", llm_prov_label(c->prov)); kprint(llm_last_error); kprint(")\n"); }
         else ok = 1;
         if (ok == 1) llm_marca_recorte(reply_out, reply_max);                               /* SOMA_260_LLM_TAM */
-        trace_record(t_start, slen_(prompt) + slen_(system), rc == 0 ? rs.body : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
+        trace_record(t_start, pchars, rc == 0 ? rs.body : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
         wn_free(&rs);
     }
 out:

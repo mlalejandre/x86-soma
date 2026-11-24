@@ -18,6 +18,9 @@
 #include "web_font.h"
 #include "web_img.h"
 #include "png_enc.h"
+#include "paint_svg.h"   /* SOMA_292_PAINT_IA */
+#include "llm.h"
+#include "thread.h"
 
 uint64_t timer_get_uptime_ms(void);
 
@@ -76,6 +79,8 @@ static int hover_btn = -1;
 static int g_last_z = 100;            /* zoom efectivo del ultimo dibujo (para + y - del teclado) */
 static int p_named;                   /* SOMA_215_PAINT: 1 = 'path' es un archivo abierto o guardado */
 static int p_dirty;                   /* SOMA_219_AVISO: 1 = hay cambios sin guardar */
+static int ia_abierto, ia_len;        /* SOMA_292_PAINT_IA: el campo "que dibujo" de esta ventana */
+static char ia_txt[200];
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void s_cpy(char *d, const char *s, int max) { int i = 0; while (s && s[i] && i + 1 < max) { d[i] = s[i]; i++; } d[i] = 0; }
@@ -351,7 +356,7 @@ void paint_open_file(const char *p)
 }
 
 /* ---------------------------------------------------------------- disposicion */
-enum { B_NEW = 0, B_OPEN, B_SAVE, B_UNDO, B_REDO, B_ZOUT, B_ZIN, B_FIT, B_N };
+enum { B_NEW = 0, B_OPEN, B_SAVE, B_UNDO, B_REDO, B_ZOUT, B_ZIN, B_FIT, B_IA, B_N };   /* SOMA_292_PAINT_IA: + B_IA */
 #define TB_H 48
 #define ST_H 28
 #define BTN 32
@@ -372,7 +377,7 @@ static void layout(struct pl *L, uint32_t wx, uint32_t wy, uint32_t ww, uint32_t
     L->strip = 0;
     for (int i = 0; i < B_N; i++) {
         L->bx[i] = x; x += BTN + 4;
-        if (i == B_SAVE || i == B_REDO) x += 14;
+        if (i == B_SAVE || i == B_REDO || i == B_FIT) x += 14;
         if (i == B_ZOUT) { L->zl_x = x; x += 58; }
     }
     L->path_x = x + 12; L->path_w = L->x + L->w - 12 - L->path_x; if (L->path_w < 0) L->path_w = 0;
@@ -478,21 +483,34 @@ static void icon_btn(int b, int cx, int cy, uint32_t col)
 }
 static int btn_enabled(int b) { return (b == B_UNDO && u_count) || (b == B_REDO && r_count) || (b != B_UNDO && b != B_REDO); }
 
+/* SOMA_292_PAINT_IA: dibujar con el modelo (paint_ia.inc, al final de este archivo) */
+static void ia_al_pintar(uint64_t now);
+static void ia_boton(int x, int y, int hov);
+static void ia_campo(int x, int y, int w, uint64_t now);
+static const char *ia_estado_txt(uint64_t now);
+static int ia_ocupado_aqui(void);
+static void ia_tecla(char c);
+static void ia_aborta(void);
+static void ia_suelta(int slot);
+static void ia_abre_campo(void);
+
 /* ---------------------------------------------------------------- dibujo de la ventana */
 static uint32_t g_sv[200 * 110]; static int g_sv_hue = -1, g_sv_w;
 void paint_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h, int show_cursor)
 {
     (void)show_cursor;
     if (!cv) paint_init();
+    uint64_t now = timer_get_uptime_ms();
+    ia_al_pintar(now);                                            /* SOMA_292_PAINT_IA: el dibujo de la IA, paso a paso */
     struct pl L; layout(&L, win_x, win_y, win_w, win_h);
     g_last_z = L.z;
-    uint64_t now = timer_get_uptime_ms();
     char b[96];
 
     /* barra de herramientas */
     fb_fill_rect(win_x, win_y, win_w, TB_H, KC_BAR);
     fb_fill_rect(win_x, win_y + TB_H - 1, win_w, 1, KC_LINE);
     for (int i = 0; i < B_N; i++) {
+        if (i == B_IA) { ia_boton(L.bx[i], L.by, hover_btn == i); continue; }   /* SOMA_292_PAINT_IA */
         int en = btn_enabled(i), hov = hover_btn == i;
         if (en && hov) fb_fill_rounded_rect(L.bx[i], L.by, BTN, BTN, 8, 0x00222B3D);
         icon_btn(i, L.bx[i] + BTN / 2, L.by + BTN / 2, !en ? 0xFF404B5Eu : hov ? 0xFFFFFFFFu : 0xFFC4CDDAu);
@@ -501,7 +519,8 @@ void paint_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_
     fb_fill_rounded_rect(L.zl_x, L.by + 2, 54, BTN - 4, (BTN - 4) / 2, KC_FIELD);
     b[0] = 0; s_num(b, sizeof b, L.z); s_cat(b, " %", sizeof b);
     tx(L.zl_x + (54 - tw(b, 13, 1)) / 2, L.by, BTN, b, 13, zoom ? KC_TXT : KC_ACC, 1);
-    if (L.path_w > 80) {
+    if (ia_abierto && L.path_w > 80) ia_campo(L.path_x, L.by, L.path_w, now);   /* SOMA_292_PAINT_IA: "que dibujo" */
+    else if (L.path_w > 80) {
         fb_fill_rounded_rect(L.path_x, L.by, L.path_w, BTN, BTN / 2, KC_FIELD);
         fb_stroke_rrect_aa(L.path_x, L.by, L.path_w, BTN, BTN / 2, 0xFF263142u);
         fb_fill_rrect_aa(L.path_x + 12, L.by + 10, 14, 12, 3, 0xFFF59E0Bu);          /* miniatura de imagen */
@@ -619,7 +638,12 @@ void paint_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_
     b[0] = 0; s_num(b, sizeof b, cw); s_cat(b, " x ", sizeof b); s_num(b, sizeof b, ch); s_cat(b, " px", sizeof b);
     rx -= tw(b, 12, 0); tx(rx, L.st_y, ST_H, b, 12, KC_DIM, 0);
     if (cur_x >= 0) { b[0] = 0; s_num(b, sizeof b, cur_x); s_cat(b, ", ", sizeof b); s_num(b, sizeof b, cur_y); rx -= 24 + tw(b, 12, 0); tx(rx, L.st_y, ST_H, b, 12, KC_DIM, 0); }
-    if (msg[0] && now < msg_until) {
+    const char *iae = ia_estado_txt(now);                         /* SOMA_292_PAINT_IA: "La IA esta dibujando..." */
+    if (iae) {
+        int mx = L.x + 200; fb_set_clip(mx, L.st_y, rx - 16 - mx, ST_H);
+        tx(mx, L.st_y, ST_H, iae, 12, KC_ACC, 1);
+        fb_reset_clip();
+    } else if (msg[0] && now < msg_until) {
         int mx = L.x + 200; if (mx + tw(msg, 12, 0) > rx - 16) mx = L.x + 170;
         fb_set_clip(mx, L.st_y, rx - 16 - mx, ST_H);
         tx(mx, L.st_y, ST_H, msg, 12, msg_ok ? KC_OK : 0x00F87171, 0);
@@ -637,6 +661,7 @@ static void begin_canvas(const struct pl *L, int mx, int my)
     int x, y; int in = to_canvas(L, mx, my, &x, &y);
     if (tool == T_HAND) { drag = D_HAND; hand_mx = mx; hand_my = my; if (!zoom) zoom = L->z; return; }
     if (!in) return;
+    if (ia_ocupado_aqui() == 2) { say("Espera: la IA esta terminando el dibujo", 0); return; }   /* SOMA_292_PAINT_IA */
     cur_x = x; cur_y = y;
     if (tool == T_PICKER) { set_color(cv[y * cw + x], 1); push_recent(color); tool = prev_tool; say("Color tomado del lienzo", 1); return; }
     undo_push();
@@ -675,6 +700,7 @@ static void panel_pick(const struct pl *L, int mx, int my)
 }
 static void new_canvas(int w, int h)
 {
+    if (ia_ocupado_aqui() == 2) ia_aborta();                       /* SOMA_292_PAINT_IA */
     undo_push();
     canvas_alloc(w, h);
     zoom = 0; pan_x = pan_y = 0;
@@ -705,6 +731,7 @@ int paint_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, u
             case B_ZOUT: zoom_step(L.z, -1); break;
             case B_ZIN: zoom_step(L.z, 1); break;
             case B_FIT: zoom = 0; break;
+            case B_IA: if (ia_abierto) ia_abierto = 0; else ia_abre_campo(); break;   /* SOMA_292_PAINT_IA */
             }
             return 0;
         }
@@ -774,6 +801,7 @@ void paint_handle_mouse(int32_t mx, int32_t my, int is_down, uint32_t win_x, uin
 void paint_handle_key(char c)
 {
     if (!cv) paint_init();
+    if (ia_abierto && ((unsigned char)c >= 32 || c == 8 || c == 10 || c == 13 || c == 27 || c == 127)) { ia_tecla(c); return; }   /* SOMA_292_PAINT_IA */
     if (c == 26) { do_undo(); return; }                          /* Ctrl+Z */
     if (c == 25) { do_redo(); return; }                          /* Ctrl+Y */
     if (c == 19) { do_save(); return; }                          /* Ctrl+S */
@@ -822,7 +850,8 @@ int paint_clip_op(int op)
  * y los pasos de deshacer van por puntero y nunca se copian). */
 #define PT_FIELDS X(cv) X(pv) X(cw) X(ch) X(undo_buf) X(undo_w) X(undo_h) X(u_top) X(u_count) X(r_count) X(tool) X(prev_tool) \
     X(bsize) X(color) X(recent) X(n_recent) X(hue) X(sat) X(val) X(zoom) X(pan_x) X(pan_y) X(path) X(msg) X(msg_until) X(msg_ok) \
-    X(cur_x) X(cur_y) X(drag) X(sx0) X(sy0) X(sx1) X(sy1) X(last_x) X(last_y) X(hand_mx) X(hand_my) X(hover_btn) X(g_last_z) X(p_named) X(p_dirty)
+    X(cur_x) X(cur_y) X(drag) X(sx0) X(sy0) X(sx1) X(sy1) X(last_x) X(last_y) X(hand_mx) X(hand_my) X(hover_btn) X(g_last_z) X(p_named) X(p_dirty) \
+    X(ia_abierto) X(ia_len) X(ia_txt)
 struct pt_inst {
 #define X(f) __typeof__(f) f;
     PT_FIELDS
@@ -851,6 +880,7 @@ static void pt_blank(void)                                  /* estado de un Pain
     hue = 1024; sat = 200; val = 246; zoom = 0; pan_x = pan_y = 0;
     s_cpy(path, "/workspace/dibujo.png", sizeof path); msg[0] = 0; msg_until = 0; msg_ok = 1;
     cur_x = cur_y = -1; drag = 0; sx0 = sy0 = sx1 = sy1 = 0; last_x = last_y = -1; hand_mx = hand_my = 0; hover_btn = -1; g_last_z = 100; p_named = 0; p_dirty = 0;
+    ia_abierto = 0; ia_len = 0; ia_txt[0] = 0;
 }
 void paint_select(int slot)
 {
@@ -875,6 +905,7 @@ int paint_inst_new(void)
 void paint_inst_drop(int slot)
 {
     if (slot < 1 || slot > PT_INST_MAX || !pt_used[slot]) return;
+    ia_suelta(slot);                                               /* SOMA_292_PAINT_IA: un dibujo pendiente de esta ventana se descarta */
     int back = pt_live != slot ? pt_live : 0;
     paint_select(slot);
     if (cv) kfree(cv);
@@ -904,3 +935,5 @@ const char *paint_inst_name(int slot)
     for (; *p; ++p) if (*p == '/') n = p + 1;
     return n;
 }
+
+#include "paint_ia.inc"   /* SOMA_292_PAINT_IA */

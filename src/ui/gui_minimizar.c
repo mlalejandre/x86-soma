@@ -33,7 +33,7 @@ static void her_minimize_window(int idx)
         her_active_win_idx = her_num_windows - 1;
         current_app = top->app;
         her_win_x = top->x; her_win_y = top->y; her_win_w = top->w; her_win_h = top->h;
-        agent_global_focus = (current_app == APP_AGENT_CHAT) ? 1 : 0;
+        agent_global_focus = 0;   /* SOMA_285_CHAT */
         her_win_focus(current_app, top->term_slot);
     } else {
         her_active_win_idx = -1; current_app = APP_DESKTOP; agent_global_focus = 1;
@@ -51,7 +51,7 @@ static void her_restore_minimized(int idx)
     her_active_win_idx = her_num_windows - 1;
     current_app = v.app;
     her_win_x = v.x; her_win_y = v.y; her_win_w = v.w; her_win_h = v.h;
-    agent_global_focus = (v.app == APP_AGENT_CHAT) ? 1 : 0;
+    agent_global_focus = 0;   /* SOMA_285_CHAT */
     her_win_focus(v.app, v.term_slot);
 }
 static void her_kill_minimized(int idx)
@@ -121,7 +121,7 @@ static void her_close_target_window_vortex(int win_idx)
         her_win_y = her_windows[her_active_win_idx].y;
         her_win_w = her_windows[her_active_win_idx].w;
         her_win_h = her_windows[her_active_win_idx].h;
-        agent_global_focus = (current_app == APP_AGENT_CHAT) ? 1 : 0;
+        agent_global_focus = 0;   /* SOMA_285_CHAT */
         her_win_focus(current_app, her_windows[her_active_win_idx].term_slot);
     } else {
         her_term_focus(-1);
@@ -144,6 +144,7 @@ static void her_close_target_window_vortex(int win_idx)
     switch (closing_app) {
     case APP_TERMINAL_SHELL: app_col = 0x0010B981u; break;
     case APP_AGENT_CHAT:     app_col = 0x0038BDF8u; break;
+    case APP_CORREO:         app_col = 0x0022D3EEu; break;   /* SOMA_295_CORREO */
     case APP_WEB_BROWSER:    app_col = 0x00F59E0Bu; break;
     case APP_FILE_MANAGER:   app_col = 0x0038BDF8u; break;
     case APP_IMAGE_VIEWER:   app_col = 0x0010B981u; break;
@@ -239,6 +240,7 @@ static int her_inst_dirty(enum app_mode app, int slot)
     switch (app) { case APP_NOTEPAD: return notepad_inst_dirty(slot); case APP_PAINT: return paint_inst_dirty(slot); case APP_CODER_APP: return ce_inst_dirty(slot); default: return 0; }
 }
 static int her_kill_armed_app = -1, her_kill_armed_slot;
+static int her_kill_derecho;                                  /* SOMA_291_CERRAR_ORBITA: el cierre viene del boton derecho */
 static uint64_t her_kill_armed_until;
 static char her_kill_hint[112];
 static int her_kill_confirmed(int idx)
@@ -251,7 +253,8 @@ static int her_kill_confirmed(int idx)
     const char *nm = her_inst_name(app, slot);
     int n = 0;
     for (const char *t = (nm && *nm) ? nm : her_app_base_title(app); *t && n < 40; ++t) her_kill_hint[n++] = *t;
-    for (const char *t = ": cambios sin guardar. Sueltalo otra vez en el agujero negro para cerrar sin guardar"; *t && n < (int)sizeof her_kill_hint - 1; ++t) her_kill_hint[n++] = *t;
+    for (const char *t = her_kill_derecho ? ": cambios sin guardar. Pulsa otra vez con el boton derecho para cerrar sin guardar"
+                                          : ": cambios sin guardar. Sueltalo otra vez en el agujero negro para cerrar sin guardar"; *t && n < (int)sizeof her_kill_hint - 1; ++t) her_kill_hint[n++] = *t;
     her_kill_hint[n] = 0;
     her_hint_msg = her_kill_hint; her_hint_until = now + 8000u;
     return 0;
@@ -284,6 +287,20 @@ static void her_kill_minimized_vortex(int idx, int32_t px, int32_t py)
         her_vortex_frame = 0; her_vortex_total_absorbed = 0; her_vortex_closing = 1; soma_vortex_boost = 10;
         ofx_flash += 60u; if (ofx_flash > 255u) ofx_flash = 255u;
     }
+}
+
+/* SOMA_291_CERRAR_ORBITA: boton derecho sobre un icono en orbita = cerrar esa aplicacion al momento (con el mismo efecto que soltarla
+ * en el agujero negro y el mismo aviso si tiene cambios sin guardar). Solo si no hay una ventana encima del puntero. 1 = lo ha usado. */
+static int her_min_right_close(int32_t mx, int32_t my, uint32_t w, uint32_t h)
+{
+    if (her_min_count <= 0 || her_min_drag >= 0) return 0;
+    for (int wi = her_num_windows - 1; wi >= 0; --wi) { int edge = 0; if (her_win_hit_target(&her_windows[wi], mx, my, &edge) > 0) return 0; }
+    int mi = her_min_hit(mx, my, w, h);
+    if (mi < 0) return 0;
+    her_kill_derecho = 1;
+    her_kill_minimized_vortex(mi, mx, my);
+    her_kill_derecho = 0;
+    return 1;
 }
 
 /* Enrutador canónico para cerrar la ventana activa desde cualquier app */

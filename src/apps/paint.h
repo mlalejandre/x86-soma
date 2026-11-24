@@ -18,4 +18,12 @@ int  paint_inst_find(const char *path);
 const char *paint_inst_name(int slot);
 int  paint_inst_dirty(int slot);                 /* SOMA_219_AVISO: 1 = cambios sin guardar */
 
+/* SOMA_292_PAINT_IA: dibujar con el modelo de lenguaje (boton IA de la barra, o desde el orbe).
+ * paint_ia_encargar: en la ventana de Paint activa; 0 = en marcha, -1 = ya hay otro dibujo. paint_ia_estado: 0 pensando, 2 pintando,
+ * 1 dibujado (msg = el tema), -1 fallo (msg = el motivo), 0 sin encargo. paint_animando: hay que repintar la ventana activa de Paint
+ * (pasos del dibujo, aviso de espera). paint_ia_slot: la ventana (instancia) del encargo en curso, o -1. */
+int  paint_ia_encargar(const char *pedido);
+int  paint_ia_estado(char *msg, uint32_t cap);
+int  paint_animando(void);
+int  paint_ia_slot(void);
 #endif

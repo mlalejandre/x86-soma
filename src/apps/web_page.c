@@ -16,6 +16,7 @@
 #include "web_ua.h"
 #include "web_img.h"
 #include "web_font.h"
+#include "web_tipo.h"   /* SOMA_289_VISOR */
 
 #define WP_UA "Mozilla/5.0 (X11; SOMA) AppleWebKit/537.36 (KHTML, like Gecko) SOMA-Browser/2.0 Safari/537.36"
 #define WP_MAX_HTML (3u << 20)
@@ -197,6 +198,9 @@ static const char *guess_ctype(const char *path)
     if (ext_is(path, ".gif")) return "image/gif";
     if (ext_is(path, ".bmp")) return "image/bmp";
     if (ext_is(path, ".svg")) return "image/svg+xml";
+    if (ext_is(path, ".webp")) return "image/webp";                       /* SOMA_289_VISOR */
+    if (ext_is(path, ".pdf")) return "application/pdf";
+    if (ext_is(path, ".tex") || ext_is(path, ".latex") || ext_is(path, ".ltx")) return "application/x-tex";
     if (ext_is(path, ".txt") || ext_is(path, ".md") || ext_is(path, ".c") || ext_is(path, ".h") || ext_is(path, ".soma")) return "text/plain";
     return "";
 }
@@ -2011,6 +2015,31 @@ static int sorry190_off(void)
     return 0;
 #endif
 }
+/* SOMA_289_VISOR: un PDF o un .tex no se dibuja como pagina: se crea una pagina "marcador" (titulo con WT_MARCA, web_tipo.h) y el
+ * navegador abre encima su visor. Si el visor no estuviera, la pagina explica que es y deja el enlace. */
+static void visor_html(struct wb *o, int tipo, const char *url)
+{
+    char nom[160], tit[200]; wt_nombre(url, nom, sizeof nom); wt_marca(tit, sizeof tit, tipo, nom);
+    wb_add(o, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>"); html_escape(o, tit, wu_strlen(tit));
+    wb_add(o, "</title></head><body style=\"margin:0;background:#20262f;color:#e5eaf2;font-family:sans-serif\"><div style=\"margin:80px auto;max-width:520px;"
+              "background:#111827;border-radius:14px;padding:28px 32px\"><h2 style=\"margin:0 0 10px 0\">");
+    wb_add(o, tipo == WT_PDF ? "Documento PDF" : "Documento LaTeX");
+    wb_add(o, "</h2><p style=\"color:#8592a8\">"); html_escape(o, nom, wu_strlen(nom));
+    wb_add(o, "</p><p>Se abre en el visor de documentos del navegador.</p><p><a style=\"color:#38bdf8\" href=\""); html_escape(o, url, wu_strlen(url));
+    wb_add(o, "\">"); html_escape(o, url, wu_strlen(url)); wb_add(o, "</a></p></div></body></html>");
+}
+static int visor_page(struct wpage *p, const char *url, int tipo, int flags)
+{
+    struct wb h = {0}; visor_html(&h, tipo, url);
+    int r = h.p ? build_document(p, h.p, h.len, url) : -1; wb_free(&h);
+    if (r != 0) return -1;
+    wu_copy(p->url, url, sizeof p->url);
+    if (!(flags & WPN_NOHIST)) { if ((flags & (WPN_REPLACE | WPN_RELOAD)) && p->hpos >= 0 && p->hpos < p->hn) wu_copy(p->hist[p->hpos].url, url, sizeof p->hist[0].url); else hist_push(p, url); }
+    p->sx = 0; p->sy = 0;
+    relayout(p, 0); update_title(p);
+    set_status(p, WPS_OK, tipo == WT_PDF ? "Documento PDF" : "Documento LaTeX"); p->progress = 100; p->phase = WP_IDLE;
+    return 0;
+}
 static int nav_core(struct wpage *p, const char *url_in, int flags, const char *post, uint32_t plen, const char *pctype)
 {
     char url[WN_URL_MAX]; int implicit = 0; norm_url(url_in, url, sizeof url, &implicit);
@@ -2062,6 +2091,7 @@ static int nav_core(struct wpage *p, const char *url_in, int flags, const char *
     soma151_cancel(); /* invalidar resultados antes de liberar el documento anterior */
     soma151_generation++;
 #endif
+    if (!post && wu_startsi(url, "file:")) { int vt = wt_tipo_url(url); if (vt) { if (!(flags & WPN_NOHIST) && p->hpos >= 0 && p->hpos < p->hn) p->hist[p->hpos].scroll_y = p->sy; return visor_page(p, url, vt, flags); } }   /* SOMA_289_VISOR: un archivo local no se lee dos veces */
     p->stop = 0; p->load_t0 = now_ms(); p->phase = WP_FETCH; p->progress = 5;
     user_blocklist_load();                                   /* SOMA_152D */
     if (!(flags & WPN_NOHIST) && p->hpos >= 0 && p->hpos < p->hn) p->hist[p->hpos].scroll_y = p->sy;
@@ -2082,6 +2112,10 @@ static int nav_core(struct wpage *p, const char *url_in, int flags, const char *
         }
     }
     struct wb page = {0}; const char *html = 0; uint32_t hlen = 0; int seed_img = 0; int err = 0;
+    {   /* SOMA_289_VISOR: un PDF o un .tex (por el tipo de contenido, la firma %PDF- o la extension si no es una pagina web) */
+        int vt = post ? WT_NADA : wt_tipo_pagina(final_url, rs.ctype, (const uint8_t *)rs.body, rs.body ? rs.len : 0);
+        if (vt) { wn_free(&rs); return visor_page(p, final_url, vt, flags); }
+    }
     if (rc != 0 || !rs.body) {
         const char *hint = wu_startsi(url, "https://") && wn_https_unverified() ? (wn_tls_last_error()[0] ? wn_tls_last_error() : "Conexion segura directa (TLS 1.3). Comprueba la red; algunos sitios antiguos solo admiten TLS 1.2.") : wu_startsi(url, "https://") ? "Las paginas HTTPS pasan por la pasarela del equipo anfitrion (puerto 8096). ejecutar.py la arranca sola; si lanzas QEMU a mano, inicia antes tools/web_gateway.py." : "Comprueba la direccion y la conexion de red.";
         page_error(&page, "No se pudo cargar la pagina", rs.err[0] ? rs.err : "error de red", url, hint);

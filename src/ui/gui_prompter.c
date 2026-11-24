@@ -618,6 +618,7 @@ static int pr_fase_de(const char *q)
 void gui_fase(const char *que);
 void gui_fase(const char *que)
 {
+    chat_fase(que);                                              /* SOMA_285_CHAT: los pasos del agente tambien en el chat */
     int f = pr_fase_de(que);
     if (f < 0) return;
     int n = pr_nf;
@@ -630,8 +631,9 @@ void gui_fase(const char *que)
 void gui_fase_orden(const char *linea);
 void gui_fase_orden(const char *linea)
 {
+    chat_fase_orden(linea);                                      /* SOMA_285_CHAT */
     char nom[16]; int n = 0; while (linea && linea[n] && linea[n] != ' ' && n < 15) { nom[n] = linea[n]; ++n; } nom[n] = 0;
-    if (pr_ig(nom, "search") || pr_ig(nom, "descargar") || pr_ig(nom, "navegador") || pr_ig(nom, "fetch") || pr_ig(nom, "web")) gui_fase("buscar");
+    if (pr_ig(nom, "search") || pr_ig(nom, "investiga") || pr_ig(nom, "leer") /* SOMA_288_INVESTIGA */ || pr_ig(nom, "descargar") || pr_ig(nom, "navegador") || pr_ig(nom, "fetch") || pr_ig(nom, "web")) gui_fase("buscar");
     else gui_fase("orden");
 }
 

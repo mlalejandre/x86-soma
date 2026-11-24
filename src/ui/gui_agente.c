@@ -14,6 +14,7 @@ static volatile uint32_t g_agent_tid;
 static volatile int g_gui_loop_on;         /* el bucle principal de la GUI esta corriendo */
 static volatile int g_gui_req, g_gui_grant; static int g_gui_depth;
 static char g_agent_mission[SOMA_AGENT_CMD_MAX];
+static char *g_chat_mis; static const char *g_agent_mis_ptr;   /* SOMA_285_CHAT: la mision del chat (sin el limite de 256 del orbe) */
 static int gui_in_agent_thread(void) { struct tcb *t = thread_current(); return g_agent_thr_on && t && t->tid == g_agent_tid; }
 int gui_enter(void)
 {
@@ -64,7 +65,7 @@ static void gui_turn_service(void)              /* bucle principal, punto seguro
 static void agent_thread_main(void *arg)
 {
     (void)arg;
-    agent_run("soma", g_agent_mission);
+    agent_run("soma", g_agent_mis_ptr ? g_agent_mis_ptr : g_agent_mission);
     g_agent_thr_done = 1;
 }
 /* cierre del turno (lo hace el bucle principal) */
@@ -72,6 +73,8 @@ static void agent_turn_finish(void)
 {
     const uint32_t wrap = 76;
     her_agent_busy = 0;
+    (void)chat_agente_fin(agent_last_response);                 /* SOMA_285_CHAT: si el turno era del chat, la respuesta va a su conversacion */
+    g_agent_mis_ptr = 0;
     her_finish_turn(agent_last_response);
     if (agent_last_response[0] != '\0')
         log_add(agent_log, &agent_log_count, "[soma]: ", agent_last_response, 0x0034D399, wrap);
@@ -320,6 +323,7 @@ static void submit_global_agent_prompt(uint32_t win_x, uint32_t win_y, uint32_t 
     if (g_gui_loop_on) {
         for (uint32_t i = 0; i < sizeof(g_agent_mission); i++) { g_agent_mission[i] = mission_copy[i]; if (!mission_copy[i]) break; }
         g_agent_thr_done = 0; g_gui_req = 0; g_gui_grant = 0; g_gui_depth = 0;
+        g_agent_mis_ptr = 0;                                    /* SOMA_285_CHAT */
         her_agent_busy = 1; g_agent_thr_on = 1;
         struct tcb *at = thread_create("soma_agente", agent_thread_main, 0);
         if (at) { g_agent_tid = at->tid; thread_set_owner(at, ACCT_AGENT); return; }
@@ -352,4 +356,30 @@ int gui_agent_submit(const char *mission)
     agent_global_cmd[n] = 0; agent_global_len = n; agent_global_cursor = n;
     submit_global_agent_prompt(0, 0, 0, 0);
     return 0;
+}
+
+/* SOMA_285_CHAT: la aplicacion de chat entrega su mision al agente (puede ser larga: lleva los adjuntos). Va al hilo del agente como
+ * las del orbe, que muestra el progreso; la respuesta vuelve al chat en agent_turn_finish (chat_agente_fin). Solo desde el hilo de la GUI.
+ * 0 = enviada, -1 = el agente esta ocupado (o no hay escritorio), -2 = vacia o sin memoria. */
+int gui_agent_submit_chat(const char *mision);
+int gui_agent_submit_chat(const char *mision)
+{
+    if (!mision || !*mision) return -2;
+    if (g_agent_thr_on || !g_gui_loop_on) return -1;
+    uint32_t n = 0; while (mision[n]) n++;
+    char *m = (char *)kmalloc(n + 1);
+    if (!m) return -2;
+    for (uint32_t i = 0; i <= n; i++) m[i] = mision[i];
+    if (g_chat_mis) kfree(g_chat_mis);
+    g_chat_mis = m; g_agent_mis_ptr = m;
+    {   char corta[200]; uint32_t k = 0; while (k < n && k + 1 < sizeof corta && m[k] != '\n') { corta[k] = m[k]; k++; } corta[k] = 0;
+        her_begin_turn(corta); }
+    agent_last_response[0] = '\0';
+    her_pulse = 0;
+    g_agent_thr_done = 0; g_gui_req = 0; g_gui_grant = 0; g_gui_depth = 0;
+    her_agent_busy = 1; g_agent_thr_on = 1;
+    struct tcb *at = thread_create("soma_agente", agent_thread_main, 0);
+    if (at) { g_agent_tid = at->tid; thread_set_owner(at, ACCT_AGENT); return 0; }
+    g_agent_thr_on = 0; her_agent_busy = 0; g_agent_mis_ptr = 0;
+    return -1;
 }

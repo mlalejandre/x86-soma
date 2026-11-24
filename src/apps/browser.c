@@ -21,6 +21,8 @@
 #include "web_util.h"
 #include "web_scroll_149.h" /* SOMA_149_SCROLL_FASTPATH */
 #include "web_fluido_152.h" /* SOMA_152_WEB_FLUIDO */
+#include "web_visor.h"      /* SOMA_289_VISOR: PDF y LaTeX dentro de la pestana */
+#include "web_tipo.h"
 
 #ifndef SOMA_WEB_FAST_SCROLL
 #define SOMA_WEB_FAST_SCROLL 1
@@ -82,7 +84,7 @@ static void on_gui_stack(void (*fn)(void *), void *arg)
 
 /* ------------------------------------------------------------ estado */
 struct tab { char url[2048]; char title[64]; int scroll; struct wp_hist hist[WP_HIST]; int hn, hpos; };
-enum { J_LOAD = 1, J_BACK, J_FWD, J_RELOAD, J_CLICK, J_KEY, J_SELECT, J_SWITCH, J_NEWTAB, J_CLOSE, J_EVAL, J_FIND, J_HOME };
+enum { J_LOAD = 1, J_BACK, J_FWD, J_RELOAD, J_CLICK, J_KEY, J_SELECT, J_SWITCH, J_NEWTAB, J_CLOSE, J_EVAL, J_FIND, J_HOME, J_VISOR };
 struct job { int type, a, b, c; char *s; };
 
 static struct wpage *s_pg;
@@ -467,6 +469,7 @@ static void run_job(struct job *j)
     case J_SELECT: if (p->dd_sel) wp_select_choose(p, p->dd_sel, j->a); break;
     case J_EVAL: { char o[64]; wp_eval_js(p, j->s ? j->s : "", o, sizeof o); break; }
     case J_FIND: wp_find_scroll(p, j->s ? j->s : ""); break;
+    case J_VISOR: wv_descarga(); break;                                     /* SOMA_289_VISOR */
     case J_SWITCH:
         if (j->a >= 0 && j->a < s_ntabs && j->a != s_cur) { s_job_busy = 1; tab_save(); tab_load(j->a); s_job_busy = 0; }
         break;
@@ -724,7 +727,8 @@ static void set_cursor(int c) { if (c != s_cursor_cur) { s_cursor_cur = c; mouse
 static void page_title(char *o, int max)
 {
     struct wpage *p = s_pg;
-    if (p->title[0]) wu_copy(o, p->title, (uint32_t)max); else if (p->url[0]) wu_copy(o, p->url, (uint32_t)max); else wu_copy(o, "Nueva pesta\xc3\xb1" "a", (uint32_t)max);
+    if (wv_activo() && wv_titulo()[0]) { wu_copy(o, wv_titulo(), (uint32_t)max); return; }   /* SOMA_289_VISOR */
+    if (p->title[0]) wu_copy(o, wt_marca_nombre(p->title), (uint32_t)max); else if (p->url[0]) wu_copy(o, p->url, (uint32_t)max); else wu_copy(o, "Nueva pesta\xc3\xb1" "a", (uint32_t)max);
 }
 
 static int sb_geom(struct geo *g, int *th, int *tr);
@@ -929,7 +933,7 @@ int browser_right_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, 
     if (savedlg_active()) return 0;
     struct wpage *p = s_pg; struct geo g; geo_of(&g, (int)win_x, (int)win_y, (int)win_w, (int)win_h);
     s_cm_n = 0; s_cm_img[0] = 0; s_cm_link[0] = 0; s_cm_hl = -1;
-    if (in_r(mx, my, g.vx, g.vy, g.vw - SB_W, g.vh) && p->lay && !p->lay_busy) {
+    if (in_r(mx, my, g.vx, g.vy, g.vw - SB_W, g.vh) && p->lay && !p->lay_busy && !wv_activo()) {   /* SOMA_289_VISOR: en el visor no hay elementos */
         struct rclick_args ra = { p, mx - g.vx + p->sx, my - g.vy + p->sy, 0, 0 }; on_gui_stack(rclick_thunk, &ra);
         const char *src = ra.node ? wl_img_src(ra.node) : 0;
         if (src && src[0]) {
@@ -1023,7 +1027,7 @@ static uint64_t browser152_key(int ww, int wh)
     MIX(ww); MIX(wh); MIX(p->lay_busy); MIX(busy); MIX(p->progress); MIX(p->status_kind); MIX(s_hover_ui);
     MIX(s_ntabs); MIX(s_cur); MIX(wp_can_back(p)); MIX(wp_can_fwd(p)); MIX(s_url_focus); MIX(s_url_all); MIX(s_url_len); MIX(s_url_cur);
     MIX(s_find_open); MIX(s_find_len); MIX(p->alert_pending); MIX(s_cm_open); MIX(s_cm_hl); MIX(s_cm_x); MIX(s_cm_y); MIX(s_sb_drag);
-    MIX(wp_doc_height(p)); MIX(p->vh); MIX(s_dd_hl);
+    MIX(wp_doc_height(p)); MIX(p->vh); MIX(s_dd_hl); MIX(wv_huella());   /* SOMA_289_VISOR */
     if (busy) MIX(now / 90);                                   /* puntos animados de la linea de estado */
     if (s_url_focus || s_find_open) MIX(now / 500);            /* cursor parpadeante de los campos */
     k = mix_str152(k, s_url); k = mix_str152(k, p->status); k = mix_str152(k, s_hover_href); k = mix_str152(k, p->title); k = mix_str152(k, p->url);
@@ -1063,6 +1067,7 @@ void browser_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     ensure_init(); if (!s_pg) return;
     struct wpage *p = s_pg; int wx = (int)win_x, wy = (int)win_y, ww = (int)win_w, wh = (int)win_h;
     r3_sync(p);                                                             /* SOMA_202 */
+    if (wv_sync(p->title, p->url)) q_push(J_VISOR, 0, 0, 0, 0);            /* SOMA_289_VISOR: la pagina es un PDF o un .tex */
     s_win_x = win_x; s_win_y = win_y; s_win_w = win_w; s_win_h = win_h;
     s_last_render = web_now_ms();
     start_worker();
@@ -1081,7 +1086,7 @@ void browser_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     fb_set_clip(wx, g.tab_y, ww, TAB_H);
     for (int i = 0; i < s_ntabs; i++) {
         int x = wx + 10 + i * tabw, cur = i == s_cur; char ti[96];
-        if (cur) page_title(ti, sizeof ti); else wu_copy(ti, s_tabs[i]->title[0] ? s_tabs[i]->title : s_tabs[i]->url, sizeof ti);
+        if (cur) page_title(ti, sizeof ti); else wu_copy(ti, s_tabs[i]->title[0] ? wt_marca_nombre(s_tabs[i]->title) : s_tabs[i]->url, sizeof ti);
         if (cur) { fb_fill_rounded_rect(x, g.tab_y + 6, tabw - 4, TAB_H + 4, 9, C_PANEL); }
         else if (s_hover_ui == 10 + i || s_hover_ui == 30 + i) fb_fill_rounded_rect(x, g.tab_y + 6, tabw - 4, TAB_H - 10, 8, 0x00161B28);
         else if (i + 1 != s_cur && i + 1 < s_ntabs) fb_fill_rect((uint32_t)(x + tabw - 3), (uint32_t)(g.tab_y + 12), 1, TAB_H - 20, C_LINE);
@@ -1131,6 +1136,7 @@ void browser_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     if (busy) { int pw = (g.vw * (p->progress < 5 ? 5 : p->progress > 100 ? 100 : p->progress)) / 100; fb_fill_rect((uint32_t)g.vx, (uint32_t)(g.vy - 2), (uint32_t)pw, 2, C_CYA); }
 
     /* contenido */
+    if (wv_activo()) { wv_pinta(g.vx, g.vy, g.vw, g.vh); s_snap_ok = 0; goto tras_pagina; }   /* SOMA_289_VISOR: el visor ocupa la pagina */
     fb_set_clip(g.vx, g.vy, g.vw - SB_W, g.vh);
 #if SOMA_WEB_PERF_LOG
     uint64_t soma149_render_start = web_now_ms();
@@ -1191,6 +1197,7 @@ void browser_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     }
 #endif
     draw_scrollbar(&g);
+tras_pagina:
 
     if (s_find_open) {
         int fw = 260, fx = g.vx + g.vw - SB_W - fw - 6, fy = g.vy + 6;
@@ -1294,6 +1301,7 @@ void browser_handle_key(char c)
         if (k == 10 || k == 13) { q_push(J_SELECT, cur, 0, 0, 0); s_dd_hl = -1; return; }
         if (k == 27) { s_pg->dd_sel = 0; s_dd_hl = -1; return; }
     }
+    if (wv_activo()) { if (k < 0x80) (void)wv_tecla(c); return; }        /* SOMA_289_VISOR: el teclado es del visor */
     if (k == '/' && !s_pg->focus) { s_find_open = 1; return; }
     if (k == 0x100) { q_push(J_KEY, 0x100, 0, 0, u); return; }
     q_push(J_KEY, k, 0, 0, u);
@@ -1353,6 +1361,7 @@ int browser_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y,
     }
     s_url_focus = 0; s_url_all = 0;
     if (!in_r(mx, my, g.vx, g.vy, g.vw, g.vh)) return 0;
+    if (wv_activo()) { (void)wv_click(mx, my, g.vx, g.vy, g.vw, g.vh); return 0; }   /* SOMA_289_VISOR */
     /* barra de desplazamiento */
     if (mx >= g.vx + g.vw - SB_W) {
         int th, tr, range = sb_geom(&g, &th, &tr);
@@ -1418,6 +1427,12 @@ void browser_mouse(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint3
         return;
     }
     if (savedlg_active()) { set_cursor(CURSOR_ARROW); return; }
+    if (wv_activo()) {                                                    /* SOMA_289_VISOR: rueda, arrastre y resalte, en el visor */
+        if (in_r(mx, my, g.vx, g.vy, g.vw, g.vh) || held) { (void)wv_raton(mx, my, g.vx, g.vy, g.vw, g.vh, wheel, held); if (wheel) { s_last_render = web_now_ms(); s152_input_ms = s_last_render; } }
+        if (s_hover_href[0]) s_hover_href[0] = 0;
+        set_cursor(CURSOR_ARROW);
+        return;
+    }
     int inview = in_r(mx, my, g.vx, g.vy, g.vw - SB_W, g.vh) && !p->alert_pending;
     if (s_sb_drag) { if (held) { sb_to(&g, my); s152_input_ms = web_now_ms(); } else s_sb_drag = 0; }
     if (wheel && inview && p->lay && !p->lay_busy && wl_inner_scroll(p->lay, mx - g.vx + p->sx, my - g.vy + p->sy, -wheel * SOMA_WEB_WHEEL_PX)) { s_last_render = web_now_ms(); s152_input_ms = s_last_render; }   /* SOMA_181: cajas con overflow:auto */

@@ -7,6 +7,10 @@
 #include "agent_ruta.h"  /* SOMA_251_RUTAS */
 #include "memoria.h"      /* SOMA_277_MEMORIA: la memoria de SOMA (portada de memorIA) sustituye a la ventana de STM y al arbol /mem */
 #include "coder_core.h"  /* SOMA_266_AVISO: en que lenguaje se va a programar (para el aviso) */
+#include "prog_voz.h"    /* SOMA_290_VOZ_CODIGO */
+#include "paint.h"       /* SOMA_292_PAINT_IA */
+#include "paint_svg.h"
+#include "thread.h"
 #include "lcm_ordenes.inc"   /* SOMA_253_LCM: traductor del LCM (solo enteros) */
 #include "rtc.h"
 #include "console.h"
@@ -206,8 +210,13 @@ static void stm_load_into_prompt(const struct agent_profile *agent, char *dst, u
     }
 }
 
+/* SOMA_285_CHAT: contexto que pone la aplicacion de chat para su turno: la conversacion en curso y si se usa la memoria */
+static const char *g_chat_hist; static int g_chat_sinmem;
+void agent_chat_contexto(const char *historial, int sin_memoria);
+void agent_chat_contexto(const char *historial, int sin_memoria) { g_chat_hist = historial; g_chat_sinmem = sin_memoria; }
 static void stm_append_interaction(const struct agent_profile *agent, const char *user_msg, const char *verdict_msg)
 {
+    if (g_chat_sinmem && delegation_depth == 0) return;       /* SOMA_285_CHAT: conversacion sin memoria: no deja recuerdos */
     if (memoria_activa()) {                                    /* SOMA_277_MEMORIA: el intercambio va a la memoria nueva (solo lo que escribe el usuario, no las sub-misiones) */
         if (delegation_depth == 0) memoria_registra(user_msg, verdict_msg);
         return;
@@ -304,7 +313,16 @@ static void inject_agent_memory(const struct agent_profile *agent, char *dst, ui
             fb_puts(dst, max, pos, "\n");
         }
     }
-    if (!memoria_activa()) stm_load_into_prompt(agent, dst, max, pos);       /* SOMA_277_MEMORIA: con la memoria nueva, esto lo pone memoria_contexto */
+    if (g_chat_hist && g_chat_hist[0] && delegation_depth == 0) {            /* SOMA_285_CHAT: lo hablado antes en esta conversacion del chat */
+        fb_puts(dst, max, pos, "- Conversacion en curso con el usuario (mensajes anteriores; la mision es su ultimo mensaje):\n");
+        uint32_t room = *pos < max ? max - *pos : 0, lim = room > 2400 ? room - 2400 : 0, n = 0;
+        while (g_chat_hist[n]) n++;
+        const char *h = g_chat_hist; if (n > lim) { h += n - lim; while (*h && *h != '\n') h++; }
+        fb_puts(dst, max, pos, h);
+        fb_puts(dst, max, pos, "\n");
+    }
+    if (g_chat_sinmem) { }                                                   /* SOMA_285_CHAT: el usuario apago la memoria en esta conversacion */
+    else if (!memoria_activa()) stm_load_into_prompt(agent, dst, max, pos);  /* SOMA_277_MEMORIA: con la memoria nueva, esto lo pone memoria_contexto */
     else memoria_contexto(mission, dst, max, pos);
 }
 
@@ -1450,7 +1468,8 @@ static void agent_aviso(int tipo, const char *mission)
     static char t[900];
     const char *lenguaje = 0; int editar = 0;
     if (tipo == LCM_AV_PROGRAMA) {
-        lenguaje = cc_mission_wants_c(mission) ? "C" : cc_mission_wants_python(mission) ? "Python" : "SOMA-LANG";
+        lenguaje = cc_mission_wants_html(mission) ? "HTML" : cc_mission_wants_js(mission) ? "JavaScript"   /* SOMA_290_VOZ_CODIGO: tambien web */
+                 : cc_mission_wants_c(mission) ? "C" : cc_mission_wants_python(mission) ? "Python" : "SOMA-LANG";
         static const char *const ed[] = { "modifica", "corrige", "arregla", "mejora", "cambia", "anade", "añade", "quita", "actualiza", 0 };
         for (int i = 0; ed[i] && !editar; ++i) editar = mayordomo_has(mission, ed[i]);
     }
@@ -1757,12 +1776,15 @@ static int programador_should_handle(const char *m)
     /* SOMA_251_RUTAS: por palabras completas, y "programa" solo cuenta como verbo al principio ("programa un reloj"): "dime un
      * resumen del programa Erasmus" iba al programador */
     static const char *const no[] = { "historia", "cuento", "documento", "maquet*", "poema", "carta", "informe", "redacta", "redactar", "redaccion",
-                                      "noticia", "noticias", "busca en", "investiga", "resumen", "resume", "explica", "explicame", 0 };
+                                      "noticia", "noticias", "busca en", "investiga", "resumen", "resume", "explica", "explicame",
+                                      "articulo", "texto", "post", "entrada", "eslogan", "descripcion", 0 };
     static const char *const verb[] = { "crea", "creame", "haz", "hazme", "escribe", "escribeme", "genera", "desarrolla", "construye", "disena", "modifica",
                                         "mejora", "corrige", "arregla", "implementa", "codifica", "programame", 0 };
     static const char *const noun[] = { "app", "apps", "aplicacion", "programa", "programita", "juego", "calculadora", "reloj", "contador", "cronometro",
                                         "temporizador", "script", "codigo", "soma lang", "snake", "pong", "tetris", "ventana", "boton", "conversor", "agenda",
-                                        "lista de tareas", 0 };
+                                        "lista de tareas",
+                                        "pagina web", "paginas web", "sitio web", "una web", "web para", "landing", "pagina html", "en html", "con html",
+                                        "en javascript", "con javascript", 0 };   /* SOMA_290_VOZ_CODIGO: las webs (HTML con su JavaScript) tambien */
     if (mayordomo_has(m, ".soma")) return 1;
     if (ar_any(m, no)) return 0;
     const char *t = m; while (*t == ' ') t++;
@@ -1852,6 +1874,26 @@ static void maquetador_run(const char *mission)
     mayordomo_store_reply(agent_last_response, 1);
     if (ok && path[0] && gui_is_running()) gui_open_layout_file(path);
 }
+/* SOMA_290_VOZ_CODIGO: SOMA habla mientras programa. Cada fase importante (corregir un fallo, probar otra version, la revision final)
+ * se dice en una frase (en el orbe y en voz alta si la voz esta activada), sin pisar lo que se este leyendo y como mucho una cada 8 s.
+ * Al terminar, el modelo explica en dos o tres frases que hace el programa y SOMA lo dice; el informe tecnico sigue en el texto. */
+extern int voz_speaking(void) __attribute__((weak));
+static char g_voz_resp[1400];                          /* lo que el orbe dice al terminar (en vez de leer el informe) */
+const char *agent_voz_toma(void);
+const char *agent_voz_toma(void) { static char b[sizeof g_voz_resp]; uint32_t i = 0; for (; g_voz_resp[i] && i + 1 < sizeof b; i++) b[i] = g_voz_resp[i]; b[i] = 0; g_voz_resp[0] = 0; return b; }
+static int g_pv_rep; static uint64_t g_pv_t;
+static void prog_narra(int fase, const char *desc, const char *det)
+{
+    char t[220]; int n = g_pv_rep;
+    if (fase == 4 && !mayordomo_has(desc, "Regenerando")) g_pv_rep++;
+    if (!pv_narra(fase, desc, det, n, t, sizeof t)) return;
+    uint64_t now = timer_get_uptime_ms();
+    if (g_pv_t && now - g_pv_t < 8000) return;
+    if (voz_speaking && voz_speaking()) return;                       /* no se corta el aviso ni la frase anterior */
+    g_pv_t = now;
+    kprint("\033[1;33m[SOMA] "); kprint(t); kprint("\033[0m\n");
+    gui_aviso(t);
+}
 static void programador_run(const char *mission)
 {
     extern int gui_is_running(void);
@@ -1860,7 +1902,47 @@ static void programador_run(const char *mission)
     kprint("\n\033[1;36m[PROGRAMADOR] La mision es de programacion: la resuelve el programador de SOMA.\033[0m\n");
     coder_pick_target(mission, target, sizeof target);
     agent_last_response[0] = '\0';
+    int usuario = delegation_depth == 0;
+    static const char *const ed[] = { "modifica", "corrige", "arregla", "mejora", "cambia", "anade", "añade", "quita", "actualiza", 0 };
+    int editar = 0; for (int i = 0; ed[i] && !editar; ++i) editar = mayordomo_has(mission, ed[i]);
+    editar = editar && vfs_size(target) > 0;
+    g_pv_rep = 0; g_pv_t = timer_get_uptime_ms();                    /* el aviso de salida acaba de decirse */
+    if (usuario) coder_narrador = prog_narra;
     int ok = coder_run_mission(target, mission, agent_last_response, sizeof(agent_last_response));
+    coder_narrador = 0;
+    if (usuario) {
+        static char expl[700]; expl[0] = 0;
+        if (ok) {                                                      /* que hace el programa, dicho para escucharlo */
+            uint32_t n = 0; char *src = vfs_read_alloc(target, &n);
+            char *pr = src ? (char *)kmalloc(9000) : 0;
+            if (pr) {
+                static const char SYS_EXPL[] = "Eres SOMA. Explica en 2 o 3 frases cortas, en espanol sencillo y para decirlas en voz alta, que hace este programa "
+                                               "y como se usa (teclas, botones). Sin codigo, sin Markdown, sin listas y sin repetir el nombre del archivo.";
+                uint32_t q = 0; fb_puts(pr, 9000, &q, "Tarea: "); fb_puts(pr, 9000, &q, mission); fb_puts(pr, 9000, &q, "\n\nPrograma:\n");
+                uint32_t k = n < 7000 ? n : 7000; for (uint32_t i = 0; i < k && q + 2 < 9000; i++) pr[q++] = src[i];
+                pr[q] = 0;
+                gui_fase("escribir");
+                llm_trace_tag("explica");
+                if (llm_chat_ex(SYS_EXPL, pr, 0, 0, 220, expl, sizeof expl, 60000u) == 1) pv_limpia(expl, 420); else expl[0] = 0;
+            }
+            if (pr) kfree(pr);
+            if (src) kfree(src);
+        }
+        const char *err = "";
+        for (const char *c = agent_last_response; *c; c++) { static const char ue[] = "Ultimo error: "; uint32_t k = 0; while (ue[k] && c[k] == ue[k]) k++; if (!ue[k]) { err = c + k; break; } }
+        pv_final(ok, editar, target, expl, err, g_voz_resp, sizeof g_voz_resp);
+        /* el texto empieza con lo mismo que se dice; despues, el informe tecnico de siempre */
+        uint32_t ln = 0; while (agent_last_response[ln]) ln++;
+        char *viejo = (char *)kmalloc(ln + 1);
+        if (viejo) {
+            for (uint32_t i = 0; i <= ln; i++) viejo[i] = agent_last_response[i];
+            uint32_t p = 0; agent_last_response[0] = 0;
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, g_voz_resp);
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, "\n\n");
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, viejo);
+            kfree(viejo);
+        }
+    }
     mayordomo_store_reply(agent_last_response, 1);
     if (ok && gui_is_running()) gui_open_coder_file(target);   /* SOMA_217_STUDIO: la ventana de ese archivo, o una nueva */
 }
@@ -1868,6 +1950,7 @@ static void programador_run(const char *mission)
 static void agent_run_core(const char *agent_name, const char *mission);
 void agent_run(const char *agent_name, const char *mission)     /* SOMA_277_MEMORIA: la extraccion de hechos espera a que ningun agente este usando el LLM */
 {
+    if (delegation_depth == 0) g_voz_resp[0] = 0;                      /* SOMA_290_VOZ_CODIGO: nada de una mision anterior */
     memoria_agente_entra();
     agent_run_core(agent_name, mission);
     memoria_agente_sale();
@@ -1892,6 +1975,84 @@ static void agent_run_core(const char *agent_name, const char *mission)
     if (str_eq_ci(requested_agent, "coder") || (str_eq_ci(requested_agent, "soma") && programador_should_handle(mission))) {
         while (*mission == ' ') mission++;
         if (*mission) { agent_aviso(LCM_AV_PROGRAMA, mission); gui_fase("programador"); programador_run(mission); agent_aviso_fin(1); return; }   /* SOMA_259_ORBE; SOMA_266_AVISO */
+    }
+    /* SOMA_295_CORREO: el correo desde el orbe (redactar, "envialo", leer y resumir, buscar, abrir). Antes que investigar en internet:
+     * "busca el correo de Amazon" es del correo; lo que dice "en internet" no lo coge ar_correo. */
+    if (str_eq_ci(requested_agent, "soma") && delegation_depth == 0 && *mission) {
+        extern int correo_orbe_hay_borrador(void);
+        extern int correo_orbe(int que, const char *mision, char *out, uint32_t cap);
+        extern int gui_is_running(void);
+        int cr = ar_correo(mission);
+        if (cr == AR_CO_ENVIA && !correo_orbe_hay_borrador()) cr = 0;          /* "envialo" sin borrador del orbe: no es del correo */
+        if (cr) {
+            uint32_t p = 0; agent_last_response[0] = 0;
+            if (!gui_is_running()) fb_puts(agent_last_response, sizeof agent_last_response, &p, "El correo vive en el escritorio de SOMA: \303\241brelo con vsoma y p\303\255demelo otra vez.");
+            else {
+                const char *av = cr == AR_CO_REDACTA ? "Voy a escribir el correo con la IA y te lo dejo en Correo para que lo revises: no se env\303\255a hasta que me lo digas."
+                               : cr == AR_CO_LEE ? "Miro tu correo y te cuento lo que hay." : cr == AR_CO_BUSCA ? "Busco en tu correo con la IA." : cr == AR_CO_ENVIA ? "Env\303\255o el correo que te prepar\303\251." : 0;
+                if (av) { kprint("\n\033[1;36m[CORREO] "); kprint(av); kprint("\033[0m\n"); gui_fase("lcm"); gui_aviso(av); }
+                (void)correo_orbe(cr, mission, agent_last_response, sizeof agent_last_response);
+            }
+            mayordomo_store_reply(agent_last_response, 1);
+            return;
+        }
+    }
+    /* SOMA_288_INVESTIGA: investigar en internet de verdad (varias busquedas, leer las paginas, informe con fuentes) */
+    int inv_modo = (str_eq_ci(requested_agent, "soma") && delegation_depth == 0 && *mission) ? ar_investiga(mission) : 0;
+    if (inv_modo) {
+        agent_aviso(LCM_AV_AGENTE, mission);
+        extern int soma_investiga(const char *pregunta, int profundo, char *out, uint32_t cap);
+        kprint("\n\033[1;36m[INVESTIGA] Busco en internet, leo las paginas y te preparo un informe con fuentes.\033[0m\n");
+        agent_last_response[0] = '\0';
+        int ok = soma_investiga(mission, inv_modo == 2, agent_last_response, sizeof agent_last_response);
+        mayordomo_store_reply(agent_last_response, 1);
+        agent_aviso_fin(ok);
+        return;
+    }
+    /* SOMA_292_PAINT_IA: "dibujame un faro", "pinta un gato en paint": el modelo lo dibuja y Paint lo pinta paso a paso */
+    if (str_eq_ci(requested_agent, "soma") && delegation_depth == 0 && *mission && ar_dibujo(mission)) {
+        extern int gui_is_running(void);
+        extern void gui_open_paint(const char *path);
+        static char tema[120], t[400];
+        ps_tema(mission, tema, sizeof tema);
+        uint32_t p = 0; agent_last_response[0] = 0;
+        if (!gui_is_running()) {
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, "Para dibujar hace falta el escritorio de SOMA (Paint es una ventana): abrelo con vsoma y pidemelo otra vez.");
+            mayordomo_store_reply(agent_last_response, 1); return;
+        }
+        p = 0; t[0] = 0; fb_puts(t, sizeof t, &p, "Voy a dibujar "); fb_puts(t, sizeof t, &p, tema);
+        fb_puts(t, sizeof t, &p, " en Paint: le pido el dibujo al modelo de IA y lo pinto paso a paso, del fondo a los detalles.");
+        kprint("\n\033[1;33m[SOMA] "); kprint(t); kprint("\033[0m\n");
+        gui_fase("lcm"); gui_aviso(t);
+        gui_open_paint("");
+        p = 0;
+        if (paint_ia_encargar(tema) != 0) {
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, "Paint ya esta haciendo otro dibujo con la IA: espera a que termine y pidemelo otra vez.");
+            mayordomo_store_reply(agent_last_response, 1); return;
+        }
+        gui_fase("pensar");
+        static char m[200]; int st = 0, fase = 0; uint64_t t0 = timer_get_uptime_ms(), t2 = 0;
+        for (;;) {
+            st = paint_ia_estado(m, sizeof m);
+            if (st == 1 || st == -1) break;
+            uint64_t now = timer_get_uptime_ms();
+            if (st == 2 && !fase) { fase = 1; t2 = now; gui_fase("escribir"); }
+            if (st == 0 && now - t0 > 420000u) break;                 /* el modelo no termina (el encargo sigue: si llega, se pinta) */
+            if (st == 2 && now - t2 > 30000u) break;                  /* Paint no esta a la vista: lo pintara al volver */
+            thread_sleep(250);
+        }
+        if (st == 1) {
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, "Listo: he dibujado "); fb_puts(agent_last_response, sizeof agent_last_response, &p, tema);
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, " en Paint. Puedes retocarlo con las herramientas, guardarlo con Ctrl+S o quitarlo con Ctrl+Z.");
+        } else if (st == -1) {
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, "No he podido dibujarlo: "); fb_puts(agent_last_response, sizeof agent_last_response, &p, m[0] ? m : "el modelo no ha dado un dibujo valido");
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, ". Prueba a pedirlo de otra forma o mas sencillo.");
+        } else if (st == 2) {
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, "Ya tengo el dibujo de "); fb_puts(agent_last_response, sizeof agent_last_response, &p, tema);
+            fb_puts(agent_last_response, sizeof agent_last_response, &p, ": se esta pintando en la ventana de Paint.");
+        } else fb_puts(agent_last_response, sizeof agent_last_response, &p, "El modelo esta tardando mucho con el dibujo; si termina, aparecera solo en Paint.");
+        mayordomo_store_reply(agent_last_response, 1);
+        return;
     }
     int lcm_v = str_eq_ci(requested_agent, "soma") ? lcm_soma(mission) : LCM_SIGUE;   /* SOMA_253_LCM */
     if (lcm_v == LCM_HECHO) return;
@@ -2010,6 +2171,7 @@ static void agent_run_core(const char *agent_name, const char *mission)
                                                         "  run <ruta.soma>           Compila y ejecuta codigo nativo SOMA-LANG en Ring 0.\n"
                             "  win.*                     Primitivas de ventanas y raton en .soma (create, clear, rect, text, present, mouse).\n" /*PL5_TOOL_WIN*/
                             "  search <consulta>         Busca informacion web en vivo (noticias, eventos, fechas, datos).\n"
+                            "  investiga <pregunta>      Investiga en internet: varias busquedas, lee las paginas y devuelve un informe con fuentes [n].\n"   /* SOMA_288_INVESTIGA */
                             "  mem_search <termino>      Busca conceptos o palabras clave en el arbol de memoria /mem/.\n"
                             "  mem_tree                  Muestra el arbol general de memoria estructurada.\n"
                             "  mem_read <nodo>           Lee el contenido de una rama/nodo del arbol de memoria.\n"

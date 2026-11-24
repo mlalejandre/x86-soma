@@ -35,6 +35,12 @@ static inline uint32_t habla_limpia(const char *in, char *out, uint32_t cap, uin
         }
         if (line_start) {
             while (*p == ' ' || *p == '\t') p++;
+            {   /* SOMA_288_INVESTIGA: la lista de fuentes de un informe no se lee ("## Fuentes", "Fuentes:") */
+                const char *h = p; while (*h == '#' || *h == ' ' || *h == '*') h++;
+                if ((h[0] == 'F' || h[0] == 'f') && h[1] == 'u' && h[2] == 'e' && h[3] == 'n' && h[4] == 't' && h[5] == 'e' && h[6] == 's' && h > p &&
+                    (h[7] == '\n' || h[7] == 0 || h[7] == ':' || h[7] == ' ' || h[7] == '*')) break;
+                if ((h[0] == 'F' || h[0] == 'f') && h[1] == 'u' && h[2] == 'e' && h[3] == 'n' && h[4] == 't' && h[5] == 'e' && h[6] == 's' && h[7] == ':' && (h[8] == '\n' || h[8] == 0)) break;
+            }
             while (*p == '#' || *p == '>' ) p++;                                         /* titulos y citas */
             if ((*p == '-' || *p == '*' || *p == '+') && p[1] == ' ') p += 2;            /* vinetas */
             else { const char *q = p; while (*q >= '0' && *q <= '9') q++; if (q > p && (*q == '.' || *q == ')') && q[1] == ' ') p = q + 2; }   /* 1. 2. */
@@ -62,6 +68,11 @@ static inline uint32_t habla_limpia(const char *in, char *out, uint32_t cap, uin
                 for (const char *t = b; t < dot; t++) HT_PUT(*t == '_' || *t == '-' ? ' ' : *t);
                 p = e; continue;
             }
+        }
+        /* SOMA_288_INVESTIGA: citas de fuentes [1], [2, 3], [1-4] */
+        if (*p == '[' && p[1] >= '0' && p[1] <= '9') {
+            const char *e = p + 1; while ((*e >= '0' && *e <= '9') || *e == ',' || *e == ' ' || *e == '-') e++;
+            if (*e == ']' && e[1] != '(') { while (o && out[o - 1] == ' ') o--; p = e + 1; continue; }
         }
         /* adornos */
         if (*p == '*' || *p == '`' || *p == '|' || *p == '#' || *p == '~') { p++; continue; }

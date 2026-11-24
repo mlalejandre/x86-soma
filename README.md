@@ -185,6 +185,11 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
 - Terminal Gráfica: Consola interactiva con emulación ANSI, historial persistente, autocompletado y tuberías (| , > , && , ||).
 - SOMA Studio: editor de código para SOMA-LANG y Python con explorador, verificación, ejecución y peticiones a la IA; pestañas *Crear con IA*, *Proyectos* y *Registro*.
 - SOMA Media: reproductor de vídeo AVI (MJPG + PCM) y audio WAV del almacén BIGFS, con biblioteca, visualización del sonido y controles con nombre.
+- SOMA (chat): conversaciones con el agente al estilo de Open WebUI, con historial, Markdown, adjuntos y voz.  <!-- SOMA_297_GITHUB -->
+- Correo: correo electrónico IMAP/SMTP con TLS 1.3 y la IA dentro (búsqueda en lenguaje natural, resúmenes y respuestas redactadas; ver *Correo con IA*).
+- YouTube: buscar, ver y hablar con los vídeos (pestaña IA con resúmenes y minutos que se pulsan).
+- Paint con IA: el botón **IA** dibuja lo que le pidas, paso a paso, y el resultado se retoca a mano.
+- Navegador con visor de documentos: PDF, LaTeX (`.tex`) e imágenes dentro de la pestaña.
 
 Todas usan los **iconos vectoriales del sistema** (`src/ui/sysicon.h`): se dibujan con antialiasing a cualquier tamaño y se
 pueden ver todos en *Ajustes → Iconos*. Para añadir uno: una entrada nueva en `enum si_icon` (antes de `SI_COUNT`), su dibujo en
@@ -598,6 +603,32 @@ Con 250 000 tokens el agente le manda hasta 700 KB de prompt y 29 000 caracteres
 pueden ocupar 384 KB, y si algo no cabe termina con «[... respuesta recortada ...]» en vez de cortarse en silencio. El maquetador
 y el programador también lo usan. Se guarda en `/etc/llm_limites.conf`.
 
+## ⌨️ Primeros pasos: la ayuda rápida (F1)  <!-- SOMA_297_GITHUB -->
+
+Al arrancar, el orbe da la bienvenida y una tarjeta abajo enseña consejos cortos. No bloquea nada: se puede usar SOMA desde el
+primer segundo, y **F1** vuelve a mostrar la ayuda cuando haga falta.
+
+| Tecla | Qué hace |
+|---|---|
+| Tecla Windows (o tocar Alt) | Aplicaciones en órbita y el reloj |
+| Mantener Alt | Hablar con SOMA; al soltar, escribe lo dicho |
+| Escribir + Intro | Pedir lo que sea al orbe: abrir apps, buscar, programar, escribir un correo… |
+| Clic derecho en un icono en órbita | Cerrar esa aplicación |
+| Esc | Detener lo que esté haciendo el agente o la voz |
+| F1 | La ayuda rápida otra vez |
+
+## 📧 Correo con IA  <!-- SOMA_297_GITHUB -->
+
+La aplicación **Correo** habla IMAP y SMTP de verdad con el cliente TLS 1.3 de SOMA (nunca se conecta sin cifrar). La primera vez
+pide nombre, dirección y clave y pone solos los servidores de Gmail, Yahoo, iCloud, GMX, Zoho o de tu dominio.
+
+- **Buscar como hablas**: «facturas de la luz de octubre», «el correo donde me hablaban del presupuesto de la reforma»; también `de:ana tiene:adjunto esta semana`.
+- **Resumir** un mensaje o un hilo y **redactar** respuestas o un correo nuevo desde una frase; el borrador se mejora con Corregir, Formal, Cercano, Breve o Inglés. Nada se envía sin pulsar Enviar o decir «envíalo».
+- **Desde el orbe**: «escribe un correo a María diciéndole que llego tarde», «envíalo», «¿tengo correos nuevos?», «resume mis correos de hoy». En el terminal, `correo`.
+
+Avisos: Gmail, Yahoo e iCloud piden una *contraseña de aplicación*. Outlook/Hotmail ya solo acepta OAuth, que SOMA aún no tiene.
+La clave se guarda **solo en el equipo** (`/etc/correo.conf`, sin cifrar), y `.gitignore` evita subirla por error.
+
 ## ⚡ Cómo decide SOMA el camino de una petición
 
 1. **Documento con formato** (PDF, maquetar, presentación, revista, paper...) → Maquetador.
@@ -606,7 +637,9 @@ y el programador también lo usan. Se guarda en `/etc/llm_limites.conf`.
    modelo de lenguaje (ver *LCM*). Lo que borra, mueve o apaga pregunta antes; si duda, sigue al paso siguiente.
 4. **Operación del sistema** (RAM, disco, archivos, carpetas...) → Mayordomo, sin el modelo.
 5. **Conversación, redacción, explicación, traducción** → **respuesta directa**: una sola llamada al modelo.
-6. **Lo demás** (internet, datos actuales, archivos, ejecutar) → agente con herramientas (`search` busca en Wikipedia y DuckDuckGo).
+6. **Correo** («escribe un correo a…», «¿tengo correos nuevos?») → la app Correo; solo envía al pulsar Enviar o decir «envíalo».  <!-- SOMA_297_GITHUB -->
+7. **Investigar** («investiga…», «busca información sobre…») → `investiga`: varias búsquedas, lee las páginas y cita fuentes.
+8. **Lo demás** (internet, datos actuales, archivos, ejecutar) → agente con herramientas (`search` busca en Wikipedia y DuckDuckGo).
 
 Las palabras se comparan completas, sin mayúsculas ni tildes. Si pides guardar («guárdalo», «en notas.txt»), SOMA guarda el
 texto ya escrito. `traza` enseña el tiempo y los tokens de las últimas llamadas al modelo (`/agent/traza.txt`): si algo tarda,

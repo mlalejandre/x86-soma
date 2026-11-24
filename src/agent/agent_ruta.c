@@ -29,6 +29,7 @@ static uint32_t norm_k(const char *in, char *out, uint32_t cap, int keep_star)
     return n;
 }
 static uint32_t norm(const char *in, char *out, uint32_t cap) { return norm_k(in, out, cap, 0); }
+static int strcmp_(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return (unsigned char)*a - (unsigned char)*b; }
 static int match_at(const char *t, const char *ph)
 {
     /* t apunta a un inicio de palabra; ph ya normalizada, sin espacios a los lados, palabras con '*' opcional */
@@ -123,4 +124,121 @@ int ar_direct_ok(const char *m)
         /* agentes y programas */
         "delega", "agente", "agentes", "mayordomo", "buscador", "compila", "codigo soma", "memoria de soma", "recuerda", "recuerdas", 0 };
     return !ar_any(m, tools);
+}
+
+/* SOMA_288_INVESTIGA: ver agent_ruta.h */
+int ar_investiga(const char *m)
+{
+    if (!m || !*m) return 0;
+    for (const char *p = m; *p; p++) if (p[0] == '/' && p[1] != '/' && (p == m || p[-1] == ' ')) return 0;    /* una ruta del sistema */
+    static const char *const no[] = { "archivo", "archivos", "fichero", "ficheros", "carpeta", "carpetas", "directorio", "disco", "pendrive", "usb",
+                                      "youtube", "video", "videos", "cancion", "canciones", "musica", "memoria de soma", "en tu memoria", "recuerdas",
+                                      "mis notas", "mi correo", "codigo fuente", "el codigo", "este codigo", "programa", "app", "aplicacion",
+                                      "ip", "dns", "ping", "mac", "red local", "wifi", "ram", "memoria libre", "cpu", "bateria", "procesos", 0 };
+    if (ar_any(m, no)) return 0;
+    static const char *const si[] = { "investiga", "investigar", "investigame", "investigalo", "investigues", "haz una investigacion", "una investigacion sobre",
+                                      "busca informacion", "buscame informacion", "busca info", "buscar informacion", "recopila informacion", "informate",
+                                      "averigua", "averiguame", "averiguar", "ultimas noticias", "noticias de", "noticias sobre", "ultima hora de",
+                                      "que se sabe de", "que se sabe sobre", "documentate", "research", "look up", 0 };
+    if (ar_any(m, si)) return 2;
+    static const char *const ver[] = { "busca", "buscar", "buscame", "buscalo", "buscala", "mira", "miralo", "consulta", "consultalo", "encuentra", "encuentrame", 0 };
+    static const char *const red[] = { "en internet", "por internet", "en la web", "en la red", "en google", "online", "en linea", 0 };
+    return ar_any(m, ver) && ar_any(m, red);
+}
+
+void ar_consulta(const char *m, char *out, uint32_t cap)
+{
+    /* por palabras: se comparan normalizadas pero se copian las originales (con sus tildes y enes: "ano" no es "año") */
+    static const char *const fuera[] = { "puedes", "podrias", "por favor", "porfa", "investiga", "investigar", "investigame", "investigalo", "haz una investigacion",
+        "una investigacion", "busca", "buscar", "buscame", "buscalo", "buscala", "mira", "miralo", "consulta", "consultalo", "encuentra", "encuentrame", "averigua",
+        "averiguame", "informate", "documentate", "recopila", "en internet", "por internet", "en la web", "en la red", "en google", "online", "en linea",
+        "informacion", "info", "sobre", "acerca de", "que se sabe", 0 };
+    enum { NW = 64 };
+    const char *wa[NW]; uint32_t wl[NW]; char wn[NW][32]; int nw = 0, quita[NW];
+    for (const char *p = m; *p && nw < NW; ) {
+        while (*p && (*p == ' ' || *p == ',' || *p == '.' || *p == '?' || *p == '!' || *p == ':' || *p == ';' || *p == '"' || *p == '\'' ||
+                      ((unsigned char)p[0] == 0xC2 && ((unsigned char)p[1] == 0xBF || (unsigned char)p[1] == 0xA1)))) p += ((unsigned char)*p == 0xC2) ? 2 : 1;
+        if (!*p) break;
+        const char *a = p;
+        while (*p && *p != ' ' && *p != ',' && *p != '.' && *p != '?' && *p != '!' && *p != ':' && *p != ';' && *p != '"' && !((unsigned char)p[0] == 0xC2 && ((unsigned char)p[1] == 0xBF || (unsigned char)p[1] == 0xA1))) p++;
+        char w[64]; uint32_t k = 0; for (const char *c = a; c < p && k + 1 < sizeof w; c++) w[k++] = *c;
+        w[k] = 0;
+        char n[40]; norm(w, n, sizeof n);
+        uint32_t z = 0; const char *nn = n; while (*nn == ' ') nn++;
+        while (nn[z] && nn[z] != ' ' && z + 1 < sizeof wn[0]) { wn[nw][z] = nn[z]; z++; }
+        wn[nw][z] = 0;
+        wa[nw] = a; wl[nw] = (uint32_t)(p - a); quita[nw] = 0; nw++;
+    }
+    for (int i = 0; fuera[i]; i++) {
+        char ph[64]; norm(fuera[i], ph, sizeof ph);
+        const char *f[6]; int nf = 0; static char pw[6][32];
+        for (const char *c = ph; *c && nf < 6; ) { while (*c == ' ') c++; if (!*c) break; uint32_t z = 0; while (*c && *c != ' ' && z + 1 < sizeof pw[0]) pw[nf][z++] = *c++; pw[nf][z] = 0; f[nf] = pw[nf]; nf++; while (*c && *c != ' ') c++; }
+        for (int k = 0; k + nf <= nw; k++) {
+            int ok = 1; for (int j = 0; j < nf && ok; j++) { const char *x = wn[k + j], *y = f[j]; while (*x && *x == *y) { x++; y++; } ok = !*x && !*y; }
+            if (ok) for (int j = 0; j < nf; j++) quita[k + j] = 1;
+        }
+    }
+    int k0 = 0;
+    for (;;) {                                                       /* sin articulos ni "de" sueltos al principio */
+        while (k0 < nw && quita[k0]) k0++;
+        if (k0 < nw) { const char *x = wn[k0]; if (!strcmp_(x, "de") || !strcmp_(x, "del") || !strcmp_(x, "el") || !strcmp_(x, "la") || !strcmp_(x, "los") || !strcmp_(x, "las") || !strcmp_(x, "que") || !strcmp_(x, "me")) { quita[k0] = 1; continue; } }
+        break;
+    }
+    uint32_t q = 0;
+    for (int k = 0; k < nw; k++) {
+        if (quita[k]) continue;
+        if (q && q + 1 < cap) out[q++] = ' ';
+        for (uint32_t z = 0; z < wl[k] && q + 1 < cap; z++) out[q++] = wa[k][z];
+    }
+    while (q && (out[q - 1] == ' ' || out[q - 1] == '?')) q--;
+    if (cap) out[q] = 0;
+    if (!q) { while (m[q] && q + 1 < cap) { out[q] = m[q]; q++; } if (cap) out[q] = 0; }
+}
+
+/* SOMA_292_PAINT_IA: ver agent_ruta.h */
+int ar_dibujo(const char *m)
+{
+    if (!m || !*m) return 0;
+    static const char *const no[] = { "grafico", "graficos", "grafica", "graficas", "diagrama", "diagramas", "esquema", "tabla", "funcion", "curva", "plano",
+        "flujo", "ascii", "svg", "codigo", "programa", "html", "latex", "documento", "informe", "presentacion", "archivo", "archivos", "fichero",
+        "ficheros", "carpeta", "carpetas", "directorio", "directorios", "arbol de", "memoria", "disco",
+        "como se dibuja", "como dibujar", "como se pinta", "como pintar", "como dibujo", "explica", "explicame", "ensename a", "con letras", "con texto", 0 };
+    if (ar_any(m, no)) return 0;
+    static const char *const verbo[] = { "dibuja", "dibujame", "dibujar", "dibujes", "pinta", "pintame", "pintar", "haz un dibujo", "hazme un dibujo",
+        "crea un dibujo", "ilustra", "ilustrame", 0 };
+    if (ar_word(m, "paint") && ar_any(m, verbo)) return 1;
+    static const char *const solo[] = { "dibujame", "dibuja un", "dibuja una", "dibuja unos", "dibuja unas", "dibuja el", "dibuja la", "dibuja los",
+        "dibuja las", "dibuja mi", "haz un dibujo", "hazme un dibujo", "crea un dibujo", "pintame un", "pintame una", "pinta un", "pinta una",
+        "ilustrame", "ilustra un", "ilustra una", 0 };
+    return ar_any(m, solo);
+}
+
+/* SOMA_295_CORREO: ver agent_ruta.h */
+int ar_correo(const char *m)
+{
+    if (!m || !*m) return 0;
+    /* "envialo" y parecidos: solo si es una frase corta (confirma el borrador del orbe) */
+    { uint32_t pal = 0; int en = 0; for (const char *p = m; *p; p++) { int l = *p != ' ' && *p != ',' && *p != '.' && *p != '!'; if (l && !en) pal++; en = l; }
+      static const char *const conf[] = { "envialo", "enviala", "mandalo", "mandala", "envia el correo", "envia el email", "envia el mail", "manda el correo",
+                                          "manda el email", "envia el borrador", "manda el borrador", "enviar el correo", "si envialo", "si mandalo", "envialo ya", "ya puedes enviarlo", 0 };
+      if (pal <= 6 && ar_any(m, conf)) return AR_CO_ENVIA; }
+    static const char *const obj[] = { "correo", "correos", "email", "emails", "e-mail", "e-mails", "mail", "mails", "emilio", "emilios", "bandeja de entrada", 0 };
+    if (!ar_any(m, obj)) return 0;
+    static const char *const no[] = { "en internet", "por internet", "en la web", "en google", "programa", "programame", "script", "codigo", "html", "funcion",
+        "que es un correo", "que es el correo", "como funciona el correo", "como funciona un correo", "explica", "explicame", "protocolo", "smtp", "imap", "pop3",
+        "servidor de correo", "correo basura en", "spam en internet", 0 };
+    if (ar_any(m, no)) return 0;
+    static const char *const abre[] = { "abre el correo", "abre correo", "abre mi correo", "abre la app de correo", "abre la aplicacion de correo", "abre el gestor de correo",
+        "abre el cliente de correo", "abre el email", "abre mi email", "abre el mail", "abreme el correo", 0 };
+    if (ar_any(m, abre)) return AR_CO_ABRE;
+    static const char *const busca[] = { "busca", "buscame", "busques", "encuentra", "encuentrame", "localiza", "localizame", 0 };
+    if (ar_any(m, busca)) return AR_CO_BUSCA;
+    static const char *const escribe[] = { "escribe", "escribeme", "escribele", "escribirle", "redacta", "redactame", "redactale", "manda", "mandale", "mandar",
+        "envia", "enviale", "enviar", "prepara", "preparame", "preparale", "responde", "respondele", "responder", "contesta", "contestale", "contestar", "redactar", 0 };
+    if (ar_any(m, escribe)) return AR_CO_REDACTA;
+    static const char *const lee[] = { "tengo correo*", "tengo email*", "tengo mail*", "correos nuevos", "correo nuevo", "emails nuevos", "mails nuevos", "mis correos", "mi correo",
+        "mis emails", "mis mails", "mi email", "bandeja de entrada", "lee", "leeme", "resume", "resumeme", "resumen", "que correos", "hay correos", "algun correo",
+        "revisa", "revisame", "mira", "comprueba", "ha llegado", "han llegado", "he recibido", "me ha escrito", "sin leer", 0 };
+    if (ar_any(m, lee)) return AR_CO_LEE;
+    return 0;
 }

@@ -6,6 +6,58 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_297_GITHUB -->
+### Listo para publicar en GitHub, con el correo y la ayuda (297)
+- Entradas del historial de los parches 285 a 297 y secciones del README para el chat, la investigación, el visor, Paint con IA,
+  la ayuda rápida (F1) y el correo.
+- `.gitignore`: no se suben `correo.conf` ni claves o certificados sueltos (`*.pem`, `*.key`, `*.p12`, `*.pfx`): el correo
+  guarda ahí tu clave.
+- El exportador para Claude (`tools/exporta_para_claude.py`) tiene los temas `correo` y `ayuda`. Sigue sin incluir nunca `.conf` ni claves.
+
+### Arreglo: la prueba del correo compila con el clang nuevo de macOS (296)
+- `correo_core.c`: la tabla para quitar tildes tenía tamaño fijo y no dejaba sitio al cero final; el clang de Xcode lo da como
+  error (`-Wunterminated-string-initialization` con `-Werror`). Ahora el tamaño lo calcula el compilador.
+
+### Correo: correo electrónico con IA, unido al orbe (295)
+- Aplicación **Correo** nueva: IMAP y SMTP de verdad sobre el TLS 1.3 de SOMA (nunca sin cifrar), con Gmail, Yahoo, iCloud, GMX,
+  Zoho y cualquier dominio. Carpetas, leer, responder, responder a todos, reenviar, archivar, papelera, estrella, adjuntos y atajos de teclado.
+- IA dentro de la interfaz: búsqueda en lenguaje natural («facturas de la luz de octubre»), resumen del mensaje, correos y
+  respuestas redactados desde una frase y mejoras del borrador (Corregir, Formal, Cercano, Breve, Inglés). Nunca envía nada sin que lo digas.
+- Desde el orbe: «escribe un correo a María diciéndole que llego tarde», «envíalo», «¿tengo correos nuevos?», «busca el correo de Juan con las fotos». Orden `correo` en el terminal.
+- Avisos: Outlook/Hotmail exige OAuth (SOMA no lo tiene); la clave se guarda solo en el equipo (`/etc/correo.conf`, sin cifrar).
+
+### La bienvenida del orbe y la ayuda rápida, F1 (294)
+- Al arrancar, el orbe saluda y una tarjeta enseña consejos cortos (tecla Windows: aplicaciones y reloj; mantén Alt: hablar;
+  escribir y pulsar Intro…). No bloquea nada: el usuario experto puede trabajar desde el segundo cero.
+- **F1** vuelve a mostrar la ayuda en cualquier momento.
+
+### Las comprobaciones de los parches 286 a 292 en macOS (293)
+- Sin símbolos débiles (el enlazador de macOS no los admite) y las pruebas que necesitan las cabeceras del núcleo solo se exigen en Linux x86_64.
+
+### Dibujar en Paint con la IA (292)
+- Botón **IA** en Paint y frases desde el orbe («dibújame un faro al atardecer»): el modelo dibuja paso a paso y el dibujo se retoca o se quita con Ctrl+Z.
+
+### Botón derecho para cerrar una aplicación en órbita (291)
+- Clic derecho sobre un icono en órbita la cierra al momento; si tiene cambios sin guardar, pide un segundo clic.
+
+### SOMA habla mientras programa, y webs con JavaScript desde el orbe (290)
+- Avisos de voz durante el programador y un resumen final para personas; «hazme una web» crea una página HTML con su JavaScript.
+
+### PDF, LaTeX e imágenes dentro del navegador (289)
+- Visor de documentos en la pestaña: PDF con el lector de SOMA, `.tex` compuesto con el motor LaTeX, e imágenes WebP locales.
+
+### Investigación y búsquedas en internet de verdad (288)
+- Orden `investiga`: varias búsquedas, lectura de hasta 5 páginas y un informe con fuentes citadas; la voz no lee las citas.
+
+### El orbe ya no va a tirones mientras SOMA trabaja (287)
+- La consola deja de escribir en la pantalla VGA con el escritorio activo y el hilo del agente cede la CPU al escribir mucho.
+
+### YouTube con el modelo de verdad, pestaña IA nueva y vídeos desde el orbe (286)
+- El modelo local sin clave también funciona en YouTube y el chat; conversación con el vídeo, minutos que se pulsan y atajos.
+
+### La aplicación SOMA: un chat moderno con el agente (285)
+- Chat al estilo de Open WebUI: historial agrupado, búsqueda, Markdown, adjuntos, editar y regenerar, y lectura en voz alta.
+
 <!-- SOMA_284_GITHUB -->
 ### Listo para publicar en GitHub (284)
 - Entradas del historial y sección del README para la memoria nueva (277–283); documentación de los parches 281 y 282 (en `docs/PARCHE_284_GITHUB.md`).

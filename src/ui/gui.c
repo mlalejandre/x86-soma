@@ -29,6 +29,7 @@
 #include "fm.h"
 #include "notepad.h"
 #include "memview.h"
+#include "chat.h"                 /* SOMA_285_CHAT */
 #include "layout.h"
 #include "paint.h"
 #include "codeedit.h"                               /* SOMA_219_AVISO */
@@ -57,6 +58,7 @@
 #include "acct.h"      /* PARCHE 089 */
 #include "sysmon.h"                                /* PARCHE 085 */
 #include "agenda_gui.h"                            /* SOMA_272_AGENDA */
+#include "correo.h"                                /* SOMA_295_CORREO */
 #include "recorder.h"                               /* SOMA_177_T480S */
 #include "camapp.h"                                /* SOMA_178_T480S */
 #include "capapp.h"                                /* SOMA_179_T480S */
@@ -101,7 +103,8 @@ enum app_mode {
     APP_CAMERA,    /* SOMA_178_T480S: camara web */
     APP_CAPTURE,   /* SOMA_179_T480S: captura de pantalla y audio interno */
     APP_YOUTUBE,   /* SOMA_250_YOUTUBE: videos de YouTube (busqueda y reproduccion en directo) */
-    APP_AGENDA     /* SOMA_272_AGENDA: calendario */
+    APP_AGENDA,    /* SOMA_272_AGENDA: calendario */
+    APP_CORREO     /* SOMA_295_CORREO: correo electronico (IMAP/SMTP) con IA */
 };
 
 static enum app_mode current_app = APP_DESKTOP;
@@ -302,6 +305,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     switch (app) {
     case APP_WEB_BROWSER:    return 520u;
     case APP_AGENT_MEMORY:   return 860u;   /* SOMA_283_MEMORIA_APP: consola de la memoria (3 columnas) */
+    case APP_AGENT_CHAT:     return 560u;   /* SOMA_285_CHAT */
     case APP_FILE_MANAGER:   return 480u;
     case APP_IMAGE_VIEWER:   return 460u;
     case APP_NOTEPAD:        return 400u;
@@ -310,6 +314,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_PDF:            return 760u;   /* PARCHE 088 */
     case APP_SYSMON:         return 900u;   /* PARCHE 089 */
     case APP_AGENDA:         return 860u;   /* SOMA_272_AGENDA */
+    case APP_CORREO:         return 960u;   /* SOMA_295_CORREO: carpetas + lista + lectura */
     case APP_RECORDER:       return 800u;   /* SOMA_177_T480S; SOMA_210: con la lista de grabaciones a la vista */
     case APP_CAMERA:         return 760u;   /* SOMA_178_T480S; SOMA_210 */
     case APP_CAPTURE:        return 720u;   /* SOMA_179_T480S; SOMA_210 */
@@ -338,6 +343,7 @@ static uint32_t her_app_min_w(enum app_mode app)
 #include "gui_lang.c"            /* pintado en vivo y ventana estandar de SOMA-LANG */
 #include "gui_abrir.c"           /* abrir aplicaciones */
 #include "gui_orbe_frente.c"     /* el orbe al frente */
+#include "gui_ayuda.c"           /* SOMA_294_AYUDA: bienvenida del orbe, consejos al iniciar y ayuda con F1 */
 
 static int gui_desktop_live;
 /* SOMA_225_AJUSTES: cambio de resolucion de trabajo pedido por Ajustes; se aplica al principio de una vuelta del bucle del escritorio */
@@ -415,6 +421,8 @@ static int soma_clip_apply(int op)
     case APP_PAINT:        return paint_clip_op(op);
     case APP_FILE_MANAGER: return fm_clip_op(op);
     case APP_AGENT_MEMORY: if (memview_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_283_MEMORIA_APP: los campos de la memoria */
+    case APP_AGENT_CHAT:   if (chat_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_285_CHAT */
+    case APP_CORREO:       if (correo_clip_op(op)) { her_refresh_all(); fb_present(); return 1; } return 0;   /* SOMA_295_CORREO */
     case APP_YOUTUBE:      if (youtube_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_250_YOUTUBE: la caja de busqueda */
     case APP_LAYOUT:       if (layout_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;     /* SOMA_254: ruta y descripcion del Maquetador */
     case APP_WEB_BROWSER:
@@ -550,6 +558,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
     imgview_init();
     notepad_init();
     memview_init();
+    chat_init();                                                /* SOMA_285_CHAT */
     her_desk_load();
 
     current_app = APP_DESKTOP;
@@ -586,6 +595,8 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
     mouse_y = (int32_t)cur_h / 2;
     mouse_init();
     (void)console_take_super();                             /* SOMA_168B_ORBE: pulsaciones de antes de la GUI no cuentan */
+    (void)console_take_help();                              /* SOMA_294_AYUDA: F1 de antes tampoco */
+    her_ayuda_arranque();                                   /* SOMA_294_AYUDA: la bienvenida y los consejos (una vez por encendido) */
     mouse_erase_cursor();
     fb_present();
 
@@ -736,10 +747,17 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             if (vz == 2) { HER_SYNC_WIN(); her_refresh_all(); fb_present(); }
             else if (vz == 1) fb_present();
         }
+        {   /* SOMA_294_AYUDA: F1 y los consejos (la tarjeta la dibuja fb_present encima de todo; nunca se queda con la entrada) */
+            if (console_take_help()) her_ayuda_f1();
+            int ay = her_ayuda_tick();
+            if (ay == 2) { HER_SYNC_WIN(); her_refresh_all(); fb_present(); }
+            else if (ay == 1) fb_present();
+        }
         if (console_take_super()) {                             /* SOMA_168B_ORBE: tecla Windows / Option */
+            her_ay_ev(AYEV_SUPER);                              /* SOMA_294_AYUDA: el consejo de la tecla Windows, aprendido */
             if (her_num_windows > 0) {
                 int app = her_summon_run(cur_w, cur_h);
-                if (app >= 0) agent_global_focus = (app == APP_AGENT_CHAT) ? 1 : 0;
+                if (app >= 0) agent_global_focus = 0;   /* SOMA_285_CHAT: el chat tiene su propio cuadro de texto (el orbe no se queda las teclas) */
                 HER_SYNC_WIN();
                 her_refresh_all();
             } else {
@@ -870,13 +888,15 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         }
         if (!her_dragging && !her_resizing) {   /* SOMA_179_T480S: Captura, Camara y Grabadora se repintan solas (hora, nivel, imagen) aunque no se mueva el raton:
                                                  * sus tick() estaban dentro de mouse_poll y no corrian sin actividad del puntero */
-            static const int live_apps[5] = { APP_CAPTURE, APP_CAMERA, APP_RECORDER, APP_YOUTUBE, APP_AGENT_MEMORY };   /* SOMA_250_YOUTUBE: el video se pinta solo; SOMA_283_MEMORIA_APP: la memoria en vivo */
-            for (int k = 0; k < 5; k++) {
+            static const int live_apps[7] = { APP_CAPTURE, APP_CAMERA, APP_RECORDER, APP_YOUTUBE, APP_AGENT_MEMORY, APP_AGENT_CHAT, APP_CORREO };   /* SOMA_295_CORREO */   /* SOMA_285_CHAT: respuestas y animaciones */
+            { int abierta = 0; for (int i = 0; i < her_num_windows; i++) if (her_windows[i].app == APP_AGENT_CHAT) abierta = 1; if (!abierta) (void)chat_tick(); }   /* SOMA_285_CHAT: cerrada o minimizada, la respuesta llega igual */
+   /* SOMA_250_YOUTUBE: el video se pinta solo; SOMA_283_MEMORIA_APP: la memoria en vivo */
+            for (int k = 0; k < 7; k++) {
                 int app = live_apps[k], si = -1;
                 for (int i = 0; i < her_num_windows; i++) if ((int)her_windows[i].app == app) si = i;
                 if (si < 0) continue;
                 uint8_t own = acct_set_owner((uint8_t)(ACCT_APP0 + app));
-                int ch = app == APP_CAPTURE ? capapp_tick() : app == APP_CAMERA ? camapp_tick() : app == APP_YOUTUBE ? youtube_tick() : app == APP_AGENT_MEMORY ? memview_tick() : recorder_tick();
+                int ch = app == APP_CAPTURE ? capapp_tick() : app == APP_CAMERA ? camapp_tick() : app == APP_YOUTUBE ? youtube_tick() : app == APP_AGENT_MEMORY ? memview_tick() : app == APP_AGENT_CHAT ? chat_tick() : app == APP_CORREO ? correo_tick() : recorder_tick();
                 if (ch) {
                     struct her_win_node *sw = &her_windows[si];
                     int covered = 0;
@@ -891,6 +911,28 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     fb_present();
                 }
                 acct_set_owner(own);
+            }
+        }
+        if (!her_dragging && !her_resizing && paint_ia_slot() >= 0) {   /* SOMA_292_PAINT_IA: el dibujo de la IA se pinta solo, paso a paso */
+            int ps = paint_ia_slot(), si = -1;
+            for (int i = 0; i < her_num_windows; i++) if (her_windows[i].app == APP_PAINT && her_windows[i].term_slot == ps) si = i;
+            if (si >= 0) {
+                struct her_win_node *sw = &her_windows[si];
+                if (sw->term_slot > 0) paint_select(sw->term_slot);   /* solo la instancia de Paint (sin tocar el foco del terminal) */
+                if (paint_animando()) {
+                    uint8_t own = acct_set_owner((uint8_t)(ACCT_APP0 + APP_PAINT));
+                    int covered = 0;
+                    for (int j = si + 1; j < her_num_windows; j++) {
+                        struct her_win_node *o = &her_windows[j];
+                        if (o->x < sw->x + sw->w && sw->x < o->x + o->w && o->y < sw->y + sw->h && sw->y < o->y + o->h) { covered = 1; break; }
+                    }
+                    if (!covered && settings_opacity() >= 100) her_render_app_body(APP_PAINT, HER_CLI_X(sw->x), HER_CLI_Y(sw->y), HER_CLI_W(sw->w), HER_CLI_H(sw->h), si == her_num_windows - 1);
+                    else her_refresh_all();
+                    if (her_cursor_should_show()) mouse_draw_cursor(mouse_x, mouse_y);
+                    fb_present();
+                    acct_set_owner(own);
+                }
+                if (her_num_windows > 0) { struct her_win_node *tw = &her_windows[her_num_windows - 1]; if (tw->app == APP_PAINT && tw->term_slot > 0) paint_select(tw->term_slot); }   /* la de Paint activa, como estaba */
             }
         }
         if (!her_dragging && !her_resizing) {   /* PARCHE 089/090: el Monitor se actualiza cada segundo aunque no sea la ventana activa */
@@ -1015,6 +1057,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 int wheel = mouse_wheel_take();
                 if (wheel && !her_cursor_should_show()) her_pr_rueda(wheel);   /* SOMA_259_ORBE: y la rueda */
                 int rclick = mouse_right_take_click();
+                if (rclick && her_min_right_close(mouse_x, mouse_y, cur_w, cur_h)) { rclick = 0; her_refresh_all(); fb_present(); }   /* SOMA_291_CERRAR_ORBITA */
                 if (current_app == APP_WEB_BROWSER) browser_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held()); /* SOMA_PARCHE_NAVEGADOR */
                 if (current_app == APP_FILE_MANAGER && !her_dragging && !her_resizing) {   /* SOMA_PARCHE_028_UI */
                     if (fm_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held(), rclick))
@@ -1022,6 +1065,12 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 }
                 if (current_app == APP_CODER_APP && !her_dragging && !her_resizing) {   /* PARCHE 093: arrastre de seleccion y rueda */
                     if (coder_app_mouse(mouse_x, mouse_y, wheel, mouse_left_held())) { coder_app_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
+                if (current_app == APP_CORREO && !her_dragging && !her_resizing) {   /* SOMA_295_CORREO: rueda, resaltado y arrastre en los campos */
+                    if (correo_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { correo_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
+                if (current_app == APP_AGENT_CHAT && !her_dragging && !her_resizing) {   /* SOMA_285_CHAT: rueda, resaltado de enlaces y botones, arrastre */
+                    if (chat_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { chat_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
                 if (current_app == APP_AGENT_MEMORY && !her_dragging && !her_resizing) {   /* SOMA_283_MEMORIA_APP: rueda, resaltado y arrastre en los campos */
                     if (memview_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { memview_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
@@ -1072,6 +1121,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 }
             }
 
+            if (m_left_click && her_ayuda_clic(mouse_x, mouse_y)) m_left_click = 0;   /* SOMA_294_AYUDA: clic en una tarjeta de la ayuda */
             if (m_left_click) {
                 int win_clicked = -1;
                 int win_hit_code = 0;
@@ -1178,7 +1228,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 }
 
                 if (current_app != APP_DESKTOP) {
-                    agent_global_focus = (current_app == APP_AGENT_CHAT) ? 1 : 0;
+                    agent_global_focus = 0;   /* SOMA_285_CHAT: el chat tiene su propio cuadro de texto (el orbe no se queda las teclas) */
                     if (current_app == APP_YOUTUBE) {                /* SOMA_250_YOUTUBE */
                         youtube_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
                         youtube_render_window(win_x, win_y, win_w, win_h, 1);
@@ -1194,6 +1244,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     if (current_app == APP_CAMERA) {                 /* SOMA_178_T480S */
                         camapp_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
                         camapp_render_window(win_x, win_y, win_w, win_h, 1);
+                    } else
+                    if (current_app == APP_CORREO) {                 /* SOMA_295_CORREO */
+                        correo_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        correo_render_window(win_x, win_y, win_w, win_h, 1);
                     } else
                     if (current_app == APP_AGENDA) {                 /* SOMA_272_AGENDA */
                         agenda_gui_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
@@ -1268,8 +1322,14 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                         struct term_edit ted = { cur_cmd, &cur_cmd_len, &cur_cursor_pos, sizeof(cur_cmd) };
                         term_mouse_down(mouse_x, mouse_y, win_x, win_y, win_w, win_h, &ted);
                         render_real_terminal(win_x, win_y, win_w, win_h, cur_cmd, cur_cmd_len, cur_cursor_pos, 1);
-                    } else if (current_app == APP_AGENT_CHAT) {
-                        if (cur_cmd_len > 0 && point_in_rect(mouse_x, mouse_y, win_x + win_w - 110, win_y + win_h - 46, 96, 46)) goto exec_agent;
+                    } else if (current_app == APP_AGENT_CHAT) {                     /* SOMA_285_CHAT */
+                        int act = chat_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        if (act == 3) {                                              /* un enlace: al Navegador */
+                            char url[1024]; const char *u = chat_url(); uint32_t k = 0; while (u[k] && k + 1 < sizeof url) { url[k] = u[k]; k++; } url[k] = 0;
+                            her_open_app(APP_WEB_BROWSER, cur_w, cur_h); HER_SYNC_WIN(); browser_load_url(url); her_refresh_all();
+                        } else if (act == 4) { her_open_notepad_path(chat_path(), cur_w, cur_h); HER_SYNC_WIN(); her_refresh_all(); }
+                        else if (act == 5) { her_open_app_path(APP_IMAGE_VIEWER, chat_path(), cur_w, cur_h); HER_SYNC_WIN(); her_refresh_all(); }
+                        else chat_render_window(win_x, win_y, win_w, win_h, 1);
                     }
                 }
             }
@@ -1281,7 +1341,10 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             if (soma_clip_gui_key(c)) continue;   /* SOMA_PARCHE_PORTAPAPELES */
             acct_set_owner((uint8_t)(ACCT_APP0 + current_app));   /* PARCHE 089 */
             if (c == 27 && her_voz_escape()) continue;                       /* SOMA_244_VOZ: Esc cancela el dictado */
+            if (her_ayuda_tecla(c)) continue;                                /* SOMA_294_AYUDA: Esc con una tarjeta de ayuda a la vista */
             if (c == 27 && current_app != APP_NOTEPAD && her_stop_escape(agent_global_focus || current_app == APP_DESKTOP)) continue;   /* SOMA_256: Esc detiene la lectura o la mision */
+            if (c == 27 && current_app == APP_CORREO) { if (correo_escape()) { correo_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); } else her_close_current_app_vortex(); continue; }   /* SOMA_295_CORREO */
+            if (c == 27 && current_app == APP_AGENT_CHAT) { (void)chat_escape(); chat_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue; }   /* SOMA_285_CHAT: Esc no sale del escritorio */
             if (c == 27) {
                 if (current_app == APP_TERMINAL_SHELL && term_popup_open()) {      /* SOMA_PARCHE_024_TERM: Esc cierra el menu */
                     term_popup_close();
@@ -1482,6 +1545,9 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 if (c == 27) { micrec_stop(); her_close_current_app_vortex(); continue; }
                 recorder_handle_key(c); recorder_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
             }
+            if (current_app == APP_CORREO) {                     /* SOMA_295_CORREO: Esc ya se atendio arriba */
+                correo_handle_key(c); correo_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
             if (current_app == APP_AGENDA) {                     /* SOMA_272_AGENDA */
                 if (c == 27) { her_close_current_app_vortex(); continue; }
                 agenda_gui_handle_key(c); agenda_gui_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
@@ -1513,6 +1579,9 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             }
             if (current_app == APP_AGENT_MEMORY) {
                 memview_handle_key(c); memview_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
+            if (current_app == APP_AGENT_CHAT) {                              /* SOMA_285_CHAT */
+                chat_handle_key(c); chat_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
             }
             if (current_app == APP_MEDIA) {
                 media_handle_key(c); media_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
@@ -1711,19 +1780,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     }
                     render_real_terminal(win_x, win_y, win_w, win_h, cur_cmd, cur_cmd_len, cur_cursor_pos, 1); fb_present(); continue;
 
-                } else if (current_app == APP_AGENT_CHAT) {
-                    if (cur_cmd_len == 0) continue;
-                exec_agent:
-                    agent_global_len = cur_cmd_len < sizeof(agent_global_cmd) - 1
-                                     ? cur_cmd_len : sizeof(agent_global_cmd) - 1;
-                    for (uint32_t i = 0; i < agent_global_len; ++i) agent_global_cmd[i] = cur_cmd[i];
-                    agent_global_cmd[agent_global_len] = '\0';
-                    agent_global_cursor = agent_global_len;
-                    agent_global_focus = 1;
-                    submit_global_agent_prompt(win_x, win_y, win_w, win_h - 56);
-                    cur_cmd_len = 0; cur_cursor_pos = 0; cur_cmd[0] = '\0';
-                    continue;
-                }
+                }                                                               /* SOMA_285_CHAT: el chat atiende sus teclas en chat_handle_key */
             }
 
             if ((uint8_t)c >= 32 && (uint8_t)c != 127) {

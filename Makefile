@@ -46,7 +46,7 @@ endif
 endif
 ifdef SOMA_MAC_NO_TOOLCHAIN
 # SOMA_263_ARREGLO: + pruebas-lcm (pruebas del anfitrion: no necesitan el compilador cruzado; make test la llama). SOMA_265_CC: + pruebas-cc
-ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm pruebas-lang pruebas-cc pruebas-js pruebas-memoria pruebas-discos run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
+ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm pruebas-lang pruebas-cc pruebas-js pruebas-memoria pruebas-chat pruebas-discos run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
 $(error macOS: el compilador del sistema (Apple clang) no puede generar el nucleo x86_64. Opcion 1: brew install x86_64-elf-gcc x86_64-elf-binutils x86_64-elf-grub xorriso  (y repetir make). Opcion 2 (solo Docker): make docker-make ARCH=$(ARCH) PLATFORM=$(PLATFORM) EXTRA_CFLAGS='$(EXTRA_CFLAGS)')
 endif
 endif
@@ -141,7 +141,7 @@ OBJS_CORE = \
 	$(BUILD)/agent_net.o \
 	$(BUILD)/llm_proto.o \
 	$(BUILD)/docagent.o $(BUILD)/docgen.o $(BUILD)/pdfw.o \
-	$(BUILD)/agent_ruta.o $(BUILD)/busca_web.o \
+	$(BUILD)/agent_ruta.o $(BUILD)/busca_web.o $(BUILD)/web_lee.o $(BUILD)/prog_voz.o \
 	$(BUILD)/memoria.o $(BUILD)/memoria_core.o \
 	$(BUILD)/shell.o \
 	$(BUILD)/httpd.o \
@@ -149,14 +149,16 @@ OBJS_CORE = \
 	$(BUILD)/gui_font.o $(BUILD)/soma_fonts.o \
 	$(BUILD)/mouse.o \
 	$(BUILD)/gui.o \
-	$(BUILD)/browser.o \
+	$(BUILD)/browser.o $(BUILD)/web_visor.o \
 	$(BUILD)/image.o \
 	$(BUILD)/imgview.o \
 	$(BUILD)/fm.o \
 	$(BUILD)/notepad.o \
 	$(BUILD)/memview.o $(BUILD)/js_runtime.o \
+	$(BUILD)/chat.o $(BUILD)/chat_core.o $(BUILD)/chat_md.o \
+	$(BUILD)/correo.o $(BUILD)/correo_core.o $(BUILD)/correo_red.o \
 	$(BUILD)/layout.o $(BUILD)/tex.o $(BUILD)/settings.o $(BUILD)/savedlg.o $(BUILD)/codeedit.o $(BUILD)/textfield.o $(BUILD)/coder_core.o $(BUILD)/coder_demo.o $(BUILD)/pdf_sbx.o $(BUILD)/pdfview.o $(BUILD)/sysmon.o $(BUILD)/agenda_core.o $(BUILD)/agenda.o $(BUILD)/agenda_gui.o $(BUILD)/recorder.o $(BUILD)/camapp.o $(BUILD)/capapp.o $(BUILD)/sysicon.o \
-	$(BUILD)/paint.o \
+	$(BUILD)/paint.o $(BUILD)/paint_svg.o \
 	$(BUILD)/coder_app.o \
 	$(BUILD)/vm.o \
 	$(BUILD)/lexer.o \
@@ -443,7 +445,7 @@ $(BUILD)/%.o: src/lang/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/youtube.o: src/apps/youtube_ia.c src/apps/youtube_nativo.c src/apps/yt_proto.h src/apps/yt_inner.h src/user/vplay/vp_abi.h   # youtube.c incluye la parte de IA (251) y la nativa (253)
-$(BUILD)/gui.o: src/ui/gui_vortice.c src/ui/gui_cosmos.c src/ui/gui_iconos.c src/ui/gui_ventanas.c src/ui/gui_agente.c src/ui/gui_orbe_fx.c src/ui/gui_fotograma.c src/ui/gui_minimizar.c src/ui/gui_lang.c src/ui/gui_abrir.c src/ui/gui_orbe_frente.c src/ui/gui_prompter.c   # SOMA_234_GUI_PARTIDO: gui.c los incluye (SOMA_259_ORBE: + gui_prompter.c)
+$(BUILD)/gui.o: src/ui/gui_vortice.c src/ui/gui_cosmos.c src/ui/gui_iconos.c src/ui/gui_ventanas.c src/ui/gui_agente.c src/ui/gui_orbe_fx.c src/ui/gui_fotograma.c src/ui/gui_minimizar.c src/ui/gui_lang.c src/ui/gui_abrir.c src/ui/gui_orbe_frente.c src/ui/gui_prompter.c src/ui/gui_voz.c src/ui/gui_ayuda.c   # SOMA_294_AYUDA (+ gui_voz.c, gui_ayuda.c); SOMA_234_GUI_PARTIDO: gui.c los incluye (SOMA_259_ORBE: + gui_prompter.c)
 $(BUILD)/shell.o: $(wildcard src/agent/shell_*.c)    # SOMA_233_SHELL_PARTIDO: shell.c incluye sus ordenes por temas
 $(BUILD)/agent.o: $(wildcard src/agent/lcm_*.inc)    # SOMA_257_LCM: agent.c incluye el LCM (modelo y pegamento en .inc)
 $(BUILD)/agenda_core.o: src/apps/agenda_nl.inc src/apps/agenda_ics.inc    # SOMA_272_AGENDA
@@ -562,6 +564,7 @@ test:
 	$(MAKE) pruebas-cc    # SOMA_265_CC
 	$(MAKE) pruebas-js    # SOMA_274_JS
 	$(MAKE) pruebas-memoria   # SOMA_277_MEMORIA
+	$(MAKE) pruebas-chat      # SOMA_285_CHAT
 	$(MAKE) pruebas-discos   # SOMA_267_DISCOS
 	@mkdir -p build/tests
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_lexer.c src/lang/lexer.c -o build/tests/test_lexer
@@ -663,6 +666,8 @@ test:
 	@echo "[prueba] test_jpeg_enc_179"; if $(HOST_CC) $(TEST_CFLAGS) tests/test_jpeg_enc_179.c src/core/jpeg_enc.c src/core/uvc.c src/core/jpeg.c -lm -o build/tests/test_jpeg_enc_179; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_jpeg_enc_179; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_jpeg_enc_179: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
 	@echo "[prueba] test_scrcap_179"; if $(HOST_CC) $(TEST_CFLAGS) tests/test_scrcap_179.c src/core/scrcap_dsp.c -lm -o build/tests/test_scrcap_179; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_scrcap_179; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_scrcap_179: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
 	@echo "[prueba] test_web_img_180"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Itests tests/test_web_img_180.c src/apps/web_img.c src/apps/bmp_dec.c src/apps/web_jpeg.c src/apps/web_inflate.c src/core/jpeg.c -o build/tests/test_web_img_180; then ./build/tests/test_web_img_180; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_web_img_180: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
+	@echo "[prueba] test_paint_ia_292"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/agent -Itests tests/test_paint_ia_292.c src/apps/paint_svg.c src/agent/agent_ruta.c src/apps/web_img.c src/apps/bmp_dec.c src/apps/web_jpeg.c src/apps/web_inflate.c src/core/jpeg.c -o build/tests/test_paint_ia_292; then ./build/tests/test_paint_ia_292; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_paint_ia_292: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_292_PAINT_IA
+	@echo "[prueba] test_paint_ia_maquina_292"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Itests -Itests/host_inc -Isrc -Isrc/core -Isrc/drivers -Isrc/fs -Isrc/net -Isrc/ui -Isrc/apps -Isrc/agent -Isrc/lang -Isrc/arch/x86_64 tests/test_paint_ia_maquina_292.c src/apps/paint_svg.c src/apps/web_img.c src/apps/bmp_dec.c src/apps/web_jpeg.c src/apps/web_inflate.c src/core/jpeg.c -o build/tests/test_paint_ia_maquina_292; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_paint_ia_maquina_292; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_paint_ia_maquina_292: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_292_PAINT_IA
 	@echo "[prueba] test_web_layout_181"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_layout_181.c tests/layhost/fbhost.c src/apps/web_layout.c src/apps/web_css.c src/apps/web_html.c src/apps/web_font.c src/ui/soma_fonts.c -o build/tests/test_web_layout_181; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_web_layout_181; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_web_layout_181: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
 	@echo "[prueba] test_web_font_182"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_font_182.c tests/layhost/fbhost.c src/apps/web_font.c src/ui/soma_fonts.c src/apps/web_css.c src/apps/web_html.c -o build/tests/test_web_font_182; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_web_font_182; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_web_font_182: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
 	@echo "[prueba] test_web_js_183"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_web_js_183.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o build/tests/test_web_js_183; then ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 ./build/tests/test_web_js_183 2>/dev/null; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_web_js_183: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
@@ -712,6 +717,14 @@ test:
 	./build/tests/test_llm_vision_248
 	@echo "[prueba] test_rutas_251"; if $(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_rutas_251.c src/agent/agent_ruta.c -o build/tests/test_rutas_251; then ./build/tests/test_rutas_251; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_rutas_251: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
 	@echo "[prueba] test_busca_251"; if $(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_busca_251.c src/agent/busca_web.c -o build/tests/test_busca_251; then ./build/tests/test_busca_251; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_busca_251: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_267_DISCOS
+	@echo "[prueba] test_investiga_288"; if $(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent -Isrc/core tests/test_investiga_288.c src/agent/web_lee.c src/agent/agent_ruta.c -o build/tests/test_investiga_288; then ./build/tests/test_investiga_288; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_investiga_288: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_288_INVESTIGA
+	@echo "[prueba] test_prog_voz_290"; if $(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/agent tests/test_prog_voz_290.c src/agent/prog_voz.c -o build/tests/test_prog_voz_290; then ./build/tests/test_prog_voz_290; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_prog_voz_290: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_290_VOZ_CODIGO
+	@echo "[prueba] test_ayuda_294"; if $(HOST_CC) $(TEST_CFLAGS) -O1 tests/test_ayuda_294.c -o build/tests/test_ayuda_294; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_ayuda_294; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_ayuda_294: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_294_AYUDA
+	@echo "[prueba] test_ayuda_maquina_294"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_ayuda_maquina_294.c tests/layhost/fbhost.c src/apps/web_font.c src/ui/soma_fonts.c -o build/tests/test_ayuda_maquina_294; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_ayuda_maquina_294; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_ayuda_maquina_294: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_294_AYUDA
+	@echo "[prueba] test_correo_295"; if $(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/apps -Isrc/agent tests/test_correo_295.c src/apps/correo_core.c src/agent/agent_ruta.c -o build/tests/test_correo_295; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_correo_295; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_correo_295: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_295_CORREO
+	@echo "[prueba] test_correo_red_295 (IMAP/SMTP con TLS 1.3 y la app entera)"; if command -v openssl >/dev/null 2>&1 && python3 -c "import ssl, sys; sys.exit(0 if ssl.HAS_TLSv1_3 else 1)" >/dev/null 2>&1 && $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPLATFORM_X86 -DWEB_HOST_TEST -Itests -Isrc -Isrc/core -Isrc/drivers -Isrc/fs -Isrc/net -Isrc/ui -Isrc/apps -Isrc/agent -Isrc/lang -Isrc/arch/x86_64 -Isrc/fonts -Isrc/icons tests/test_correo_red_295.c src/apps/correo_red.c src/apps/correo_core.c src/core/tls13.c src/core/tlscrypto.c src/core/crypto.c src/core/x509.c -o build/tests/test_correo_red_295 && $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPLATFORM_X86 -DWEB_HOST_TEST -Itests -Isrc -Isrc/core -Isrc/drivers -Isrc/fs -Isrc/net -Isrc/ui -Isrc/apps -Isrc/agent -Isrc/lang -Isrc/arch/x86_64 -Isrc/fonts -Isrc/icons tests/test_correoapp_295.c src/apps/correo_core.c src/apps/correo_red.c src/apps/agenda_core.c src/ui/textfield.c tests/layhost/fbhost.c src/apps/web_font.c src/ui/soma_fonts.c src/core/png_enc.c src/core/tls13.c src/core/tlscrypto.c src/core/crypto.c src/core/x509.c -lm -o build/tests/test_correoapp_295; then ASAN_OPTIONS=detect_leaks=0 python3 tests/test_correo_red_295.py build/tests/test_correo_red_295 build/tests/test_correoapp_295; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_correo_red_295: no compila, o falta openssl o un python3 con TLS 1.3, en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_295_CORREO
+	@echo "[prueba] test_visor_289"; if $(HOST_CC) $(TEST_CFLAGS) -O1 tests/test_visor_289.c -o build/tests/test_visor_289; then ./build/tests/test_visor_289; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_visor_289: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_289_VISOR
+	@echo "[prueba] test_visor_maquina_289"; if $(HOST_CC) $(TEST_CFLAGS) -O1 tests/test_visor_maquina_289.c src/apps/tex.c -o build/tests/test_visor_maquina_289; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_visor_maquina_289; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_visor_maquina_289: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)); solo se exige en Linux x86_64: SE OMITE"; fi   # SOMA_289_VISOR
 	@if [ "$(HOST_MACHINE)" = x86_64 ] || [ "$(HOST_MACHINE)" = amd64 ]; then ./build/tests/test_memfn_199; fi
 	./build/tests/test_f64_200
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/fuzz_http_201 3000 1
@@ -851,6 +864,7 @@ pruebas-lcm:
 	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_llm_tam_260.c -o build/tests/test_llm_tam_260
 	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_aviso_266.c -o build/tests/test_aviso_266   # SOMA_266_AVISO
 	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/ui tests/test_orbe_266.c -o build/tests/test_orbe_266
+	$(HOST_CC) $(LCM_TEST_CFLAGS) -O1 -Isrc/agent tests/test_lcm_286.c -o build/tests/test_lcm_286   # SOMA_286_YOUTUBE
 	$(HOST_CC) -ffreestanding -mgeneral-regs-only -O2 -Wall -Wextra -Werror -Wno-unused-function -Isrc/agent -c tests/test_lcm_257_nucleo.c -o build/tests/lcm_nucleo_257.o
 	$(HOST_CC) -ffreestanding -mgeneral-regs-only -O2 -Wall -Wextra -Werror -Wno-unused-function -Isrc/ui -Isrc/apps -c tests/test_orbe_259_nucleo.c -o build/tests/orbe_nucleo_259.o
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_lcm_ordenes_253
@@ -860,6 +874,7 @@ pruebas-lcm:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_llm_tam_260
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_aviso_266
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_orbe_266
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_lcm_286
 
 # SOMA_265_CC: el compilador de C en el anfitrion (solo Linux x86_64: ejecuta los .elf de SOMA con tests/somaemu_265.c; en macOS
 # avisa y no hace nada) y el programador en modo C. En QEMU: python3 tests/prueba_cc_265.py
@@ -880,10 +895,20 @@ pruebas-js:
 	@echo "[prueba] test_html_275"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST -Isrc -Isrc/core -Isrc/apps -Isrc/arch/x86_64 -Isrc/drivers -Isrc/fs -Isrc/lang -Isrc/ui -Isrc/net -Isrc/fonts -Isrc/icons -Itests tests/test_html_275.c src/apps/htmlproj.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o build/tests/test_html_275 2>/dev/null; then ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 ./build/tests/test_html_275; else echo "== test_html_275: no compila en este equipo: SE OMITE"; fi
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_coder_js_275.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_coder_js_275
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_coder_js_275
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_web_html_290.c src/apps/coder_core.c tests/stubs_common.c tests/stubs_lang.c src/lang/lang.c src/lang/vm.c src/lang/lexer.c -o build/tests/test_web_html_290   # SOMA_290_VOZ_CODIGO
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_web_html_290
 
 # SOMA_277_MEMORIA: el nucleo de la memoria (memorIA portada a C) con ASan/UBSan: fechas, vectores int8, busqueda, sustitucion temporal,
 # canal lexical, lectura de las respuestas del LLM, contexto del prompt y guardado por fragmentos con CRC (corrupcion y truncado). Sin Docker.
 # SOMA_281_ARREGLOS: LeakSanitizer no existe en macOS (ASAN_OPTIONS=detect_leaks=1 aborta alli); como el resto de pruebas, detect_leaks=0
+# SOMA_285_CHAT: la aplicacion de chat (historial, conversacion de varios turnos con el modelo, Markdown + LaTeX, y la aplicacion entera
+# dibujada en el anfitrion). Capturas: ./build/tests/test_chatapp_285 CARPETA
+pruebas-chat:
+	@mkdir -p build/tests
+	$(HOST_CC) $(TEST_CFLAGS) -O1 -Isrc/apps -Isrc/agent tests/test_chat_285.c src/apps/chat_core.c src/apps/chat_md.c src/apps/tex.c src/agent/llm_proto.c -o build/tests/test_chat_285
+	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_chat_285
+	@echo "[prueba] test_chatapp_285"; if $(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DPLATFORM_X86 -DWEB_HOST_TEST -Itests -Isrc -Isrc/core -Isrc/drivers -Isrc/fs -Isrc/net -Isrc/ui -Isrc/apps -Isrc/agent -Isrc/lang -Isrc/arch/x86_64 -Isrc/fonts -Isrc/icons tests/test_chatapp_285.c src/apps/chat_core.c src/apps/chat_md.c src/apps/tex.c src/ui/textfield.c tests/layhost/fbhost.c src/apps/web_font.c src/ui/soma_fonts.c src/agent/llm_proto.c src/core/png_enc.c -lm -o build/tests/test_chatapp_285; then ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_chatapp_285; elif [ -n "$(HOST_REF)" ]; then exit 1; else echo "== test_chatapp_285: no compila en este equipo ($(HOST_SO) $(HOST_MACHINE)): SE OMITE"; fi
+
 pruebas-memoria:
 	@mkdir -p build/tests
 	$(HOST_CC) $(TEST_CFLAGS) -Isrc/agent tests/test_memoria_277.c src/agent/memoria_core.c -o build/tests/test_memoria_277

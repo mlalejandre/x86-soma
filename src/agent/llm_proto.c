@@ -245,43 +245,95 @@ static void sb_b64(struct sb *b, const uint8_t *d, uint32_t n)
 static void sb_u(struct sb *b, uint32_t v) { char t[12]; int k = 0; do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 11); while (k) sb_c(b, t[--k]); }
 uint32_t llm_proto_chat_ex_size(const char *system, const char *prompt, const struct llm_img *img, int nimg)
 {
-    uint32_t n = 4096; const char *s;
-    for (s = system ? system : SYS_PROMPT; *s; s++) n += 2;          /* el escape JSON puede duplicar */
-    for (s = prompt ? prompt : ""; *s; s++) n += 2;
-    for (int i = 0; i < nimg; i++) n += (img[i].len + 2) / 3 * 4 + 256;
-    return n;
+    struct llm_msg m = { LLM_ROL_USER, prompt ? prompt : "" };
+    return llm_proto_chat_hist_size(system, &m, 1, img, nimg);
 }
 int llm_proto_chat_ex(const struct llm_conf *c, const char *system, const char *prompt, const struct llm_img *img, int nimg, int max_tokens,
                       char *body, uint32_t max, struct llm_http *h)
 {
+    struct llm_msg m = { LLM_ROL_USER, prompt ? prompt : "" };
+    return llm_proto_chat_hist(c, system, &m, 1, img, nimg, max_tokens, body, max, h);
+}
+/* SOMA_285_CHAT: conversacion de varios turnos (la aplicacion de chat). Los mensajes seguidos del mismo papel se juntan con una linea en
+ * blanco (Claude y Gemini exigen que se alternen); los vacios se saltan; las imagenes van con el ultimo mensaje del usuario. */
+uint32_t llm_proto_chat_hist_size(const char *system, const struct llm_msg *m, int nm, const struct llm_img *img, int nimg)
+{
+    uint32_t n = 4096; const char *s;
+    for (s = system ? system : SYS_PROMPT; *s; s++) n += 2;          /* el escape JSON puede duplicar */
+    for (int i = 0; i < nm; i++) { n += 64; for (s = m[i].text ? m[i].text : ""; *s; s++) n += 2; }
+    for (int i = 0; i < nimg; i++) n += (img[i].len + 2) / 3 * 4 + 256;
+    return n;
+}
+static int hist_last_user(const struct llm_msg *m, int nm)
+{
+    for (int i = nm - 1; i >= 0; i--) if (m[i].rol == LLM_ROL_USER && m[i].text && m[i].text[0]) return i;
+    return -1;
+}
+int llm_proto_chat_hist(const struct llm_conf *c, const char *system, const struct llm_msg *m, int nm, const struct llm_img *img, int nimg,
+                        int max_tokens, char *body, uint32_t max, struct llm_http *h)
+{
     int r = prep(c, h, 1); if (r != LLM_P_OK) return r;
     int p = c->prov;
     if (!system || !system[0]) system = SYS_PROMPT;
-    if (!prompt) prompt = "";
     if (max_tokens <= 0) max_tokens = 8192;
+    int lu = hist_last_user(m, nm);
+    if (lu < 0) { static const struct llm_msg vacio = { LLM_ROL_USER, "" }; m = &vacio; nm = 1; lu = 0; }
     struct sb u = { h->url, 0, sizeof h->url, 0 }, b = { body, 0, max, 0 };
     h->method = "POST";
     sb_s(&u, c->base[p]);
+    /* grupos: mensajes seguidos del mismo papel; el grupo que contiene lu lleva las imagenes */
+    int i = 0, first = 1;
     if (p == LLM_CLAUDE) {
         sb_s(&u, "/v1/messages");
         sb_s(&b, "{\"model\":\""); sb_json(&b, c->model[p]); sb_s(&b, "\",\"max_tokens\":"); sb_u(&b, (uint32_t)max_tokens); sb_s(&b, ",\"system\":\""); sb_json(&b, system);
-        sb_s(&b, "\",\"messages\":[{\"role\":\"user\",\"content\":[");
-        for (int i = 0; i < nimg; i++) { sb_s(&b, "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\""); sb_s(&b, img[i].mime ? img[i].mime : "image/png"); sb_s(&b, "\",\"data\":\""); sb_b64(&b, img[i].data, img[i].len); sb_s(&b, "\"}},"); }
-        sb_s(&b, "{\"type\":\"text\",\"text\":\""); sb_json(&b, prompt); sb_s(&b, "\"}]}]}");
+        sb_s(&b, "\",\"messages\":[");
     } else if (p == LLM_GEMINI) {
         sb_s(&u, "/v1beta/models/"); sb_s(&u, starts(c->model[p], "models/") ? c->model[p] + 7 : c->model[p]); sb_s(&u, ":generateContent");
-        sb_s(&b, "{\"systemInstruction\":{\"parts\":[{\"text\":\""); sb_json(&b, system); sb_s(&b, "\"}]},\"contents\":[{\"role\":\"user\",\"parts\":[");
-        for (int i = 0; i < nimg; i++) { sb_s(&b, "{\"inline_data\":{\"mime_type\":\""); sb_s(&b, img[i].mime ? img[i].mime : "image/png"); sb_s(&b, "\",\"data\":\""); sb_b64(&b, img[i].data, img[i].len); sb_s(&b, "\"}},"); }
-        sb_s(&b, "{\"text\":\""); sb_json(&b, prompt); sb_s(&b, "\"}]}],\"generationConfig\":{\"maxOutputTokens\":"); sb_u(&b, (uint32_t)max_tokens); sb_s(&b, "}}");
+        sb_s(&b, "{\"systemInstruction\":{\"parts\":[{\"text\":\""); sb_json(&b, system); sb_s(&b, "\"}]},\"contents\":[");
     } else {
         sb_s(&u, "/v1/chat/completions");
         sb_s(&b, "{\"model\":\""); sb_json(&b, c->model[p]); sb_s(&b, "\",\"messages\":[{\"role\":\"system\",\"content\":\""); sb_json(&b, system);
-        sb_s(&b, "\"},{\"role\":\"user\",\"content\":");
-        if (nimg > 0) {
-            sb_s(&b, "[{\"type\":\"text\",\"text\":\""); sb_json(&b, prompt); sb_s(&b, "\"}");
-            for (int i = 0; i < nimg; i++) { sb_s(&b, ",{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:"); sb_s(&b, img[i].mime ? img[i].mime : "image/png"); sb_s(&b, ";base64,"); sb_b64(&b, img[i].data, img[i].len); sb_s(&b, "\"}}"); }
-            sb_s(&b, "]}]");
-        } else { sb_c(&b, '"'); sb_json(&b, prompt); sb_s(&b, "\"}]"); }
+        sb_s(&b, "\"}");
+        first = 0;
+    }
+    while (i < nm) {
+        int rol = m[i].rol == LLM_ROL_ASSISTANT ? LLM_ROL_ASSISTANT : LLM_ROL_USER;
+        int j = i, has_lu = 0, any = 0;
+        while (j < nm && (m[j].rol == LLM_ROL_ASSISTANT ? LLM_ROL_ASSISTANT : LLM_ROL_USER) == rol) { if (j == lu) has_lu = 1; if (m[j].text && m[j].text[0]) any = 1; j++; }
+        if (!any && !has_lu) { i = j; continue; }
+        if (!first) sb_c(&b, ',');
+        first = 0;
+        int ni = has_lu ? nimg : 0;
+        if (p == LLM_CLAUDE) {
+            sb_s(&b, rol == LLM_ROL_USER ? "{\"role\":\"user\",\"content\":[" : "{\"role\":\"assistant\",\"content\":[");
+            for (int k = 0; k < ni; k++) { sb_s(&b, "{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\""); sb_s(&b, img[k].mime ? img[k].mime : "image/png"); sb_s(&b, "\",\"data\":\""); sb_b64(&b, img[k].data, img[k].len); sb_s(&b, "\"}},"); }
+            sb_s(&b, "{\"type\":\"text\",\"text\":\"");
+        } else if (p == LLM_GEMINI) {
+            sb_s(&b, rol == LLM_ROL_USER ? "{\"role\":\"user\",\"parts\":[" : "{\"role\":\"model\",\"parts\":[");
+            for (int k = 0; k < ni; k++) { sb_s(&b, "{\"inline_data\":{\"mime_type\":\""); sb_s(&b, img[k].mime ? img[k].mime : "image/png"); sb_s(&b, "\",\"data\":\""); sb_b64(&b, img[k].data, img[k].len); sb_s(&b, "\"}},"); }
+            sb_s(&b, "{\"text\":\"");
+        } else {
+            sb_s(&b, rol == LLM_ROL_USER ? "{\"role\":\"user\",\"content\":" : "{\"role\":\"assistant\",\"content\":");
+            if (ni > 0) sb_s(&b, "[{\"type\":\"text\",\"text\":\""); else sb_c(&b, '"');
+        }
+        int sep = 0;
+        for (int k = i; k < j; k++) {
+            if (!m[k].text || !m[k].text[0]) continue;
+            if (sep) sb_json(&b, "\n\n");
+            sb_json(&b, m[k].text); sep = 1;
+        }
+        if (p == LLM_CLAUDE || p == LLM_GEMINI) sb_s(&b, "\"}]}");
+        else if (ni > 0) {
+            sb_s(&b, "\"}");
+            for (int k = 0; k < ni; k++) { sb_s(&b, ",{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:"); sb_s(&b, img[k].mime ? img[k].mime : "image/png"); sb_s(&b, ";base64,"); sb_b64(&b, img[k].data, img[k].len); sb_s(&b, "\"}}"); }
+            sb_s(&b, "]}");
+        } else sb_s(&b, "\"}");
+        i = j;
+    }
+    if (p == LLM_CLAUDE) sb_s(&b, "]}");
+    else if (p == LLM_GEMINI) { sb_s(&b, "],\"generationConfig\":{\"maxOutputTokens\":"); sb_u(&b, (uint32_t)max_tokens); sb_s(&b, "}}"); }
+    else {
+        sb_c(&b, ']');
         if (p == LLM_OPENAI) { sb_s(&b, ",\"max_completion_tokens\":"); sb_u(&b, (uint32_t)max_tokens); sb_c(&b, '}'); }
         else { sb_s(&b, ",\"temperature\":0.3,\"max_tokens\":"); sb_u(&b, (uint32_t)max_tokens); sb_c(&b, '}'); }
     }

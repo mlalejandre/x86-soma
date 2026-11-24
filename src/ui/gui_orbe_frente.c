@@ -136,6 +136,10 @@ static int her_summon_run(uint32_t cur_w, uint32_t cur_h)
                 if (dx * dx + dy * dy <= 1600) { chosen_min = mi; closing = 1; }
             }
         }
+        if (mouse_right_take_click() && !closing && her_min_drag < 0) {   /* SOMA_291_CERRAR_ORBITA: boton derecho sobre un icono = cerrarlo */
+            int mi = her_min_hit(mouse_x, mouse_y, cur_w, cur_h);
+            if (mi >= 0) { her_kill_derecho = 1; her_kill_minimized_vortex(mi, mouse_x, mouse_y); her_kill_derecho = 0; }
+        }
         while (kgetc_ready()) { char c = kgetc(); if (c == 27) closing = closing ? closing : 1; }
         if (console_take_super() && !closing) closing = 1;
         if ((g_gui_req || fb_user_exclusive()) && !closing) closing = 1;

@@ -410,6 +410,20 @@ int cc_mission_wants_js(const char *m)
         || ci_has(m, "usando js") || ci_has(m, "con node") || ci_has(m, "script de js") || ci_has(m, "programa js") || ci_has(m, "programa en js")
         || ci_has_ext(m, ".js");
 }
+/* SOMA_290_VOZ_CODIGO: "una web" o "web para" como palabras ("hazme una web", "una web, sencilla"; no "una webcam") */
+static int ci_web_palabra(const char *m)
+{
+    static const char *const f[] = { "una web", "web para", 0 };
+    for (int i = 0; f[i]; i++)
+        for (const char *h = m; *h; h++) {
+            const char *a = h, *b = f[i]; while (*b && *a && (*a | 32) == *b) { a++; b++; }
+            if (*b) continue;
+            if (h != m && (((h[-1] | 32) >= 'a' && (h[-1] | 32) <= 'z') || ((unsigned char)h[-1] & 0x80))) continue;
+            if (((*a | 32) >= 'a' && (*a | 32) <= 'z') || ((unsigned char)*a & 0x80)) continue;
+            return 1;
+        }
+    return 0;
+}
 /* SOMA_275_HTML: "pagina web", "en html", "index.html"... */
 int cc_mission_wants_html(const char *m)
 {
@@ -417,6 +431,7 @@ int cc_mission_wants_html(const char *m)
     return ci_has(m, "en html") || ci_has(m, "con html") || ci_has(m, "usando html") || ci_has(m, "lenguaje html") || ci_has(m, "html:")
         || ci_has(m, "pagina web") || ci_has(m, "página web") || ci_has(m, "sitio web") || ci_has(m, "web app") || ci_has(m, "aplicacion web")
         || ci_has(m, "aplicación web") || ci_has(m, "landing") || ci_has(m, "html y css") || ci_has(m, "html, css") || ci_has_ext(m, ".html")
+        || ci_web_palabra(m) || ci_has(m, "pagina html") || ci_has(m, "página html")      /* SOMA_290_VOZ_CODIGO */
         || ci_has_ext(m, ".htm");
 }
 /* "[error] Uncaught SyntaxError: token inesperado (col 1: ...) (programa.js, linea 3) en <anonymous>" o "... (l:5) en <cadena>:5" -> 3 y "SyntaxError: token inesperado" */

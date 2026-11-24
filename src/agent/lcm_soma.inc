@@ -492,6 +492,21 @@ static void lcm_frase(char *o, uint32_t cap, const char *orden, const char *sali
         char l[200]; lcm_primera_linea(l, sizeof l, salida);
         if (l[0]) { lcm_cpy(o, cap, l); uint32_t L = lcm_len(o); if (L && o[L - 1] != '.') lcm_cat(o, cap, "."); return; }
     }
+    /* ---- SOMA_286_YOUTUBE: lo que se hace con YouTube por voz */
+    if (str_eq_ci(nom, "youtube") && *resto && (lcm_empieza(resto, "ver ") || str_eq_ci(resto, "pausa") || str_eq_ci(resto, "sigue") || str_eq_ci(resto, "siguiente") ||
+                                               str_eq_ci(resto, "anterior") || str_eq_ci(resto, "resumen") || str_eq_ci(resto, "transcribir") || str_eq_ci(resto, "subtitulos") || lcm_empieza(resto, "pregunta "))) {
+        char l[200]; lcm_primera_linea(l, sizeof l, salida);
+        const char *t = l; if (lcm_empieza(t, "youtube: ")) t += 9;
+        int mal = lcm_busca(l, "no hay") || lcm_busca(l, "antes hay que") || lcm_busca(l, "Espera");
+        if (mal) { lcm_cpy(o, cap, t); uint32_t L = lcm_len(o); if (L && o[L - 1] != '.') lcm_cat(o, cap, "."); if (o[0] >= 'a' && o[0] <= 'z') o[0] = (char)(o[0] - 32); return; }
+        if (lcm_empieza(resto, "ver ") || str_eq_ci(resto, "siguiente") || str_eq_ci(resto, "anterior")) {
+            static const char *const f[] = { "Pongo «{1}».", "Vamos con «{1}».", "Ahí va: «{1}»." }; lcm_forma(o, cap, LCM_UNA(f), t, 0, 0); return; }
+        if (str_eq_ci(resto, "pausa")) { static const char *const f[] = { "Pausado.", "Vídeo en pausa.", "Lo paro aquí." }; lcm_cpy(o, cap, LCM_UNA(f)); return; }
+        if (str_eq_ci(resto, "sigue")) { static const char *const f[] = { "Seguimos.", "Continúo el vídeo.", "Vuelve a sonar." }; lcm_cpy(o, cap, LCM_UNA(f)); return; }
+        if (str_eq_ci(resto, "resumen")) { static const char *const f[] = { "Resumo el vídeo; te lo leo en cuanto lo tenga.", "Me pongo con el resumen del vídeo. Enseguida te lo cuento.", "Voy a resumirlo; un momento." }; lcm_cpy(o, cap, LCM_UNA(f)); return; }
+        if (lcm_empieza(resto, "pregunta ")) { static const char *const f[] = { "Se lo pregunto al vídeo; ahora te contesto.", "Miro qué dice el vídeo y te lo cuento.", "Déjame revisar el vídeo." }; lcm_cpy(o, cap, LCM_UNA(f)); return; }
+        static const char *const f[] = { "Transcribo el vídeo. Mira la pestaña Texto.", "Saco el texto del vídeo; lo verás en la pestaña Texto." }; lcm_cpy(o, cap, LCM_UNA(f)); return;
+    }
     /* ---- abrir */
     int cl = lcm_clase(nom, resto);
     if (cl == LCM_C_ABRE) {
@@ -1116,6 +1131,148 @@ static int lcm_escrita(const char *m)
 }
 
 /* Orden decidida (por la red o por lo aprendido): confirmar o ejecutar */
+
+/* ------------------------------------------------------------------------------------------- SOMA_286_YOUTUBE: videos
+ * Frases de videos que la red no siempre reconoce ("quiero ver un video sobre agujeros negros", "pon musica relajante", "pon el segundo",
+ * "resume el video", "que dice el video sobre...") -> la orden youtube. Se mira antes que la red; el texto de la busqueda se toma de la
+ * frase original (con sus tildes y mayusculas). */
+static int lcm_vid_ord(const char *w)                     /* 1..20; 99 = ultimo; 0 = no es un numero de orden */
+{
+    static const char *const o[] = { "primero", "segundo", "tercero", "cuarto", "quinto", "sexto", "septimo", "octavo", "noveno", "decimo", 0 };
+    static const char *const o2[] = { "primer", "segundo", "tercer", 0 };
+    static const char *const c[] = { "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", 0 };
+    for (int i = 0; o[i]; ++i) if (str_eq_ci(w, o[i])) return i + 1;
+    for (int i = 0; o2[i]; ++i) if (str_eq_ci(w, o2[i])) return i + 1;
+    for (int i = 0; c[i]; ++i) if (str_eq_ci(w, c[i])) return i + 1;
+    if (str_eq_ci(w, "ultimo")) return 99;
+    int v = 0, k = 0; while (w[k] >= '0' && w[k] <= '9' && k < 3) { v = v * 10 + (w[k] - '0'); ++k; }
+    if (k && (!w[k] || ((w[k] == 'o' || w[k] == 'a') && !w[k + 1])) && v >= 1 && v <= 20) return v;
+    return 0;
+}
+static int lcm_vid_letra(unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '/' || c == '_' || c == '-' || c == ':' || c >= 0x80; }
+/* la frase original a partir de la palabra numero k (las palabras se cuentan como en lcm_pliega) */
+static void lcm_vid_resto(const char *orig, int k, char *o, uint32_t cap)
+{
+    const unsigned char *s = (const unsigned char *)orig;
+    for (int i = 0; i < k && *s; ++i) {
+        while (*s && (!lcm_vid_letra(*s) || (*s == 0xC2 && s[1]))) { if (*s == 0xC2 && s[1]) s += 2; else ++s; }
+        while (*s && lcm_vid_letra(*s) && !(*s == 0xC2 && s[1])) ++s;
+    }
+    while (*s && (!lcm_vid_letra(*s) || (*s == 0xC2 && s[1]))) { if (*s == 0xC2 && s[1]) s += 2; else ++s; }
+    lcm_cpy(o, cap, (const char *)s);
+    uint32_t n = lcm_len(o);
+    while (n && (o[n - 1] == '?' || o[n - 1] == '!' || o[n - 1] == '.' || o[n - 1] == ' ' || o[n - 1] == ',')) o[--n] = 0;
+    static const char *const fin[] = { " en youtube", " de youtube", " por favor", " porfa", 0 };
+    for (int r = 0; r < 2; ++r) for (int i = 0; fin[i]; ++i) {
+        uint32_t L = lcm_len(fin[i]);
+        if (n >= L) { char t[16]; uint32_t q = 0; for (; q < L; ++q) t[q] = mayordomo_lower(o[n - L + q]); t[q] = 0; if (str_eq_ci(t, fin[i])) { n -= L; o[n] = 0; while (n && (o[n - 1] == ' ' || o[n - 1] == ',')) o[--n] = 0; } }
+    }
+}
+/* SOMA_293_MAC: hay un video abierto en YouTube. Lo pone src/apps/youtube.c al arrancar la app (en las pruebas no existe y queda a 0).
+ * Antes era un simbolo debil: en macOS el enlazador no admite uno sin definir y las pruebas del LCM no enlazaban alli. */
+int (*lcm_youtube_activo)(void);
+static int lcm_video(const char *orig, char *ord, uint32_t cap)
+{
+    char f[512]; lcm_pliega(orig, f, sizeof f);
+    const char *g = lcm_sin_llamada(f);
+    char w[28][40]; int n = 0, base = 0;
+    for (const char *z = f; z < g; ++z) if (*z == ' ') ++base;    /* palabras de llamada ("soma", "oye"...) */
+    { const char *z = g; while (*z && n < 28) { uint32_t k = 0; while (*z && *z != ' ') { if (k + 1 < sizeof w[0]) w[n][k++] = *z; ++z; } w[n][k] = 0; ++n; while (*z == ' ') ++z; } }
+    while (n && (str_eq_ci(w[n - 1], "favor") || str_eq_ci(w[n - 1], "porfa") || str_eq_ci(w[n - 1], "porfavor"))) { if (str_eq_ci(w[n - 1], "favor") && n >= 2 && str_eq_ci(w[n - 2], "por")) --n; --n; }
+    if (!n) return 0;
+    int i = 0;
+    /* cortesias delante */
+    static const char *const cort[] = { "puedes", "podrias", "me", "nos", "quieres", 0 };
+    while (i < n - 1 && lcm_es(w[i], cort)) ++i;
+    int yt = 0, vid = 0; for (int k = 0; k < n; ++k) { if (str_eq_ci(w[k], "youtube")) yt = 1; if (lcm_empieza(w[k], "video") || str_eq_ci(w[k], "clip")) vid = 1; }
+    /* abrir YouTube */
+    if (yt && n - i <= 6) {
+        static const char *const ab[] = { "abre", "abreme", "pon", "ponme", "lanza", "arranca", "inicia", "muestrame", "ensename", "entra", "ir", "ve", "vamos", "la", "app", "aplicacion", "de", "en", "a", "youtube", 0 };
+        int todo = 1; for (int k = i; k < n; ++k) if (!lcm_es(w[k], ab)) todo = 0;
+        if (todo) { lcm_cpy(ord, cap, "youtube"); return 1; }
+    }
+    /* controles del video (pausa, sigue, siguiente...): solo si hay uno abierto en YouTube; si no, son de SOMA Media */
+    if ((vid || yt) && (yt || (lcm_youtube_activo && lcm_youtube_activo()))) {
+        static const char *const pau[] = { "pausa", "para", "paralo", "deten", "detenlo", 0 }, *const sig[] = { "continua", "sigue", "reanuda", "quita", 0 };
+        if (lcm_es(w[i], pau) || (str_eq_ci(w[i], "pon") && i + 1 < n && str_eq_ci(w[i + 1], "pausa"))) { lcm_cpy(ord, cap, "youtube pausa"); return 1; }
+        if (lcm_es(w[i], sig) && !lcm_busca(g, "siguiente")) { lcm_cpy(ord, cap, "youtube sigue"); return 1; }
+        if (lcm_busca(g, "siguiente") && n - i <= 6) { lcm_cpy(ord, cap, "youtube siguiente"); return 1; }
+        if (lcm_busca(g, "anterior") && n - i <= 6) { lcm_cpy(ord, cap, "youtube anterior"); return 1; }
+    }
+    /* lo que se le pide al video (resumen, texto, preguntas): con "video" en la frase basta; sin video abierto, YouTube lo dice */
+    if (vid || yt) {
+        if (lcm_busca(g, "resum")) { lcm_cpy(ord, cap, "youtube resumen"); return 1; }
+        if (lcm_busca(g, "transcrib") || lcm_busca(g, "transcripcion")) { lcm_cpy(ord, cap, "youtube transcribir"); return 1; }
+        if (lcm_busca(g, "subtitulo")) { lcm_cpy(ord, cap, "youtube subtitulos"); return 1; }
+        if (lcm_busca(g, "de que trata") || lcm_busca(g, "de que va") || lcm_busca(g, "de que habla")) { lcm_cpy(ord, cap, "youtube pregunta \302\277De qu\303\251 trata el v\303\255deo?"); return 1; }
+        /* "pregunta(le) al video ...", "que dice el video sobre ...", "segun el video ..." */
+        static const char *const pre[][5] = { { "preguntale", "al", "video", 0 }, { "pregunta", "al", "video", 0 }, { "que", "dice", "el", "video", 0 }, { "que", "explica", "el", "video", 0 },
+                                              { "segun", "el", "video", 0 }, { "en", "el", "video", 0 }, { "del", "video", 0 } };
+        for (unsigned q = 0; q < sizeof pre / sizeof pre[0]; ++q) {
+            int k = 0; while (pre[q][k] && i + k < n && str_eq_ci(w[i + k], pre[q][k])) ++k;
+            if (pre[q][k]) continue;
+            int r = i + k; static const char *const pr[] = { "sobre", "de", "acerca", "respecto", 0 };
+            if (r < n && lcm_es(w[r], pr)) ++r;
+            if (r < n && str_eq_ci(w[r - 1], "acerca") && str_eq_ci(w[r], "de")) ++r;
+            if (r >= n) break;
+            char t[300]; lcm_vid_resto(orig, base + r, t, sizeof t);
+            if (!t[0]) break;
+            lcm_cpy(ord, cap, "youtube pregunta "); lcm_cat(ord, cap, t); return 1;
+        }
+    }
+    /* elegir uno de los resultados: "pon el segundo", "el tercer video", "reproduce el numero 4" */
+    {
+        static const char *const vb[] = { "pon", "ponme", "pones", "reproduce", "abre", "elige", "quiero", "ver", "mira", "selecciona", "escojo", "dale", "al", "me", "quedo", "con", "ve", "a", 0 };
+        int k = i; while (k < n && lcm_es(w[k], vb)) ++k;
+        int verbo = k > i;
+        if (k < n && (str_eq_ci(w[k], "el") || str_eq_ci(w[k], "la"))) ++k;
+        if (k < n && str_eq_ci(w[k], "numero")) ++k;
+        int num = k < n ? lcm_vid_ord(w[k]) : 0;
+        if (num) {
+            int r = k + 1, ok = 1;
+            static const char *const tras[] = { "video", "videos", "resultado", "de", "la", "lista", "ellos", "esos", "que", "has", "encontrado", "salido", 0 };
+            for (; r < n; ++r) if (!lcm_es(w[r], tras)) ok = 0;
+            if (ok && (verbo || vid || n - i <= 2)) {
+                char t[24]; uint32_t p = 0; lcm_cpy(ord, cap, "youtube ver ");
+                if (num == 99) lcm_cat(ord, cap, "ultimo"); else { t[0] = 0; fb_put_dec(t, sizeof t, &p, (uint64_t)num); lcm_cat(ord, cap, t); }
+                return 1;
+            }
+        }
+    }
+    /* buscar */
+    {
+        static const char *const vb[] = { "busca", "buscame", "busqueme", "buscanos", "pon", "ponme", "ponnos", "reproduce", "reproduceme", "ensename", "ensenanos", "muestrame", "encuentra",
+                                          "encuentrame", "quiero", "quisiera", "apetece", "gustaria", "poner", "buscar", "ver", "escuchar", "oir", "mirar", "mira", "en", "youtube", "a",
+                                          "pones", "pondrias", "buscas", "buscarias", "ensenas", "ensenarias", "reproduces", "muestras", 0 };
+        int k = i, verbo = 0; while (k < n && lcm_es(w[k], vb)) { if (!str_eq_ci(w[k], "en") && !str_eq_ci(w[k], "youtube") && !str_eq_ci(w[k], "a")) verbo = 1; ++k; }
+        if (!verbo) return 0;
+        static const char *const art[] = { "un", "una", "unos", "unas", "algun", "alguna", "algunos", "algunas", "el", "la", "los", "las", "mas", "otro", "otra", "buenos", "buen", 0 };
+        while (k < n && lcm_es(w[k], art)) ++k;
+        int k_adj = k;                                           /* "la ultima cancion de...": el adjetivo va en la busqueda */
+        static const char *const adj[] = { "ultima", "ultimo", "ultimas", "ultimos", "nueva", "nuevo", "nuevas", "nuevos", "mejor", "mejores", "primer", "primera", "famosa", "famoso", 0 };
+        while (k < n && lcm_es(w[k], adj)) ++k;
+        static const char *const quita[] = { "video", "videos", "clip", "clips", "videoclip", "videoclips", 0 };
+        static const char *const deja[] = { "tutorial", "tutoriales", "documental", "documentales", "cancion", "canciones", "musica", "trailer", "trailers", "concierto", "conciertos",
+                                            "podcast", "entrevista", "entrevistas", "directo", "receta", "recetas", "curso", "clase", 0 };
+        int r = k, tiene = 0;
+        if (k < n && lcm_es(w[k], quita)) {
+            tiene = 1; r = k + 1;
+            static const char *const pr[] = { "de", "del", "sobre", "con", "acerca", "para", "en", "los", "las", "el", "la", 0 };
+            static const char *const vq[] = { "expliquen", "explique", "hablen", "hable", "traten", "trate", "ensenen", "ensene", "muestren", "muestre", "cuenten", "cuente", 0 };
+            if (r + 1 < n && str_eq_ci(w[r], "que") && lcm_es(w[r + 1], vq)) r += 2;     /* "videos que expliquen la relatividad" */
+            while (r < n - 1 && lcm_es(w[r], pr)) ++r;
+        } else if (k < n && lcm_es(w[k], deja)) { tiene = 1; r = k_adj; }
+        else if (yt) { tiene = 1; r = k; }                       /* "busca recetas de paella en youtube" */
+        if (!tiene || r >= n) return 0;
+        static const char *const malo[] = { "archivo", "archivos", "carpeta", "disco", "fichero", "ficheros", "pendrive", "usb", 0 };
+        for (int q = r; q < n; ++q) if (lcm_es(w[q], malo) || lcm_busca(w[q], "/")) return 0;
+        if (r < n && str_eq_ci(w[r], "youtube")) return 0;
+        char t[300]; lcm_vid_resto(orig, base + r, t, sizeof t);
+        if (!t[0]) return 0;
+        lcm_cpy(ord, cap, "youtube "); lcm_cat(ord, cap, t);
+        return 1;
+    }
+}
 static void lcm_actua(const char *orden, int confirmar, const char *frase)
 {
     char nom[32]; const char *resto; lcm_partes(orden, nom, sizeof nom, &resto);
@@ -1251,6 +1408,12 @@ pide_correccion:
             char nom[32]; uint32_t fl = 0; const char *resto; lcm_partes(ord, nom, sizeof nom, &resto);
             if (shell_command_info(nom, &fl, 0)) { lcm_cpy(lcm_ult_frase, sizeof lcm_ult_frase, m); lcm_actua(ord, 0, m); ret = 1; goto fin; }
         }
+    }
+
+    /* 4b. SOMA_286_YOUTUBE: videos y YouTube */
+    {
+        char ord[512]; uint32_t fl = 0;
+        if (lcm_video(m, ord, sizeof ord) && shell_command_info("youtube", &fl, 0)) { lcm_cpy(lcm_ult_frase, sizeof lcm_ult_frase, m); lcm_actua(ord, 0, m); ret = 1; goto fin; }
     }
 
     /* 5. la red */
