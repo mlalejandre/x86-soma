@@ -6,6 +6,12 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_300_CI -->
+### La CI con el gcc 14 de GitHub (300)
+- GitHub compila con gcc 14, que convierte en error lo que antes era aviso: `websvc.c` llamaba a `sha256` sin declararla,
+  `web_f64.c` tenía variables que gcc 14 (aarch64) cree sin inicializar, y libxaac (audio AAC, de terceros) mezcla tipos en punteros a función.
+- El arranque de prueba admite `BOOT_MAX_S`: en tu equipo sigue siendo 6 s; la CI usa 30 s (QEMU sin KVM en máquinas compartidas).
+
 <!-- SOMA_299_CI -->
 ### La CI de GitHub en verde (299)
 - Compila con `-Werror` en x86_64 y en aarch64 (que no compilaba), y las pruebas de JavaScript compilan con clang (macOS).

@@ -35,7 +35,7 @@ jobs:
       - name: 'Compilar (sin warnings: -Werror)'
         run: make ARCH=${{ matrix.arch }} WERROR=1
       - name: Arranque en QEMU
-        run: make ARCH=${{ matrix.arch }} boot-smoke
+        run: make ARCH=${{ matrix.arch }} boot-smoke BOOT_MAX_S=30   # SOMA_300_CI: QEMU sin KVM es lento
       - name: Arranque con varias CPU (qemu64 sin RDRAND, Nehalem, max) (solo x86_64)
         if: matrix.arch == 'x86_64'
         run: make ARCH=x86_64 cpu-matrix

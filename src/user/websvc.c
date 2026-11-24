@@ -17,6 +17,7 @@
 #include "../drivers/fb.h"
 #include "../core/tls13.h"
 #include "../core/x509.h"
+#include "../core/tlscrypto.h"   /* SOMA_300_CI: sha256 (gcc 14 no admite llamadas sin declarar) */
 #include "../core/tls_roots.h"
 #include "../core/crypto.h"
 #include "../core/smp.h"

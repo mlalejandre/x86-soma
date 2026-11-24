@@ -249,7 +249,7 @@ $(BUILD)/user/vplay.elf: $(VP_AVC_SRCS) $(VP_XAAC_SRCS) $(wildcard $(VP_AVC)/*/*
 		src/user/ulib.h src/user/user.ld $(PY_LIBM) | $(BUILD)
 	rm -rf $(BUILD)/user/vplay && mkdir -p $(BUILD)/user/vplay
 	set -e; for f in $(VP_AVC_SRCS); do $(CC) $(VP_CFLAGS) $(VP_AVC_INC) -w -c $$f -o $(BUILD)/user/vplay/avc_$$(basename $$f .c).o; done
-	set -e; for f in $(VP_XAAC_SRCS); do $(CC) $(VP_CFLAGS) $(VP_XAAC_INC) -w -c $$f -o $(BUILD)/user/vplay/xa_$$(basename $$f .c).o; done
+	set -e; for f in $(VP_XAAC_SRCS); do $(CC) $(VP_CFLAGS) $(VP_XAAC_INC) -w -Wno-incompatible-pointer-types -c $$f -o $(BUILD)/user/vplay/xa_$$(basename $$f .c).o; done   # SOMA_300_CI: libxaac mezcla WORD16/WORD32 en punteros a funcion; gcc 14 lo da como error aunque haya -w
 	set -e; for f in $(PY_LIBM); do $(CC) $(VP_CFLAGS) -w -I$(PY_DIR)/libm_dbl/include -c $$f -o $(BUILD)/user/vplay/m_$$(basename $$f .c).o; done
 	$(CC) $(VP_CFLAGS) -Wall -Wextra $(VP_AVC_INC) -c src/user/vplay/vp_vdec.c -o $(BUILD)/user/vplay/vp_vdec.o
 	$(CC) $(VP_CFLAGS) -Wall -Wextra $(VP_XAAC_INC) -c src/user/vplay/vp_adec.c -o $(BUILD)/user/vplay/vp_adec.o
@@ -819,8 +819,11 @@ web152-test:
 	ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_web_fluido_152
 
 # Requiere la imagen compilada (make ARCH=...) y QEMU instalado
+# SOMA_300_CI: limite de tiempo del arranque de prueba (en x86_64). En tu equipo, 6 s; la CI de GitHub (QEMU sin KVM y
+# maquinas compartidas) usa BOOT_MAX_S=30.
+BOOT_MAX_S ?= 6
 boot-smoke:
-	python3 tools/boot_smoke.py --arch $(ARCH) $(if $(filter x86_64,$(ARCH)),--max-seconds 6)
+	python3 tools/boot_smoke.py --arch $(ARCH) $(if $(filter x86_64,$(ARCH)),--max-seconds $(BOOT_MAX_S))
 
 # PARCHE 138: servicios aislados en ring 3 (ataques al aislamiento, imagenes vs referencia, fuzzing, concurrencia) + pruebas de ring 3, en QEMU
 sbx-check:

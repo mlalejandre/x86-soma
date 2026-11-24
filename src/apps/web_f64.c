@@ -13,6 +13,7 @@ int f64_is_finite(f64 a) { return fexp(a) != 0x7FF; }
 static int is_zero(f64 a) { return (a & ~SIGN) == 0; }
 
 /* desempaqueta a (e, m) con m normalizado en el bit 62; devuelve 0 si es cero */
+/* SOMA_300_CI: unpack no escribe e/m si el numero es 0; quien llama ya lo descarta, pero gcc 14 (aarch64) no lo ve y avisa: se inicializan a 0 */
 static int unpack(f64 a, int *e, uint64_t *m)
 {
     int be = fexp(a); uint64_t f = a & FRAC;
@@ -84,7 +85,7 @@ f64 f64_add(f64 a, f64 b)
     if (f64_is_inf(b)) return b;
     if (is_zero(a)) { if (is_zero(b)) return (a & b & SIGN) ? SIGN : 0; return b; }
     if (is_zero(b)) return a;
-    int ea, eb; uint64_t ma, mb; unpack(a, &ea, &ma); unpack(b, &eb, &mb);
+    int ea = 0, eb = 0; uint64_t ma = 0, mb = 0; unpack(a, &ea, &ma); unpack(b, &eb, &mb);
     int sa = (a & SIGN) != 0, sb = (b & SIGN) != 0;
     if (ea < eb || (ea == eb && ma < mb)) { int t = ea; ea = eb; eb = t; uint64_t tm = ma; ma = mb; mb = tm; t = sa; sa = sb; sb = t; }
     int d = ea - eb; int sticky = 0;
@@ -108,7 +109,7 @@ f64 f64_mul(f64 a, f64 b)
     if (f64_is_nan(a) || f64_is_nan(b)) return F64_NAN;
     if (f64_is_inf(a) || f64_is_inf(b)) { if (is_zero(a) || is_zero(b)) return F64_NAN; return (sg ? SIGN : 0) | F64_INF; }
     if (is_zero(a) || is_zero(b)) return sg ? SIGN : 0;
-    int ea, eb; uint64_t ma, mb; unpack(a, &ea, &ma); unpack(b, &eb, &mb);
+    int ea = 0, eb = 0; uint64_t ma = 0, mb = 0; unpack(a, &ea, &ma); unpack(b, &eb, &mb);
     u128 p = (u128)ma * mb;                       /* bit 124 o 125 */
     int e = ea + eb; uint64_t m; int st;
     if (p >> 125) { m = (uint64_t)(p >> 63); st = (p & (((u128)1 << 63) - 1)) != 0; e += 1; }
@@ -123,7 +124,7 @@ f64 f64_div(f64 a, f64 b)
     if (f64_is_inf(b)) return sg ? SIGN : 0;
     if (is_zero(b)) { if (is_zero(a)) return F64_NAN; return (sg ? SIGN : 0) | F64_INF; }
     if (is_zero(a)) return sg ? SIGN : 0;
-    int ea, eb; uint64_t ma, mb; unpack(a, &ea, &ma); unpack(b, &eb, &mb);
+    int ea = 0, eb = 0; uint64_t ma = 0, mb = 0; unpack(a, &ea, &ma); unpack(b, &eb, &mb);
     uint64_t q = 0, r = ma;
     for (int i = 0; i < 64; i++) { q <<= 1; if (r >= mb) { r -= mb; q |= 1; } r <<= 1; }
     int e = ea - eb, st = r != 0;
@@ -189,7 +190,7 @@ f64 f64_sqrt(f64 a)
     if (is_zero(a)) return a;
     if (a & SIGN) return F64_NAN;
     if (f64_is_inf(a)) return a;
-    int e; uint64_t m; unpack(a, &e, &m);
+    int e = 0; uint64_t m = 0; unpack(a, &e, &m);
     /* m/2^62 en [1,2): valor = m*2^(e-62); raiz entera de m * 2^(62 + (e&1)) ... */
     int odd = e & 1; if (odd) e -= 1;                     /* e par (e&1 de negativos en complemento a 2 sirve) */
     u128 n = (u128)m << (62 + (odd ? 1 : 0));            /* bit 124/125 -> raiz de ~62/63 bits */
@@ -231,7 +232,7 @@ f64 f64_log(f64 x)
     if (f64_is_nan(x) || (x & SIGN && !is_zero(x))) return F64_NAN;
     if (is_zero(x)) return F64_NINF;
     if (f64_is_inf(x)) return x;
-    int e; uint64_t m; unpack(x, &e, &m);
+    int e = 0; uint64_t m = 0; unpack(x, &e, &m);
     f64 mm = rp(0, 0, m, 0);                                 /* [1,2) */
     if (f64_lt(0x3FF6A09E667F3BCDULL, mm)) { mm = f64_mul(mm, 0x3FE0000000000000ULL); e++; }
     f64 t = f64_div(f64_sub(mm, F64_ONE), f64_add(mm, F64_ONE)); f64 t2 = f64_mul(t, t);

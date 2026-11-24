@@ -45,7 +45,7 @@ def compilar():
         trabajos.append((f, os.path.join(OUT, "avc_" + os.path.basename(f)[:-2] + ".o"), ["-O2", "-w"] + AVC_INC))
     for d in ("common", "decoder", os.path.join("decoder", "drc_src"), os.path.join("decoder", "generic")):
         for f in sorted(glob.glob(os.path.join(T, "libxaac", d, "*.c"))):
-            trabajos.append((f, os.path.join(OUT, "xa_" + os.path.basename(f)[:-2] + ".o"), ["-O2", "-w"] + XA_INC))
+            trabajos.append((f, os.path.join(OUT, "xa_" + os.path.basename(f)[:-2] + ".o"), ["-O2", "-w", "-Wno-incompatible-pointer-types"] + XA_INC))   # SOMA_300_CI: gcc 14 y clang lo dan como error
     estricto = ["-O2", "-g", "-Wall", "-Wextra", "-Werror"]
     trabajos.append((os.path.join(V, "vp_vdec.c"), os.path.join(OUT, "vp_vdec.o"), estricto + AVC_INC))
     trabajos.append((os.path.join(V, "vp_adec.c"), os.path.join(OUT, "vp_adec.o"), estricto + XA_INC))
