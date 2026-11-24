@@ -11,7 +11,7 @@ static int fails, checks;
 #define CK(c, ...) do { checks++; if (!(c)) { fails++; printf("FALLO: " __VA_ARGS__); printf("\n"); } } while (0)
 static uint64_t S = 88172645463325252ULL;
 static uint32_t rnd(void) { S ^= S << 13; S ^= S >> 7; S ^= S << 17; return (uint32_t)(S >> 11); }
-static void hex(const uint8_t *b, int n, char *o) { for (int i = 0; i < n; i++) sprintf(o + 2 * i, "%02x", b[i]); }
+static void hex(const uint8_t *b, int n, char *o) { for (int i = 0; i < n; i++) snprintf(o + 2 * i, 3, "%02x", b[i]); }   /* SOMA_302_CI */
 
 int main(int argc, char **argv)
 {

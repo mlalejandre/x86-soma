@@ -31,7 +31,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc make binutils grub-pc-bin grub-common xorriso mtools \
-            qemu-system-x86 qemu-system-arm gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+            qemu-system-x86 qemu-system-arm gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            python3-pil   # SOMA_302_CI: tools/mkavi.py (video de prueba de fault-check) usa Pillow
       - name: 'Compilar (sin warnings: -Werror)'
         run: make ARCH=${{ matrix.arch }} WERROR=1
       - name: Arranque en QEMU

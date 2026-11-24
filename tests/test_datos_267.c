@@ -38,8 +38,8 @@ static unsigned long long fnv(const unsigned char *p, size_t n) { unsigned long 
 static uint64_t sem = 0x9E3779B97F4A7C15ULL;
 static uint64_t azar(void) { sem ^= sem << 13; sem ^= sem >> 7; sem ^= sem << 17; return sem; }
 
-static void spill_path(int s, char *p) { sprintf(p, "/.ramfs/%03d", s); }
-static void spill_tmp(int s, char *p) { sprintf(p, "/.ramfs/t%03d", s); }
+static void spill_path(int s, char *p) { snprintf(p, 32, "/.ramfs/%03d", s); }   /* SOMA_302_CI: los dos buffers son char[32] */
+static void spill_tmp(int s, char *p) { snprintf(p, 32, "/.ramfs/t%03d", s); }
 
 static void cabecera(uint8_t *h, const char *nombre, uint32_t size, int spilled, const uint8_t *datos)
 {

@@ -17,13 +17,13 @@ void mc_free(void *p) { free(p); }
 static void vec_tema(int tema, int ruido, int8_t *v, int dim)
 {
     char js[16384]; int p = 0;
-    p += sprintf(js, "{\"data\":[{\"embedding\":[");
+    p += snprintf(js, sizeof js, "{\"data\":[{\"embedding\":[");
     for (int i = 0; i < dim; i++) {
         double x = (i % 8 == tema) ? 1.0 : 0.0;
         x += ((i * 7 + ruido * 13) % 11) * 0.004;
-        p += sprintf(js + p, "%s%.6f", i ? "," : "", x);
+        p += snprintf(js + p, sizeof js - (size_t)p, "%s%.6f", i ? "," : "", x);
     }
-    sprintf(js + p, "]}]}");
+    snprintf(js + p, sizeof js - (size_t)p, "]}]}"); /* SOMA_302_CI */
     int d = mc_parse_embedding(js, v, MC_DIM_MAX);
     if (d != dim) printf("  (vec_tema dim %d != %d)\n", d, dim);
 }
@@ -175,7 +175,7 @@ int main(void)
     uint32_t cap = mc_frag_max_bytes();
     uint8_t *buf = malloc(cap);
     for (int i = 0; i < 2500; i++) {                 /* mas de 2 fragmentos */
-        char tx[64]; sprintf(tx, "Hecho numero %d del usuario", i);
+        char tx[64]; snprintf(tx, sizeof tx, "Hecho numero %d del usuario", i);
         mc_add(&m, MC_CELDA, 0, tx, "carga", 5, t0 + (uint32_t)i, 5, i % 3 ? vt[i % 8] : 0, i % 3 ? 64 : 0);
     }
     CKE(mc_nfrag(&m), 3);

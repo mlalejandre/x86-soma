@@ -1,4 +1,5 @@
 /* PARCHE 032: pruebas y fuzzing de los analizadores ACPI / FDT (host). make test-hw; con ASAN+UBSAN en make fuzz-hw. */
+/* SOMA_302_CI: snprintf en lugar de sprintf (el SDK de macOS lo marca obsoleto y -Werror lo hace error) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,7 +88,7 @@ static size_t build_fdt(void)
     prop("model", "Raspberry Pi 4 Model B", 23); prop("compatible", "raspberrypi,4-model-b\0brcm,bcm2711", 33);
     begin("chosen"); prop("stdout-path", "serial0:115200n8", 17); endn();
     begin("memory@0"); prop("device_type", "memory", 7); uint8_t r[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0x3B, 0x40, 0, 0 }; prop("reg", r, 12); endn();
-    begin("cpus"); for (int i = 0; i < 4; i++) { char n[16]; sprintf(n, "cpu@%d", i); begin(n); prop("device_type", "cpu", 4); endn(); } endn();
+    begin("cpus"); for (int i = 0; i < 4; i++) { char n[16]; snprintf(n, sizeof n, "cpu@%d", i); begin(n); prop("device_type", "cpu", 4); endn(); } endn();
     begin("soc"); pcell("#address-cells", 1); pcell("#size-cells", 1);
     begin("serial@7e201000"); prop("compatible", "arm,pl011\0arm,primecell", 24); uint8_t g[8] = { 0x7e, 0x20, 0x10, 0, 0, 0, 0x02, 0 }; prop("reg", g, 8); endn();
     endn(); endn(); w32(9);

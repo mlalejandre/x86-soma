@@ -17,9 +17,9 @@ void mc_free(void *p) { free(p); }
 static void vec_tema(int tema, int ruido, int8_t *v, int dim)
 {
     char js[16384]; int p = 0;
-    p += sprintf(js, "{\"data\":[{\"embedding\":[");
-    for (int i = 0; i < dim; i++) { double x = (i % 8 == tema) ? 1.0 : 0.0; x += ((i * 7 + ruido * 13) % 11) * 0.004; p += sprintf(js + p, "%s%.6f", i ? "," : "", x); }
-    sprintf(js + p, "]}]}");
+    p += snprintf(js, sizeof js, "{\"data\":[{\"embedding\":[");
+    for (int i = 0; i < dim; i++) { double x = (i % 8 == tema) ? 1.0 : 0.0; x += ((i * 7 + ruido * 13) % 11) * 0.004; p += snprintf(js + p, sizeof js - (size_t)p, "%s%.6f", i ? "," : "", x); }
+    snprintf(js + p, sizeof js - (size_t)p, "]}]}"); /* SOMA_302_CI */
     mc_parse_embedding(js, v, MC_DIM_MAX);
 }
 static uint32_t celda(struct mc *m, const char *t, int imp, uint32_t tick) { return mc_add(m, MC_CELDA, MC_ROL_USUARIO, t, "test", imp, 1000, tick, 0, 0); }
@@ -168,7 +168,7 @@ int main(void)
 
     /* 10. aplicar split */
     uint32_t big = mc_nodo_ruta(&m, "Viajes", 1), idsv[16];
-    for (int i = 0; i < 15; i++) { char t[64]; sprintf(t, "Viaje numero %d a un sitio", i); idsv[i] = celda(&m, t, 5, 300); mc_asigna(&m, idsv[i], big); }
+    for (int i = 0; i < 15; i++) { char t[64]; snprintf(t, sizeof t, "Viaje numero %d a un sitio", i); idsv[i] = celda(&m, t, 5, 300); mc_asigna(&m, idsv[i], big); }
     CKE(mc_nodo_sobrecargado(&m), big);
     CK(mc_prompt_split(&m, big, (char[2000]){0}, 2000) > 100);
     memset(&sp, 0, sizeof sp); strcpy(sp.nombre_a, "Europa"); strcpy(sp.nombre_b, "Asia");
@@ -182,7 +182,7 @@ int main(void)
     CKE(mc_nodo_sobrecargado(&m), 0);
     /* en el ultimo nivel el grupo B es un hermano, no un hijo */
     uint32_t hoja = mc_nodo_ruta(&m, "Ocio/Cine/Estrenos", 1), idh[14];
-    for (int i = 0; i < 14; i++) { char t[64]; sprintf(t, "Pelicula %d vista en el cine", i); idh[i] = celda(&m, t, 5, 300); mc_asigna(&m, idh[i], hoja); }
+    for (int i = 0; i < 14; i++) { char t[64]; snprintf(t, sizeof t, "Pelicula %d vista en el cine", i); idh[i] = celda(&m, t, 5, 300); mc_asigna(&m, idh[i], hoja); }
     memset(&sp, 0, sizeof sp); strcpy(sp.nombre_b, "Clasicos"); for (int i = 0; i < 4; i++) sp.ids_b[sp.nb++] = idh[i];
     CKE(mc_aplica_split(&m, hoja, &sp), 4);
     uint32_t hermano = mc_nodo_ruta(&m, "Ocio/Cine/Clasicos", 0); CK(hermano && m.nodo[hermano].nivel == 2 && m.nodo[hermano].padre == m.nodo[hoja].padre);

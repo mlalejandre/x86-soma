@@ -6,6 +6,20 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_302_CI -->
+### La CI: macOS y fault-check (302)
+- macOS: el SDK de Xcode 26 marca `sprintf` como obsoleto y con `-Werror` es error. Las pruebas de host usan `snprintf` con el tamaño del buffer.
+- fault-check: la CI instala Pillow (`python3-pil`), que necesita `tools/mkavi.py` para crear el vídeo de prueba.
+
+<!-- SOMA_301_EXPORTAR -->
+### exportar_txt.py al día (301)
+- Temas nuevos: `ia`, `lcm`, `memoria`, `chat`, `correo`, `ayuda`, `orbe`, `investiga`, `youtube`, `paint`, `agenda`, `video` y `ci`.
+  Se pueden juntar (`--tema correo --tema ia`) sin repetir archivos, y `--temas` dice cuánto ocupa cada uno.
+- `--parche 295` o `--parche 290-300`: exporta los archivos que tocó ese parche (los que llevan su marca) con su nota de `docs/`.
+- La cabecera dice el último parche aplicado y las reglas que ya conocemos (clang del Mac, gcc 14 de la CI, sin coma flotante...).
+- Más protección: nunca exporta `correo.conf`, tu memoria exportada (`memoria-export/`, `*.smem`), modelos `.gguf` ni vídeos; y
+  oculta también tokens `github_pat_`, `hf_`, `glpat-`, `AKIA…` y claves privadas pegadas en un texto.
+
 <!-- SOMA_300_CI -->
 ### La CI con el gcc 14 de GitHub (300)
 - GitHub compila con gcc 14, que convierte en error lo que antes era aviso: `websvc.c` llamaba a `sha256` sin declararla,

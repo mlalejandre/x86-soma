@@ -35,14 +35,14 @@ static int fails, checks;
 static char big[200000];
 static const char *report(int paras)
 {
-    int p = sprintf(big, "<!DOCTYPE html><html><head><meta name=\"soma-pagina\" content=\"A4; pie=Prueba {n}/{N}\"><title>Informe de prueba</title></head><body>"
+    int p = snprintf(big, sizeof big, "<!DOCTYPE html><html><head><meta name=\"soma-pagina\" content=\"A4; pie=Prueba {n}/{N}\"><title>Informe de prueba</title></head><body>"
                          "<div class=\"portada\"><div class=\"titulo\">Informe de prueba</div></div>");
     for (int i = 0; i < paras; i++) {
-        if (i % 6 == 0) p += sprintf(big + p, "<h2>Seccion %d</h2>", i / 6 + 1);
-        p += sprintf(big + p, "<p>Parrafo %d. El tercer trimestre cerro con una facturacion de 4,82 millones de euros, un 12,4 %% mas que en el mismo periodo "
+        if (i % 6 == 0) p += snprintf(big + p, sizeof big - (size_t)p, "<h2>Seccion %d</h2>", i / 6 + 1);
+        p += snprintf(big + p, sizeof big - (size_t)p, "<p>Parrafo %d. El tercer trimestre cerro con una facturacion de 4,82 millones de euros, un 12,4 %% mas que en el mismo periodo "
                               "del ano anterior. El crecimiento se concentro en el canal digital y en los mercados de Portugal y Francia.</p>", i);
     }
-    sprintf(big + p, "</body></html>");
+    snprintf(big + p, sizeof big - (size_t)p, "</body></html>"); /* SOMA_302_CI */
     return big;
 }
 static int ink_rows(const uint32_t *px, int w, int h, uint32_t bg) { int n = 0; for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) if ((px[y * w + x] & 0xFFFFFF) != (bg & 0xFFFFFF)) { n++; break; } return n; }
@@ -76,7 +76,7 @@ int main(void)
         if (b) {
             CHECK(memcmp(b, "%PDF-1.4", 8) == 0, "cabecera PDF");
             CHECK(memcmp(b + n - 6, "%%EOF\n", 6) == 0, "final PDF");
-            char cnt[32]; sprintf(cnt, "/Count %d", dg_npages(d));
+            char cnt[32]; snprintf(cnt, sizeof cnt, "/Count %d", dg_npages(d));
             CHECK(memmem(b, n, cnt, strlen(cnt)) != 0, "numero de paginas en el arbol");
             CHECK(memmem(b, n, "/MediaBox [0 0 595 842]", 23) != 0, "tamano de pagina en puntos");
             CHECK(memmem(b, n, "/Predictor 15", 13) != 0, "imagen con predictor PNG");
@@ -86,7 +86,7 @@ int main(void)
             int nobj = atoi((char *)b + xo + 7); int okx = nobj > 3;
             /* comprobacion fina: cada entrada en uso apunta a "<i> 0 obj" */
             const char *e = (const char *)b + xo; e = strchr(e, '\n') + 1; e = strchr(e, '\n') + 1; e += 20;
-            for (int i = 1; i < nobj; i++, e += 20) { int off = atoi(e); char want[16]; int k = sprintf(want, "%d 0 obj", i); if (memcmp(b + off, want, (size_t)k) != 0) { okx = 0; break; } }
+            for (int i = 1; i < nobj; i++, e += 20) { int off = atoi(e); char want[16]; int k = snprintf(want, sizeof want, "%d 0 obj", i); if (memcmp(b + off, want, (size_t)k) != 0) { okx = 0; break; } }
             CHECK(okx, "todas las entradas de la xref son correctas");
             FILE *f = fopen("build/tests/docgen_248.pdf", "wb"); if (f) { fwrite(b, 1, n, f); fclose(f); }
             free(b);
@@ -118,9 +118,9 @@ int main(void)
     }
     /* ---- diapositiva demasiado llena y tabla que se sale */
     {
-        static char s2[20000]; int p = sprintf(s2, "<html><head><meta name=\"soma-pagina\" content=\"16:9\"></head><body><section class=\"diapositiva\"><h2>Demasiado</h2><ul>");
-        for (int i = 0; i < 30; i++) p += sprintf(s2 + p, "<li>Punto numero %d con bastante texto</li>", i);
-        sprintf(s2 + p, "</ul></section></body></html>");
+        static char s2[20000]; int p = snprintf(s2, sizeof s2, "<html><head><meta name=\"soma-pagina\" content=\"16:9\"></head><body><section class=\"diapositiva\"><h2>Demasiado</h2><ul>");
+        for (int i = 0; i < 30; i++) p += snprintf(s2 + p, sizeof s2 - (size_t)p, "<li>Punto numero %d con bastante texto</li>", i);
+        snprintf(s2 + p, sizeof s2 - (size_t)p, "</ul></section></body></html>");
         d = dg_open(s2, (uint32_t)strlen(s2), 100, err, sizeof err);
         CHECK(d && dg_check(d, chk, sizeof chk) > 0 && strstr(chk, "diapositiva"), "detecta la diapositiva desbordada");
         if (d) dg_close(d);

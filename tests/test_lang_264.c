@@ -78,16 +78,16 @@ static void cadenas_largas(void)
 
 static char *prog_vars(int n)
 {
-    char *p = malloc((size_t)n * 40 + 64); size_t k = 0;
-    for (int i = 0; i < n; ++i) k += (size_t)sprintf(p + k, "let v%d=%d;", i, i);
-    k += (size_t)sprintf(p + k, "print(v0+v%d);", n - 1);
+    size_t cap = (size_t)n * 40 + 64; char *p = malloc(cap); size_t k = 0; /* SOMA_302_CI */
+    for (int i = 0; i < n; ++i) k += (size_t)snprintf(p + k, cap - k, "let v%d=%d;", i, i);
+    k += (size_t)snprintf(p + k, cap - k, "print(v0+v%d);", n - 1);
     return p;
 }
 static char *prog_fns(int n)
 {
-    char *p = malloc((size_t)n * 48 + 64); size_t k = 0;
-    for (int i = 0; i < n; ++i) k += (size_t)sprintf(p + k, "fn f%d(x){ return x+%d; }\n", i, i);
-    k += (size_t)sprintf(p + k, "print(f%d(1));", n - 1);
+    size_t cap = (size_t)n * 48 + 64; char *p = malloc(cap); size_t k = 0;
+    for (int i = 0; i < n; ++i) k += (size_t)snprintf(p + k, cap - k, "fn f%d(x){ return x+%d; }\n", i, i);
+    k += (size_t)snprintf(p + k, cap - k, "print(f%d(1));", n - 1);
     return p;
 }
 
@@ -109,9 +109,9 @@ static void compilador(void)
     free(p);
     /* un programa grande: 4000 lineas */
     size_t cap = 4000 * 60 + 64, k = 0; p = malloc(cap);
-    k += (size_t)sprintf(p + k, "let s=0;\n");
-    for (int i = 0; i < 4000; ++i) k += (size_t)sprintf(p + k, "if (s >= 0) { s = s + %d; }\n", i % 7);
-    k += (size_t)sprintf(p + k, "print(s);");
+    k += (size_t)snprintf(p + k, cap - k, "let s=0;\n");
+    for (int i = 0; i < 4000; ++i) k += (size_t)snprintf(p + k, cap - k, "if (s >= 0) { s = s + %d; }\n", i % 7);
+    k += (size_t)snprintf(p + k, cap - k, "print(s);");
     CHECK(k > 64 * 1024);
     EXPECT_OUT(p, "11994\n");
     free(p);
