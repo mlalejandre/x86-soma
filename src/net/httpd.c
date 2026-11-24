@@ -16,6 +16,7 @@
 #include "net.h"
 #if defined(__x86_64__)
 #include "cpupower.h"
+#include "fwcfg.h"                                    /* SOMA_299_CI */
 #endif
 #include "soma_str.h"
 
@@ -356,7 +357,8 @@ static uint32_t httpd_refused;
 static int httpd_default_mode(void)
 {
 #if defined(__x86_64__)
-    return cpupower_info()->hypervisor ? 1 : 0;
+    /* SOMA_299_CI: QEMU sin KVM (TCG, como en la CI) no siempre marca el bit de hipervisor de CPUID; fw_cfg solo existe en QEMU */
+    return (cpupower_info()->hypervisor || fwcfg_open("etc/e820") != 0) ? 1 : 0;
 #elif defined(PLATFORM_qemu_virt)
     return 1;
 #else

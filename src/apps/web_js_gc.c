@@ -66,7 +66,7 @@ void *__asan_get_current_fake_stack(void);
 static int gc_enabled_cfg(void)
 {
 #if defined(WEB_HOST_TEST)
-    extern char *getenv(const char *); const char *o = getenv("SOMA_OFF"); return !(o && strstr(o, "jsgc"));
+    extern char *getenv(const char *); extern char *strstr(const char *, const char *); /* SOMA_299_CI */ const char *o = getenv("SOMA_OFF"); return !(o && strstr(o, "jsgc"));
 #elif defined(__x86_64__)
     extern int bootinfo_disabled(const char *name);
     static int v = -1; if (v < 0) v = bootinfo_disabled("jsgc") ? 0 : 1;

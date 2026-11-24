@@ -9,6 +9,12 @@
 #include <string.h>
 #include "web_font.h"
 #include "micrec.h"
+/* SOMA_299_CI: las primitivas de fb.h que usan esta prueba y gui_ayuda.c (clang no admite llamadas sin declarar) */
+void fb_set_clip(int32_t x, int32_t y, int32_t w, int32_t h);
+void fb_get_clip(int32_t *x0, int32_t *y0, int32_t *x1, int32_t *y1);
+void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
+void fb_fill_rrect_aa(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, uint32_t argb);
+void fb_fill_rect_alpha(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
 
 extern uint32_t *g_fb; extern int g_fbw, g_fbh;
 int g_wf182_on;                                         /* web_css.c (no se enlaza aqui) */

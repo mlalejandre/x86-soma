@@ -1697,7 +1697,20 @@ void shell_run(void)
         if (*s0 == '\0') continue;
 
         static char shell_buf[2048];
-        if (!dispatch_command_usuario(s0, shell_buf, sizeof(shell_buf))) {
+        /* SOMA_299_CI: si otro hilo tiene la consola (el agente, o el informe del arranque), la orden escrita no se pierde en
+         * silencio: se espera hasta 30 s a que la suelte y, si no, se dice. Antes se descartaba sin mensaje. */
+        static const char ocupada[] = "El agente SOMA esta usando la consola";
+        int r_disp = 0;
+        for (int intento = 0; ; ++intento) {
+            shell_buf[0] = 0;
+            r_disp = dispatch_command_usuario(s0, shell_buf, sizeof(shell_buf));
+            int busy = r_disp;
+            for (uint32_t k = 0; busy && ocupada[k]; ++k) if (shell_buf[k] != ocupada[k]) busy = 0;
+            if (!busy) break;
+            if (intento >= 300) { kprint(shell_buf); kprint("\n"); break; }
+            thread_sleep(100);
+        }
+        if (!r_disp) {
             extern int lcm_terminal(const char *linea);   /* SOMA_253_LCM: una frase en vez de una orden */
             if (!lcm_terminal(s0)) { kprint("Comando desconocido: '"); kprint(s0); kprint("'. Escribe 'help'.\n"); }
         }

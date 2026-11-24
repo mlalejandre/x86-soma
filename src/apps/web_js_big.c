@@ -206,7 +206,7 @@ static jv big_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 static int big_on(void)
 {
 #if defined(WEB_HOST_TEST)
-    extern char *getenv(const char *); const char *o = getenv("SOMA_OFF"); return !(o && strstr(o, "jsbigint"));
+    extern char *getenv(const char *); extern char *strstr(const char *, const char *); /* SOMA_299_CI */ const char *o = getenv("SOMA_OFF"); return !(o && strstr(o, "jsbigint"));
 #elif defined(__x86_64__)
     extern int bootinfo_disabled(const char *name);
     static int v = -1; if (v < 0) v = bootinfo_disabled("jsbigint") ? 0 : 1;

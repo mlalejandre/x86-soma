@@ -297,6 +297,7 @@ static void vm_gc_collect(struct soma_vm *vm)
 /* el pool de arrays (o de tablas) crece al doble hasta 'max'; los identificadores no cambian */
 static int vm_pool_grow(struct soma_vm *vm, void **pool, int *cap, size_t obj, int max)
 {
+    (void)vm;   /* SOMA_299_CI */
     if (*cap >= max) return 0;
     int n = *cap ? *cap * 2 : 64;
     if (n > max) n = max;

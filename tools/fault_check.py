@@ -176,14 +176,14 @@ def scenario_exec(root, qemu, td) -> list:
         send("exec /bin/fault.elf")
         if not wait_for(log, "vector 14", 15):
             fails.append("fault.elf no murio con #PF")
-        send('write /workspace/corto.elf "esto no es un ELF"')
+        send('write /tmp/corto.elf "esto no es un ELF"')
         time.sleep(1)
-        send("exec /workspace/corto.elf")
+        send("exec /tmp/corto.elf")
         if not wait_for(log, "exec: rechazado: archivo demasiado corto", 10):
             fails.append("un archivo de 17 bytes no fue rechazado como demasiado corto")
-        send('write /workspace/basura.elf "' + "x" * 90 + '"')
+        send('write /tmp/basura.elf "' + "x" * 90 + '"')
         time.sleep(1)
-        send("exec /workspace/basura.elf")
+        send("exec /tmp/basura.elf")
         if not wait_for(log, "exec: rechazado: no es un ELF", 10):
             fails.append("un archivo largo que no es ELF no fue rechazado por su firma")
         send("exec /bin/no_existe.elf")
@@ -951,18 +951,18 @@ def scenario_media_gui(root, qemu, td, extra=(), tag="mediagui", expect_feat=Non
             hmp("mouse_button 1"); hmp("mouse_button 0")
         def finals(): return len(re.findall(r"\[media\] /video/clip\.avi: fin,", text(log)))
         # 1) boton PLAY (el video ya termino: vuelve a reproducirse completo)
-        click_at(222, 470)
+        click_at(585, 537)   # SOMA_299_CI: botones del diseno nuevo del reproductor
         t0 = time.time()
         while time.time() - t0 < 40 and finals() < 2: time.sleep(0.3)
         if finals() < 2: fails.append("clic en PLAY: no volvio a reproducir")
         # 2) clic en el archivo de la biblioteca
-        click_at(100, 108)
+        click_at(94, 140)
         t0 = time.time()
         while time.time() - t0 < 40 and finals() < 3: time.sleep(0.3)
         if finals() < 3: fails.append("clic en la biblioteca: no reprodujo el archivo")
         # 3) PLAY y, a medias, STOP
-        click_at(222, 470)
-        click_at(295, 470)
+        click_at(585, 537)   # SOMA_299_CI: botones del diseno nuevo del reproductor
+        click_at(333, 537)
         if not wait_for(log, "clip.avi: parado,", 15): fails.append("clic en STOP: no paro la reproduccion")
         time.sleep(1.0)
         ms.close()

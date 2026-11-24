@@ -31,7 +31,13 @@ def scan_sources(root: Path):
         raw = p.read_text(encoding="utf-8", errors="replace")
         sizes.append((len(raw.splitlines()), p.relative_to(root).as_posix()))
         todos += len(re.findall(r"\b(TODO|FIXME|XXX)\b", raw))
+        rel = p.relative_to(root).as_posix()
+        # SOMA_299_CI: las libc de los programas de usuario (TinyCC, voz, vplay) DEFINEN estas funciones para los programas que
+        # se compilan dentro de SOMA: no son usos inseguros del sistema. Y un nombre dentro de una cadena ("strcpy(") no es una llamada.
+        if rel.startswith("src/user/cc/") or rel.endswith("_libc.c"):
+            continue
         for i, line in enumerate(strip_comments(raw).splitlines(), 1):
+            line = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', line)
             for m in unsafe_re.finditer(line):
                 unsafe.setdefault(p.relative_to(root).as_posix(), []).append((i, m.group(1)))
     return unsafe, todos, sorted(sizes, reverse=True)

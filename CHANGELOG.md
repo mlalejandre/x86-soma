@@ -6,6 +6,17 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_299_CI -->
+### La CI de GitHub en verde (299)
+- Compila con `-Werror` en x86_64 y en aarch64 (que no compilaba), y las pruebas de JavaScript compilan con clang (macOS).
+- Una orden escrita en el terminal ya no se pierde en silencio si otro hilo tiene la consola: espera a que quede libre.
+- Con una aplicación delante, Esc es de la aplicación aunque estén los consejos del arranque (la tarjeta de F1 se sigue cerrando con Esc).
+- El servidor web se enciende solo también en QEMU sin aceleración (y sigue apagado en un equipo real).
+- `fault_check.py` y `audit.py` al día con el sistema (rutas de escritura, botones del reproductor y avisos falsos).
+
+### La CI vuelve a ejecutarse (298)
+- `.github/workflows/ci.yml` era YAML inválido por un «: » sin comillas en un nombre: GitHub no lanzaba ninguna tarea.
+
 <!-- SOMA_297_GITHUB -->
 ### Listo para publicar en GitHub, con el correo y la ayuda (297)
 - Entradas del historial de los parches 285 a 297 y secciones del README para el chat, la investigación, el visor, Paint con IA,

@@ -91,6 +91,9 @@ static int her_ayuda_tick(void)
 static int her_ayuda_tecla(char c)
 {
     if (c == 27) {
+        /* SOMA_299_CI: con una aplicacion delante, su Esc es suyo (cerrar un menu, cancelar...): los consejos del recorrido
+         * siguen solos. La tarjeta pedida con F1 si se cierra con Esc en cualquier caso. */
+        if (her_ay.modo == AY_RECORRIDO && current_app != APP_DESKTOP && !agent_global_focus) return 0;
         int r = ay_evento(&her_ay, AYEV_ESC, timer_get_uptime_ms());
         if (r & AY_REPINTA) { her_ay_repinta = 1; her_ay_dibujada = 0; }
         return (r & AY_CONSUME) ? 1 : 0;

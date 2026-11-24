@@ -1125,7 +1125,7 @@ static void hoist_funcs(struct jrt *rt, struct jn *s, struct scope *sc)
 static int sloppy_this(void)   /* soma.jssloppy=off */
 {
 #if defined(WEB_HOST_TEST)
-    extern char *getenv(const char *); static int v = -1; if (v < 0) { const char *o = getenv("SOMA_OFF"); v = !(o && strstr(o, "jssloppy")); } return v;
+    extern char *getenv(const char *); extern char *strstr(const char *, const char *); /* SOMA_299_CI */ static int v = -1; if (v < 0) { const char *o = getenv("SOMA_OFF"); v = !(o && strstr(o, "jssloppy")); } return v;
 #elif defined(__x86_64__)
     extern int bootinfo_disabled(const char *name);
     static int v = -1; if (v < 0) v = bootinfo_disabled("jssloppy") ? 0 : 1;

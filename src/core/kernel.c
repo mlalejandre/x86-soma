@@ -293,12 +293,14 @@ static void step_files(void)
 {
     vfs_init();
     /* SOMA_269_RAM: "soma.ram=1" (entrada del menu de GRUB): las fuentes pasan a memoria y RamFS solo se guarda al apagar o con `disco sync` */
+#ifdef __x86_64__   /* SOMA_299_CI: la opcion de GRUB solo existe en x86_64 */
     if (bootinfo_has_option("soma.ram=1")) {
         int r = srcfs_a_ram();
         vfs_modo_ram(1);
         kprint(r == 0 ? "MODO RAM: fuentes en memoria; los cambios se guardan al apagar o con 'disco sync' (un corte de luz pierde lo no guardado)\n"
                       : "MODO RAM: los cambios se guardan al apagar o con 'disco sync' (las fuentes siguen en el pendrive)\n");
     }
+#endif
     usermode_install_programs();   /* SOMA_PARCHE_016_EXEC: /bin/ *.elf */
     bigfs_sys_probe();             /* SOMA_PARCHE_018_BIGFS */
     audio_sys_init();              /* SOMA_PARCHE_020_AUDIO */

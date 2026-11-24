@@ -1096,6 +1096,7 @@ static void lcm_voz_min(char *o, uint32_t cap, uint32_t *p, uint32_t min)
     if (h && m) soma_str_put(o, cap, p, " y ");
     if (m || !h) { soma_str_put_dec(o, cap, p, m); soma_str_put(o, cap, p, m == 1 ? " minuto" : " minutos"); }
 }
+#ifdef __x86_64__   /* SOMA_299_CI */
 int lcm_voz_bateria(char *o, uint32_t cap);
 int lcm_voz_bateria(char *o, uint32_t cap)
 {
@@ -1145,4 +1146,10 @@ int lcm_voz_energia(char *o, uint32_t cap)
     }
     return 1;
 }
+#else   /* SOMA_299_CI: en aarch64 no hay ACPI ni cpupower */
+int lcm_voz_bateria(char *o, uint32_t cap);
+int lcm_voz_bateria(char *o, uint32_t cap) { uint32_t p = 0; o[0] = 0; soma_str_put(o, cap, &p, "No puedo leer la batería en este equipo."); return 1; }
+int lcm_voz_energia(char *o, uint32_t cap);
+int lcm_voz_energia(char *o, uint32_t cap) { uint32_t p = 0; o[0] = 0; ++lcm_voz_vuelta; soma_str_put(o, cap, &p, "No puedo leer el procesador en este equipo."); return 1; }
+#endif
 /* SOMA_257_LCM fin */
