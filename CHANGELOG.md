@@ -6,6 +6,12 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_303_CI -->
+### La prueba del lanzador en macOS (303)
+- `test_lanzador_emb_278` esperaba al lanzador 10 s a ciegas, y en la CI de macOS no llegaba a conectar. Ahora espera hasta 40 s a que
+  escuche de verdad y, si no lo consigue, enseña lo que dijo el lanzador en vez de colgarse.
+- El lanzador admite `SOMA_LANZADOR_HOST` (por defecto `0.0.0.0`, como siempre). La prueba escucha solo en `127.0.0.1`.
+
 <!-- SOMA_302_CI -->
 ### La CI: macOS y fault-check (302)
 - macOS: el SDK de Xcode 26 marca `sprintf` como obsoleto y con `-Werror` es error. Las pruebas de host usan `snprintf` con el tamaño del buffer.

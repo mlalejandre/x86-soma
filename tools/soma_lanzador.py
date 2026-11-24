@@ -72,6 +72,7 @@ EMB_LOG_FILE = os.getenv("SOMA_EMB_LOG_FILE", "/tmp/soma-emb.log")
 EMB_ALIAS = "bge-m3"
 
 LANZADOR_PORT = int(os.getenv("SOMA_LANZADOR_PORT", "8086"))
+LANZADOR_HOST = os.getenv("SOMA_LANZADOR_HOST", "0.0.0.0")   # SOMA_303_CI: las pruebas escuchan solo en 127.0.0.1
 KEY_FILE = Path(os.getenv("SOMA_LANZADOR_CLAVE", str(Path.home() / ".config" / "soma" / "lanzador.clave")))
 KEY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"      # sin l, i, o, 0, 1: hay que teclearla en SOMA
 SPLIT_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
@@ -541,7 +542,7 @@ def main() -> int:
         return install_service()
     key = read_key()
     try:
-        srv = ThreadingHTTPServer(("0.0.0.0", LANZADOR_PORT), Handler)
+        srv = ThreadingHTTPServer((LANZADOR_HOST, LANZADOR_PORT), Handler)
     except OSError as e:
         print(f"[LANZADOR] no puedo escuchar en el puerto {LANZADOR_PORT}: {e}", file=sys.stderr)
         return 1

@@ -73,6 +73,20 @@ def pide(base, key, metodo, ruta):
         return e.code, json.loads(e.read() or b"{}")
 
 
+def escucha(port, proc, seg=40):
+    """SOMA_303_CI: espera a que el lanzador acepte conexiones de verdad (en la CI de macOS, Python tarda en arrancar)."""
+    t0 = time.time()
+    while time.time() - t0 < seg:
+        if proc.poll() is not None:
+            return False
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.5).close()
+            return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
 def espera(base, key, quiere, seg=15):
     t0 = time.time()
     while time.time() - t0 < seg:
@@ -96,23 +110,20 @@ def main():
         dummy = HTTPServer(("127.0.0.1", p_llm), Dummy)
         threading.Thread(target=dummy.serve_forever, daemon=True).start()
         env = dict(os.environ, SOMA_LANZADOR_PORT=str(p_l), SOMA_EMB_PORT=str(p_e), SERVER_PORT=str(p_llm), SERVER_PORT_4090=str(p_llm),
-                   MODELS_DIR=d + "/models", SOMA_EMB_BIN=falso, LLAMA_SERVER_BIN=falso, SOMA_LANZADOR_CLAVE=d + "/clave",
+                   MODELS_DIR=d + "/models", SOMA_EMB_BIN=falso, LLAMA_SERVER_BIN=falso, SOMA_LANZADOR_CLAVE=d + "/clave", SOMA_LANZADOR_HOST="127.0.0.1",
                    SOMA_EMB_PID_FILE=d + "/emb.pid", SOMA_EMB_LOG_FILE=d + "/emb.log", SOMA_PID_FILE=d + "/llm.pid", SOMA_LOG_FILE=d + "/llm.log")
         env.pop("SOMA_EMB_MODEL", None)
         srv = subprocess.Popen([sys.executable, os.path.join(R, "tools", "soma_lanzador.py")], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
-            key = ""
-            for _ in range(50):
-                if os.path.exists(d + "/clave") and open(d + "/clave").read().strip():
-                    key = open(d + "/clave").read().strip()
-                    try:
-                        socket.create_connection(("127.0.0.1", p_l), 0.3).close()
-                        break
-                    except OSError:
-                        pass
-                time.sleep(0.2)
+            listo = escucha(p_l, srv)                           # SOMA_303_CI
+            key = open(d + "/clave").read().strip() if os.path.exists(d + "/clave") else ""
             base = f"http://127.0.0.1:{p_l}"
             ck(key != "", "el lanzador arranca y crea la clave")
+            if not listo:
+                srv.kill()
+                print("  FALLA: el lanzador no llega a escuchar en 127.0.0.1:%d. Lo que dijo:\n%s" % (p_l, srv.communicate()[0]))
+                print(f"test_lanzador_emb_278: {N + 1} comprobaciones, {FALLOS + 1} fallos")
+                return 1
             c, j = pide(base, "mala", "GET", "/v1/embeddings/estado")
             ck(c == 401, "sin la clave buena no hay acceso a los embeddings")
             c, j = pide(base, key, "GET", "/v1/embeddings/estado")
@@ -163,7 +174,7 @@ def main():
         open(modelo, "wb").write(b"x")
         srv = subprocess.Popen([sys.executable, os.path.join(R, "tools", "soma_lanzador.py")], env=env2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            time.sleep(1.5)
+            ck(escucha(int(env2["SOMA_LANZADOR_PORT"]), srv), "el segundo lanzador escucha")   # SOMA_303_CI
             b2 = f"http://127.0.0.1:{env2['SOMA_LANZADOR_PORT']}"
             c, j = pide(b2, key, "POST", "/v1/embeddings/lanzar")
             ck(c == 500 and "mismo" in j.get("error", ""), f"mismo puerto: {c} {j}")
