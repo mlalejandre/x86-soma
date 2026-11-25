@@ -20,6 +20,5 @@ const char *pdfview_inst_name(int slot);
 int  pdfview_open_data(const char *name, uint8_t *data, uint32_t len);
 int  pdfview_selected(void);
 const char *pdfview_doc_title(void);
-int  pdfview_pages(void);
 const char *pdfview_error(void);
 #endif

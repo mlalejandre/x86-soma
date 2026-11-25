@@ -21,7 +21,6 @@ struct bootfb_info {
 void bootinfo_parse(uint32_t magic, uint32_t addr);
 int  bootinfo_is_mb2(void);
 const char *bootinfo_cmdline(void);                 /* "" si no hay */
-const char *bootinfo_loader(void);                  /* nombre del cargador, "" si no hay */
 int  bootinfo_has_option(const char *opt);          /* p.ej. "soma.fb=bga" en la linea de ordenes */
 uint64_t bootinfo_rsdp(void);                       /* direccion fisica del RSDP de ACPI, 0 si no se paso */
 int  bootinfo_efi(void);                            /* 1 si se arranco desde UEFI */
@@ -44,7 +43,6 @@ void bootfb_console_start(void);                    /* tras vmm_init: pinta lo a
 void bootfb_console_stop(void);                     /* la GUI toma la pantalla */
 void bootfb_console_resume(void);                   /* la GUI la devuelve */
 void bootfb_console_panic(void);                    /* panico: volver a mostrar texto aunque la GUI estuviera */
-int  bootfb_console_active(void);
 void bootfb_putc(char c);                           /* desde kputc */
 void bootfb_print_info(void);                       /* orden "pantalla" */
 #endif

@@ -5,6 +5,7 @@
 #include "coder_app.h"
 #include "docagent.h"   /* SOMA_248_DOC */
 #include "agent_ruta.h"  /* SOMA_251_RUTAS */
+#include "agent_protegidos.h"   /* SOMA_307_SEGURIDAD: archivos que la IA no puede parchear (la lista del anfitrion) */
 #include "memoria.h"      /* SOMA_277_MEMORIA: la memoria de SOMA (portada de memorIA) sustituye a la ventana de STM y al arbol /mem */
 #include "coder_core.h"  /* SOMA_266_AVISO: en que lenguaje se va a programar (para el aviso) */
 #include "prog_voz.h"    /* SOMA_290_VOZ_CODIGO */
@@ -554,27 +555,10 @@ int mem_write_cmd(const char *args, char *out_buf, uint32_t max_out)
  * GESTIÓN DE PARCHES Y ESTADO DE REANUDACIÓN
  * ==================================================================== */
 
+/* SOMA_307_SEGURIDAD: la lista y la comparacion por nombre de archivo estan en agent_protegidos.h (la misma que el anfitrion). */
 static int is_patch_target_protected(const char *name)
 {
-    static const char *const protected_list[] = {
-        "boot.s", "idt.c", "idt.h", "io.h", "srcfs.c", "srcfs.h",
-        "virtio_blk.c", "virtio_blk.h", "sysdisk.h", "boot_gate.c", "boot_gate.h",   /* SOMA_231: sysdisk.h, lo que antes declaraba virtio_blk.h */
-        "pmm.c", "pmm.h", "vmm.c", "vmm.h", "mem.c", "mem.h",
-        "thread.c", "thread.h", "switch.s", "mutex.c", "mutex.h", "arch.h", 0
-    };
-    while (*name == ' ' || *name == '\t') name++;
-    if (name[0] == '/') name++;
-    if (name[0] == 's' && name[1] == 'r' && name[2] == 'c' && name[3] == '/') name += 4;
-
-    for (int i = 0; protected_list[i]; ++i) {
-        const char *a = name;
-        const char *b = protected_list[i];
-        while (*a && *b && (*a == *b)) { a++; b++; }
-        if (*b == '\0' && (*a == '\0' || *a == ' ' || *a == '\n' || *a == '\r' || *a == '"')) {
-            return 1;
-        }
-    }
-    return 0;
+    return agent_ruta_protegida(name);
 }
 
 static void host_submit_patch(const char *text)
@@ -2365,8 +2349,11 @@ static void agent_run_core(const char *agent_name, const char *mission)
             if (pfile) {
                 const char *tf = pfile + 10;
                 while (*tf == ' ') tf++;
-                int is_c_src = (find_substr(tf, ".c") != 0 || find_substr(tf, ".h") != 0 || find_substr(tf, ".s") != 0);
-                int is_workspace = (find_substr(tf, "workspace") != 0 || find_substr(tf, "mis_archivos") != 0 || find_substr(tf, ".txt") != 0);
+                /* SOMA_307_SEGURIDAD: se mira la RUTA del parche, no todo el texto que la sigue (antes un ".txt" o un ".c"
+                 * en cualquier parte de la respuesta del modelo cambiaba la decision) */
+                char tf_ruta[160]; agent_ruta_parche(tf, tf_ruta, sizeof tf_ruta);
+                int is_c_src = agent_ruta_termina(tf_ruta, ".c") || agent_ruta_termina(tf_ruta, ".h") || agent_ruta_termina(tf_ruta, ".s");
+                int is_workspace = (find_substr(tf_ruta, "workspace") != 0 || find_substr(tf_ruta, "mis_archivos") != 0 || agent_ruta_termina(tf_ruta, ".txt"));
 
                 if (is_c_src && !is_workspace) {
                     if (is_patch_target_protected(tf)) {

@@ -248,7 +248,6 @@ int wn_cookie_header(const char *url, char *out, uint32_t max, int for_js)
 { soma151_http_lock(); int n = wn_cookie_header_impl(url, out, max, for_js); soma151_http_unlock(); return n; }
 /* ------------------------------ transporte ------------------------------ */
 static uint8_t gw_ip[4] = { 10, 0, 2, 2 };
-void wn_set_gateway(const uint8_t ip[4]) { soma151_http_lock(); memcpy(gw_ip, ip, 4); soma151_http_unlock(); }
 static int raw_gw_state = -1;     /* -1 desconocido, 0 no disponible, 1 disponible (puerto 8096) */
 static uint64_t raw_gw_t;         /* SOMA_PARCHE_028_UI: cuando se vio que no estaba (se vuelve a probar pasado un rato) */
 static int gw_caps;
@@ -579,6 +578,13 @@ static int wn_fetch_impl(const struct wn_req *rq, struct wn_resp *rs)
  * su hilo). En las pruebas del anfitrion y en netsvc (URL de 1024) se llama directamente. */
 #if (defined(__x86_64__) || defined(__aarch64__)) && !defined(WEB_HOST_TEST) && !defined(SOMA_HOST_TEST) && !defined(SOMA_NETSVC)
 #define WN_FETCH_OWN_STACK 1
+#include "pila_canario.h"   /* SOMA_306_PILAS */
+#if defined(SOMA_WEBSVC)
+#define WN_PILA_AVISO(m) ((void)0)                                /* navegador aislado (ring 3): basta con parar el proceso */
+#else
+#include "console.h"
+#define WN_PILA_AVISO(m) kprint(m)
+#endif
 void web_call_on_stack(char *top, void (*fn)(void *), void *arg);
 struct wn_fetch_args { const struct wn_req *rq; struct wn_resp *rs; int rc; };
 static void wn_fetch_thunk(void *u) { struct wn_fetch_args *a = (struct wn_fetch_args *)u; a->rc = wn_fetch_impl(a->rq, a->rs); }
@@ -588,7 +594,13 @@ int wn_fetch(const struct wn_req *rq, struct wn_resp *rs)
     soma151_http_lock();
 #ifdef WN_FETCH_OWN_STACK
     int rc; char *stk = (char *)kmalloc(256u * 1024u);
-    if (stk) { struct wn_fetch_args a = { rq, rs, 0 }; web_call_on_stack((char *)(((uintptr_t)stk + 256u * 1024u) & ~(uintptr_t)15), wn_fetch_thunk, &a); rc = a.rc; kfree(stk); }
+    if (stk) {
+        struct wn_fetch_args a = { rq, rs, 0 };
+        pila_canario_pon(stk);                                   /* SOMA_306_PILAS: esta pila no tiene pagina de guarda */
+        web_call_on_stack((char *)(((uintptr_t)stk + 256u * 1024u) & ~(uintptr_t)15), wn_fetch_thunk, &a); rc = a.rc;
+        if (!pila_canario_ok(stk)) { WN_PILA_AVISO("\n[PILA] desbordada la pila de 256 KiB de wn_fetch (el monton de debajo esta corrupto)\n"); __builtin_trap(); }
+        kfree(stk);
+    }
     else { memset(rs, 0, sizeof *rs); wu_copy(rs->err, "sin memoria", sizeof rs->err); rc = -3; }
 #else
     int rc = wn_fetch_impl(rq, rs);

@@ -30,6 +30,5 @@ struct sysdisk_ops {
     const char *name;
 };
 int sysdisk_set_device(const struct sysdisk_ops *o);           /* 0 = aceptado; -1 si ya hay disco virtio */
-const char *sysdisk_device_name(void);                         /* 0 si el disco es el virtio de siempre */
 const char *sysdisk_describe(void);                            /* "SOMAFS en el pendrive (SOMADATA, 79 MiB)"... */
 #endif

@@ -245,48 +245,6 @@ static int dns_resolve_unlocked(const char *name, uint8_t *ip_out, uint32_t time
 }
 
 
-void net_run_dns_test(void)
-{
-    kprint("\nNET: UDP + DNS TEST\n");
-    kprint("-------------------\n");
-
-    if (!net_init()) {
-        kprint("NET: init FAILED\n");
-        return;
-    }
-
-    static const char *names[] = { "example.com", "anthropic.com" };
-
-    int resolved = 0;
-
-    for (int i = 0; i < 2; ++i) {
-
-        uint8_t ip[4];
-
-        kprint("\nDNS ");
-        kprint(names[i]);
-        kprint(" via ");
-        kprint_ip(net_dns);
-        kprint(": ");
-
-        if (dns_resolve(names[i], ip, 3000)) {
-            kprint_ip(ip);
-            kprint("\n");
-            ++resolved;
-        } else {
-            kprint("FAILED\n");
-        }
-    }
-
-    kprint("\n");
-
-    if (resolved > 0) {
-        kprint("NET: UDP layer OK\n");
-    } else {
-        kprint("NET: UDP layer FAILED\n");
-    }
-}
-
 
 int dns_resolve(const char *name, uint8_t *ip_out, uint32_t timeout_ms)
 {

@@ -21,7 +21,6 @@ int  voz_tier_of(const char *name);                       /* nivel de un .bin po
 int  voz_tier_from_key(const char *key);                  /* "rapido" / "preciso" / "maximo" -> nivel, -1 si no */
 const char *voz_tier_file(int tier);                      /* nombre recomendado del .bin */
 const char *voz_tier_name(int tier);
-const char *voz_tier_key(int tier);
 uint32_t voz_tier_mb(int tier);                           /* tamano aproximado del .bin recomendado */
 int  voz_installed(int tier, char *path, uint32_t cap, uint64_t *size);    /* 0 = hay un modelo de ese nivel en /modelos */
 int  voz_on_stick(int tier, char *name, uint32_t cap, uint32_t *size);     /* 0 = esta en MODELOS del pendrive; -2 sin pendrive */

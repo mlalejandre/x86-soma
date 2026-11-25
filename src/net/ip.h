@@ -23,7 +23,4 @@ void ip_input(const uint8_t *frame, uint16_t len);
 /* Un ping. 1 = respuesta, 0 = timeout, -1 = error al enviar. */
 int icmp_ping(const uint8_t *dst_ip, uint16_t seq, uint32_t timeout_ms);
 
-/* Prueba de la capa IPv4 + ICMP. */
-void net_run_ping_test(void);
-
 #endif

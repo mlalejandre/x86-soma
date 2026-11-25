@@ -321,7 +321,6 @@ int pdfview_open_data(const char *name, uint8_t *data, uint32_t len)
 }
 int pdfview_selected(void) { pv_boot(); for (int k = 1; k <= PV_INST_MAX; ++k) if (PV == &pv_insts[k]) return k; return 1; }
 const char *pdfview_doc_title(void) { pv_boot(); return g_title; }
-int pdfview_pages(void) { pv_boot(); return g_pdf ? g_np : 0; }
 const char *pdfview_error(void) { pv_boot(); return g_err; }
 void pdfview_init(void) { pv_boot(); (void)has_wf(); }
 

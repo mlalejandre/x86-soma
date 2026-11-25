@@ -927,11 +927,6 @@ int vfs_delete(const char *name)
     return -1;
 }
 
-void vfs_list(void)
-{
-    vfs_list_ext(0, 0);
-}
-
 void vfs_list_ext(int show_all, const char *filter_dir)
 {
     if (unid_es(filter_dir)) { (void)unid_lista(show_all, filter_dir, 0, 0, 1); return; }   /* SOMA_267_DISCOS */
@@ -977,11 +972,6 @@ void vfs_list_ext(int show_all, const char *filter_dir)
     kprint("--------------------------------------------------\n");
     kprint("Total: "); kprint_dec((uint32_t)count); kprint(" archivos visibles (Capacidad: 256 archivos, sin limite de 16 KiB).\n\n");
     kmutex_unlock(&vfs_mutex);
-}
-
-int vfs_format_list(char *out_buf, uint32_t max)
-{
-    return vfs_format_list_ext(0, 0, out_buf, max);
 }
 
 int vfs_format_list_ext(int show_all, const char *filter_dir, char *out_buf, uint32_t max)
@@ -1380,11 +1370,6 @@ int vfs_grep_all(const char *pat, int ignore_case, int list_only,
         out[pos] = '\0';
     }
     return files_hit;
-}
-
-void vfs_tree(char *out_buf, uint32_t max)
-{
-    vfs_tree_ext(0, out_buf, max);
 }
 
 void vfs_tree_ext(int show_all, char *out_buf, uint32_t max)

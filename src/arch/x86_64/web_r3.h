@@ -15,7 +15,6 @@ const struct w3_state *web_r3_state(void);         /* ultimo estado publicado po
 void web_r3_scroll_req_done(void);
 void web_r3_set_log(void (*cb)(int level, const char *msg));
 uint32_t web_r3_frame_seq(void);
-int  web_r3_frame_info(int *w, int *h, int *sx, int *sy);
 void web_r3_blit(int x, int y, int w, int h, int sx, int sy);
 void web_r3_stats(uint32_t *starts, uint32_t *deaths, int64_t *last_exit, uint32_t *heap_pages, uint32_t *surf_pages);
 /* SOMA_203 */

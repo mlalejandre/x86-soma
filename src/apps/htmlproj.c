@@ -346,7 +346,6 @@ static const char T_JUEGO_JS[] =
 "document.getElementById('empezar').addEventListener('click', function () {\n  if (reloj !== null) clearInterval(reloj);\n  puntos = 0; tiempo = 30;\n  document.getElementById('puntos').textContent = puntos;\n  document.getElementById('tiempo').textContent = tiempo;\n  mueve();\n"
 "  reloj = setInterval(function () {\n    tiempo--;\n    document.getElementById('tiempo').textContent = tiempo;\n    if (tiempo <= 0) { clearInterval(reloj); reloj = null; }\n  }, 1000);\n});\n";
 
-const char *html_template_kinds(void) { return "basica, app, juego"; }
 const char *html_template_name(int file) { return file == 0 ? "index.html" : file == 1 ? "estilo.css" : file == 2 ? "app.js" : 0; }
 int html_template(const char *kind, int file, const char *titulo, char *out, uint32_t cap)
 {

@@ -409,11 +409,6 @@ void httpd_thread_func(void *arg)
     }
 }
 
-void httpd_init(void)
-{
-    thread_create("httpd", httpd_thread_func, 0);
-}
-
 static int httpd_arg(const char *a, const char *w) { while (*a == ' ') a++; while (*w && *a == *w) { a++; w++; } return !*w && (!*a || *a == ' '); }
 int cmd_httpd(const char *args, char *out_buf, uint32_t max_out)
 {

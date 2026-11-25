@@ -261,7 +261,6 @@ void vpx_stop(void)                                            /* espera (hasta 
     stop_i(EX);
     for (int w = 0; w < 200 && EX->alive > 0; ++w) thread_sleep(10);
 }
-int  vpx_active(void) { return EX->state != VPS_IDLE; }
 void vpx_get_info(struct vpx_info *o)
 {
     __builtin_memset(o, 0, sizeof *o);

@@ -185,8 +185,6 @@ jv       js_big_inc(struct jrt *rt, jv v, int d);
 jv       js_big_literal(struct jrt *rt, jstr *digits);
 jstr    *js_big_tostr(struct jrt *rt, jv v, int radix);
 f64      js_big_tonum(jv v);
-jv       js_big_from_i64(struct jrt *rt, int64_t v);
-jv       js_big_from_u64(struct jrt *rt, uint64_t v);
 uint64_t js_big_low64(jv v);
 jv       js_proxy_get(struct jrt *rt, jobj *p, jstr *key, jv receiver);
 int      js_proxy_set(struct jrt *rt, jobj *p, jstr *key, jv val, jv receiver);

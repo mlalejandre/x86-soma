@@ -263,6 +263,24 @@ static void test_ganchos_de_arquitectura(void)
     (void)n1;
 }
 
+/* SOMA_306_PILAS: un fallo en la pagina de guarda de un hilo se atribuye a ese hilo, y solo esa pagina */
+static void test_pagina_de_guarda(void)
+{
+    struct tcb *g = thread_create("guardado", worker, 0);
+    CHECK(g != 0);
+    if (!g) return;
+    uint64_t slot = g->stack_slot;
+    CHECK(thread_guard_owner(slot) != 0 && strcmp(thread_guard_owner(slot), "guardado") == 0);
+    CHECK(thread_guard_owner(slot + 4095) != 0 && strcmp(thread_guard_owner(slot + 4095), "guardado") == 0);
+    CHECK(thread_guard_owner(slot + 4096) == 0);                       /* primera pagina de la pila de verdad */
+    CHECK(thread_guard_owner(slot + 0x10000 - 8) == 0);                 /* cima de la pila */
+    CHECK(thread_guard_owner(THREAD_STACK_BASE - 1) == 0);              /* fuera de la zona de pilas */
+    CHECK(thread_guard_owner(THREAD_STACK_BASE + (uint64_t)THREAD_MAX_SLOTS * 0x10000ULL) == 0);
+    CHECK_EQ_INT(thread_kill(g->tid), 1);
+    thread_yield();                                                     /* se recolecta: la ranura queda libre */
+    CHECK(thread_guard_owner(slot) == 0 || strcmp(thread_guard_owner(slot), "guardado") != 0);
+}
+
 int main(void)
 {
     thread_init();
@@ -277,5 +295,6 @@ int main(void)
     test_agotar_ranuras_y_fallo_de_pmm();
     test_latido_del_vigilante();
     test_ganchos_de_arquitectura();
+    test_pagina_de_guarda();
     TEST_MAIN_END("sched");
 }

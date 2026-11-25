@@ -236,7 +236,6 @@ void web_r3_stats2(uint32_t *frames, uint32_t *paint_last, uint32_t *paint_avg, 
 
 /* ---------------------------------------------------------------- fotogramas */
 uint32_t web_r3_frame_seq(void) { return g_fseq; }
-int web_r3_frame_info(int *w, int *h, int *sx, int *sy) { if (!g_fb || !g_fw) return 0; *w = g_fw; *h = g_fh; *sx = g_fsx; *sy = g_fsy; return 1; }
 /* Dibuja el ultimo fotograma en (x, y), recortado a w x h. Si la pagina se ha desplazado desde que se pinto, se dibuja corrido
  * (lo que falta se ve en blanco hasta que llega el siguiente). */
 void web_r3_blit(int x, int y, int w, int h, int sx, int sy)

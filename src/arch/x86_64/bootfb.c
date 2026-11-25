@@ -129,7 +129,6 @@ int bootinfo_disabled(const char *feature)
     return bootinfo_has_option(opt);
 }
 const char *bootinfo_cmdline(void) { return g_cmdline; }
-const char *bootinfo_loader(void) { return g_loader; }
 uint64_t bootinfo_rsdp(void) { return g_rsdp; }
 int bootinfo_has_option(const char *opt)
 {
@@ -329,7 +328,6 @@ void bootfb_console_panic(void)
     if (!con_started) { bootfb_console_start(); return; }
     if (!con_on) { con_on = 1; con_attr = 15; con_clear(); }
 }
-int bootfb_console_active(void) { return con_on; }
 
 static void pdec(uint64_t v) { char t[21]; int n = 0; if (!v) t[n++] = '0'; while (v) { t[n++] = (char)('0' + v % 10); v /= 10; } while (n) { char o[2] = { t[--n], 0 }; kprint(o); } }
 static void phex(uint64_t v) { kprint("0x"); for (int s = 60; s >= 0; s -= 4) { char o[2] = { "0123456789ABCDEF"[(v >> s) & 15], 0 }; kprint(o); } }

@@ -40,5 +40,4 @@ int iwl_scan(void);                          /* busqueda pasiva (bloquea unos se
 const struct iwl_bss *iwl_bss_list(int *n);
 void iwl_start(void);                       /* arranque en segundo plano (hilo "wifi") */
 void iwl_command(const char *args);         /* orden wifi */
-const struct iwl_info *iwl_get(void);
 #endif

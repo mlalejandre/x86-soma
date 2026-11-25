@@ -55,7 +55,6 @@ static volatile int g_prog = -1;                       /* instalacion en curso: 
 
 const char *voz_tier_file(int t) { return t >= 0 && t < VOZ_TIERS ? TIER_FILE[t] : ""; }
 const char *voz_tier_name(int t) { return t >= 0 && t < VOZ_TIERS ? TIER_NAME[t] : ""; }
-const char *voz_tier_key(int t)  { return t >= 0 && t < VOZ_TIERS ? TIER_KEY[t] : ""; }
 uint32_t voz_tier_mb(int t)      { return t >= 0 && t < VOZ_TIERS ? TIER_MB[t] : 0; }
 int voz_install_progress(void)   { return g_prog; }
 static int has_sub(const char *s, const char *sub)

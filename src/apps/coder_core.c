@@ -1305,7 +1305,6 @@ static uint32_t take(const struct cc_env *e, struct cc_result *r, int gui, int e
 }
 
 static volatile int g_busy;
-int cc_busy(void) { return g_busy; }
 static int cc_run_inner(const struct cc_env *e, const char *target, const char *mission, struct cc_result *r);
 int cc_run(const struct cc_env *e, const char *target, const char *mission, struct cc_result *r)
 {

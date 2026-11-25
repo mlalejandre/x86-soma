@@ -2185,7 +2185,6 @@ static int nav_core(struct wpage *p, const char *url_in, int flags, const char *
     return err ? -1 : 0;
 }
 int wp_navigate(struct wpage *p, const char *url, int flags) { return nav_core(p, url, flags, 0, 0, 0); }
-int wp_post(struct wpage *p, const char *url, const char *body, uint32_t blen, const char *ctype) { return nav_core(p, url, 0, body, blen, ctype); }
 void wp_history_go(struct wpage *p, int delta)
 {
     int t = p->hpos + delta; if (t < 0 || t >= p->hn) return;
@@ -2195,11 +2194,6 @@ void wp_history_go(struct wpage *p, int delta)
 }
 int wp_can_back(const struct wpage *p) { return p->hpos > 0; }
 int wp_can_fwd(const struct wpage *p) { return p->hpos >= 0 && p->hpos + 1 < p->hn; }
-void wp_stop(struct wpage *p) { p->stop = 1;
-#if SOMA_WEB_ASYNC_IMAGES
-    soma151_cancel();
-#endif
-}
 static void flush_nav(struct wpage *p)
 {
     if (!p->nav_pending) return;

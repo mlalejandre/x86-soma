@@ -187,7 +187,6 @@ void clip_overlay_open(void)
 {
     g_ov_open = 1; g_ov_sel = 0; g_ov_dirty = 1;
 }
-void clip_overlay_close(void) { g_ov_open = 0; }
 
 static int ov_count(void) { int n = 0; for (int i = 0; i < CLIP_HIST_MAX; i++) if (hist[i].kind != CLIP_NONE) n++; return n; }
 

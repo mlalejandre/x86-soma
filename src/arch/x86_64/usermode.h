@@ -158,7 +158,6 @@ int usermode_selftest(void);
 int usermode_oomtest_mem(void);   /* PARCHE 119: OOM en el monton y el sistema de archivos; 1 = todo OK */
 int usermode_oomtest(void);   /* PARCHE 118: carga de procesos con memoria agotada en cada punto; 1 = todo OK */
 int usermode_fuzz(int nproc, uint32_t iters, uint32_t seed);   /* PARCHE 117: fuzzing de syscalls desde ring 3; 1 = todo OK */
-int usermode_cpu_features(void);     /* bit0 = SMEP activo, bit1 = SMAP activo */
 
 /* Ganchos que llama el manejador de interrupciones (idt.c) */
 int  usermode_active(void);

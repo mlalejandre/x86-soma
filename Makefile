@@ -46,7 +46,7 @@ endif
 endif
 ifdef SOMA_MAC_NO_TOOLCHAIN
 # SOMA_263_ARREGLO: + pruebas-lcm (pruebas del anfitrion: no necesitan el compilador cruzado; make test la llama). SOMA_265_CC: + pruebas-cc
-ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm pruebas-lang pruebas-cc pruebas-js pruebas-memoria pruebas-chat pruebas-discos run-t480s-uefi run-t480s-bios,$(or $(MAKECMDGOALS),all)),)
+ifneq ($(filter-out clean test ci audit fuzz fuzz-% docker-make docker-image web152-test browser-boundary-test pruebas-lcm pruebas-lang pruebas-cc pruebas-js pruebas-memoria pruebas-chat pruebas-discos run-t480s-uefi run-t480s-bios size-check,$(or $(MAKECMDGOALS),all)),)
 $(error macOS: el compilador del sistema (Apple clang) no puede generar el nucleo x86_64. Opcion 1: brew install x86_64-elf-gcc x86_64-elf-binutils x86_64-elf-grub xorriso  (y repetir make). Opcion 2 (solo Docker): make docker-make ARCH=$(ARCH) PLATFORM=$(PLATFORM) EXTRA_CFLAGS='$(EXTRA_CFLAGS)')
 endif
 endif
@@ -154,7 +154,7 @@ OBJS_CORE = \
 	$(BUILD)/imgview.o \
 	$(BUILD)/fm.o \
 	$(BUILD)/notepad.o \
-	$(BUILD)/memview.o $(BUILD)/js_runtime.o \
+	$(BUILD)/memview.o \
 	$(BUILD)/chat.o $(BUILD)/chat_core.o $(BUILD)/chat_md.o \
 	$(BUILD)/correo.o $(BUILD)/correo_core.o $(BUILD)/correo_red.o \
 	$(BUILD)/layout.o $(BUILD)/tex.o $(BUILD)/settings.o $(BUILD)/savedlg.o $(BUILD)/codeedit.o $(BUILD)/textfield.o $(BUILD)/coder_core.o $(BUILD)/coder_demo.o $(BUILD)/pdf_sbx.o $(BUILD)/pdfview.o $(BUILD)/sysmon.o $(BUILD)/agenda_core.o $(BUILD)/agenda.o $(BUILD)/agenda_gui.o $(BUILD)/recorder.o $(BUILD)/camapp.o $(BUILD)/capapp.o $(BUILD)/sysicon.o \
@@ -377,12 +377,38 @@ ifeq ($(SSP),1)
 CFLAGS += -fstack-protector-strong -mstack-protector-guard=global
 OBJS_CORE += $(BUILD)/ssp.o
 endif
+# SOMA_306_PILAS: cada hilo del nucleo tiene 60 KiB de pila y UNA pagina de guarda de 4 KiB debajo. Una funcion con un marco
+# mayor de 4 KiB (hay mas de 50) bajaba el puntero de pila de golpe y podia saltarse la guarda: escribia en la pila del hilo
+# vecino sin que nada fallara. Con -fstack-clash-protection el compilador toca cada pagina al reservar el marco, asi que un
+# desbordamiento cae siempre en la guarda (#PF con su traza) en vez de corromper otro hilo. Coste: una escritura por cada
+# 4 KiB en las funciones grandes. make CLASH=0 lo quita. En aarch64 sigue desactivado hasta poder probarlo en la Pi.
+ifeq ($(ARCH),x86_64)
+CLASH ?= 1
+else
+CLASH ?= 0
+endif
+ifeq ($(CLASH),1)
+CFLAGS += -fstack-clash-protection
+endif
+# SOMA_306_PILAS: ninguna funcion del nucleo puede reservar mas de KFRAME_MAX bytes de pila de una vez (con WERROR=1, como en
+# la CI, es un error). Las mayores de hoy fuera del navegador: 9,4 KiB en x86_64 y 14 KiB en aarch64 (jpeg.c). El motor web se salta el limite: corre en pilas
+# propias de 256-512 KiB (web_call_on_stack) y sus marcos llegan a 84 KiB (URL de 8 KiB).
+KFRAME_MAX ?= 16384
+KFRAME_FLAG = -Wframe-larger-than=$(KFRAME_MAX)
+CFLAGS += $(KFRAME_FLAG)
+$(BUILD)/web_net.o $(BUILD)/web_page.o $(BUILD)/web_layout.o $(BUILD)/web_js_dom.o: KFRAME_FLAG =
 
 OBJS_CORE += $(BUILD)/rng.o         # SOMA_192: generador aleatorio unico del nucleo (ChaCha20)
 OBJS_CORE += $(BUILD)/x509.o $(BUILD)/tls_roots.o $(BUILD)/tls_trust.o   # SOMA_194: validacion de certificados del TLS propio
 
 # PARCHE 032: descripcion del hardware (ACPI / FDT)
-OBJS_CORE += $(BUILD)/hwinfo.o $(BUILD)/nvme_proto.o $(BUILD)/blk.o $(BUILD)/xhci_proto.o $(BUILD)/hid_proto.o $(BUILD)/msc_proto.o $(BUILD)/fat.o $(BUILD)/sd_proto.o $(BUILD)/pcie_proto.o $(BUILD)/mbox_proto.o $(BUILD)/rp1_proto.o $(BUILD)/gem_proto.o $(BUILD)/dma_pool.o $(BUILD)/gpio_proto.o $(BUILD)/sdio_proto.o $(BUILD)/crypto.o $(BUILD)/tlscrypto.o $(BUILD)/tls13.o $(BUILD)/wpa.o $(BUILD)/ccmp.o $(BUILD)/brcm_proto.o $(BUILD)/png_enc.o $(BUILD)/conc_test.o
+OBJS_CORE += $(BUILD)/hwinfo.o $(BUILD)/nvme_proto.o $(BUILD)/blk.o $(BUILD)/xhci_proto.o $(BUILD)/hid_proto.o $(BUILD)/msc_proto.o $(BUILD)/fat.o $(BUILD)/crypto.o $(BUILD)/tlscrypto.o $(BUILD)/tls13.o $(BUILD)/wpa.o $(BUILD)/ccmp.o $(BUILD)/png_enc.o $(BUILD)/conc_test.o
+# SOMA_308_EFICIENCIA: los protocolos de la Raspberry Pi 5 (tarjeta SD, PCIe, mailbox, RP1, Ethernet GEM, GPIO, Wi-Fi SDIO/Broadcom
+# y su reserva de DMA) solo se compilan en aarch64. En x86_64 se compilaban y el enlazador los tiraba enteros: nada los usa.
+# Sus pruebas del anfitrion (make test) no cambian.
+ifeq ($(ARCH),aarch64)
+OBJS_CORE += $(BUILD)/sd_proto.o $(BUILD)/pcie_proto.o $(BUILD)/mbox_proto.o $(BUILD)/rp1_proto.o $(BUILD)/gem_proto.o $(BUILD)/dma_pool.o $(BUILD)/gpio_proto.o $(BUILD)/sdio_proto.o $(BUILD)/brcm_proto.o
+endif
 
 # SOMA_267_DISCOS: exFAT (MODELOS y USUARIO del pendrive) y las unidades /usuario y /modelos
 OBJS_CORE += $(BUILD)/exfat.o $(BUILD)/unidades.o
@@ -586,6 +612,9 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_agent_policy.c -o build/tests/test_agent_policy
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_user_path.c -o build/tests/test_user_path
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_pmm_scan.c -o build/tests/test_pmm_scan
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_pila_canario_306.c -o build/tests/test_pila_canario_306      # SOMA_306_PILAS
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_agent_protegidos_307.c -o build/tests/test_agent_protegidos_307      # SOMA_307_SEGURIDAD
+	$(HOST_CC) -std=gnu11 -O2 $(TEST_WARN) -g -fsanitize=address,undefined -fno-sanitize-recover=undefined $(if $(filter 1,$(STRICT)),-Werror) tests/test_memfn_gen_308.c -o build/tests/test_memfn_gen_308      # SOMA_308_EFICIENCIA
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined $(TEST_INC) tests/test_tcp_reap.c tests/stubs_netif.c src/net/net.c src/net/ip.c src/net/udp.c src/net/tcp.c -o build/tests/test_tcp_reap
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined $(TEST_INC) tests/test_tcp_send.c tests/stubs_netif.c src/net/net.c src/net/ip.c src/net/udp.c src/net/tcp.c -o build/tests/test_tcp_send
 	$(HOST_CC) -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined $(TEST_INC) tests/test_tcp_rx.c tests/stubs_netif.c src/net/net.c src/net/ip.c src/net/udp.c src/net/tcp.c -o build/tests/test_tcp_rx
@@ -706,6 +735,9 @@ test:
 	./build/tests/test_agent_policy
 	./build/tests/test_user_path
 	./build/tests/test_pmm_scan
+	./build/tests/test_pila_canario_306
+	./build/tests/test_agent_protegidos_307
+	./build/tests/test_memfn_gen_308
 	./build/tests/test_tcp_reap
 	./build/tests/test_tcp_send
 	./build/tests/test_tcp_rx
@@ -754,6 +786,7 @@ test:
 	python3 tests/test_wavcheck.py
 	python3 tests/test_fpcheck.py
 	python3 tests/test_srcfs_pack.py
+	python3 tests/test_size_check_310.py      # SOMA_310_PRESUPUESTO
 	python3 tests/test_srcfs_pack.py --emit build/tests/srcfs.img build/tests/srcfs.manifest
 	./build/tests/test_srcfs build/tests/srcfs.img build/tests/srcfs.manifest
 	@echo "TESTS OK"
@@ -832,6 +865,12 @@ sbx-check:
 # Arranca en QEMU con varias CPU (qemu64 sin RDRAND, Nehalem, max) y comprueba que no hay panico y que HTTP responde (x86_64)
 cpu-matrix:
 	python3 tools/cpu_matrix.py
+
+# SOMA_310_PRESUPUESTO: cuanto ocupa el nucleo frente a su limite de 46 MiB (linker_x86_64.ld) y que es lo que mas ocupa.
+# Avisa desde el 85 %; la CI falla desde el 90 % (SIZE_FALLAR=90), antes de que el enlazador corte de golpe al 100 %.
+SIZE_FALLAR ?= 100
+size-check:
+	python3 tools/size_check.py build/x86_64/soma.elf --fallar-en $(SIZE_FALLAR)
 
 # Falla si el SO vuelve a consumir CPU en reposo (solo Linux + QEMU, x86_64)
 idle-check:

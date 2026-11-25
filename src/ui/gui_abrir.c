@@ -470,22 +470,6 @@ void gui_open_youtube(const char *query)
     gui_leave(tok);
 }
 
-static void gui_open_agents__impl(void)
-{
-    if (gui_win_open(APP_AGENTS)) return;
-    ensure_window_geom();
-    current_app = APP_AGENTS;
-    agent_global_focus = 0;
-    g_pending_app = APP_AGENTS;                         /* PARCHE 120 */
-    cmd_vsoma("", 0, 0);
-    g_pending_app = APP_DESKTOP;
-}
-void gui_open_agents(void)   /* PARCHE 091: el hilo del agente pide turno de pantalla */
-{
-    int tok = gui_enter();
-    gui_open_agents__impl();
-    gui_leave(tok);
-}
 
 /* El estado del raton es compartido con el hilo de fondo */
 #define mouse_x g_mouse_x_s

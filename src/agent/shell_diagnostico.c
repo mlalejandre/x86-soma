@@ -294,9 +294,29 @@ static void __attribute__((noinline)) crash_level3(volatile uint64_t *p) { *p = 
 static void __attribute__((noinline)) crash_level2(volatile uint64_t *p) { crash_level3(p); kprint(""); }
 static void __attribute__((noinline)) crash_level1(volatile uint64_t *p) { crash_level2(p); kprint(""); }
 
+/* SOMA_306_PILAS: 'crash pila' agota la pila de un hilo con marcos de 8 KiB (mas que la pagina de guarda). Sin
+ * -fstack-clash-protection uno de esos marcos podia saltarse la guarda y escribir en la pila del hilo vecino; con el, el
+ * sistema se detiene en la guarda y el informe dice que hilo se ha desbordado. */
+static volatile uint32_t pila_prueba_prof, pila_prueba_tope = 1000000u;   /* tope volatil: no es recursion infinita para el compilador */
+static uint32_t __attribute__((noinline)) pila_prueba_baja(uint32_t n)
+{
+    volatile char marco[8192];
+    if (n > pila_prueba_tope) return 0;
+    marco[0] = (char)n;                                     /* lo mas bajo del marco: lo ultimo que se escribe */
+    pila_prueba_prof = n;
+    return pila_prueba_baja(n + 1) + (uint32_t)marco[0];    /* no es llamada de cola: el marco sigue vivo */
+}
+static void pila_prueba_hilo(void *arg) { (void)arg; (void)pila_prueba_baja(1); }
+
 static int cmd_crash(const char *args, char *out_buf, uint32_t max_out)
 {
-    (void)args; (void)out_buf; (void)max_out;
+    (void)out_buf; (void)max_out;
+    while (*args == ' ') args++;
+    if (args[0] == 'p' && args[1] == 'i' && args[2] == 'l' && args[3] == 'a') {
+        kprint("crash pila: un hilo agota su pila de 60 KiB con marcos de 8 KiB (debe detenerse en su pagina de guarda)...\n");
+        if (!thread_create("pila_prueba", pila_prueba_hilo, 0)) kprint("crash pila: no se pudo crear el hilo\n");
+        return 1;
+    }
     kprint("crash: provocando un fallo de pagina a proposito...\n");
     crash_level1((volatile uint64_t *)0x00007F0000000000ULL);   /* direccion no mapeada */
     return 1;

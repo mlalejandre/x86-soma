@@ -9,20 +9,6 @@ struct http_response {
     int      status_code;     /* 4 bytes (offset 12) -> total 16 B */
 } __attribute__((aligned(8)));
 
-int http_request(
-    const uint8_t *ip,
-    uint16_t port,
-    const char *method,
-    const char *path,
-    const char *content_type,
-    const char *body,
-    uint32_t body_len,
-    char *buf,
-    uint32_t buf_size,
-    struct http_response *resp,
-    uint32_t timeout_ms
-);
-
 int http_get_host(
     const uint8_t *ip,
     uint16_t port,

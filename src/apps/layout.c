@@ -246,7 +246,6 @@ void layout_init(void)
     fields(); ly_focus = F_NONE; ly_hover = -1; ly_scroll = 0; ly_view = 0;
     if (!ly_src_len) { layout_set_source(SAMPLE_TEX, 0); status("Documento de ejemplo. Abre un .tex o pide uno a la IA abajo.", 1); }
 }
-const char *layout_get_prompt(void) { return ly_prompt; }
 
 /* ---------------------------------------------------------------- IA */
 /* La descripcion tal como se manda a la IA: saltos de linea y tabuladores como espacios, sin espacios sobrantes en los extremos. */

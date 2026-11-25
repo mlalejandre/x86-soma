@@ -13,8 +13,6 @@ void notepad_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
 /* Control de eventos de ratón (clic izquierdo, clic derecho, arrastre y soltar) */
 int  notepad_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h);
 int  notepad_handle_right_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h);
-int  notepad_handle_drag(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h);
-int  notepad_handle_mouse_up(int32_t mx, int32_t my);
 /* SOMA_PARCHE_028_UI: raton completo con las coordenadas reales del puntero (movimiento, arrastre, rueda, boton derecho).
  * Devuelve 1 si hay que repintar. notepad_escape() cierra el menu o el dialogo abiertos (1 = tecla usada). */
 int  notepad_mouse(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h,

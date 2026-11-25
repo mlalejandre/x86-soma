@@ -5,7 +5,7 @@ Uso:  python3 tools/audit.py [--root DIR] [--strict] [--top N]
 
 Informa de: funciones C inseguras, marcadores TODO/FIXME, tamano de los
 fuentes mas grandes y coherencia de la lista de archivos protegidos entre
-ejecutar.py, protected.txt y src/agent/agent.c.
+ejecutar.py, protected.txt y src/agent/agent_protegidos.h (SOMA_307_SEGURIDAD: con --strict, una diferencia es un fallo).
 Con --strict devuelve codigo 1 si hay hallazgos de funciones inseguras.
 """
 import argparse
@@ -54,13 +54,13 @@ def protected_sets(root: Path):
     pt = root / "protected.txt"
     if pt.is_file():
         for line in pt.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
+            line = line.split("#", 1)[0].strip()   # SOMA_305_LIMPIEZA: como ejecutar.py, sin el comentario del final
+            if line:
                 txt.add(Path(line).name)
     c = set()
-    sh = root / "src/agent/agent.c"
+    sh = root / "src/agent/agent_protegidos.h"   # SOMA_307_SEGURIDAD: la lista del SO (antes, protected_list de agent.c)
     if sh.is_file():
-        m = re.search(r"protected_list\[\]\s*=\s*\{(.*?)\};", sh.read_text(encoding="utf-8"), re.S)
+        m = re.search(r"agent_protegidos\[\]\s*=\s*\{(.*?)\};", sh.read_text(encoding="utf-8"), re.S)
         if m:
             c = set(re.findall(r'"([^"]+)"', m.group(1)))
     return py, txt, c
@@ -125,7 +125,7 @@ def main() -> int:
     host = py | txt  # ejecutar.py aplica ambas listas (por nombre de archivo)
     existing = {p.name for p in (root / "src").rglob("*") if p.is_file()}
     print("== Archivos protegidos (por nombre de archivo)")
-    print(f"   host (ejecutar.py + protected.txt): {len(host)} | dentro del SO (agent.c): {len(c)}")
+    print(f"   host (ejecutar.py + protected.txt): {len(host)} | dentro del SO (agent_protegidos.h): {len(c)}")
     problemas = 0
     for name in sorted(host | c):
         notas = []
@@ -134,14 +134,15 @@ def main() -> int:
         if name not in host:
             notas.append("falta en el host")
         if name not in c:
-            notas.append("falta en el SO (agent.c)")
+            notas.append("falta en el SO (agent_protegidos.h)")
         if notas:
             problemas += 1
             print(f"   {name}: {', '.join(notas)}")
     if not problemas:
         print("   coherente")
     srcfs_bad = srcfs_check(root)
-    return 1 if (a.strict and (total or srcfs_bad)) else 0
+    # SOMA_307_SEGURIDAD: con --strict (make ci) tambien falla si el SO y el anfitrion no protegen lo mismo
+    return 1 if (a.strict and (total or srcfs_bad or problemas)) else 0
 
 
 if __name__ == "__main__":

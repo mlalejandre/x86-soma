@@ -23,8 +23,6 @@ const char *ahci_err_str(int err);
 /* PARCHE 041: el controlador queda inicializado tras ahci_probe (puerto en marcha, memoria DMA persistente de 64 KiB)
  * y expone lectura, escritura y vaciado de cache por sondeo. count <= AHCI_MAX_SECTORS por llamada. */
 #define AHCI_MAX_SECTORS 128
-int ahci_ready(void);
-uint64_t ahci_sector_count(void);
 int ahci_read(uint64_t lba, uint32_t count, void *buf);          /* 0 ok, <0 error (ver ahci_err_str) */
 int ahci_write(uint64_t lba, uint32_t count, const void *buf);
 int ahci_flush(void);

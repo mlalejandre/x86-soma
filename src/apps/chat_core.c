@@ -70,13 +70,6 @@ struct cc_msg *cc_anade(struct cc_conv *c, int rol, const char *txt, uint32_t n,
     if (t > c->t1) c->t1 = t;
     return m;
 }
-int cc_texto(struct cc_msg *m, const char *txt, uint32_t n)
-{
-    if (n > CC_TXT_MAX) n = CC_TXT_MAX;
-    char *d = dup_n(txt, n); if (!d) return 0;
-    if (m->txt) cc_free(m->txt);
-    m->txt = d; m->n = n; return 1;
-}
 void cc_trunca(struct cc_conv *c, uint32_t desde)
 {
     while (c->nm > desde) msg_libera(&c->m[--c->nm]);

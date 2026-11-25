@@ -46,8 +46,6 @@ void wn_cookie_clear(void);
 uint32_t wn_cookie_gen(void);                                  /* SOMA_203 */
 uint32_t wn_cookie_export(void *out, uint32_t max);            /* bytes escritos (0 = no cabe) */
 int  wn_cookie_import(const void *in, uint32_t len);
-/* ajustes */
-void wn_set_gateway(const uint8_t ip[4]);
 /* SOMA_PARCHE_028_UI: lo que sabe hacer la pasarela del anfitrion (cabecera X-Soma-Gateway). 0 = desconocida o antigua.
  * Las URL "soma-gw:/ruta" son ordenes directas a la pasarela (p. ej. POST soma-gw:/svg para rasterizar un <svg> en linea). */
 #define WN_GW_PRESENT 1

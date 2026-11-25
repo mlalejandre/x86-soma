@@ -28,55 +28,6 @@ static int str_eq(const char *a, const char *b)
     return (*a == *b);
 }
 
-const char* token_type_name(enum soma_tok_type t)
-{
-    switch (t) {
-    case TOK_EOF: return "EOF";
-    case TOK_INT: return "INT";
-    case TOK_STRING: return "STRING";
-    case TOK_IDENT: return "IDENT";
-    case TOK_FN: return "fn";
-    case TOK_LET: return "let";
-    case TOK_IF: return "if";
-    case TOK_ELSE: return "else";
-    case TOK_WHILE: return "while";
-    case TOK_RETURN: return "return";
-    case TOK_PRINT: return "print";
-    case TOK_INPUT: return "input";
-    case TOK_IMPORT: return "import";
-    case TOK_PROC: return "proc";
-    case TOK_LOOP: return "loop";
-    case TOK_BREAK: return "break";
-    case TOK_AGENT: return "agent";
-    case TOK_SPAWN: return "spawn";
-    case TOK_ASK: return "ask";
-    case TOK_MEM: return "mem";
-    case TOK_VFS: return "vfs";
-    case TOK_SYS: return "sys";
-        case TOK_FB: return "fb";
-    case TOK_WIN: return "win"; /*PL4_TYPENAME*/
-    case TOK_COLON: return ":";
-    case TOK_FOR: return "for";
-    case TOK_CONTINUE: return "continue";
-    case TOK_LE: return "<=";
-    case TOK_GE: return ">=";
-    case TOK_AND: return "&&";
-    case TOK_OR: return "||";
-    case TOK_NOT: return "!";
-    case TOK_MOD: return "%";
-    case TOK_TRUE: return "true";
-    case TOK_FALSE: return "false";
-    case TOK_NIL: return "nil";
-    case TOK_LBRACKET: return "[";
-    case TOK_RBRACKET: return "]";
-    case TOK_PLUS_ASSIGN: return "+=";
-    case TOK_MINUS_ASSIGN: return "-=";
-    case TOK_STAR_ASSIGN: return "*=";
-    case TOK_SLASH_ASSIGN: return "/=";
-    default: return "SYMBOL";
-    }
-}
-
 struct soma_token lexer_next(struct soma_lexer *lex)
 {
     struct soma_token tok;

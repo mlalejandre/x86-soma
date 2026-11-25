@@ -16,8 +16,6 @@ struct camera_info {
 };
 struct camera_mode { uint16_t w, h; uint8_t mjpeg; };
 
-void camera_init(void);
-int  camera_present(void);                                    /* 1 = hay una camara UVC (explora el USB la primera vez) */
 int  camera_modes(struct camera_mode *m, int max);            /* tamanos MJPEG disponibles, de menor a mayor */
 int  camera_start(uint32_t w, uint32_t h, uint32_t fps);      /* 0 = en marcha; <0 error (camera_info().msg) */
 void camera_stop(void);

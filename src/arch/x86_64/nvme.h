@@ -18,7 +18,6 @@ struct nvme_info {
 #define NVME_MAX_SECTORS 128
 int nvme_probe(struct nvme_info *o);                              /* 0 = inicializado y sector 0 leido */
 const char *nvme_err_str(int err);
-int nvme_ready(void);
 int nvme_read(uint64_t lba, uint32_t count, void *buf);           /* hasta NVME_MAX_SECTORS; buf debe tener count*512 bytes */
 int nvme_write(uint64_t lba, uint32_t count, const void *buf);
 int nvme_flush(void);

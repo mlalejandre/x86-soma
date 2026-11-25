@@ -123,6 +123,5 @@ struct vpx_info {
 };
 int  vpx_start(const struct vps_source *src, uint32_t max_ms, vpx_sink_fn sink, void *sctx, char *err, uint32_t emax);
 void vpx_stop(void);                                                       /* bloquea hasta 2 s: despues el sumidero ya no se llama */
-int  vpx_active(void);
 void vpx_get_info(struct vpx_info *o);
 #endif

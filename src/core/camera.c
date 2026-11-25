@@ -113,8 +113,6 @@ static void dec_main(void *arg)
     }
 }
 
-void camera_init(void) { }
-
 static void free_buffers(void)
 {
     if (asm0) { kfree(asm0); }
@@ -133,8 +131,6 @@ static void free_rec(void)
     for (uint32_t i = 0; i < nvch; i++) { kfree(vch[i]); vch[i] = 0; }
     nvch = 0; vch_used = 0; nvf = 0; vrec_bytes = 0;
 }
-
-int camera_present(void) { struct cam_hw_info i; if (running) return 1; return cam_hw_probe(&i) == 0; }
 
 int camera_modes(struct camera_mode *m, int max)
 {

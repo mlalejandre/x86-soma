@@ -20,7 +20,6 @@ int  bmp_decode(const uint8_t *data, size_t size, struct image *img);   /* PARCH
 void image_free(struct image *img);
 
 void image_render(const struct image *img, int32_t dx, int32_t dy, int32_t dw, int32_t dh);
-void image_render_alpha(const struct image *img, int32_t dx, int32_t dy, int32_t dw, int32_t dh);
 
 int  image_create_demo_bmp(uint8_t *out_buf, size_t max_size, uint32_t width, uint32_t height);
 int  image_create_chip_bmp(uint8_t *out_buf, size_t max_size, uint32_t width, uint32_t height);

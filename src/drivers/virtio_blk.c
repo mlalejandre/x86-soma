@@ -321,7 +321,6 @@ static int virtio_blk_opn(uint64_t sector, void *buf, uint32_t nsec, int write)
 
 static const struct sysdisk_ops *g_alt;                     /* SOMA_162_T480S */
 int sysdisk_set_device(const struct sysdisk_ops *o) { if (blk_ready) return -1; g_alt = o; return 0; }
-const char *sysdisk_device_name(void) { return g_alt ? g_alt->name : 0; }
 /* SOMA_162_T480S: una linea para la portada y 'disco' (antes era un texto fijo "RamFS (16 MiB virtio-blk)") */
 const char *sysdisk_describe(void)
 {

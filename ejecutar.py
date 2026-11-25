@@ -184,8 +184,8 @@ def is_target_protected(path: Path) -> bool:
     prot_txt = ROOT / 'protected.txt'
     if prot_txt.exists():
         for line in prot_txt.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
-            if line and not line.startswith('#') and Path(line).name == path.name:
+            line = line.split('#', 1)[0].strip()   # SOMA_305_LIMPIEZA: un comentario al final de la linea no es parte del nombre
+            if line and Path(line).name == path.name:
                 return True
     return False
 

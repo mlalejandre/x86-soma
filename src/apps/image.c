@@ -104,11 +104,6 @@ void image_render(const struct image *img, int32_t dx, int32_t dy, int32_t dw, i
     }
 }
 
-void image_render_alpha(const struct image *img, int32_t dx, int32_t dy, int32_t dw, int32_t dh)
-{
-    image_render(img, dx, dy, dw, dh);
-}
-
 int image_create_demo_bmp(uint8_t *out, size_t max_size, uint32_t w, uint32_t h)
 {
     if (w != 80 || h != 40) { w = 80; h = 40; }

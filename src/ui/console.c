@@ -275,8 +275,6 @@ void console_serial_probe(void)
 }
 int console_serial_present(void) { return !uart_absent; }
 #endif
-unsigned console_uart_timeouts(void) { return uart_timeouts; }
-int console_uart_dead(void) { return uart_dead; }
 /* SOMA_156_T480S: registro del nucleo ("dmesg"). El portatil no tiene puerto serie y el arranque pasa demasiado deprisa para
  * leerlo: todo lo que sale por kputc se guarda aqui. 16 KiB estaticos al principio; en cuanto hay montón, 256 KiB. */
 #define KLOG_EARLY 16384u

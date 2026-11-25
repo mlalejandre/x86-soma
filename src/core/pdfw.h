@@ -11,7 +11,6 @@ struct pdfw;
 struct pdfw *pdfw_new(const char *title_utf8, const char *creator);
 /* argb: w*h pixeles; w_pt/h_pt: tamano de la pagina en puntos (1/72"). 0 = bien, <0 = sin memoria o error de codificacion. */
 int  pdfw_page(struct pdfw *p, const uint32_t *argb, int w, int h, int w_pt, int h_pt);
-int  pdfw_pages(const struct pdfw *p);
 /* Cierra el documento: devuelve el PDF (kmalloc, lo libera quien llama) y su longitud; libera p. 0 si falla. */
 uint8_t *pdfw_finish(struct pdfw *p, uint32_t *len);
 void pdfw_free(struct pdfw *p);

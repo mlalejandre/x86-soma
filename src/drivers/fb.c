@@ -907,11 +907,6 @@ void fb_user_end(void)
 }
 int fb_user_exclusive(void) { return fb_user_owned; }
 
-int fb_set_mode_hd(void)
-{
-    return fb_set_mode(FB_RES_FHD_W, FB_RES_FHD_H);
-}
-
 #ifdef __x86_64__
 static const uint8_t vga_mode3_seq[5] = { 0x03, 0x00, 0x03, 0x00, 0x02 };
 static const uint8_t vga_mode3_crtc[25] = {
@@ -1610,26 +1605,6 @@ void fb_fill_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color)
                 fast_fill_span(target + py * fb_cur_w + lx, color, lw);
             }
         }
-    }
-}
-
-void fb_draw_circle(int32_t cx, int32_t cy, int32_t r, uint32_t color)
-{
-    if (!fb_active || r <= 0) return;
-    int32_t x = 0, y = r;
-    int32_t d = 3 - 2 * r;
-    while (x <= y) {
-        fb_draw_pixel((uint32_t)(cx + x), (uint32_t)(cy + y), color);
-        fb_draw_pixel((uint32_t)(cx - x), (uint32_t)(cy + y), color);
-        fb_draw_pixel((uint32_t)(cx + x), (uint32_t)(cy - y), color);
-        fb_draw_pixel((uint32_t)(cx - x), (uint32_t)(cy - y), color);
-        fb_draw_pixel((uint32_t)(cx + y), (uint32_t)(cy + x), color);
-        fb_draw_pixel((uint32_t)(cx - y), (uint32_t)(cy + x), color);
-        fb_draw_pixel((uint32_t)(cx + y), (uint32_t)(cy - x), color);
-        fb_draw_pixel((uint32_t)(cx - y), (uint32_t)(cy - x), color);
-        if (d < 0) d += 4 * x + 6;
-        else { d += 4 * (x - y) + 10; y--; }
-        x++;
     }
 }
 

@@ -6,6 +6,61 @@ Primera versión que se publica como **pre-beta**: el sistema es usable a diario
 todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
 encontrar fallos con más gente y más hardware antes de una beta.
 
+<!-- SOMA_310_PRESUPUESTO -->
+### El tamaño del núcleo, vigilado en la CI (310)
+- `make size-check` (`tools/size_check.py`) dice cuánto ocupa la imagen frente a su límite de 46 MiB y qué es lo que más ocupa,
+  incluidos los programas de ring 3 incrustados. Avisa desde el 85 %. La CI de GitHub falla desde el 90 %, antes de que el
+  enlazador corte de golpe.
+- Hoy: 68,8 % (31,7 de 46 MiB). Los pesos del LCM y los programas incrustados suman más de 12 MiB.
+
+<!-- SOMA_309_CODIGO_MUERTO -->
+### Fuera las funciones que nadie llama (309)
+- 52 funciones (517 líneas en 38 archivos) que no llamaba nadie en todo el proyecto: ni el núcleo de ninguna de las dos
+  arquitecturas, ni las pruebas, ni las herramientas. Por ejemplo, el antiguo puente de JavaScript del navegador, pruebas de red de los
+  primeros parches y funciones del VFS sustituidas por las órdenes del terminal. La lista completa y el criterio están en
+  `docs/PARCHE_309_CODIGO_MUERTO.md`.
+- Se conserva `gui_stream_*` (texto a trozos en el orbe): tiene pruebas y falta conectarla.
+
+<!-- SOMA_308_EFICIENCIA -->
+### Eficiencia: copias de memoria rápidas en la Raspberry Pi (308)
+- En aarch64, `memcpy`, `memmove`, `memset` y `memcmp` iban byte a byte. Ahora van de 8 en 8 bytes con solo accesos alineados
+  (`-mstrict-align`), también cuando origen y destino tienen alineaciones distintas. En emulación, una fila de pantalla se copia
+  14 veces más rápido y un `memset` grande 23 veces.
+- Los 9 módulos de protocolos de la Pi 5 ya no se compilan en x86_64, donde el enlazador los tiraba enteros.
+
+<!-- SOMA_307_SEGURIDAD -->
+### Seguridad: el SO protege los mismos archivos que el anfitrión (307)
+- El filtro que aplica el propio SO a los parches del agente comparaba la ruta entera (`core/thread.c` no casaba con
+  `thread.c`) y tenía su propia lista de 23 archivos frente a los 76 del anfitrión. En la práctica solo protegía el anfitrión.
+  Ahora usa la misma lista (`src/agent/agent_protegidos.h`) y compara el nombre de archivo, como `ejecutar.py`.
+- Si un parche es de C o del espacio de trabajo se decide por su ruta, no por lo que diga el resto de la respuesta del modelo.
+- `audit.py --strict` (`make ci`) falla si las dos listas dejan de coincidir.
+
+<!-- SOMA_306_PILAS -->
+### Pilas del núcleo: un desbordamiento siempre se ve (306)
+- El núcleo se compila con `-fstack-clash-protection` (x86_64). Una función con un marco de pila mayor que la página de guarda
+  (hay más de 50) ya no puede saltársela y escribir en silencio en la pila de otro hilo: el sistema se para con su traza.
+- Si un hilo agota su pila, el pánico lo dice: `DESBORDAMIENTO DE PILA del hilo '<nombre>'`.
+- Las pilas propias del navegador y de `wn_fetch` (sin página de guarda) llevan un canario. Si se desbordan, se avisa y se para,
+  en vez de seguir con el montón corrupto.
+- Ninguna función nueva del núcleo puede reservar más de 16 KiB de pila de golpe (error con `WERROR=1`, como en la CI). El motor
+  web, que corre en sus pilas grandes, queda fuera del límite.
+- `crash pila` (depuración) y un escenario nuevo en `fault-check`. Arreglo menor en `usermode.c` (nulo comprobado tarde).
+
+<!-- SOMA_305_LIMPIEZA -->
+### Limpieza: código y herramientas que ya no se usan (305)
+- Fuera 25 archivos que nada usaba (unos 5,9 MB):
+  - un vídeo de prueba olvidado en la raíz (`in.mkv`) y un volcado antiguo de la interfaz (`fuentes_ui.txt`);
+  - los 19 exportadores anteriores a `exportar_txt.py` (`tools/estructura*.py`, `tools/exportar*.py`). Dos de ellos
+    copiaban también los `.conf`, y con ellos tus claves;
+  - el «JavaScript» de juguete `src/apps/js_runtime.c` (nadie lo llamaba desde que existe el motor `web_js`) y su nota;
+  - una copia repetida de `lang.h`.
+- `protected.txt`: las cuatro entradas de los `lcm_*.inc` llevaban el comentario detrás del nombre y no protegían nada. Los
+  comentarios van ahora en su propia línea, y `ejecutar.py` y `audit.py` ignoran lo que vaya tras `#`.
+- `.gitignore` sin líneas repetidas ni rotas, y con `*.mkv`, `fuentes_*.txt` y `estructura*.txt`.
+- **Arreglo** (`src/fs/srcfs.c`): leer una fuente del sistema por su nombre corto (`lang.h`) podía dar otro archivo que
+  terminara igual (`lang/lang.h`). Ahora gana siempre la ruta exacta.
+
 <!-- SOMA_304_CI -->
 ### Los servidores falsos de las pruebas con el mismo Python (304)
 - Las pruebas que crean un `llama-server` o un `yt-dlp` falsos los escribían con `#!/usr/bin/env python3`. En el Mac de GitHub

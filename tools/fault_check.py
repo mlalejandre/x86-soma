@@ -91,6 +91,34 @@ def scenario_crash(root, qemu, td) -> list:
     return fails
 
 
+def scenario_stack(root, qemu, td) -> list:
+    """SOMA_306_PILAS: un hilo del nucleo agota su pila con marcos de 8 KiB (mas que la pagina de guarda). Tiene que
+    detenerse en su guarda (#PF por IST1, panic observable) y el informe tiene que nombrar el hilo."""
+    fails = []
+    proc, log, out = boot(root, qemu, td, "pila")
+    try:
+        if not wait_for(log, "Modo texto activado", 60):
+            return ["no llego a la consola de texto"]
+        proc.stdin.write(b"crash pila\n"); proc.stdin.flush()
+        try:
+            rc = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            return ["el kernel no se detuvo tras 'crash pila'"]
+        t = text(log)
+        if rc != 71:
+            fails.append(f"codigo de salida {rc} (esperado 71 = panic observable)")
+        for needle in ("KERNEL PANIC", "Page Fault", "DESBORDAMIENTO DE PILA del hilo 'pila_prueba'"):
+            if needle not in t:
+                fails.append(f"falta '{needle}' en la salida")
+        if "pila_prueba_baja" not in symbolized(root, log):
+            fails.append("el backtrace no resuelve a 'pila_prueba_baja'")
+    finally:
+        if proc.poll() is None:
+            proc.kill(); proc.wait()
+        out.close()
+    return fails
+
+
 def scenario_hang(root, qemu, td) -> list:
     fails = []
     proc, log, out = boot(root, qemu, td, "hang")
@@ -1286,7 +1314,7 @@ def main() -> int:
         return 2
     bad = 0
     with tempfile.TemporaryDirectory(prefix="soma_fault_") as td:
-        for name, fn in (("crash", scenario_crash), ("hang/watchdog", scenario_hang),
+        for name, fn in (("crash", scenario_crash), ("pila desbordada", scenario_stack), ("hang/watchdog", scenario_hang),
                          ("interbloqueo", scenario_deadlock), ("ring3", scenario_ring3), ("exec-elf", scenario_exec), ("bigfs", scenario_bigfs), ("big-exec", scenario_bigexec), ("audio", scenario_audio), ("fpu", scenario_fpu), ("pantalla", scenario_fb), ("video", scenario_video), ("media", scenario_media), ("media GUI", scenario_media_gui), ("terminal GUI", scenario_terminal),
                          ("audio sin dispositivo", lambda r, q, t: scenario_audio(r, q, t, (), "audionodev", False)),
                          ("ring3+SMEP/SMAP", lambda r, q, t: scenario_ring3(r, q, t, ("-cpu", "qemu64,+smep,+smap"), "ring3smap", "SMEP activo, SMAP activo")),

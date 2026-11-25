@@ -10,54 +10,7 @@
 #if defined(__x86_64__)
 #include "memfn.h"            /* SOMA_199: memcpy, memmove, memset y memcmp de x86_64 */
 #else
-void *memcpy(void *dst, const void *src, size_t n)
-{
-    void *ret = dst;
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-    while (n--) *d++ = *s++;
-    return ret;
-}
-
-void *memset(void *dst, int value, size_t n)
-{
-    void *ret = dst;
-    uint8_t *d = (uint8_t *)dst;
-    uint8_t v = (uint8_t)value;
-    while (n--) *d++ = v;
-    return ret;
-}
-
-void *memmove(void *dst, const void *src, size_t n)
-{
-    uint8_t *d = (uint8_t *)dst;
-    const uint8_t *s = (const uint8_t *)src;
-
-    if (n == 0 || d == s) {
-        return dst;
-    }
-
-    if (d < s) {
-        for (size_t i = 0; i < n; i++) d[i] = s[i];
-    } else {
-        for (size_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
-    }
-    return dst;
-}
-
-int memcmp(const void *a, const void *b, size_t n)
-{
-    const uint8_t *x = (const uint8_t *)a;
-    const uint8_t *y = (const uint8_t *)b;
-
-    for (size_t i = 0; i < n; ++i) {
-        if (x[i] != y[i]) {
-            return (int)x[i] - (int)y[i];
-        }
-    }
-    return 0;
-}
-
+#include "memfn_gen.h"        /* SOMA_308_EFICIENCIA: aarch64 de 8 en 8 bytes (antes, byte a byte) y solo accesos alineados */
 #endif /* x86_64 */
 #endif /* SOMA_HOST_TEST */
 
@@ -553,17 +506,6 @@ void kheap_stats(size_t *used, size_t *free_bytes)
     /* PARCHE 128: O(1). kheap_check() comprueba que los contadores coinciden con un recorrido completo. */
     if (used) *used = (size_t)heap_ctr.used_bytes;
     if (free_bytes) *free_bytes = heap_free_bytes;
-}
-
-/* PARCHE 128: comprobacion barata (O(1)) para llamarla a menudo: el ultimo bloque cierra la region mapeada y los contadores son plausibles. */
-int kheap_check_quick(void)
-{
-    if (!heap_initialized) return 0;
-    if (!heap_tail || !hdr_in_heap(heap_tail) || !block_valid(heap_tail)) return 1;
-    if ((uintptr_t)(heap_tail + 1) + heap_tail->size != (uintptr_t)heap_current_brk) return 1;
-    if (heap_ctr.used_bytes + heap_free_bytes > heap_mapped_bytes) return 1;
-    if (heap_ctr.used_bytes < heap_ctr.live_blocks * (sizeof(struct block_header) + KHEAP_MIN_PAYLOAD)) return 1;
-    return 0;
 }
 
 /* PARCHE 089: bytes vivos (con cabecera) por dueno */

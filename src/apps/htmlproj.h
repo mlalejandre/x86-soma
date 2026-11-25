@@ -29,7 +29,6 @@ int html_bundle(const char *src, uint32_t len, const char *dir, const struct htm
 /* Plantillas de proyecto: kind "basica" | "app" | "juego" (0 = la lista por defecto). file 0 = index.html, 1 = estilo.css, 2 = app.js.
  * Devuelve el texto (con %TITULO% ya sustituido en out) o -1 si no cabe / no existe. */
 int html_template(const char *kind, int file, const char *titulo, char *out, uint32_t cap);
-const char *html_template_kinds(void);        /* "basica, app, juego" */
 const char *html_template_name(int file);     /* "index.html" ... */
 
 int html_path_join(const char *dir, const char *rel, char *out, uint32_t cap);   /* resuelve ./ y ../; 0 = bien */

@@ -31,7 +31,6 @@ void gui_turn_end(int tok);
 int  gui_agent_busy(void);                   /* PARCHE 085 */
 int  gui_agent_submit(const char *mission);  /* SOMA_248_DOC: mision al agente (como escrita en el orbe); 0 enviada, -1 ocupado */
 void gui_open_layout_file(const char *path);   /* PARCHE 084: abre un .tex en el maquetador */
-void gui_open_agents(void);
 void gui_open_notepad(const char *path);
 void gui_open_paint(const char *path);
 void gui_open_imgview(const char *path);   /* SOMA_PARCHE_ARCHIVOS */

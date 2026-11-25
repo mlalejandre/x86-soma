@@ -173,9 +173,6 @@ static void copy_bytes(void *d, const void *s2, uint32_t n)
     else for (uint32_t i = 0; i < n; i++) ((uint8_t *)d)[i] = ((const uint8_t *)s2)[i];
 }
 
-int ahci_ready(void) { return g_port >= 0; }
-uint64_t ahci_sector_count(void) { return g_sectors; }
-
 int ahci_read(uint64_t lba, uint32_t count, void *buf)
 {
     if (g_port < 0 && !(dma_pg && dma_data)) return E_NO_DISK;

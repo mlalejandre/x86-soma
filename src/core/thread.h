@@ -59,6 +59,7 @@ struct tcb *thread_current(void);
 void thread_reap_dead(void);
 void thread_dump(void);
 int  thread_format_stacks(char *out, uint32_t max);   /* PARCHE 132: marca de agua de pila por hilo; devuelve los que pasan del 80 % */
+const char *thread_guard_owner(uint64_t addr);        /* SOMA_306_PILAS: hilo cuya pagina de guarda contiene addr (0 = ninguno) */
 int  thread_test_self(void);
 int  thread_format_table(char *out, uint32_t max);
 

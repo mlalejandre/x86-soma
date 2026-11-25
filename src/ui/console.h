@@ -6,8 +6,6 @@
 #define CMD_LINE_MAX 4096
 
 void kputc(char c);
-unsigned console_uart_timeouts(void);   /* PARCHE 132 */
-int console_uart_dead(void);
 void kprint(const char *s);
 void kprint_hex8(uint8_t value);
 void kprint_hex16(uint16_t value);

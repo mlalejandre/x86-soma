@@ -85,8 +85,6 @@ static void clean_str(char *d, const uint8_t *s, int n)
     d[last + 1] = 0;
 }
 
-int nvme_ready(void) { return g_ready; }
-
 int nvme_probe(struct nvme_info *o)
 {
     for (unsigned i = 0; i < sizeof *o; i++) ((uint8_t *)o)[i] = 0;

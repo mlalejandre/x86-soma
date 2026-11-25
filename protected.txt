@@ -37,10 +37,12 @@ src/core/wpa.c
 src/core/ccmp.c
 src/agent/agent_policy.h
 src/agent/agent.c
-src/agent/lcm_ordenes.inc   # SOMA_253_LCM
-src/agent/lcm_ordenes_pesos.inc   # SOMA_253_LCM
-src/agent/lcm_soma.inc   # SOMA_257_LCM
-src/agent/lcm_ordenes_shell.inc   # SOMA_258_LCM
+# SOMA_253_LCM, SOMA_257_LCM y SOMA_258_LCM. SOMA_305_LIMPIEZA: el comentario va en su propia linea (detras del nombre,
+# ejecutar.py no reconocia el archivo).
+src/agent/lcm_ordenes.inc
+src/agent/lcm_ordenes_pesos.inc
+src/agent/lcm_soma.inc
+src/agent/lcm_ordenes_shell.inc
 src/agent/shell.c
 src/net/net.c
 src/net/httpd.c
@@ -72,3 +74,9 @@ src/core/tls_roots.c
 src/core/tls_trust.c
 src/core/tls13.h
 src/apps/web_net.c
+# SOMA_307_SEGURIDAD: la lista de protegidos que aplica el propio SO y el canario de las pilas (parche 306)
+src/agent/agent_protegidos.h
+src/core/pila_canario.h
+# SOMA_308_EFICIENCIA: memcpy/memset/memmove/memcmp del nucleo (las de mem.c, que ya estaba protegido)
+src/core/memfn.h
+src/core/memfn_gen.h

@@ -91,5 +91,4 @@ int      cc_mission_wants_js(const char *mission);       /* SOMA_275_HTML: "en j
 int      cc_mission_wants_html(const char *mission);     /* SOMA_275_HTML: "pagina web", "en html", "index.html"... */
 int      cc_js_error(const char *out, uint32_t *line, char *msg, uint32_t cap);   /* SOMA_275_HTML: "[error] Uncaught X: ... (programa.js, linea 7)" */
 int      cc_html_normalize(char *src, uint32_t *len, uint32_t cap);                /* SOMA_275_HTML: solo \r */
-int      cc_busy(void);
 #endif

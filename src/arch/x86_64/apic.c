@@ -136,7 +136,6 @@ static int route_active, route_gsi[2];
 static uint8_t pic_saved_bits;                  /* bits 0 y 1 de la mascara del PIC maestro antes de activar el enrutado */
 static volatile uint32_t eoi_count;
 
-int apic_routed(void) { return route_active; }
 uint32_t apic_eoi_count(void) { return eoi_count; }
 void apic_eoi(void)
 {

@@ -68,6 +68,14 @@ char *web_stack_hi(const char *sp)
     return 0;
 }
 void web_call_on_stack(char *top, void (*fn)(void *), void *arg);
+#include "pila_canario.h"   /* SOMA_306_PILAS: canario al fondo de las pilas propias (la de la GUI y la del trabajador) */
+#include "console.h"
+static void pila_vigila(const void *base, const char *cual)
+{
+    if (pila_canario_ok(base)) return;
+    kprint("\n[PILA] desbordada la pila propia del navegador ("); kprint(cual); kprint("): el monton de debajo esta corrupto\n");
+    __builtin_trap();
+}
 /* El arbol de cajas se recorre de forma recursiva: en el hilo de la GUI (pila corta) se hace sobre una pila propia de 512 KiB. */
 #define GU_STACK (512u * 1024u)
 static void on_gui_stack(void (*fn)(void *), void *arg)
@@ -77,9 +85,11 @@ static void on_gui_stack(void (*fn)(void *), void *arg)
     if (!s_gu_lo) {
         char *stk = (char *)kmalloc(GU_STACK);
         if (!stk) { fn(arg); return; }
+        pila_canario_pon(stk);                                   /* SOMA_306_PILAS */
         s_gu_hi = stk + GU_STACK; s_gu_lo = stk + 8192;
     }
     web_call_on_stack((char *)(((uintptr_t)s_gu_hi) & ~(uintptr_t)15), fn, arg);
+    pila_vigila(s_gu_hi - GU_STACK, "GUI");
 }
 
 /* ------------------------------------------------------------ estado */
@@ -582,6 +592,7 @@ static void worker_run(void)
 {
     for (;;) {
         struct job j; int worked = 0;
+        if (s_wk_lo) pila_vigila(s_wk_lo - 4096, "trabajador");   /* SOMA_306_PILAS */
         while (q_pop(&j)) { run_job(&j); if (j.s) kfree(j.s); worked = 1; }
         uint64_t now = web_now_ms(); int next = 250;      /* ventana no visible: casi dormido (el SO en reposo no gasta CPU) */
         if (s_pg && now - s_last_render < 4000) {
@@ -599,6 +610,7 @@ static void worker_entry(void *arg)
     s_wk_tcb = thread_current();
     char *stk = (char *)kmalloc(WK_STACK);
     if (!stk) { worker_loop(arg); return; }
+    pila_canario_pon(stk);                                       /* SOMA_306_PILAS: se vigila en cada vuelta de worker_run */
     s_wk_lo = stk + 4096; s_wk_hi = stk + WK_STACK;
     web_call_on_stack((char *)(((uintptr_t)stk + WK_STACK) & ~(uintptr_t)15), worker_loop, arg);
 }
@@ -1471,29 +1483,4 @@ int browser_is_loading(void)
 {
     if (!s_inited || !s_pg) return 0;
     return s_job_busy || s_qh != s_qt || s_pg->phase == WP_FETCH || s_pg->phase == WP_RES || s_pg->phase == WP_SCRIPT;
-}
-struct text_args { struct wdoc *d; struct wnode *n; const char *s; struct wb b; };
-static void settext_thunk(void *v) { struct text_args *a = (struct text_args *)v; wd_set_text(a->d, a->n, a->s); }
-static void gettext_thunk(void *v) { struct text_args *a = (struct text_args *)v; wd_text_content(a->n, &a->b); }
-int browser_set_element_text_by_id(const char *id, const char *new_text)
-{
-    if (!s_inited || !s_pg || !s_pg->doc || !id || s_pg->lay_busy) return 0;
-    struct wnode *n = wd_by_id(s_pg->doc->root, id); if (!n) return 0;
-    struct text_args ta; memset(&ta, 0, sizeof ta); ta.d = s_pg->doc; ta.n = n; ta.s = new_text ? new_text : ""; on_gui_stack(settext_thunk, &ta);
-    s_pg->need_style = 1; return 1;
-}
-const char *browser_get_element_text_by_id(const char *id)
-{
-    static char buf[256];
-    buf[0] = 0;
-    if (!s_inited || !s_pg || !s_pg->doc || !id || s_pg->lay_busy) return buf;
-    struct wnode *n = wd_by_id(s_pg->doc->root, id); if (!n) return buf;
-    struct text_args ta; memset(&ta, 0, sizeof ta); ta.d = s_pg->doc; ta.n = n; on_gui_stack(gettext_thunk, &ta);
-    if (ta.b.p) wu_copy(buf, ta.b.p, sizeof buf);
-    wb_free(&ta.b); return buf;
-}
-void browser_js_eval(const char *code)
-{
-    ensure_init(); if (!s_pg || !code || !*code) return;
-    q_push(J_EVAL, 0, 0, 0, code);
 }

@@ -41,7 +41,6 @@ struct pdfw *pdfw_new(const char *title, const char *creator)
     p->nobj = 3;                                     /* 1 catalogo, 2 arbol de paginas, 3 info: se escriben al cerrar */
     return p;
 }
-int pdfw_pages(const struct pdfw *p) { return p ? p->npages : 0; }
 
 size_t pdfw_png_idat(const uint8_t *png, size_t n, uint8_t *out, size_t cap)
 {

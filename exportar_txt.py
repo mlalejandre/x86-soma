@@ -93,7 +93,7 @@ TEMAS = {
     "lcm":        ("LCM: entender ordenes sin llamar al modelo (pesos, ordenes, entrenamiento y pruebas)",
                    ["src/agent/lcm_*", "src/agent/agent_ruta.*", "tools/lcm_ordenes/*", "tests/test_lcm_*", "docs/PARCHE_25[3-8]_*"]),
     "memoria":    ("memoria infinita: hechos, arbol de temas, sueno y exportacion",
-                   ["src/agent/memoria*", "tools/exporta_memoria.py", "tools/exportarmemoria.py", "tests/test_memoria_*"]),
+                   ["src/agent/memoria*", "tools/exporta_memoria.py", "tests/test_memoria_*"]),
     "chat":       ("la aplicacion SOMA: chat con el agente (historial, Markdown, adjuntos, voz)",
                    ["src/apps/chat*", "tests/test_chat*_285.c"]),
     "correo":     ("Correo: IMAP/SMTP con TLS 1.3, la IA del correo y el orbe",

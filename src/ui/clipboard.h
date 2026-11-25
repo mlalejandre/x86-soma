@@ -42,7 +42,6 @@ void        clip_toast(const char *msg);                       /* aviso breve en
 void        clip_toast_ms(const char *msg, uint32_t ms);       /* SOMA_238_GUARDADO: aviso que dura ms */
 int         clip_overlay_active(void);
 void        clip_overlay_open(void);
-void        clip_overlay_close(void);
 int         clip_overlay_key(char c);                          /* devuelve 1 si hay que pegar el elemento elegido */
 void        clip_overlay_draw(void);                           /* lo llama fb_present() */
 

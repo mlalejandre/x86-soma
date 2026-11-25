@@ -61,7 +61,6 @@ void wp_free(struct wpage *p);
 void wp_set_viewport(struct wpage *p, int vw, int vh);
 /* navegacion bloqueante (hilo trabajador) */
 int  wp_navigate(struct wpage *p, const char *url, int flags);
-int  wp_post(struct wpage *p, const char *url, const char *body, uint32_t blen, const char *ctype);
 void wp_history_go(struct wpage *p, int delta);
 int  wp_can_back(const struct wpage *p);
 int  wp_can_fwd(const struct wpage *p);
@@ -69,7 +68,6 @@ uint32_t wp_store_gen(void);                                   /* SOMA_203 */
 void wp_store_export(const struct wpage *p, struct wb *o);
 int  wp_store_import(struct wpage *p, const void *data, uint32_t len);
 int  wp_img_get(struct wpage *p, const char *src, const uint32_t **px, int *w, int *h, char *abs, uint32_t absmax);   /* PARCHE 085 */
-void wp_stop(struct wpage *p);
 /* devuelve ms hasta que conviene volver a llamar */
 int  wp_tick(struct wpage *p, uint64_t now);
 /* GUI */

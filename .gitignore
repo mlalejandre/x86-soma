@@ -15,7 +15,6 @@ __pycache__/
 .idea/
 *.swp
 *~
-estructura_proyecto.txt
 build_backup_src/
 .parche_backup/
 .backup_*/
@@ -23,21 +22,15 @@ build_backup_src/
 snapshots/
 hdd.img.checkpoint*
 *.checkpoint_*
-   sd.img
-   usb.img
-   soma_pi5_sd.img
-   tools/pi5/firmware/
-   tools/pi5/*.img
-   *.img
-*.avi
-estructuranotepad.txt
-tools/pi5/firmware/
 # Binarios y generados (no se suben)
 *.img
 *.avi
-estructuranotepad.txt
 tools/pi5/firmware/
 parche*.py
+# SOMA_305_LIMPIEZA: videos de prueba y volcados de texto sueltos; salidas de los exportadores antiguos (ya borrados)
+*.mkv
+fuentes_*.txt
+estructura*.txt
 
 
 
@@ -65,7 +58,6 @@ voces/
 /llm.conf
 *.wav
 *.pdf
-.soma_parches/
 
 # SOMA_262_PUBLICAR: respaldos de los parches de un solo archivo (los usa --revertir; tienen copias de archivos antiguos)
 # y lo preparado para Claude. Son locales.

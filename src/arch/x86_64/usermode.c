@@ -159,8 +159,6 @@ static inline void cpuid_leaf(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t
     __asm__ volatile ("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c2), "=d"(*d) : "0"(leaf), "2"(sub));
 }
 
-int usermode_cpu_features(void) { return (smep_on ? 1 : 0) | (smap_on ? 2 : 0); }
-
 /* SOMA_241_VOZ: AVX para los procesos de usuario (whisper.cpp/ggml calculan con AVX2+FMA). Sin CR4.OSXSAVE y XCR0 la CPU da #UD con
  * cualquier instruccion AVX. Con XSAVE, el estado de cada proceso (x87, SSE y la mitad alta de los YMM) se guarda con xsave64/xrstor64
  * al cambiar de hilo en lugar de fxsave64. El nucleo no usa SIMD (-mgeneral-regs-only), asi que solo los procesos tienen ese estado.
@@ -232,8 +230,9 @@ static int user_range(uint64_t p, uint64_t len, int need_write)
     /* SOMA_241_VOZ: tambien dentro de una region del proceso (el monton grande de voz); las paginas deben estar ya presentes */
     for (int i = 0; i < usermode_cur->nregions; ++i) {
         const struct uregion *r = usermode_cur->regions[i];
+        if (!r) continue;                                  /* SOMA_306_PILAS: antes se leia r->npages y despues se miraba si r era nulo */
         uint64_t sz = (uint64_t)r->npages * 4096;
-        if (r && p >= r->va && p - r->va < sz && len <= 1u << 20)
+        if (p >= r->va && p - r->va < sz && len <= 1u << 20)
             return uaccess_range_ok(p, len, need_write, r->va, sz, user_pte_of, usermode_cur);
     }
     return 0;

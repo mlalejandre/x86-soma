@@ -216,10 +216,14 @@ static const uint8_t *find_entry(int count, const char *name)
     uint32_t qlen = 0;
     while (name[qlen]) qlen++;
 
+    /* SOMA_305_LIMPIEZA: primero la ruta exacta y solo despues por el final de la ruta. Antes valia la primera que
+     * coincidiera de las dos formas: 'lang.h' devolvia lang/lang.h (va antes en el indice) en vez de src/lang.h. */
+    for (int i = 1; i <= count; ++i)
+        if (name_eq((const char *)(srcfs_index + i * SRCFS_ENTRY_SIZE), name)) return srcfs_index + i * SRCFS_ENTRY_SIZE;
+
     for (int i = 1; i <= count; ++i) {
         const uint8_t *e = srcfs_index + i * SRCFS_ENTRY_SIZE;
         const char *ename = (const char *)e;
-        if (name_eq(ename, name)) return e;
 
         uint32_t elen = 0;
         while (ename[elen]) elen++;
@@ -303,11 +307,6 @@ int srcfs_ls_filter(const char *prefix, char *out, uint32_t max)
     }
 
     return matched;
-}
-
-int srcfs_ls(char *out, uint32_t max)
-{
-    return srcfs_ls_filter(0, out, max);
 }
 
 

@@ -19,8 +19,6 @@ static jv bnew(struct jrt *rt, i128 x)
     jobj *o = js_obj_new(rt, rt->p_bigint ? rt->p_bigint : rt->p_object); o->cls = JC_BIGINT;
     o->u.big.lo = (uint64_t)(u128)x; o->u.big.hi = (uint64_t)((u128)x >> 64); return jobjv(o);
 }
-jv js_big_from_i64(struct jrt *rt, int64_t v) { return bnew(rt, (i128)v); }
-jv js_big_from_u64(struct jrt *rt, uint64_t v) { return bnew(rt, (i128)(u128)v); }
 uint64_t js_big_low64(jv v) { return v.u.o->u.big.lo; }
 int js_big_is_zero(jv v) { return !v.u.o->u.big.lo && !v.u.o->u.big.hi; }
 int js_big_same(jv a, jv b) { return a.u.o->u.big.lo == b.u.o->u.big.lo && a.u.o->u.big.hi == b.u.o->u.big.hi; }

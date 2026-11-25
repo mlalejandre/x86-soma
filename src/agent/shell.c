@@ -782,7 +782,7 @@ static const struct command_entry cmd_table[] = {
     { "usertest",     cmd_usertest,     CMD_F_NORMAL, "DEPURACION: ejecuta programas de prueba en ring 3 (syscalls, aislamiento, plazo)" },
     { "fbverify",     cmd_fbverify,     CMD_F_NORMAL, "DEPURACION: fbverify on|off — verifica el dano del renderizado" },
     { "watchdog",     cmd_watchdog,     CMD_F_SAFE,   "Estado del vigilante (aviso si ningun hilo cede la CPU en 5 s)" },
-    { "crash",        cmd_crash,        CMD_F_NORMAL, "DEPURACION: provoca un panic con backtrace (detiene el sistema)" },
+    { "crash",        cmd_crash,        CMD_F_NORMAL, "DEPURACION: provoca un panic con backtrace (detiene el sistema). crash pila: desbordamiento de pila de un hilo" },
     { "hang",         cmd_hang,         CMD_F_NORMAL, "DEPURACION: hang [seg] retiene la CPU para probar el vigilante" },
     { "pmm",          cmd_pmm,          CMD_F_SAFE,   "Telemetria y auto-test del PMM bitmap allocator" },
     { "vmm",          cmd_vmm,          CMD_F_SAFE,   "Verificacion de tablas de paginas MMU 4 KiB" },

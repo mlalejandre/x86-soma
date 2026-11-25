@@ -35,6 +35,9 @@ jobs:
             python3-pil   # SOMA_302_CI: tools/mkavi.py (video de prueba de fault-check) usa Pillow
       - name: 'Compilar (sin warnings: -Werror)'
         run: make ARCH=${{ matrix.arch }} WERROR=1
+      - name: Presupuesto de la imagen del nucleo (solo x86_64; falla desde el 90 % del limite)
+        if: matrix.arch == 'x86_64'
+        run: make ARCH=x86_64 size-check SIZE_FALLAR=90   # SOMA_310_PRESUPUESTO
       - name: Arranque en QEMU
         run: make ARCH=${{ matrix.arch }} boot-smoke BOOT_MAX_S=30   # SOMA_300_CI: QEMU sin KVM es lento
       - name: Arranque con varias CPU (qemu64 sin RDRAND, Nehalem, max) (solo x86_64)

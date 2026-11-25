@@ -46,7 +46,6 @@ int  ce_clip_op(int op);
 int  ce_undo(void);
 int  ce_redo(void);
 void ce_prompt(int kind);                       /* abre barra: buscar, reemplazar, ir a, abrir, guardar como */
-int  ce_prompt_kind(void);
 const char *ce_prompt_value(void);
 void ce_find_next(int dir);
 void ce_toggle_comment(void);

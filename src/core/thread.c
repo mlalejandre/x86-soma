@@ -126,6 +126,20 @@ static uint64_t allocate_thread_stack(uint64_t slot)
     return slot + (uint64_t)(THREAD_STACK_PAGES + 1) * VMM_PAGE_SIZE;
 }
 
+/* SOMA_306_PILAS: si addr cae en la pagina de guarda de un hilo, su nombre ("?" si la ranura esta libre); si no, 0.
+ * Lo usa el informe de panico: un #PF ahi es un desbordamiento de pila (con -fstack-clash-protection siempre cae aqui). */
+const char *thread_guard_owner(uint64_t addr)
+{
+    if (addr < THREAD_STACK_BASE) return 0;
+    uint64_t idx = (addr - THREAD_STACK_BASE) / THREAD_SLOT_SIZE;
+    if (idx >= THREAD_MAX_SLOTS) return 0;
+    uint64_t slot = THREAD_STACK_BASE + idx * THREAD_SLOT_SIZE;
+    if (addr - slot >= VMM_PAGE_SIZE) return 0;
+    struct tcb *t = thread_list;                                  /* lista circular */
+    if (t) do { if (t->stack_slot == slot) return t->name; t = t->next; } while (t && t != thread_list);
+    return "?";
+}
+
 /* bytes de pila realmente tocados: se busca desde el extremo bajo la primera palabra distinta del patron */
 static uint32_t stack_used_bytes(uint64_t slot)
 {

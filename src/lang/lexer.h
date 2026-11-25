@@ -82,6 +82,5 @@ struct soma_lexer {
 
 void lexer_init(struct soma_lexer *lex, const char *src, uint32_t len);
 struct soma_token lexer_next(struct soma_lexer *lex);
-const char* token_type_name(enum soma_tok_type t);
 
 #endif

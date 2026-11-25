@@ -1923,24 +1923,6 @@ int notepad_escape(void) {
     return 0;
 }
 
-/* Compatibilidad con la interfaz anterior */
-int notepad_handle_drag(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t win_h) {
-    if (dlg_mode != NP_DLG_NONE || !np_dragging) return 0;
-    struct np_geo g;
-    np_geo_of(&g, win_x, win_y, win_w, win_h);
-    np_layout(g.cols);
-    np_mx = mx; np_my = my;
-    np_drag_to(&g, mx, my);
-    return 1;
-}
-
-int notepad_handle_mouse_up(int32_t mx, int32_t my) {
-    (void)mx; (void)my;
-    np_dragging = 0; np_sb_drag = 0;
-    if (np_sel == (int)np_cursor) np_sel = -1;
-    return 1;
-}
-
 /* -------------------------------------------------------------------------
  * Control de Teclado con Acentos en Español (á, é, í, ó, ú, ñ)
  * ------------------------------------------------------------------------- */

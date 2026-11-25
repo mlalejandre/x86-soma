@@ -41,7 +41,6 @@ struct cc_conv *cc_por_id(struct cc_hist *h, uint32_t id);
 int  cc_indice(const struct cc_hist *h, uint32_t id);                         /* -1 = no esta */
 int  cc_borra(struct cc_hist *h, uint32_t id);                                /* 1 = borrada */
 struct cc_msg *cc_anade(struct cc_conv *c, int rol, const char *txt, uint32_t n, const char *adj, uint32_t t);
-int  cc_texto(struct cc_msg *m, const char *txt, uint32_t n);                 /* cambia el texto; 0 = sin memoria */
 void cc_trunca(struct cc_conv *c, uint32_t desde);                            /* quita los mensajes desde ese */
 void cc_titulo_auto(struct cc_conv *c);                                       /* de la primera pregunta (si no lo puso el usuario) */
 void cc_titulo_pon(struct cc_conv *c, const char *t);

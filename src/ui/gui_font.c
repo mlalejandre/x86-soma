@@ -299,56 +299,6 @@ static void font_draw_string_bitmap(uint32_t x, uint32_t y, const char *str, uin
     }
 }
 
-static void font_draw_string_ansi_bitmap(uint32_t x, uint32_t y, const char *str, uint32_t def_color)
-{
-    if (!str) return;
-    uint32_t cur_x = x;
-    uint32_t cur_col = def_color;
-
-    const char *p = str;
-    uint32_t vis_chars = 0;
-    while (*p) {
-        if ((uint8_t)*p == 27 && *(p + 1) == '[') {
-            p += 2;
-            while ((*p >= '0' && *p <= '9') || *p == ';') p++;
-            if (*p) p++;
-            continue;
-        }
-        vis_chars++;
-        p++;
-    }
-    fb_damage((int32_t)x, (int32_t)y, (int32_t)(vis_chars * 8), 10);
-
-    while (*str) {
-        if ((uint8_t)*str == 27 && *(str + 1) == '[') {
-            str += 2;
-            int code = 0;
-            while ((*str >= '0' && *str <= '9') || *str == ';') {
-                if (*str == ';') code = 0;
-                else code = code * 10 + (*str - '0');
-                str++;
-            }
-            if (*str == 'm') {
-                if (code == 0) cur_col = def_color;
-                else if (code == 30) cur_col = 0x00475569;
-                else if (code == 31) cur_col = 0x00EF4444;
-                else if (code == 32) cur_col = 0x0010B981;
-                else if (code == 33) cur_col = 0x00F59E0B;
-                else if (code == 34) cur_col = 0x003B82F6;
-                else if (code == 35) cur_col = 0x00D946EF;
-                else if (code == 36) cur_col = 0x0038BDF8;
-                else if (code == 37) cur_col = 0x00F8FAFC;
-                str++;
-                continue;
-            }
-        }
-
-        char ch = *str++;
-        const uint8_t *glyph = font_get_glyph(ch);
-        fb_draw_glyph8_nodmg((int32_t)cur_x, (int32_t)y, glyph, cur_col, 1);
-        cur_x += 8;
-    }
-}
 
 
 /* ======================================================================
@@ -509,42 +459,6 @@ static void vf_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg,
     }
 }
 
-static void vf_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_t def_color)
-{
-    int face = vf_face_now(); if (face < 0) return;
-    uint32_t cx = x, col = def_color;
-    while (*str) {
-        if ((uint8_t)*str == 27 && str[1] == '[') {
-            const char *q = str + 2;
-            int code = 0;
-            while ((*q >= '0' && *q <= '9') || *q == ';') {
-                if (*q == ';') code = 0;
-                else code = code * 10 + (*q - '0');
-                q++;
-            }
-            if (*q == 'm') {
-                if (code == 0) col = def_color;
-                else if (code == 30) col = 0x00475569;
-                else if (code == 31) col = 0x00EF4444;
-                else if (code == 32) col = 0x0010B981;
-                else if (code == 33) col = 0x00F59E0B;
-                else if (code == 34) col = 0x003B82F6;
-                else if (code == 35) col = 0x00D946EF;
-                else if (code == 36) col = 0x0038BDF8;
-                else if (code == 37) col = 0x00F8FAFC;
-                str = q + 1;
-                continue;
-            }
-            str = q;
-            if (!*str) break;
-        }
-        int n = 1;
-        uint32_t cp = vf_utf8(str, &n);
-        if (face != FFACE_MONO) cx += (uint32_t)ff_draw_prop(face, (int32_t)cx, (int32_t)y, cp, col, 1);   /* SOMA_226 */
-        else { ff_draw_cp(face, (int32_t)cx, (int32_t)y, cp, col, 1); cx += 8; }
-        str += n;
-    }
-}
 
 void font_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, int scale)
 {
@@ -572,13 +486,6 @@ void font_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, int 
     if (!str || scale <= 0) return;
     if (vf_active()) { vf_draw_string(x, y, str, fg, scale); return; }
     font_draw_string_bitmap(x, y, str, fg, scale);
-}
-
-void font_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_t def_color)
-{
-    if (!str) return;
-    if (vf_active()) { vf_draw_string_ansi(x, y, str, def_color); return; }
-    font_draw_string_ansi_bitmap(x, y, str, def_color);
 }
 
 /* SOMA_PARCHE_024_TERM: texto de terminal en rejilla fija */
@@ -644,20 +551,6 @@ void vicon_draw(int id, int32_t x, int32_t y, int32_t size, uint32_t color)
     uint32_t a = color >> 24;
     if (a == 0) a = 255;
     fb_draw_mask8(x, y, m, size, size, color & 0x00FFFFFFu, a);
-}
-
-void vicon_draw_tile(int id, int32_t x, int32_t y, int32_t size, uint32_t fg, uint32_t bg)
-{
-    if (id < 0 || id >= VICON_COUNT) return;
-    if (size < 8) size = 8;
-    if (size > VR_MAX_DIM) size = VR_MAX_DIM;
-    const uint8_t *t = vi_mask(VI_TILE_ID, size);
-    if (t) {
-        uint32_t a = bg >> 24;
-        if (a == 0) a = 255;
-        fb_draw_mask8(x, y, t, size, size, bg & 0x00FFFFFFu, a);
-    }
-    vicon_draw(id, x, y, size, fg);
 }
 
 

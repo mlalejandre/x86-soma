@@ -45,9 +45,7 @@ int  fs_spill_stat(int slot, char *name_out, uint32_t *len_out);
 int  fs_spill_get(int slot, char *buf, uint32_t len);
 void fs_spill_del(int slot);
 
-void vfs_list(void);
 void vfs_list_ext(int show_all, const char *filter_dir);
-int  vfs_format_list(char *out_buf, uint32_t max);
 int  vfs_format_list_ext(int show_all, const char *filter_dir, char *out_buf, uint32_t max);
 
 int  vfs_sync(void);
@@ -57,7 +55,6 @@ void     vfs_modo_ram(int on);
 int      vfs_modo_ram_activo(void);
 uint32_t vfs_sin_guardar(void);
 void vfs_format(void);
-void vfs_tree(char *out_buf, uint32_t max);
 void vfs_tree_ext(int show_all, char *out_buf, uint32_t max);
 
 void vfs_get_stats(uint32_t *files_used, uint32_t *bytes_used, uint32_t *dirty_count);

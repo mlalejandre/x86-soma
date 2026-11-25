@@ -451,7 +451,6 @@ void ce_prompt(int kind)
         tfa.anc = (uint32_t)sl; tfa.cur = (uint32_t)dot;
     } else if (kind == CE_PR_FIND || kind == CE_PR_REPLACE) tf_select_all(&tfa);
 }
-int ce_prompt_kind(void) { return pr_kind; }
 const char *ce_prompt_value(void) { return pr_a; }
 int ce_escape(void)
 {

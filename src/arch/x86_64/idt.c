@@ -10,6 +10,7 @@ int gui_hang_tick(uint64_t *rip, uint64_t *rsp);
 #include "bootdiag.h"
 #include "usermode.h"
 #include "pic_irq.h"
+#include "thread.h"   /* SOMA_306_PILAS: thread_guard_owner */
 #include "i8042.h"
 
 struct idt_entry {
@@ -358,6 +359,8 @@ void isr_exception_handler(struct trap_frame *tf)
     kprint("\n\nREGISTROS DE CONTROL Y MEMORIA:\n");
     if (tf->vector == 14) {
         kprint("  CR2 (Direccion fallida): "); print_hex64(cr2); kprint("  <-- FALLO DE PAGINA\n");
+        const char *pg = thread_guard_owner(cr2);                 /* SOMA_306_PILAS */
+        if (pg) { kprint("  DESBORDAMIENTO DE PILA del hilo '"); kprint(pg); kprint("': ha agotado sus 60 KiB y ha tocado la pagina de guarda\n"); }
     }
     kprint("  CR0: "); print_hex64(cr0);
     kprint("   CR3 (PML4): "); print_hex64(cr3);

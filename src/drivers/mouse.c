@@ -416,7 +416,6 @@ static int mouse_finish_packet(int32_t *out_dx, int32_t *out_dy, int *out_left_c
 
 int mouse_wheel_take(void) { int w = mouse_wheel_acc; mouse_wheel_acc = 0; return w; }
 int mouse_right_take_click(void) { if (mouse_right_clicks > 0) { mouse_right_clicks--; return 1; } return 0; }
-int mouse_right_held(void) { return mouse_right_down; }
 
 #if defined(__x86_64__) || defined(__aarch64__)
 #ifdef __x86_64__
@@ -520,7 +519,6 @@ int point_in_rect(int32_t px, int32_t py, uint32_t rx, uint32_t ry, uint32_t rw,
 static int g_mouse_speed = 100;
 static int32_t g_mouse_rx, g_mouse_ry;
 int mouse_set_speed(int pct) { if (pct < 25) pct = 25; if (pct > 300) pct = 300; g_mouse_speed = pct; g_mouse_rx = g_mouse_ry = 0; return pct; }
-int mouse_get_speed(void) { return g_mouse_speed; }
 int mouse_poll(int32_t *out_dx, int32_t *out_dy, int *out_left_click)
 {
     int r = mouse_poll_raw(out_dx, out_dy, out_left_click);

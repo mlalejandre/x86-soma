@@ -182,11 +182,6 @@ static int http_request_host(const uint8_t *ip, uint16_t port, const char *host,
     return r;
 }
 
-int http_request(const uint8_t *ip, uint16_t port, const char *method, const char *path, const char *content_type, const char *body, uint32_t body_len, char *buf, uint32_t buf_size, struct http_response *resp, uint32_t timeout_ms)
-{
-    return http_request_host(ip, port, 0, method, path, content_type, body, body_len, buf, buf_size, resp, timeout_ms);
-}
-
 int http_get(const uint8_t *ip, uint16_t port, const char *path, char *buf, uint32_t buf_size, struct http_response *resp, uint32_t timeout_ms)
 {
     return http_request_host(ip, port, 0, "GET", path, 0, 0, 0, buf, buf_size, resp, timeout_ms);

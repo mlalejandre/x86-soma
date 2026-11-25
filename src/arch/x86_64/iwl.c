@@ -1663,8 +1663,6 @@ int iwl_scan(void)
 int iwl_ip_is_static(void) { return cn.ipfija && cn.state == W_UP; }   /* SOMA_175C6: netmgr no pide DHCP si hay IP fija puesta con wifi ipfija */
 const struct iwl_bss *iwl_bss_list(int *n) { if (n) *n = nbss; return bss; }
 
-const struct iwl_info *iwl_get(void) { return &st; }
-
 /* SOMA_175C: palabra n-esima de la orden (admite "nombres con espacios" entre comillas) */
 static int arg_word(const char *a, int idx, char *out, int max)
 {

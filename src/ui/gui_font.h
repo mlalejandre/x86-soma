@@ -76,7 +76,6 @@ const uint8_t *font_get_glyph(char c);
 void font_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, int scale);
 void font_draw_string(uint32_t x, uint32_t y, const char *str, uint32_t fg, int scale);
 int  font_text_width(const char *str, int scale);   /* SOMA_226_SISTEMA: ancho en px con la fuente del escritorio */
-void font_draw_string_ansi(uint32_t x, uint32_t y, const char *str, uint32_t def_color);
 
 
 /* SOMA_PARCHE_024_TERM: para el terminal (rejilla fija, tamano propio, independiente de la fuente global) */
@@ -106,8 +105,6 @@ enum soma_vicon {
 
 /* Dibuja un icono vectorial (size 8..192 px) tintado con 'color' */
 void vicon_draw(int id, int32_t x, int32_t y, int32_t size, uint32_t color);
-/* Igual, sobre una baldosa redondeada de color 'bg' */
-void vicon_draw_tile(int id, int32_t x, int32_t y, int32_t size, uint32_t fg, uint32_t bg);
 
 
 /* ==== SOMA_VECTOR_CELL_PATCH ====

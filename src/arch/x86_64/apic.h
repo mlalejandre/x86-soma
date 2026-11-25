@@ -27,7 +27,6 @@ void apic_timer_irq(void);                  /* lo llama el manejador del vector 
 struct apic_route_cfg { int lapic_id; int gsi[2], low[2], level[2]; };
 int  apic_route_on(const struct apic_route_cfg *c);     /* 0 ok; -1 sin probe/IOAPIC; -2 ya activo */
 void apic_route_off(void);
-int  apic_routed(void);
 uint32_t apic_eoi_count(void);
 void apic_eoi(void);                                    /* EOI del LAPIC si el enrutado esta activo; si no, no hace nada */
 
