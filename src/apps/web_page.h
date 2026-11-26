@@ -14,7 +14,10 @@ enum { WPK_NONE = 0, WPK_TEXT, WPK_LINK };      /* cursor sugerido */
 
 struct wp_hist { char url[2048]; int scroll_y; char title[64]; };   /* SOMA 188B: 2048 (era 512): las busquedas de Google pasan de 512 */
 struct wp_img { char *url; int w, h; uint32_t *px; int state; int has_alpha; int tries; uint32_t hash; int pw, ph; uint32_t serial; /* SOMA_152 */ int frames, cur; uint16_t *delay; uint32_t total_ms; /* SOMA_180: animacion (px tiene `frames` fotogramas de pw*ph) */ int size_dep; /* SOMA_152B */
-                int dist, dw, dh; uint8_t ratio_only, is_svg, redraws, painted; };   /* SOMA_188: painted = pedida al pintar (fondo CSS a la vista) */             /* SOMA_PARCHE_028_UI: distancia a la zona visible y tamano mostrado (0 = desconocido) */
+                int dist, dw, dh; uint8_t ratio_only, is_svg, redraws, painted;
+                uint8_t aplazada;
+                int fw, fh; uint8_t sin_fijo; };   /* SOMA_342_NAVEGADOR_AGIL: el mayor ancho/alto fijo con que se muestra (CSS o atributos;
+                                                    * 0 = no se sabe); sin_fijo = en algun sitio se muestra a su tamano natural */   /* SOMA_341_NAVEGADOR_MEMORIA: no cupo lejos de la vista: se carga al acercarse (no antes de maquetar) */   /* SOMA_188: painted = pedida al pintar (fondo CSS a la vista) */             /* SOMA_PARCHE_028_UI: distancia a la zona visible y tamano mostrado (0 = desconocido) */
 struct wp_store;
 struct wp_svg;
 

@@ -3,7 +3,9 @@
 #include "web_css.h"
 
 /* informacion de imagen aportada por el cargador */
-struct wimginfo { int w, h; const uint32_t *px; int state; int has_alpha; int pw, ph; uint32_t serial; int need_size; int ratio_only; int painting; };   /* SOMA_188: painting (entrada): se pide al pintar (esta a la vista) */   /* SOMA_188: ratio_only = SVG con viewBox y sin width/height (ocupa el ancho disponible) */   /* SOMA_152B: need_size (entrada): la maquetacion necesita el tamano natural */   /* SOMA_152: serial unico por mapa de bits decodificado (0 = desconocido) */   /* w,h: tamano natural; pw,ph: pixeles guardados (0 = iguales) */   /* state: 0 desconocida, 1 cargando, 2 lista, 3 fallo */
+struct wimginfo { int w, h; const uint32_t *px; int state; int has_alpha; int pw, ph; uint32_t serial; int need_size; int ratio_only; int painting;
+                  int fixed_w, fixed_h; };   /* SOMA_342_NAVEGADOR_AGIL (entrada, solo al maquetar un <img>): ancho/alto que fija el CSS o los
+                                              * atributos; -1 = lo decide la imagen; 0 = sin informacion (al pintar) */   /* SOMA_188: painting (entrada): se pide al pintar (esta a la vista) */   /* SOMA_188: ratio_only = SVG con viewBox y sin width/height (ocupa el ancho disponible) */   /* SOMA_152B: need_size (entrada): la maquetacion necesita el tamano natural */   /* SOMA_152: serial unico por mapa de bits decodificado (0 = desconocido) */   /* w,h: tamano natural; pw,ph: pixeles guardados (0 = iguales) */   /* state: 0 desconocida, 1 cargando, 2 lista, 3 fallo */
 typedef int (*wl_img_cb)(void *ud, const char *url, struct wimginfo *out);
 
 enum { CTL_NONE = 0, CTL_IMG, CTL_TEXT, CTL_PASSWORD, CTL_CHECK, CTL_RADIO, CTL_BUTTON, CTL_BTN_INPUT, CTL_SELECT, CTL_TEXTAREA, CTL_PLACEHOLDER, CTL_RANGE, CTL_COLOR, CTL_FILE };

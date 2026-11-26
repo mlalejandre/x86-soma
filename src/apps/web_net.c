@@ -306,6 +306,63 @@ static int tio_send(void *c, const uint8_t *d, uint32_t n) { int h = ((struct ti
 static int tio_recv(void *c, uint8_t *d, uint32_t max, uint32_t to) { int r = tcp_recv(((struct tioctx *)c)->h, d, (uint16_t)(max > 16384 ? 16384 : max), to); return r == TCP_EOF ? TLS_IO_EOF : r == TCP_ERR ? TLS_IO_ERR : r; }
 static uint64_t tio_now(void) { return web_now_ms(); }
 static void tio_yield(void) { web_yield(); }
+
+/* SOMA_343_DESCARGAS: conexiones que siguen abiertas despues de una respuesta (HTTP/1.1 keep-alive). Cada peticion abria su TCP
+ * (y en la red real su TLS 1.3 entero) y lo cerraba: en una portada, cien apretones TLS con el mismo servidor. Ahora una conexion
+ * con respuesta completa (Content-Length o trozos), sin "Connection: close", se guarda hasta KA_IDLE_MS y la siguiente peticion GET
+ * al mismo servidor (IP, puerto y nombre TLS) la reutiliza. Si al reutilizarla el servidor ya la habia cerrado, se repite con una
+ * nueva (solo GET: un POST nunca se repite). Pocas: el nucleo tiene 16 conexiones TCP para todo el sistema. */
+#define KA_N 4
+#define KA_IDLE_MS 15000
+struct kaconn { int used; uint8_t ip[4]; uint16_t port; char sni[96]; int h; struct tls13 *tls; struct tioctx ctx; uint64_t t; uint32_t gen; };
+/* Solo en el proceso del navegador (que cierra las caducadas en su bucle). En el nucleo y en netsvc, como antes: una conexion por peticion. */
+#if defined(SOMA_WEBSVC)
+#define KA_ON 1
+extern uint32_t tls_trust_gen;
+static uint32_t ka_gen(void) { return tls_trust_gen ^ ((uint32_t)tls13_verify * 0x9E3779B9u); }
+#else
+#define KA_ON 0
+static uint32_t ka_gen(void) { return 0; }
+#endif
+static struct kaconn ka[KA_N];
+static uint32_t ka_reused, ka_new;
+static int ka_same(const struct kaconn *k, const uint8_t *ip, uint16_t port, const char *sni)
+{
+    return k->used && !memcmp(k->ip, ip, 4) && k->port == port && ((!sni && !k->sni[0]) || (sni && wu_streq(k->sni, sni)));
+}
+static void ka_close(struct kaconn *k)
+{
+    if (k->tls) { k->tls->io.ctx = &k->ctx; tls13_close(k->tls); kfree(k->tls); }
+    tcp_close(k->h); k->used = 0; k->tls = 0;
+}
+static int ka_take(const uint8_t *ip, uint16_t port, const char *sni, struct tls13 **tls)
+{
+    uint64_t now = web_now_ms();
+    for (int i = 0; i < KA_N; i++) {
+        struct kaconn *k = &ka[i];
+        if (!ka_same(k, ip, port, sni)) continue;
+        if (now - k->t > KA_IDLE_MS || (sni && k->gen != ka_gen())) { ka_close(k); continue; }   /* caducada, o la confianza cambio */
+        k->used = 0; *tls = k->tls; k->tls = 0; return k->h;
+    }
+    return -1;
+}
+static int ka_put(const uint8_t *ip, uint16_t port, const char *sni, int h, struct tls13 *tls)
+{
+    if (sni && wu_strlen(sni) >= sizeof ka[0].sni) return 0;
+    struct kaconn *k = 0;
+    for (int i = 0; i < KA_N; i++) if (!ka[i].used) { k = &ka[i]; break; }
+    if (!k) { uint64_t o = ~0ull; for (int i = 0; i < KA_N; i++) if (ka[i].t < o) { o = ka[i].t; k = &ka[i]; } ka_close(k); }   /* la mas antigua sale */
+    memcpy(k->ip, ip, 4); k->port = port; wu_copy(k->sni, sni ? sni : "", sizeof k->sni); k->h = h; k->tls = tls;
+    k->ctx.h = h; if (tls) tls->io.ctx = &k->ctx; k->t = web_now_ms(); k->gen = ka_gen(); k->used = 1;
+    return 1;
+}
+/* cierra las guardadas que llevan demasiado sin usarse (el bucle del navegador lo llama de vez en cuando) */
+void wn_keepalive_prune(void)
+{
+    uint64_t now = web_now_ms();
+    for (int i = 0; i < KA_N; i++) if (ka[i].used && now - ka[i].t > KA_IDLE_MS) ka_close(&ka[i]);
+}
+void wn_keepalive_stats(uint32_t *reused, uint32_t *nuevas) { if (reused) *reused = ka_reused; if (nuevas) *nuevas = ka_new; }
 /* Una conexion completa: envia `req` y recoge la respuesta (cabeceras + cuerpo en bruto, completo segun CL/chunked/EOF). */
 static int http_exchange(const uint8_t *ip, uint16_t port, const char *req, uint32_t reqlen, const char *body, uint32_t blen,
                          struct wb *out, uint32_t max_total, uint32_t timeout_ms, int *hdr_len_out,
@@ -313,7 +370,17 @@ static int http_exchange(const uint8_t *ip, uint16_t port, const char *req, uint
 {
     uint64_t deadline = web_now_ms() + timeout_ms;
     net_client_lock();
-    int h;
+    int keep_ok = KA_ON && !cancel && !blen && reqlen > 4 && !memcmp(req, "GET ", 4);   /* SOMA_343_DESCARGAS: solo GET se reutiliza o repite */
+#if KA_ON && !defined(WEB_HOST_TEST)
+    if (keep_ok && tls_sni) tls_trust_setup();                       /* la generacion de la confianza, al dia antes de reutilizar */
+#endif
+    int reused = 0, tried_fresh = 0;
+again:;
+    int h = -1;
+    struct tls13 *tls = 0; struct tioctx tctx = { -1 };
+    if (keep_ok && !tried_fresh) { h = ka_take(ip, port, tls_sni, &tls); reused = h >= 0; }
+    if (reused) { tctx.h = h; if (tls) tls->io.ctx = &tctx; ka_reused++; goto conectada; }
+    ka_new++;
 #if SOMA_WEB_ASYNC_IMAGES
     if (cancel) {
         h = tcp_connect_start(ip, port);
@@ -331,8 +398,7 @@ static int http_exchange(const uint8_t *ip, uint16_t port, const char *req, uint
 #endif
     h = tcp_connect(ip, port, timeout_ms > 8000 ? 8000 : timeout_ms);
     if (h < 0) { net_client_unlock(); return -1; }
-    int rc = 0;
-    struct tls13 *tls = 0; struct tioctx tctx = { h };
+    tctx.h = h;
     if (tls_sni) {                                                       /* SOMA_176A: apreton de manos TLS 1.3 sobre la conexion TCP */
         tls = (struct tls13 *)kmalloc(sizeof *tls);
         if (!tls) { tcp_close(h); net_client_unlock(); return -3; }
@@ -347,8 +413,13 @@ static int http_exchange(const uint8_t *ip, uint16_t port, const char *req, uint
             kfree(tls); tcp_close(h); net_client_unlock(); return -14;
         }
     }
+conectada:;
+    int rc = 0, fin_ok = 0, conn_close = 0;
 #define XSEND(d, n) (tls ? tls13_send(tls, (d), (n)) : tcp_send(h, (d), (n)))
-    if (XSEND(req, reqlen) < 0) rc = -2;
+    if (XSEND(req, reqlen) < 0) {
+        if (reused) { if (tls) kfree(tls); tcp_close(h); reused = 0; tried_fresh = 1; goto again; }   /* la guardada ya no servia */
+        rc = -2;
+    }
     else if (blen) {
         uint32_t off = 0; while (off < blen && rc == 0) { uint32_t c = blen - off > 1200 ? 1200 : blen - off; if (XSEND(body + off, c) < 0) rc = -2; off += c; }
     }
@@ -369,8 +440,10 @@ static int http_exchange(const uint8_t *ip, uint16_t port, const char *req, uint
                 hl = find_hdr_end(out->p, out->len);
                 if (hl > 0) {
                     const char *hp = out->p; const char *he = out->p + hl;
+                    if (!wu_starts(hp, "HTTP/1.1")) conn_close = 1;          /* SOMA_343: HTTP/1.0 cierra al acabar */
                     for (const char *l = hp; l < he; ) {
                         const char *e = l; while (e < he && *e != '\r') e++;
+                        if (wu_startsi(l, "connection:") && wu_findi(l, "close") && wu_findi(l, "close") < e) conn_close = 1;
                         if (wu_startsi(l, "content-length:")) clen = wu_atoi(l + 15);
                         else if (wu_startsi(l, "transfer-encoding:") && wu_findi(l, "chunked") && wu_findi(l, "chunked") < e) chunked = 1;
                         l = e + 2;
@@ -379,15 +452,26 @@ static int http_exchange(const uint8_t *ip, uint16_t port, const char *req, uint
                 }
             }
             if (hl > 0) {
-                if (clen >= 0 && out->len >= (uint32_t)hl + (uint32_t)clen) break;
-                if (chunked && out->len >= 5 && out->len > (uint32_t)hl && !memcmp(out->p + out->len - 5, "0\r\n\r\n", 5)) break;
+                if (clen >= 0 && out->len >= (uint32_t)hl + (uint32_t)clen) { fin_ok = out->len == (uint32_t)hl + (uint32_t)clen; break; }
+                if (chunked && out->len >= 5 && out->len > (uint32_t)hl && !memcmp(out->p + out->len - 5, "0\r\n\r\n", 5)) { fin_ok = 1; break; }
             }
             continue;
         }
-        if (n == TCP_EOF || n == TCP_ERR) { if (!out->len && n == TCP_ERR) rc = -5; break; }
+        if (n == TCP_EOF || n == TCP_ERR) {
+            if (reused && !out->len) {                                  /* SOMA_343: el servidor cerro la guardada: otra vez con una nueva */
+                kfree(tmp); if (tls) kfree(tls); tcp_close(h); reused = 0; tried_fresh = 1; goto again;
+            }
+            if (!out->len && n == TCP_ERR) rc = -5;
+            break;
+        }
         web_yield();
     }
     kfree(tmp);
+    if (rc == 0 && keep_ok && fin_ok && !conn_close && ka_put(ip, port, tls_sni, h, tls)) {   /* SOMA_343: se guarda abierta */
+        net_client_unlock();
+        *hdr_len_out = hl;
+        return 0;
+    }
     if (tls) { if (rc == 0 || rc == -4) tls13_close(tls); kfree(tls); }   /* SOMA_176A */
     /* Si se cancela un recurso, evitar esperar los tres RTO de tcp_close.
      * Este hilo de IO solo posee la conexion de esta imagen. */
@@ -489,7 +573,7 @@ static int do_hop(const struct wn_req *rq, const char *url_in, const char *metho
         char t[16]; wu_itoa(rq->body_len, t); append_hdr(&req, "Content-Length", t);
         append_hdr(&req, "Content-Type", rq->ctype ? rq->ctype : "application/x-www-form-urlencoded");
     } else if (wu_streq(method, "POST")) append_hdr(&req, "Content-Length", "0");
-    append_hdr(&req, "Connection", "close"); wb_add(&req, "\r\n");
+    append_hdr(&req, "Connection", (!KA_ON || use_body || legacy || wu_streq(method, "POST")) ? "close" : "keep-alive"); wb_add(&req, "\r\n");   /* SOMA_343 */
     if (req.err) { wb_free(&req); return -3; }
     struct wb raw = {0}; int hl = -1;
     uint32_t tmo = rq->timeout_ms ? rq->timeout_ms : 15000, maxb = rq->max_body ? rq->max_body : (8u << 20);

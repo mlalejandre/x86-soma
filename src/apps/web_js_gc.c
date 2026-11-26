@@ -287,6 +287,7 @@ static int add_chunk(struct jgc *g, int cls, int atomic)
 void *js_gc_alloc(struct jrt *rt, uint32_t n, int atomic)
 {
     struct jgc *g = gc_get(rt); if (!g) return 0;
+    int nozero = atomic == 2;                         /* SOMA_344_JS: 2 = sin punteros y sin poner a cero (cadenas: se rellenan enteras) */
     atomic = atomic ? 1 : 0;
     if (g->stress && rt->in_task && !g->running && ++g->stress_n >= g->stress) { g->stress_n = 0; js_gc_collect(rt); }
     if (!n) n = 1;
@@ -302,7 +303,7 @@ void *js_gc_alloc(struct jrt *rt, uint32_t n, int atomic)
         struct glarge *L = (struct glarge *)kmalloc(sizeof *L + sz);
         if (!L) { js_gc_collect(rt); L = (struct glarge *)kmalloc(sizeof *L + sz); if (!L) return 0; }
         L->size = sz; L->mark = 0; L->atomic = (uint8_t)atomic; L->pad = 0; L->pad2 = 0;
-        memset(L + 1, 0, sz);
+        if (!nozero) memset(L + 1, 0, sz);
         if (g->nlarge && (uintptr_t)g->large[g->nlarge - 1] > (uintptr_t)L) g->large_sorted = 0;
         g->large[g->nlarge++] = L; g->large_bytes += sz + sizeof *L; g->alloc_since += sz;
         if ((uintptr_t)L < g->lo) g->lo = (uintptr_t)L;
@@ -316,7 +317,7 @@ void *js_gc_alloc(struct jrt *rt, uint32_t n, int atomic)
     }
     char *b = (char *)*head; uint32_t bs = gc_cls_size(cls);
     GC_UNPOISON(b, bs);
-    *head = *(void **)b; memset(b, 0, bs);
+    *head = *(void **)b; if (!nozero) memset(b, 0, bs); else *(void **)b = 0;   /* sin el enlace de la lista libre dentro */
     g->free_bytes -= bs; g->alloc_since += bs;
     return b;
 }

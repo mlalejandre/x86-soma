@@ -180,9 +180,9 @@ static const char *norm_text(struct wlay *L, const char *s, uint32_t n, const st
 }
 
 /* ---- enlace con el cargador: lectura de imagen ---- */
-static int img_info_need(struct wlay *L, const char *url, struct wimginfo *o, int need)
+static int img_info_need(struct wlay *L, const char *url, struct wimginfo *o, int need, int fw, int fh)
 {
-    memset(o, 0, sizeof(*o)); o->need_size = need; if (!L->img_cb || !url || !*url) return 0;
+    memset(o, 0, sizeof(*o)); o->need_size = need; o->fixed_w = fw > 0 ? fw : -1; o->fixed_h = fh > 0 ? fh : -1; if (!L->img_cb || !url || !*url) return 0;
     return L->img_cb(L->img_ud, url, o);
 }
 static int img_info(struct wlay *L, const char *url, struct wimginfo *o)
@@ -587,7 +587,7 @@ static void repl_size(struct wlay *L, struct wbox *b, int cbw, int cbh, int *pw,
     case CTL_IMG: {
         struct wimginfo ii; const char *src = wl_img_src(n);
         /* SOMA_152B: si el CSS/atributos ya fijan ancho y alto, el tamano natural no cambia la maquetacion */
-        if (src && img_info_need(L, src, &ii, w < 0 || h < 0) && ii.state == 2 && ii.w > 0 && ii.h > 0) { nw = ii.w; nh = ii.h; aspect = 1;
+        if (src && img_info_need(L, src, &ii, w < 0 || h < 0, w, h) && ii.state == 2 && ii.w > 0 && ii.h > 0) { nw = ii.w; nh = ii.h; aspect = 1;
             if (ii.ratio_only && w < 0 && h < 0 && !intr && cbw > 0 && !wl181_off()) { w = cbw - hextra(b); if (w < 0) w = 0; }   /* SOMA_188: SVG solo con proporcion: ancho disponible */
         }
         else if (src && ii.state == 3 && n->tag != WT_SVG) { const char *alt = wd_attr(n, "alt"); nw = alt ? textw(s, alt, wu_strlen(alt)) + 4 : 0; nh = alt && *alt ? lh + 2 : 0; if (w < 0 && h < 0 && !alt) { nw = 16; nh = 16; } }

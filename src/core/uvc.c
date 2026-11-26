@@ -96,7 +96,7 @@ int uvc_choose(const struct uvc_cfg *c, uint32_t want_w, uint32_t want_h, uint32
                 for (int r = 0; r < fm->n_frames; r++) {
                     const struct uvc_frame *fr = &fm->frame[r];
                     /* distancia: area pedida contra area del tamano; los menores que lo pedido cuestan un poco mas que los mayores */
-                    uint32_t pa = fr->w * fr->h, wa = want_w * want_h;
+                    uint32_t pa = (uint32_t)fr->w * fr->h, wa = want_w * want_h;   /* SOMA_340_RED_HOSTIL: uint16*uint16 era int: 65280*51664 desbordaba */
                     uint32_t dist = absdiff(pa, wa) / 64u + (pa < wa ? 1u : 0u);
                     if (fr->w == want_w && fr->h == want_h) dist = 0;
                     if (dist < best) { best = dist; bv = v; bf = f; bfr = r; }

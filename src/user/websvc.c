@@ -39,7 +39,8 @@ uint64_t timer_get_uptime_ms(void);                    /* unet.c */
 static const uint32_t H_SZ[H_NCLASS] = { 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 65536 };
 struct hblk { uint64_t size; uint64_t tag; };          /* en libres, tag = siguiente de la lista */
 static struct hblk *h_free[H_NCLASS], *h_big;
-static uint64_t h_brk = W3_HEAP_VA, h_end = W3_HEAP_VA + W3_HEAP_MAX, h_used;
+/* SOMA_341_NAVEGADOR_MEMORIA: hasta W3C_INIT, lo minimo que el nucleo siempre concede; despues, lo que diga (a[4], en MiB) */
+static uint64_t h_brk = W3_HEAP_VA, h_end = W3_HEAP_VA + W3_HEAP_MIN, h_used;
 static struct hblk *h_grow(uint64_t need) { if (h_end - h_brk < need) return 0; struct hblk *b = (struct hblk *)h_brk; h_brk += need; b->size = need; return b; }
 void *kmalloc(size_t n)
 {
@@ -79,7 +80,7 @@ void kfree(void *p)
     if (cur && (uint8_t *)b + b->size == (uint8_t *)cur) { b->size += cur->size; b->tag = cur->tag; }
     if (prev && (uint8_t *)prev + prev->size == (uint8_t *)b) { prev->size += b->size; prev->tag = b->tag; }
 }
-size_t kheap_max_bytes(void) { return W3_HEAP_MAX; }
+size_t kheap_max_bytes(void) { return (size_t)(h_end - W3_HEAP_VA); }
 volatile uint8_t kheap_owner;
 
 /* ------------------------------------------------------------ lo que el motor espera de "el nucleo" */
@@ -91,13 +92,17 @@ extern char *g_co_lo, *g_co_hi;
 static uint64_t s_poll_at;
 
 uint64_t web_now_ms(void) { return timer_get_uptime_ms(); }
+#include "../apps/web_dl.h"                       /* SOMA_343_DESCARGAS */
 void web_yield(void)
 {
+    if (wdl_inside()) { wdl_yield(); return; }          /* SOMA_343_DESCARGAS: una descarga que espera cede al bucle principal */
     uint64_t now = timer_get_uptime_ms();
     if (now - s_poll_at >= 40) { s_poll_at = now; if (ws3(SYS_WEB_WAIT, -1, 0, 0) == 2 && P) P->stop = 1; }   /* el usuario pulso parar */
     ws3(SYS_YIELD, 0, 0, 0);
 }
-void unet_idle(void) { web_yield(); ws3(SYS_SLEEP, 1, 0, 0); }
+/* SOMA_343_DESCARGAS: dentro de una descarga, esperar a la red es ceder el turno; fuera (una hoja de estilo, un script, la pagina),
+ * mientras se espera tambien avanzan las descargas de imagenes */
+void unet_idle(void) { if (wdl_inside()) { wdl_yield(); return; } wdl_pump(); web_yield(); ws3(SYS_SLEEP, 1, 0, 0); }
 uint32_t web_stack_left(void)
 {
     char c; char *sp = &c;
@@ -131,6 +136,9 @@ uint8_t net_ip[4];
 int bootinfo_disabled(const char *f) { (void)f; return 0; }
 static uint64_t s_unix0, s_up0;
 static uint64_t unix_now(void) { return s_unix0 ? s_unix0 + (timer_get_uptime_ms() - s_up0) / 1000 : 0; }
+/* SOMA_343_DESCARGAS: "generacion" de la confianza (autoridades del usuario y verificar si/no). Una conexion TLS guardada para reutilizarla
+ * solo sirve mientras no cambie: si el usuario quita una autoridad, la siguiente peticion abre otra conexion y vuelve a comprobar. */
+uint32_t tls_trust_gen;
 void tls_trust_setup(void)
 {
     static int inited; static uint64_t last;
@@ -138,9 +146,10 @@ void tls_trust_setup(void)
     uint64_t now = timer_get_uptime_ms();
     if (last && now - last < 30000) return;
     last = now ? now : 1;
-    char *pem = 0; uint32_t len = 0;
+    char *pem = 0; uint32_t len = 0, h = 2166136261u;
     x509_clear_anchors();
-    if (wp_fs_read("/etc/tls_confianza.pem", &pem, &len) == 0) { (void)x509_add_anchors_pem(pem, len); kfree(pem); }
+    if (wp_fs_read("/etc/tls_confianza.pem", &pem, &len) == 0) { (void)x509_add_anchors_pem(pem, len); for (uint32_t i = 0; i < len; i++) { h ^= (uint8_t)pem[i]; h *= 16777619u; } kfree(pem); }
+    tls_trust_gen = h ^ (uint32_t)len;
 }
 /* decodificadores de imagen: aqui mismo (este proceso ya esta aislado) */
 int wi_decode(const uint8_t *d, uint32_t n, struct wimg *o) { return wi_decode_local(d, n, o); }
@@ -226,6 +235,12 @@ static int scan_flags(void)
     if (s_scan_lay != P->lay || s_scan_gen != P->gen || s_scan_h != P->lay->doc_h) { s_scan_lay = P->lay; s_scan_gen = P->gen; s_scan_h = P->lay->doc_h; s_scan = wl_scan_flags(P->lay); }
     return s_scan;
 }
+/* SOMA_342_NAVEGADOR_AGIL: cada imagen que llegaba repintaba el fotograma entero (dos pantallas de alto): en una portada con 120 fotos,
+ * 121 repintados de ~45 ms en QEMU. Mientras llegan imagenes, lo que solo cambia el contenido se agrupa: como mucho un repintado cada
+ * PINTA_MIN_MS. Lo que cambia la vista (desplazarse, otro tamano) se repinta al momento, como siempre. */
+#define PINTA_MIN_MS 250
+static uint64_t s_paint_t;
+static int s_paint_due;
 static void publish(int force)
 {
     if (!P) return;
@@ -235,12 +250,15 @@ static void publish(int force)
         if (P->sy != s_last_sy) { s_dir = P->sy > s_last_sy ? 1 : -1; s_last_sy = P->sy; s_scroll_ms = now; }
         int over = !(fl & 1) && doc_h > vh && !P->dd_sel && (!P->focus || now - s_scroll_ms < 1500);
         /* SOMA_203: `force` (acaba de terminar una orden) ya solo obliga a publicar el estado; antes repintaba con cada movimiento del raton */
-        int repaint = k != s_key || vw != s_fw || P->sx != s_fsx || P->sy < s_fsy || P->sy + vh > s_fsy + s_fh;
-        if (!repaint && !over && P->sy != s_fsy) repaint = 1;
-        if (!repaint && over) {                        /* cerca del borde de lo pintado y aun queda documento por ese lado */
+        int vista = vw != s_fw || P->sx != s_fsx || P->sy < s_fsy || P->sy + vh > s_fsy + s_fh;
+        if (!vista && !over && P->sy != s_fsy) vista = 1;
+        if (!vista && over) {                          /* cerca del borde de lo pintado y aun queda documento por ese lado */
             int thr = vh / 8;
-            if ((P->sy - s_fsy < thr && s_fsy > 0) || (s_fsy + s_fh - (P->sy + vh) < thr && s_fsy + s_fh < doc_h)) repaint = 1;
+            if ((P->sy - s_fsy < thr && s_fsy > 0) || (s_fsy + s_fh - (P->sy + vh) < thr && s_fsy + s_fh < doc_h)) vista = 1;
         }
+        int repaint = vista || k != s_key;
+        s_paint_due = 0;
+        if (repaint && !vista && P->phase == WP_IMAGES && now - s_paint_t < PINTA_MIN_MS) { repaint = 0; s_paint_due = 1; }
         if (repaint) {
             int fh = vh, fsy = P->sy;
             if (over) {
@@ -253,7 +271,7 @@ static void publish(int force)
                 if (fsy < 0) fsy = 0;
                 if (fsy > P->sy) fsy = P->sy;
             }
-            s_key = k;
+            s_key = k; s_paint_t = now;
             fb_target_begin((uint32_t *)W3_SURF_VA, (uint32_t)vw, (uint32_t)fh);
             fb_fill_rect(0, 0, (uint32_t)vw, (uint32_t)fh, 0x00FFFFFF);
             if (P->lay) { wl_paint(P->lay, 0, 0, vw, fh, P->sx, fsy); P->lay->scroll_x = P->sx; P->lay->scroll_y = P->sy; }
@@ -317,6 +335,8 @@ static void run_cmd(void)
     S->reply_len = 0; S->reply_status = 0; S->blob_len = 0; S->blob_va = 0;
     if (C->op == W3C_INIT) {
         s_unix0 = C->u64; s_up0 = timer_get_uptime_ms(); tls13_verify = a[2];
+        if (a[4] > 0 && (uint64_t)a[4] << 20 <= W3_HEAP_MAX && W3_HEAP_VA + ((uint64_t)a[4] << 20) > h_end)
+            h_end = W3_HEAP_VA + ((uint64_t)a[4] << 20);             /* SOMA_341_NAVEGADOR_MEMORIA: solo crece (lo ya repartido sigue dentro) */
         net_ip[0] = (uint8_t)(a[3] >> 24); net_ip[1] = (uint8_t)(a[3] >> 16); net_ip[2] = (uint8_t)(a[3] >> 8); net_ip[3] = (uint8_t)a[3];
         if (!P) { P = wp_new(); if (P) restore_state(); }
         if (!P) ws_exit(-79);
@@ -388,7 +408,9 @@ static void ws_main(void)
 {
     for (;;) {
         int next = P ? wp_tick(P, timer_get_uptime_ms()) : 200;
+        wn_keepalive_prune();                                    /* SOMA_343_DESCARGAS: cierra las conexiones guardadas que caducaron */
         publish(0); save_state();
+        if (s_paint_due) { uint64_t t = timer_get_uptime_ms() - s_paint_t; int falta = t < PINTA_MIN_MS ? (int)(PINTA_MIN_MS - t) : 1; if (next > falta) next = falta; }   /* SOMA_342 */
         if (next < 1) next = 1;
         if (next > 250) next = 250;
         long r = ws3(SYS_WEB_WAIT, next, 0, 0);

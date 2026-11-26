@@ -30,6 +30,8 @@ struct qcmd { uint32_t seq, op, len; int32_t a[8]; char *data; };
 static struct qcmd q[Q_N]; static volatile uint32_t q_h, q_t;
 static uint32_t g_seq;
 static struct uregion r_in, r_out, r_heap, r_surf;
+static uint32_t g_heap_bytes;                       /* SOMA_341_NAVEGADOR_MEMORIA: monton concedido al proceso en este arranque */
+static uint64_t pmm_libre_bytes(void) { size_t fr = 0, us = 0, tot = 0; pmm_get_stats(&fr, &us, &tot); return (uint64_t)fr * 4096u; }
 static int g_idx = -1; static volatile int g_up;
 static volatile int g_stop_req;
 static struct w3_state *g_st;                       /* copia validada del estado (sin la zona de respuestas) */
@@ -132,7 +134,7 @@ int web_r3_start(int vw, int vh)
     if (!g_st || !g_reply) return -1;
     memset(g_st, 0, ST_HDR); g_reply_len = 0; g_fseq = 0; g_fw = g_fh = 0; g_stop_req = 0; g_acc_seen = 0; g_scroll_pend = 0; g_blob_seq = 0;
     if (reg_init(&r_in, W3_IN_VA, W3_IN_MAX / 4096u, NXR, 1) || reg_init(&r_out, W3_OUT_VA, W3_OUT_PAGES, NXW, 0) ||
-        reg_init(&r_heap, W3_HEAP_VA, W3_HEAP_MAX / 4096u, NXW, 1) || reg_init(&r_surf, W3_SURF_VA, (uint32_t)(W3_SURF_MAX / 4096u), NXW, 1)) { teardown(); return -1; }
+        reg_init(&r_heap, W3_HEAP_VA, (g_heap_bytes = w3_heap_bytes(pmm_libre_bytes())) / 4096u, NXW, 1) || reg_init(&r_surf, W3_SURF_VA, (uint32_t)(W3_SURF_MAX / 4096u), NXW, 1)) { teardown(); return -1; }
     r_in.demand = 0;                                /* la entrada solo crece cuando el NUCLEO escribe en ella */
     { uintptr_t f = pmm_alloc_frame(); if (!f) { teardown(); return -1; } memset((void *)f, 0, 4096); r_in.frames[0] = f; r_in.used = 1; }
     struct uexec_spec sp; memset(&sp, 0, sizeof sp);
@@ -148,9 +150,10 @@ int web_r3_start(int vw, int vh)
     }
     if (idx < 0) { kprint("[WEB-R3] no se pudo lanzar el proceso del navegador (error "); kprint_dec((uint32_t)(-err)); kprint(")\n"); teardown(); return -1; }
     g_idx = idx; g_up = 1; g_starts++; g_last_sys = timer_get_uptime_ms(); g_in_wait = 0;
-    int32_t a[4] = { vw, vh, tls13_verify, (int32_t)(((uint32_t)net_ip[0] << 24) | ((uint32_t)net_ip[1] << 16) | ((uint32_t)net_ip[2] << 8) | net_ip[3]) };
+    int32_t a[5] = { vw, vh, tls13_verify, (int32_t)(((uint32_t)net_ip[0] << 24) | ((uint32_t)net_ip[1] << 16) | ((uint32_t)net_ip[2] << 8) | net_ip[3]),
+                     (int32_t)(g_heap_bytes >> 20) };
     tls_trust_setup();
-    uint32_t s = web_r3_send(W3C_INIT, a, 4, 0, 0);
+    uint32_t s = web_r3_send(W3C_INIT, a, 5, 0, 0);
     if (!s || web_r3_wait(s, 5000) != 1) { kprint("[WEB-R3] el proceso del navegador no arranca\n"); web_r3_stop(); return -1; }
     return 0;
 }
@@ -324,7 +327,7 @@ int64_t web_r3_sys_post(int proc_idx, uint64_t what, uint64_t a, uint64_t b)
     }
     if (what == W3P_SAVE) {                         /* SOMA_203: copia de cookies y almacenamiento; el nucleo la guarda sin mirarla */
         uint64_t now = timer_get_uptime_ms();
-        if (b < 8 || b > W3_SAVE_MAX || a < W3_HEAP_VA || a - W3_HEAP_VA > W3_HEAP_MAX - b) return -1;
+        if (b < 8 || b > W3_SAVE_MAX || a < W3_HEAP_VA || a - W3_HEAP_VA > (uint64_t)r_heap.npages * 4096u - b) return -1;
         if (g_save_ms && now - g_save_ms < 250) return -1;
         if (b > g_save_cap) {
             uint32_t cap = ((uint32_t)b + 0xFFFFu) & ~0xFFFFu; uint8_t *nb = (uint8_t *)kmalloc(cap);
@@ -354,7 +357,7 @@ int64_t web_r3_sys_post(int proc_idx, uint64_t what, uint64_t a, uint64_t b)
         g_reply[g_reply_len] = 0;
         if (g_blob_seq && g_blob_seq == in->seq_done) {                 /* SOMA_203: pixeles, solo si el nucleo los pidio con esta orden */
             if (g_blob) { kfree(g_blob); g_blob = 0; g_blob_len = 0; }
-            if (in->blob_len && in->blob_len <= W3_BLOB_MAX && in->blob_va >= W3_HEAP_VA && in->blob_va - W3_HEAP_VA <= W3_HEAP_MAX - in->blob_len) {
+            if (in->blob_len && in->blob_len <= W3_BLOB_MAX && in->blob_va >= W3_HEAP_VA && in->blob_va - W3_HEAP_VA <= (uint64_t)r_heap.npages * 4096u - in->blob_len) {
                 g_blob = (uint8_t *)kmalloc(in->blob_len);
                 if (g_blob) { reg_read(&r_heap, in->blob_va - W3_HEAP_VA, g_blob, in->blob_len); g_blob_len = in->blob_len; }
             }
@@ -403,7 +406,7 @@ int web_r3_selftest(const char *url)
     int r = s ? web_r3_wait(s, 45000) : -1;
     if (r != 1) { kprint(r < 0 ? "WEBR3: FALLO (el proceso murio durante la carga)\n" : "WEBR3: FALLO (la carga no termino en 45 s)\n"); return 1; }
     uint64_t t1 = timer_get_uptime_ms(); uint32_t fs = 0;
-    while (timer_get_uptime_ms() - t1 < 6000) {                      /* espera a que se asiente (imagenes, scripts en turnos) */
+    while (timer_get_uptime_ms() - t1 < 90000) {                      /* espera a que se asiente (imagenes, scripts en turnos); SOMA_341: hasta 90 s, sale en cuanto queda quieta */
         if (!web_r3_alive()) { kprint("WEBR3: FALLO (el proceso murio)\n"); return 1; }
         if (g_st->phase == 0 && g_fseq == fs && timer_get_uptime_ms() - t1 > 1200) break;
         fs = g_fseq; thread_sleep(300);
@@ -413,7 +416,7 @@ int web_r3_selftest(const char *url)
     kprint("  titulo: "); kprint(g_st->title); kprint("\n  url:    "); kprint(g_st->url); kprint("\n  estado: "); kprint(g_st->status);
     kprint("\n  fase "); kprint_dec((uint32_t)g_st->phase); kprint(", alto del documento "); kprint_dec((uint32_t)g_st->doc_h); kprint(" px, imagenes "); kprint_dec((uint32_t)g_st->img_ok); kprint("/"); kprint_dec((uint32_t)g_st->nimg);
     kprint("\n  fotogramas "); kprint_dec(g_fseq); kprint(" ("); kprint_dec((uint32_t)g_fw); kprint("x"); kprint_dec((uint32_t)g_fh); kprint("), pixeles no blancos "); kprint_dec(nz); kprint(", huella 0x"); kprint_hex32(h);
-    kprint("\n  memoria del proceso: monton "); kprint_dec(r_heap.used * 4u); kprint(" KiB, superficie "); kprint_dec(r_surf.used * 4u); kprint(" KiB; en "); kprint_dec((uint32_t)(timer_get_uptime_ms() - t0)); kprint(" ms\n");
+    kprint("\n  memoria del proceso: monton "); kprint_dec(r_heap.used * 4u); kprint(" KiB de "); kprint_dec(g_heap_bytes >> 20); kprint(" MiB, superficie "); kprint_dec(r_surf.used * 4u); kprint(" KiB; en "); kprint_dec((uint32_t)(timer_get_uptime_ms() - t0)); kprint(" ms\n");
     kprint(g_fseq && g_st->url[0] ? "WEBR3: OK\n" : "WEBR3: FALLO (sin fotograma o sin pagina)\n");
     return !(g_fseq && g_st->url[0]);
 }

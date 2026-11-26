@@ -23,8 +23,12 @@ uint64_t timer_get_uptime_ms(void);
 #define TCP_HDR_MAX      24
 #define TCP_MSS_MAX      1460
 #define TCP_MSS_DEFAULT  536
-#define TCP_RX_BUFFER    32768
-#define TCP_MAX_CONN     8      /* PARCHE 133: antes 4 (un solo cliente lento ocupaba la cuarta parte) */
+#define TCP_RX_BUFFER    65535  /* SOMA_344_RED: 32 KiB -> 64 KiB, la ventana maxima sin escalado (RFC 7323). Con 32 KiB y 30 ms hasta el
+                                 * servidor, una conexion no pasaba de ~1 MB/s; con 64 KiB, el doble. El anillo se recorre con %, no hace
+                                 * falta potencia de 2 */
+#define TCP_MAX_CONN     16     /* PARCHE 133: antes 4 (un solo cliente lento ocupaba la cuarta parte); SOMA_343_DESCARGAS: 8 -> 16 (el
+                                 * navegador descarga 4 recursos a la vez y guarda hasta 4 conexiones abiertas; el resto del sistema sigue
+                                 * teniendo sitio para el correo, el LLM, netsvc y el panel web) */
 #define TCP_RTO_MS       1000
 #define TCP_MAX_RETRIES  5
 

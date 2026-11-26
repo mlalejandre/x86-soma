@@ -31,35 +31,46 @@ static void *alloc2(struct jrt *rt, uint32_t n, int atomic)
 }
 void *js_alloc(struct jrt *rt, uint32_t n) { return alloc2(rt, n, 0); }
 void *js_alloc_atomic(struct jrt *rt, uint32_t n) { return alloc2(rt, n, 1); }   /* bloque sin punteros (texto): el recolector no lo recorre */
-static uint32_t hash_bytes(const char *s, uint32_t n) { return wu_hash(s, n); }
+/* SOMA_344_JS: las cadenas. Construir una cadena con += en un bucle (lo que hacen las paginas para montar HTML) era cuadratico y con
+ * una constante enorme: cada concatenacion calculaba la huella de la cadena ENTERA byte a byte, ponia a cero la memoria que iba a
+ * copiar encima y la dejaba como memoria con punteros que el recolector recorria entera. Ahora la huella se calcula la primera vez
+ * que hace falta (internar, comparar, Map) y se guarda (0 = sin calcular), y el texto va en memoria sin punteros y sin poner a cero. */
+static uint32_t hash_bytes(const char *s, uint32_t n) { uint32_t h = wu_hash(s, n); return h ? h : 1u; }
+uint32_t js_str_hash(jstr *s) { if (!s->hash) s->hash = hash_bytes(s->d, s->len); return s->hash; }
+static jstr *str_alloc(struct jrt *rt, uint32_t n)
+{
+    jstr *r = (jstr *)alloc2(rt, (uint32_t)sizeof(jstr) + n, 2);
+    r->len = n; r->hash = 0; r->u16 = 0; r->interned = 0; r->d[n] = 0;
+    return r;
+}
 jstr *js_str_new(struct jrt *rt, const char *s, uint32_t n)
 {
     if (n == 0 && rt->s_empty) return rt->s_empty;
     if (n == 1 && rt->s_chars[0] && (uint8_t)s[0] < 128) return rt->s_chars[(uint8_t)s[0]];
-    jstr *r = (jstr *)js_alloc_atomic(rt, (uint32_t)sizeof(jstr) + n);
-    r->len = n; memcpy(r->d, s, n); r->d[n] = 0; r->hash = hash_bytes(s, n); return r;
+    jstr *r = str_alloc(rt, n);
+    memcpy(r->d, s, n); return r;
 }
 jstr *js_str_cstr(struct jrt *rt, const char *s) { return js_str_new(rt, s, wu_strlen(s)); }
-int js_str_eq(const jstr *a, const jstr *b) { return a == b || (a->len == b->len && a->hash == b->hash && !memcmp(a->d, b->d, a->len)); }
+int js_str_eq(const jstr *a, const jstr *b) { return a == b || (a->len == b->len && (!a->hash || !b->hash || a->hash == b->hash) && !memcmp(a->d, b->d, a->len)); }
 static void itab_grow(struct jrt *rt)
 {
     uint32_t nc = rt->itab_cap ? rt->itab_cap * 2 : 1024; jstr **nt = (jstr **)js_alloc(rt, nc * (uint32_t)sizeof(jstr *));
-    for (uint32_t i = 0; i < rt->itab_cap; i++) { jstr *s = rt->itab[i]; if (!s) continue; uint32_t h = s->hash & (nc - 1); while (nt[h]) h = (h + 1) & (nc - 1); nt[h] = s; }
+    for (uint32_t i = 0; i < rt->itab_cap; i++) { jstr *s = rt->itab[i]; if (!s) continue; uint32_t h = js_str_hash(s) & (nc - 1); while (nt[h]) h = (h + 1) & (nc - 1); nt[h] = s; }
     rt->itab = nt; rt->itab_cap = nc;
 }
 jstr *js_intern(struct jrt *rt, jstr *s)
 {
     if (s->interned) return s;
     if (rt->itab_n * 2 >= rt->itab_cap) itab_grow(rt);
-    uint32_t h = s->hash & (rt->itab_cap - 1);
-    while (rt->itab[h]) { jstr *t = rt->itab[h]; if (t->len == s->len && t->hash == s->hash && !memcmp(t->d, s->d, s->len)) return t; h = (h + 1) & (rt->itab_cap - 1); }
+    uint32_t sh = js_str_hash(s), h = sh & (rt->itab_cap - 1);
+    while (rt->itab[h]) { jstr *t = rt->itab[h]; if (t->len == s->len && js_str_hash(t) == sh && !memcmp(t->d, s->d, s->len)) return t; h = (h + 1) & (rt->itab_cap - 1); }
     s->interned = 1; rt->itab[h] = s; rt->itab_n++; return s;
 }
 jstr *js_intern_n(struct jrt *rt, const char *s, uint32_t n)
 {
     if (rt->itab_cap) {
         uint32_t hh = hash_bytes(s, n), h = hh & (rt->itab_cap - 1);
-        while (rt->itab[h]) { jstr *t = rt->itab[h]; if (t->len == n && t->hash == hh && !memcmp(t->d, s, n)) return t; h = (h + 1) & (rt->itab_cap - 1); }
+        while (rt->itab[h]) { jstr *t = rt->itab[h]; if (t->len == n && js_str_hash(t) == hh && !memcmp(t->d, s, n)) return t; h = (h + 1) & (rt->itab_cap - 1); }
     }
     return js_intern(rt, js_str_new(rt, s, n));
 }
@@ -75,12 +86,12 @@ jstr *js_str_concat(struct jrt *rt, jstr *a, jstr *b)
         uint32_t lo = 0xD000u | ((uint32_t)((uint8_t)b->d[1] & 0x3F) << 6) | ((uint8_t)b->d[2] & 0x3Fu);
         uint32_t cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00); char t[4]; int n = wu_utf8_put(cp, t);
         uint32_t nl = a->len - 3 + (uint32_t)n + b->len - 3;
-        jstr *r = (jstr *)js_alloc(rt, (uint32_t)sizeof(jstr) + nl);
+        jstr *r = str_alloc(rt, nl);
         memcpy(r->d, a->d, a->len - 3); memcpy(r->d + a->len - 3, t, (uint32_t)n); memcpy(r->d + a->len - 3 + n, b->d + 3, b->len - 3);
-        r->len = nl; r->d[nl] = 0; r->hash = hash_bytes(r->d, nl); return r;
+        return r;
     }
-    jstr *r = (jstr *)js_alloc(rt, (uint32_t)sizeof(jstr) + a->len + b->len);
-    r->len = a->len + b->len; memcpy(r->d, a->d, a->len); memcpy(r->d + a->len, b->d, b->len); r->d[r->len] = 0; r->hash = hash_bytes(r->d, r->len); return r;
+    jstr *r = str_alloc(rt, a->len + b->len);
+    memcpy(r->d, a->d, a->len); memcpy(r->d + a->len, b->d, b->len); return r;
 }
 
 /* ------------------------------ errores ------------------------------ */
@@ -172,13 +183,13 @@ static void idx_rebuild(struct jrt *rt, jobj *o)
 {
     uint32_t nc = 16; while (nc < o->np * 2 + 2) nc *= 2;
     uint32_t *ix = (uint32_t *)js_alloc(rt, nc * 4);
-    for (uint32_t i = 0; i < o->np; i++) { uint32_t h = (o->props[i].key->hash) & (nc - 1); while (ix[h]) h = (h + 1) & (nc - 1); ix[h] = i + 1; }
+    for (uint32_t i = 0; i < o->np; i++) { uint32_t h = js_str_hash(o->props[i].key) & (nc - 1); while (ix[h]) h = (h + 1) & (nc - 1); ix[h] = i + 1; }
     o->idx = ix; o->icap = nc;
 }
 struct jprop *js_find_own(jobj *o, jstr *key)
 {
     if (o->idx) {
-        uint32_t h = key->hash & (o->icap - 1);
+        uint32_t h = js_str_hash(key) & (o->icap - 1);
         while (o->idx[h]) { struct jprop *p = &o->props[o->idx[h] - 1]; if (p->key == key) return p; h = (h + 1) & (o->icap - 1); }
         return 0;
     }
@@ -198,7 +209,7 @@ static struct jprop *add_prop(struct jrt *rt, jobj *o, jstr *key)
         o->props = np; o->cap = nc;
     }
     struct jprop *p = &o->props[o->np++]; memset(p, 0, sizeof *p); p->key = key; p->flags = JP_ENUM;
-    if (o->idx) { if (o->np * 2 > o->icap) idx_rebuild(rt, o); else { uint32_t h = key->hash & (o->icap - 1); while (o->idx[h]) h = (h + 1) & (o->icap - 1); o->idx[h] = o->np; } }
+    if (o->idx) { if (o->np * 2 > o->icap) idx_rebuild(rt, o); else { uint32_t h = js_str_hash(key) & (o->icap - 1); while (o->idx[h]) h = (h + 1) & (o->icap - 1); o->idx[h] = o->np; } }
     else if (o->np > 8) idx_rebuild(rt, o);
     return p;
 }

@@ -34,7 +34,7 @@ static inline int httpd_path_allowed(const char *path)
 static inline int httpd_peer_allowed(const unsigned char peer[4], const unsigned char ip[4], const unsigned char mask[4])
 {
     if (peer[0] == 127) return 1;
-    if (!(mask[0] | mask[1] | mask[2] | mask[3])) return 0;
+    if (mask[0] != 255) return 0;                                 /* SOMA_340_RED_HOSTIL: sin mascara o mas ancha que /8: no es una red local */
     if (!(ip[0] | ip[1] | ip[2] | ip[3])) return 0;
     for (int i = 0; i < 4; i++) if ((peer[i] & mask[i]) != (ip[i] & mask[i])) return 0;
     return 1;

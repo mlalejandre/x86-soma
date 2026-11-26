@@ -234,7 +234,7 @@ enum { MP_GET, MP_SET, MP_HAS, MP_DELETE, MP_CLEAR, MP_SIZE, MP_FOREACH, MP_KEYS
 static uint32_t key_hash(jv k)
 {
     switch (k.t) {
-    case JT_STR: return k.u.s->hash * 2654435761u + 1;
+    case JT_STR: return js_str_hash(k.u.s) * 2654435761u + 1;   /* SOMA_344_JS: huella perezosa */
     case JT_NUM: { f64 n = k.u.n; if (f64_abs(n) == 0) n = 0; if (f64_is_nan(n)) n = 0x7FF8000000000000ULL; return (uint32_t)((n ^ (n >> 29)) * 0x9E3779B97F4A7C15ULL >> 32); }
     case JT_OBJ: if (k.u.o->cls == JC_BIGINT) return (uint32_t)(js_big_low64(k) * 0x9E3779B97F4A7C15ULL >> 32); return (uint32_t)(((uintptr_t)k.u.o >> 4) * 2654435761u);
     case JT_BOOL: return k.u.b ? 0x51ED270Bu : 0x2545F491u;

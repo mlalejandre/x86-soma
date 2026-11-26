@@ -86,6 +86,16 @@ TEMAS = {
                   "servicios aislados de ring 3 y el sandbox"),   # SOMA_339_GITHUB
     "youtube": (["src/apps/youtube*.[ch]", "src/apps/yt_*.h", "src/apps/yt_*.c", "tests/test_yt_busquedas_335.c", "tests/prueba_yt_335.py"],
                 "YouTube: busqueda con IA, ficha y reproduccion"),   # SOMA_339_GITHUB
+    "navegador": (["src/apps/web_page.[ch]", "src/apps/web_util.h", "src/user/websvc.c", "src/arch/x86_64/web_r3.[ch]",
+                   "src/core/web_r3_abi.h", "src/apps/browser.c", "tests/test_navegador_memoria_341.c", "tests/prueba_navegador_341.py",
+                   "src/apps/web_jpeg.c", "src/apps/web_layout.h", "tools/web_gateway.py", "tests/test_jpeg_reducido_342.c",
+                   "tests/test_pasarela_342.py", "docs/PARCHE_342_NAVEGADOR_AGIL.md", "src/user/web_dl.c", "src/apps/web_dl.h",
+                   "src/apps/web_net.[ch]", "tests/test_web_dl_343.c", "docs/PARCHE_343_DESCARGAS.md", "docs/PARCHE_344_RED_SCRIPTS_JS.md",
+                   "docs/PARCHE_341_NAVEGADOR_MEMORIA.md"],
+                  "el navegador: motor en ring 3, memoria, imagenes y maquetacion"),   # SOMA_341_NAVEGADOR_MEMORIA
+    "red": (["src/net/*.[ch]", "tests/test_red_hostil_340.c", "tests/fuzz_net.c", "tests/test_httpd_policy.c",
+             "docs/PARCHE_340_RED_HOSTIL.md"],
+            "la pila de red del nucleo: TCP/IP, DNS, DHCP y el panel web"),   # SOMA_340_RED_HOSTIL
     "compilar": (["Makefile", "ejecutar.py", "construyeimagen.py", "Dockerfile", "linker_*.ld", "protected.txt"],
                  "compilacion y arranque"),
 }

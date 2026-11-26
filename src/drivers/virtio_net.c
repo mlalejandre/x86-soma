@@ -32,7 +32,8 @@
 #define QUEUE_MEM_BYTES        12288
 #define QUEUE_MAX_SIZE         256
 #define NET_HDR_SIZE           10
-#define RX_BUFFER_COUNT        8
+#define RX_BUFFER_COUNT        64     /* SOMA_344_RED: 8 -> 64. Una rafaga de una ventana TCP (45 tramas) no cabia en 8 bufferes entre
+                                       * dos pasadas del hilo de red: el resto se perdia y habia que esperar a la retransmision */
 #define RX_BUFFER_SIZE         2048
 #define TX_BUFFER_SIZE         2048
 #define ETH_MIN_FRAME          60
@@ -317,7 +318,7 @@ static int vnet_init(void)
     if (!vq_setup_pci(0, virtq0_memory, &rxq)) return fail_device("RX queue setup failed");
     if (!vq_setup_pci(1, virtq1_memory, &txq)) return fail_device("TX queue setup failed");
 
-    for (uint16_t i = 0; i < RX_BUFFER_COUNT; ++i) {
+    for (uint16_t i = 0; i < RX_BUFFER_COUNT && i < rxq.size; ++i) {   /* SOMA_344_RED: nunca mas bufferes que la cola del dispositivo */
         rxq.desc[i].addr  = (uint64_t)(uintptr_t)rx_buffers[i];
         rxq.desc[i].len   = RX_BUFFER_SIZE;
         rxq.desc[i].flags = DESC_F_WRITE;

@@ -24,6 +24,7 @@ ejecutar.py la arranca solo (ensure_gateway); no hace falta lanzarla a mano.
 """
 import argparse
 import gzip
+import http.client
 import io
 import ipaddress
 import os
@@ -39,15 +40,17 @@ import urllib.request
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4"
+VERSION = "6"                        # SOMA_342: conexiones reutilizadas con cada servidor; SOMA_343: keep-alive tambien con SOMA
 DEFAULT_PORT = 8096
 MAX_BODY = 24 * 1024 * 1024          # lo maximo que se lee de un servidor
 MAX_TO_GUEST = 7 * 1024 * 1024       # el navegador acepta 8 MiB por recurso
 IMG_MAX_SIDE = 1280                  # lado mayor de una imagen entregada a SOMA (menos bytes por la red emulada y menos memoria)
 IMG_MAX_PIXELS = 1280 * 960
 IMG_KEEP_BYTES = 160 * 1024          # PNG/GIF y JPEG baseline pequenos se entregan tal cual
-PREFETCH_WORKERS = 8                 # descargas paralelas de los recursos de una pagina
-PREFETCH_MAX = 90
+PREFETCH_WORKERS = 12                # descargas paralelas de los recursos de una pagina (SOMA_342: 8 -> 12, ya sin un TLS por recurso)
+PREFETCH_MAX = 160                   # SOMA_342: 90 -> 160 (las portadas de los periodicos tienen mas de 100 fotos)
+POOL_PER_HOST = 6                    # SOMA_342: conexiones abiertas que se guardan por servidor
+POOL_IDLE_S = 25                     # ... y cuanto tiempo (los servidores suelen cerrar a los 30-60 s)
 TIMEOUT = 20
 
 try:
@@ -933,8 +936,110 @@ def _is_static(ctype):
     return any(c.startswith(t) for t in _STATIC_TYPES)
 
 
+# ------------------------------------------------------------------------------- conexiones reutilizadas (SOMA_342)
+# urllib abre una conexion (TCP + TLS: media docena de idas y vueltas) por cada recurso. Una portada con 100 fotos del mismo servidor
+# pagaba 100 apretones TLS. Ahora las conexiones con cada servidor se guardan abiertas y se reutilizan (HTTP/1.1 keep-alive).
+# Si hay un proxy configurado en el entorno se sigue usando urllib, que lo respeta.
+_pool = {}
+_pool_lock = threading.Lock()
+_ctx = [None]
+_stats_pool = {"nuevas": 0, "reusadas": 0}
+
+
+def _ssl_ctx():
+    if _ctx[0] is None:
+        _ctx[0] = _ssl_context()
+    return _ctx[0]
+
+
+def _conn_get(scheme, host, port):
+    key = (scheme, host, port)
+    now = time.time()
+    with _pool_lock:
+        lst = _pool.get(key) or []
+        while lst:
+            c, t = lst.pop()
+            if now - t < POOL_IDLE_S:
+                _stats_pool["reusadas"] += 1
+                return c, True
+            try:
+                c.close()
+            except Exception:
+                pass
+        _stats_pool["nuevas"] += 1
+    if scheme == "https":
+        return http.client.HTTPSConnection(host, port, timeout=TIMEOUT, context=_ssl_ctx()), False
+    return http.client.HTTPConnection(host, port, timeout=TIMEOUT), False
+
+
+def _conn_put(scheme, host, port, c):
+    with _pool_lock:
+        lst = _pool.setdefault((scheme, host, port), [])
+        if len(lst) < POOL_PER_HOST:
+            lst.append((c, time.time()))
+            return
+    c.close()
+
+
+def _fetch_pool(url, method, body, headers):
+    sp = urllib.parse.urlsplit(url)
+    scheme, host = sp.scheme.lower(), sp.hostname
+    if scheme not in ("http", "https") or not host:
+        raise ValueError("URL no valida")
+    port = sp.port or (443 if scheme == "https" else 80)
+    path = (sp.path or "/") + ("?" + sp.query if sp.query else "")
+    hdrs = {k: v for k, v in (headers or {}).items() if v}
+    enc = "gzip, deflate"
+    if brotli is not None:
+        enc += ", br"
+    hdrs["Accept-Encoding"] = enc
+    post = method == "POST"
+    for intento in (0, 1):
+        c, reusada = _conn_get(scheme, host, port) if not post else (None, False)
+        if c is None:                    # un POST nunca va por una conexion reutilizada: no se podria repetir sin riesgo
+            c = http.client.HTTPSConnection(host, port, timeout=TIMEOUT, context=_ssl_ctx()) if scheme == "https" else \
+                http.client.HTTPConnection(host, port, timeout=TIMEOUT)
+        try:
+            c.request(method, path, body=body if post else None, headers=hdrs)
+            resp = c.getresponse()
+            data = resp.read(MAX_BODY + 1)
+        except (http.client.RemoteDisconnected, http.client.BadStatusLine, ConnectionError, ssl.SSLEOFError):
+            c.close()
+            if reusada and intento == 0:  # el servidor cerro la conexion guardada: otra vez con una nueva
+                continue
+            raise
+        except Exception:
+            c.close()
+            raise
+        if post or len(data) > MAX_BODY or resp.will_close or not resp.isclosed():
+            c.close()
+        else:
+            _conn_put(scheme, host, port, c)
+        return resp.status, resp.headers, data
+    raise ConnectionError("no se pudo repetir la peticion")
+
+
+def _usa_proxy(url):
+    """True si urllib mandaria esta URL por un proxy del entorno (entonces se usa urllib, que lo sabe hacer)."""
+    sp = urllib.parse.urlsplit(url)
+    px = urllib.request.getproxies()
+    if not (px.get(sp.scheme.lower()) or px.get("all")):
+        return False
+    try:
+        return not urllib.request.proxy_bypass(sp.hostname or "")
+    except Exception:
+        return True
+
+
 def fetch(url, method="GET", body=None, headers=None):
     """-> (status, headers_list, final_ctype, body_bytes, set_cookies, location)."""
+    if not _usa_proxy(url):
+        status, hdrs, data = _fetch_pool(url, method, body, headers)
+        if len(data) > MAX_BODY:
+            data = data[:MAX_BODY]
+        data = _decode_body(data, hdrs.get("Content-Encoding"))
+        cookies = hdrs.get_all("Set-Cookie") or []
+        return status, hdrs, hdrs.get("Content-Type") or "", data, cookies, hdrs.get("Location")
     req = urllib.request.Request(url, data=body if method == "POST" else None, method=method)
     for k, v in (headers or {}).items():
         if v:
@@ -1108,7 +1213,10 @@ def start_prefetch(html_bytes, page_url, ua, lang):
 
 
 class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.0"
+    # SOMA_343_DESCARGAS: HTTP/1.1 con keep-alive: SOMA reutiliza la conexion con la pasarela (antes, una por recurso). Toda respuesta
+    # lleva Content-Length (_reply); si algo falla sin responder, o queda un cuerpo sin leer, la conexion se cierra.
+    protocol_version = "HTTP/1.1"
+    disable_nagle_algorithm = True
     server_version = "SomaGateway/" + VERSION
 
     def log_message(self, fmt, *args):
@@ -1122,7 +1230,10 @@ class Handler(BaseHTTPRequestHandler):
             body = gzip.compress(body, 5)
             out_headers.append(("Content-Encoding", "gzip"))
         out_headers += extra or []
-        out_headers += [("Content-Length", str(len(body))), ("Connection", "close"), ("Cache-Control", "no-store")]
+        out_headers += [("Content-Length", str(len(body))), ("Cache-Control", "no-store")]
+        if self.close_connection:
+            out_headers.append(("Connection", "close"))
+        self._replied = True
         try:
             self.send_response(200)
             for k, v in out_headers:
@@ -1153,21 +1264,38 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(status, "text/html; charset=utf-8", html.encode("utf-8"))
 
     def do_GET(self):
-        self._handle()
+        self._seguro()
 
     def do_POST(self):
-        self._handle()
+        self._seguro()
 
     def do_HEAD(self):
-        self._handle()
+        self._seguro()
+
+    def _seguro(self):
+        self._replied = False
+        try:
+            self._handle()
+        except Exception as e:                  # nunca dejar a SOMA esperando una respuesta que no llega
+            if not self._replied:
+                self.close_connection = True
+                try:
+                    self._error(500, "Error de la pasarela", "Fallo interno: %s" % str(e)[:160])
+                except Exception:
+                    pass
+        finally:
+            if not self._replied:
+                self.close_connection = True
 
     def _handle(self):
         with _lock:
             _stats["req"] += 1
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path not in ("/raw", "/svg") and (self.headers.get("Content-Length") or "0").strip() not in ("", "0"):
+            self.close_connection = True        # SOMA_343: esas rutas no leen el cuerpo
         if parsed.path in ("/", "/health", "/status"):
-            info = "SOMA web gateway v%s\npillow=%s brotli=%s cairosvg=%s\n%s\n" % (
-                VERSION, HAVE_PIL, brotli is not None, cairosvg is not None, _stats)
+            info = "SOMA web gateway v%s\npillow=%s brotli=%s cairosvg=%s\n%s\nconexiones: %s\n" % (
+                VERSION, HAVE_PIL, brotli is not None, cairosvg is not None, _stats, _stats_pool)
             self._reply(200, "text/plain; charset=utf-8", info.encode(), compress=False)
             return
         if parsed.path == "/svg":
@@ -1191,12 +1319,19 @@ class Handler(BaseHTTPRequestHandler):
         if method not in ("GET", "POST", "HEAD"):
             method = "GET"
         body = None
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
         if method == "POST":
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                n = 0
             body = self.rfile.read(n) if 0 < n <= 8 * 1024 * 1024 else b""
+            if n > 8 * 1024 * 1024:
+                self.close_connection = True    # el cuerpo no se ha leido: la conexion no sirve para otra peticion
+        elif n > 0:
+            if n <= 1024 * 1024:
+                self.rfile.read(n)              # un GET con cuerpo: se descarta para que no se mezcle con la siguiente peticion
+            else:
+                self.close_connection = True
         accept = self.headers.get("X-Soma-Accept") or "*/*"
         want_image = accept.lower().startswith("image/")
         h = {
@@ -1253,6 +1388,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             n = 0
         if n <= 0 or n > 256 * 1024:
+            self.close_connection = n > 0        # SOMA_343: el cuerpo se queda sin leer
             self._reply(400, "text/plain", b"svg vacio o demasiado grande", compress=False)
             return
         data = self.rfile.read(n)

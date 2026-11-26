@@ -344,6 +344,9 @@ static int img_cb(void *ud, const char *src, struct wimginfo *o)
     abs_url(p, src, u, sizeof u);
     uint32_t h = wu_hash(u, wu_strlen(u)); struct wp_img *e = img_find(p, u, h);
     if (!e) { e = img_add(p, u, h); if (!e) { o->state = 3; return 0; } e->state = 1; p->img_pending++; }
+    if (o->fixed_w < 0 && o->fixed_h < 0) e->sin_fijo = 1;           /* SOMA_342_NAVEGADOR_AGIL: un uso a tamano natural: no se reduce por el fijo */
+    if (o->fixed_w > e->fw) e->fw = o->fixed_w;
+    if (o->fixed_h > e->fh) e->fh = o->fixed_h;
     if (o->painting && !g_wl181_off) e->painted = 1;   /* SOMA_188: imagen de fondo a la vista: se carga como cercana */
     o->state = e->state;
     if (o->need_size && e->state != 2 && e->state != 3) e->size_dep = 1;   /* SOMA_152B: la maquetacion uso un hueco provisional */
@@ -409,6 +412,16 @@ static uint32_t *img_shrink(const uint32_t *src, int w, int h, int f, int *ow, i
 #define WP_FAR (1 << 28)
 /* Libera imagenes ya cargadas que estan lejos de la zona visible (vuelven a quedar pendientes: si el usuario se acerca se
  * piden otra vez, normalmente de la cache de la pasarela). Devuelve los bytes liberados. */
+/* SOMA_341_NAVEGADOR_MEMORIA: una imagen que no cabe y esta lejos de la vista ya no se da por perdida ("sin memoria para mas
+ * imagenes" para siempre, aunque luego se fuera hasta ella): vuelve a pendiente y se carga al acercarse, cuando las lejanas ya se
+ * han liberado. Con tope de intentos, para no descargarla una y otra vez. */
+static int img_aplaza(struct wpage *p, struct wp_img *e)
+{
+    int lim = p->vh > 0 ? p->vh + p->vh / 2 : 900;                     /* la misma distancia con la que img_load_one carga */
+    if (e->tries >= 4 || (p->lay && e->dist <= lim)) return 0;         /* a la vista, o ya lo intento varias veces: fallo de verdad */
+    e->state = 1; e->aplazada = 1; p->img_pending++;
+    return 1;
+}
 static uint32_t img_evict(struct wpage *p, uint32_t need, const struct wp_img *keep)
 {
     uint32_t freed = 0; int lim = p->vh > 0 ? p->vh * 2 : 1200; if (lim < 1600) lim = 1600;   /* la pintura salta lo que esta a mas de 600 px */
@@ -468,6 +481,14 @@ static void img_decode_into(struct wpage *p, struct wp_img *e, const uint8_t *da
     /* PARCHE 086: los JPEG se reducen ya al decodificar hasta el tamano al que se muestran (o 1024x768 si aun no se sabe); si falta
      * memoria se liberan imagenes lejanas y se reintenta mas pequena, en vez de dar la imagen por danada */
     int mw = e->dw > 0 ? e->dw : 1024, mh = e->dh > 0 ? e->dh : 768, dr = -1;
+    /* SOMA_342_NAVEGADOR_AGIL: con el ancho fijado por CSS y el alto automatico (las portadas: img{width:240px}) la caja es provisional
+     * y se decodificaba a tamano completo: 990x556 para verla a 240. El ancho fijo es de verdad: el JPEG sale ya reducido en el
+     * dominio DCT (1/2, 1/4, 1/8: mucho menos trabajo), nunca por debajo de lo que se ve. Lo mismo con solo el alto fijo. */
+    if ((e->size_dep || e->dw <= 0 || e->dh <= 0) && !e->sin_fijo) {
+        if (e->fw > 0 && e->fh > 0) { mw = e->fw; mh = e->fh; }
+        else if (e->fw > 0) { mw = e->fw; mh = 1; }
+        else if (e->fh > 0) { mw = 1; mh = e->fh; }
+    }
     if (len > 8 && fmt180_off()) {
         if (fmt180_is_new(data, len)) { e->state = 3; img_note_fail(p, e->url, "formato desactivado (soma.webimg=off)", 200, len); return; }
         goto classic;
@@ -477,7 +498,7 @@ static void img_decode_into(struct wpage *p, struct wp_img *e, const uint8_t *da
         int known = e->dw > 0 && e->dh > 0 && !e->size_dep;        /* si la caja aun es provisional (depende del tamano natural) no sirve */
         dr = wi_decode_svg(data, len, &im, known ? e->dw : 0, known ? e->dh : 0, p->svg_color);
         if (dr == -2) { wi_free(&im); img_evict(p, 8u << 20, e); dr = wi_decode_svg(data, len, &im, 0, 0, p->svg_color); }
-        if (dr == -2) { wi_free(&im); e->state = 3; img_note_fail(p, e->url, "sin memoria para decodificarla", 200, len); return; }
+        if (dr == -2) { wi_free(&im); if (img_aplaza(p, e)) return; e->state = 3; img_note_fail(p, e->url, "sin memoria para decodificarla", 200, len); return; }
     } else if (len > 8 && wi_anim_frames(data, len) > 1) {      /* SOMA_180: GIF/WebP animado: todos los fotogramas si caben */
         uint32_t left0 = p->img_bytes < WP_IMG_BUDGET ? WP_IMG_BUDGET - p->img_bytes : 0, maxpix = left0 / 8; if (maxpix > WI_ANIM_MAX_PIXELS) maxpix = WI_ANIM_MAX_PIXELS;
         struct wimg an; memset(&an, 0, sizeof an);
@@ -494,7 +515,7 @@ static void img_decode_into(struct wpage *p, struct wp_img *e, const uint8_t *da
         wi_free(&an);
         dr = wi_decode_fit(data, len, &im, mw, mh);
         if (dr == -2) { wi_free(&im); img_evict(p, 8u << 20, e); dr = wi_decode_fit(data, len, &im, mw / 2, mh / 2); }
-        if (dr == -2) { wi_free(&im); e->state = 3; img_note_fail(p, e->url, "sin memoria para decodificarla", 200, len); return; }
+        if (dr == -2) { wi_free(&im); if (img_aplaza(p, e)) return; e->state = 3; img_note_fail(p, e->url, "sin memoria para decodificarla", 200, len); return; }
     } else if (len > 8) {
 classic:
         dr = wi_decode_fit(data, len, &im, mw, mh);
@@ -502,7 +523,7 @@ classic:
             wi_free(&im); img_evict(p, 8u << 20, e); mw /= 2; mh /= 2;
             dr = wi_decode_fit(data, len, &im, mw > 16 ? mw : 16, mh > 16 ? mh : 16);
         }
-        if (dr == -2) { wi_free(&im); e->state = 3; img_note_fail(p, e->url, "sin memoria para decodificarla", 200, len); return; }
+        if (dr == -2) { wi_free(&im); if (img_aplaza(p, e)) return; e->state = 3; img_note_fail(p, e->url, "sin memoria para decodificarla", 200, len); return; }
     }
     if (dr == 0 && im.px && im.w > 0 && im.h > 0) {
         int nat_w = im.nw > 0 ? im.nw : im.w, nat_h = im.nh > 0 ? im.nh : im.h;
@@ -521,12 +542,13 @@ classic:
         uint32_t bytes = (uint32_t)pw * (uint32_t)ph * 4;
         if (px && bytes <= left) {
             { static uint32_t serial152; if (++serial152 == 0) serial152 = 1; e->serial = serial152; }   /* SOMA_152: clave de la cache de imagenes escaladas */
-            e->px = px; e->w = nat_w; e->h = nat_h; e->pw = pw; e->ph = ph; e->state = 2; p->img_bytes += bytes;
+            e->px = px; e->w = nat_w; e->h = nat_h; e->pw = pw; e->ph = ph; e->state = 2; e->aplazada = 0; p->img_bytes += bytes;
             int al = 0; for (uint32_t i = 0; i < (uint32_t)pw * (uint32_t)ph; i += 7) if ((px[i] >> 24) != 0xFF) { al = 1; break; }
             e->has_alpha = al; p->img_ok++;
             return;
         }
         if (px) kfree(px);
+        if (img_aplaza(p, e)) return;
         e->state = 3; img_note_fail(p, e->url, "sin memoria para mas imagenes", 200, len);
         return;
     }
@@ -739,6 +761,9 @@ static void s152d_io_thread(void *arg)
 #endif
 /* Pide (o recoge) un script de red. 1 = listo en rs y rc (el llamador hace wn_free), 0 = en camino (volver luego),
  * -1 = no se puede asincrono (hagalo el llamador de forma sincrona). Solo desde el hilo web. */
+#if defined(SOMA_WEBSVC) && defined(__x86_64__)
+static int script_fetch_dl(struct wpage *p, struct wnode *node, const char *url, struct wn_resp *rs, int *rc);   /* SOMA_344_SCRIPTS */
+#endif
 static int script_fetch152(struct wpage *p, struct wnode *node, const char *url, struct wn_resp *rs, int *rc)
 {
 #if SOMA_WEB_ASYNC_SCRIPTS
@@ -768,6 +793,8 @@ static int script_fetch152(struct wpage *p, struct wnode *node, const char *url,
     __atomic_store_n(&s152d_io.cancel, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&s152d_io.state, SOMA151_QUEUED, __ATOMIC_RELEASE);
     return 0;
+#elif defined(SOMA_WEBSVC) && defined(__x86_64__)
+    return script_fetch_dl(p, node, url, rs, rc);                /* SOMA_344_SCRIPTS: corrutinas de descarga del proceso del navegador */
 #else
     (void)p; (void)node; (void)url; (void)rs; (void)rc;
     return -1;
@@ -819,6 +846,22 @@ static void img_scan(struct wpage *p)
         }
         n = wd_walk_next(n, 0);
     }
+    /* SOMA_341_NAVEGADOR_MEMORIA: una foto con el ancho puesto por CSS y el alto automatico tiene una caja provisional hasta que llega
+     * (size_dep), y entonces se guarda entera para no pixelarla: 990x556 son 2,2 MB aunque se vea a 240 px. Ya maquetada, se sabe su
+     * caja de verdad: si se guarda al doble o mas de lo que se ve, se reduce (nunca por debajo de lo que se ve). En una portada de
+     * periodico es la diferencia entre 15 fotos y todas. */
+    for (int i = 0; i < p->nimg; i++) {
+        struct wp_img *x = &p->imgs[i];
+        if (x->state != 2 || !x->px || x->is_svg || x->frames > 1 || x->size_dep || x->dw <= 0 || x->dh <= 0) continue;
+        int f = x->pw / x->dw, fh = x->ph / x->dh; if (fh < f) f = fh;
+        if (f < 2) continue;
+        int nw = 0, nh = 0; uint32_t *nx = img_shrink(x->px, x->pw, x->ph, f, &nw, &nh);
+        if (!nx) continue;
+        uint32_t antes = (uint32_t)x->pw * (uint32_t)x->ph * 4, ahora = (uint32_t)nw * (uint32_t)nh * 4;
+        kfree(x->px); x->px = nx; x->pw = nw; x->ph = nh;
+        { static uint32_t s341 = 0x20000000u; if (++s341 >= 0x40000000u) s341 = 0x20000000u; x->serial = s341; }   /* otra clave en la cache de escaladas */
+        p->img_bytes = p->img_bytes > antes - ahora ? p->img_bytes - (antes - ahora) : 0;
+    }
     /* SOMA_188: un SVG que se muestra bastante mas grande de lo que se rasterizo se vuelve a dibujar a su tamano (sin pixelar) */
     for (int i = 0; i < p->nimg; i++) {
         struct wp_img *x = &p->imgs[i];
@@ -829,9 +872,186 @@ static void img_scan(struct wpage *p)
         p->img_bytes = p->img_bytes > by ? p->img_bytes - by : 0;
     }
 }
+/* carga en sincrono la imagen i (lo que hacia img_load_one con la elegida) */
+static int img_load_index(struct wpage *p, int i)
+{
+    struct wp_img *e = &p->imgs[i];
+    p->img_pending--; e->tries++;
+    struct wn_resp rs;
+    if (wu_starts(e->url, "soma-svg:")) { svg_load(p, i); return 1; }      /* SOMA_PARCHE_028_UI */
+    int lr = load_sub(p, e->url, 0, 0, 0, 0, 1, 8u << 20, 10000, &rs);   /* SOMA_191 */
+    if (lr == 0 && rs.body && rs.status >= 200 && rs.status < 300 && !rs.via_gateway && wu_startsi(e->url, "http://") && img_needs_gateway((const uint8_t *)rs.body, rs.len)) {
+        /* SOMA_PARCHE_028_UI: WebP/AVIF/SVG servido por http:// -> segundo intento a traves de la pasarela, que lo convierte */
+        struct wn_resp r2; struct wn_req rq; memset(&rq, 0, sizeof rq);
+        rq.url = e->url; rq.referer = p->url; rq.timeout_ms = 10000; rq.max_body = 8u << 20; rq.want_binary = 1; rq.via_gateway = 1; rq.accept = "image/png,image/jpeg,image/gif";
+        if (wb_network_fetch(&rq, &r2) == 0 && r2.body && r2.status >= 200 && r2.status < 300 && !img_needs_gateway((const uint8_t *)r2.body, r2.len)) { wn_free(&rs); rs = r2; }
+        else wn_free(&r2);
+    }
+    if (lr == 0 && rs.body && rs.status >= 200 && rs.status < 300) img_decode_into(p, &p->imgs[i], (const uint8_t *)rs.body, rs.len);
+    else { p->imgs[i].state = 3; img_note_fail(p, e->url, rs.err[0] ? rs.err : (lr ? "error de red" : "estado HTTP"), rs.status, rs.len); }
+    wn_free(&rs);
+    return 1;
+}
+#if defined(SOMA_WEBSVC) && defined(__x86_64__)
+/* SOMA_343_DESCARGAS: en el proceso del navegador las imagenes se descargan de WDL_N en WDL_N, cada una en su corrutina (web_dl.h).
+ * La descarga solo trae los bytes; decodificar se hace aqui, en el bucle principal, como antes. Cada trabajo lleva su propia copia
+ * de la URL y del referente, y al recogerlo se comprueba que la pagina, la imagen y la URL siguen siendo las mismas. */
+#define SOMA_DL 1
+#include "web_dl.h"
+static int url_blocked(const char *u);                           /* SOMA_344_SCRIPTS: definidas mas abajo */
+static int under_template(const struct wnode *n);
+struct dlimg { int used, done, kind; struct wpage *p; uint64_t t0; int idx; uint32_t hash; struct wnode *node; char *url, *ref; struct wn_resp rs; int rc; };
+enum { DLK_IMG = 0, DLK_SCRIPT = 1 };                            /* SOMA_344_SCRIPTS: tambien scripts */
+static struct dlimg dl_jobs[WDL_N];
+static void dl_img_job(void *arg)
+{
+    struct dlimg *j = (struct dlimg *)arg;
+    struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&j->rs, 0, sizeof j->rs);
+    rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 10000; rq.max_body = 8u << 20; rq.want_binary = 1; rq.accept = "image/png,image/jpeg,image/gif";
+    j->rc = wb_network_fetch(&rq, &j->rs);
+    if (j->rc == 0 && j->rs.body && j->rs.status >= 200 && j->rs.status < 300 && !j->rs.via_gateway && wu_startsi(j->url, "http://") &&
+        img_needs_gateway((const uint8_t *)j->rs.body, j->rs.len)) {                    /* como la carga en sincrono: WebP/AVIF por la pasarela */
+        struct wn_resp r2; struct wn_req g = rq; g.via_gateway = 1;
+        if (wb_network_fetch(&g, &r2) == 0 && r2.body && r2.status >= 200 && r2.status < 300 && !img_needs_gateway((const uint8_t *)r2.body, r2.len)) { wn_free(&j->rs); j->rs = r2; }
+        else wn_free(&r2);
+    }
+    j->done = 1;
+}
+static int dl_busy(const struct wpage *p) { for (int i = 0; i < WDL_N; i++) if (dl_jobs[i].used && !dl_jobs[i].done && dl_jobs[i].p == p && dl_jobs[i].kind == DLK_IMG) return 1; return 0; }
+static void dl_job_free(struct dlimg *j) { wn_free(&j->rs); kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = j->done = 0; }
+static int dl_collect(struct wpage *p)
+{
+    int did = 0;
+    for (int i = 0; i < WDL_N; i++) {
+        struct dlimg *j = &dl_jobs[i];
+        if (!j->used || !j->done) continue;
+        if (j->kind == DLK_SCRIPT) { if (j->p != p || j->t0 != p->load_t0) dl_job_free(j); continue; }   /* script de otra pagina: fuera; de esta, lo recoge su turno */
+        int valid = j->p == p && p->load_t0 == j->t0 && j->idx >= 0 && j->idx < p->nimg && p->imgs[j->idx].state == 4 &&
+                    p->imgs[j->idx].hash == j->hash && wu_streq(p->imgs[j->idx].url, j->url);
+        if (valid) {
+            struct wp_img *e = &p->imgs[j->idx];
+            if (p->img_pending > 0) p->img_pending--;
+            if (j->rc == 0 && j->rs.body && j->rs.status >= 200 && j->rs.status < 300) img_decode_into(p, e, (const uint8_t *)j->rs.body, j->rs.len);
+            else if (j->rc != -13 && j->rc != 0 && j->rs.status == 0 && e->tries < 2 && !p->stop) { e->state = 1; p->img_pending++; }   /* un fallo de red: otra vez */
+            else { e->state = 3; img_note_fail(p, e->url, j->rs.err[0] ? j->rs.err : (j->rc ? "error de red" : "estado HTTP"), j->rs.status, j->rs.len); }
+            did = 1;
+        }
+        wn_free(&j->rs); kfree(j->url); kfree(j->ref);
+        j->url = j->ref = 0; j->used = j->done = 0;
+    }
+    return did;
+}
+static int dl_submit(struct wpage *p, int idx)
+{
+    struct wp_img *e = &p->imgs[idx];
+    if (!wu_startsi(e->url, "http://") && !wu_startsi(e->url, "https://")) return 0;
+    struct dlimg *j = 0; for (int i = 0; i < WDL_N; i++) if (!dl_jobs[i].used) { j = &dl_jobs[i]; break; }
+    if (!j) return 0;
+    memset(j, 0, sizeof *j); j->kind = DLK_IMG;
+    j->url = sdup(e->url); j->ref = sdup(p->url);
+    if (!j->url || !j->ref) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; return 0; }
+    j->p = p; j->t0 = p->load_t0; j->idx = idx; j->hash = e->hash; j->used = 1;
+    if (wdl_start(dl_img_job, j) != 0) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = 0; return 0; }
+    e->state = 4; e->tries++;                                     /* en vuelo: img_pending se descuenta al recoger */
+    return 1;
+}
+/* SOMA_344_SCRIPTS: los scripts externos se descargaban uno detras de otro (hasta 12 s cada uno) y la pagina no se maquetaba hasta
+ * acabar. Ahora, al pedir uno, se adelantan los siguientes (como mucho 3, dejando siempre un hueco libre): se descargan a la vez y se
+ * EJECUTAN en el orden del documento, como manda HTML. Si no hay hueco para el que toca, se descarga en sincrono (nunca espera a uno
+ * adelantado: no puede quedarse atascado). */
+static void dl_script_job(void *arg)
+{
+    struct dlimg *j = (struct dlimg *)arg;
+    struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&j->rs, 0, sizeof j->rs);
+    rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 12000; rq.max_body = WP_MAX_RES;   /* como load_sub para un script */
+    j->rc = wb_network_fetch(&rq, &j->rs);
+    j->done = 1;
+}
+static struct dlimg *dl_find_script(struct wpage *p, struct wnode *node)
+{
+    for (int i = 0; i < WDL_N; i++) { struct dlimg *j = &dl_jobs[i]; if (j->used && j->kind == DLK_SCRIPT && j->p == p && j->t0 == p->load_t0 && j->node == node) return j; }
+    return 0;
+}
+static int dl_free_slots(void) { int n = 0; for (int i = 0; i < WDL_N; i++) n += !dl_jobs[i].used; return n; }
+static int dl_submit_script(struct wpage *p, struct wnode *node, const char *url)
+{
+    if (!wu_startsi(url, "http://") && !wu_startsi(url, "https://")) return 0;
+    struct dlimg *j = 0; for (int i = 0; i < WDL_N; i++) if (!dl_jobs[i].used) { j = &dl_jobs[i]; break; }
+    if (!j) return 0;
+    memset(j, 0, sizeof *j); j->kind = DLK_SCRIPT;
+    j->url = sdup(url); j->ref = sdup(p->url);
+    if (!j->url || !j->ref) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; return 0; }
+    j->p = p; j->t0 = p->load_t0; j->node = node; j->used = 1;
+    if (wdl_start(dl_script_job, j) != 0) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = 0; return 0; }
+    return 1;
+}
+static int script_is_classic_or_module(struct wnode *s)
+{
+    const char *ty = wd_attr(s, "type");
+    if (!ty || !*ty) return 1;
+    return wu_strieq(ty, "module") || wu_findi(ty, "javascript") || wu_findi(ty, "ecmascript") || wu_findi(ty, "jscript");
+}
+/* adelanta las descargas de los siguientes scripts externos del documento (despues de `from`) */
+static void dl_prefetch_scripts(struct wpage *p, struct wnode *from)
+{
+    int lanzados = 0;
+    for (struct wnode *n = wd_walk_next(from, 0); n && lanzados < 3 && dl_free_slots() > 1; n = wd_walk_next(n, 0)) {
+        if (n->type != WN_ELEM || n->tag != WT_SCRIPT || n->sel || under_template(n)) continue;
+        const char *src = wd_attr(n, "src");
+        if (!src || !*src || !script_is_classic_or_module(n)) continue;
+        if (dl_find_script(p, n)) { lanzados++; continue; }
+        char u[WN_URL_MAX]; abs_url(p, src, u, sizeof u);
+        if (url_blocked(u)) continue;
+        if (dl_submit_script(p, n, u)) lanzados++;
+    }
+}
+static int script_fetch_dl(struct wpage *p, struct wnode *node, const char *url, struct wn_resp *rs, int *rc)
+{
+    wdl_pump();
+    struct dlimg *j = dl_find_script(p, node);
+    if (j && !wu_streq(j->url, url)) { dl_job_free(j); j = 0; }       /* el src cambio: no vale */
+    if (j) {
+        if (!j->done) { dl_prefetch_scripts(p, node); return 0; }   /* en camino: volver en el siguiente turno */
+        *rs = j->rs; *rc = j->rc; memset(&j->rs, 0, sizeof j->rs);
+        dl_job_free(j);
+        dl_prefetch_scripts(p, node);
+        return 1;
+    }
+    if (!dl_submit_script(p, node, url)) return -1;                   /* sin hueco (o no es http): en sincrono, como antes */
+    dl_prefetch_scripts(p, node);
+    return 0;
+}
+/* un turno a cada descarga, recoger lo terminado y lanzar las pendientes mas cercanas mientras haya hueco */
+static int img_load_dl(struct wpage *p)
+{
+    wdl_pump();
+    int got = dl_collect(p), started = 0, sync_best = -1;
+    img_scan(p);
+    int lim = p->vh > 0 ? p->vh + p->vh / 2 : 900, waiting = 0;
+    for (int round = 0; round <= WDL_N; round++) {
+        int best = -1;
+        for (int i = 0; i < p->nimg; i++) {
+            struct wp_img *x = &p->imgs[i]; if (x->state != 1) continue;
+            if (p->lay ? x->dist <= lim : !x->aplazada) { if (best < 0 || x->dist < p->imgs[best].dist) best = i; }
+            else if (round == 0) waiting++;
+        }
+        if (round == 0) p->img_waiting = waiting;
+        if (best < 0) break;
+        if (dl_submit(p, best)) { started++; continue; }
+        if (!wu_startsi(p->imgs[best].url, "http://") && !wu_startsi(p->imgs[best].url, "https://")) sync_best = best;   /* data:, soma-svg:, archivos */
+        break;                                                     /* o no queda hueco: ya se lanzara al recoger */
+    }
+    if (got || started) return 1;
+    if (sync_best >= 0) return img_load_index(p, sync_best);
+    return 0;
+}
+#endif
 /* carga la imagen pendiente mas cercana a la pantalla; devuelve 1 si hizo algo (0 = no queda ninguna cerca) */
 static int img_load_one(struct wpage *p)
 {
+#if defined(SOMA_DL)
+    return img_load_dl(p);                                       /* SOMA_343_DESCARGAS */
+#endif
 #if SOMA_WEB_ASYNC_IMAGES
     /* Recoger una respuesta completada sin bloquear la cola de eventos. */
     if (soma151_collect(p)) return 1;
@@ -841,34 +1061,20 @@ static int img_load_one(struct wpage *p)
     int best = -1, lim = p->vh > 0 ? p->vh + p->vh / 2 : 900, waiting = 0;
     for (int i = 0; i < p->nimg; i++) {
         struct wp_img *x = &p->imgs[i]; if (x->state != 1) continue;
-        if (!p->lay || x->dist <= lim) { if (best < 0 || x->dist < p->imgs[best].dist) best = i; }
+        if (p->lay ? x->dist <= lim : !x->aplazada) { if (best < 0 || x->dist < p->imgs[best].dist) best = i; }   /* SOMA_341 */
         else waiting++;
     }
     p->img_waiting = waiting;
     for (int i = best; i >= 0; i = -1) {
-        struct wp_img *e = &p->imgs[i];
 #if SOMA_WEB_ASYNC_IMAGES
+        struct wp_img *e = &p->imgs[i];
         if ((wu_startsi(e->url, "http://") || wu_startsi(e->url, "https://")) && soma151_submit(p, i)) {
             e->state = 4; /* en vuelo; img_pending se decrementa solo al recibir */
             e->tries++;
             return 0;
         }
 #endif
-        p->img_pending--; e->tries++;
-        struct wn_resp rs;
-        if (wu_starts(e->url, "soma-svg:")) { svg_load(p, i); return 1; }      /* SOMA_PARCHE_028_UI */
-        int lr = load_sub(p, e->url, 0, 0, 0, 0, 1, 8u << 20, 10000, &rs);   /* SOMA_191 */
-        if (lr == 0 && rs.body && rs.status >= 200 && rs.status < 300 && !rs.via_gateway && wu_startsi(e->url, "http://") && img_needs_gateway((const uint8_t *)rs.body, rs.len)) {
-            /* SOMA_PARCHE_028_UI: WebP/AVIF/SVG servido por http:// -> segundo intento a traves de la pasarela, que lo convierte */
-            struct wn_resp r2; struct wn_req rq; memset(&rq, 0, sizeof rq);
-            rq.url = e->url; rq.referer = p->url; rq.timeout_ms = 10000; rq.max_body = 8u << 20; rq.want_binary = 1; rq.via_gateway = 1; rq.accept = "image/png,image/jpeg,image/gif";
-            if (wb_network_fetch(&rq, &r2) == 0 && r2.body && r2.status >= 200 && r2.status < 300 && !img_needs_gateway((const uint8_t *)r2.body, r2.len)) { wn_free(&rs); rs = r2; }
-            else wn_free(&r2);
-        }
-        if (lr == 0 && rs.body && rs.status >= 200 && rs.status < 300) img_decode_into(p, &p->imgs[i], (const uint8_t *)rs.body, rs.len);
-        else { p->imgs[i].state = 3; img_note_fail(p, e->url, rs.err[0] ? rs.err : (lr ? "error de red" : "estado HTTP"), rs.status, rs.len); }
-        wn_free(&rs);
-        return 1;
+        return img_load_index(p, i);
     }
     return 0;
 }
@@ -1749,7 +1955,14 @@ static const char *const BLOCKED[] = {
     "google-analytics.com", "googletagmanager.com", "doubleclick.net", "googlesyndication.com", "adservice.google", "facebook.net", "connect.facebook",
     "hotjar.com", "scorecardresearch.com", "quantserve.com", "taboola.com", "outbrain.com", "criteo.", "amazon-adsystem", "clarity.ms", "segment.com",
     "mixpanel.com", "newrelic.com", "nr-data.net", "sentry.io", "optimizely.com", "addthis.com", "sharethis.com", "chartbeat", "krxd.net", "demdex.net",
-    "pubmatic.com", "rubiconproject.com", "adnxs.com", "googleadservices.com", "ads-twitter.com", "analytics.twitter", "px.ads.linkedin", "bat.bing.com", 0
+    "pubmatic.com", "rubiconproject.com", "adnxs.com", "googleadservices.com", "ads-twitter.com", "analytics.twitter", "px.ads.linkedin", "bat.bing.com",
+    /* SOMA_344_SCRIPTS: publicidad y medicion habituales en la prensa espanola (no los gestores de consentimiento: sin ellos algunas
+     * paginas se quedan tapadas por el aviso de cookies) */
+    "googletagservices.com", "smartadserver.com", "adform.net", "teads.tv", "seedtag.com", "permutive.com", "omnitagjs", "cxense.com",
+    "gemius.", "effectivemeasure", "moatads.com", "doubleverify.com", "adsafeprotected.com", "casalemedia.com", "openx.net",
+    "indexww.com", "id5-sync.com", "liadm.com", "rlcdn.com", "bidswitch.net", "sharethrough.com", "33across.com", "gumgum.com",
+    "onetag-sys.com", "smartclip.net", "richaudience.com", "sunmedia.tv", "sensic.net", "mrf.io", "adnami.io", "yieldlove",
+    "pbstck.com", "prebid", "analytics.tiktok.com", "snap.licdn.com", "connect.facebook.net", 0
 };
 /* SOMA_152D: lista de bloqueo del usuario en /etc/bloqueo_web.txt (se relee al cargar cada pagina).
  * Una linea por dominio o trozo de URL; '#' comenta; "!dominio" permite algo que la lista interna bloquea.
@@ -2730,6 +2943,9 @@ int wp_tick(struct wpage *p, uint64_t now)
         /* Una peticion en vuelo no implica que se hayan acabado las imagenes. */
         int io_busy = soma151_busy(p);
         if (io_busy && next > 16) next = 16;
+#elif defined(SOMA_DL)
+        int io_busy = dl_busy(p);                                 /* SOMA_343_DESCARGAS: descargas en vuelo: volver pronto a darles turno */
+        if (io_busy && next > 2) next = 2;
 #else
         int io_busy = 0;
 #endif

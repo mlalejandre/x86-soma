@@ -21,7 +21,19 @@
 #define W3_OUT_VA     SBX_OUT_VA
 #define W3_HEAP_VA    SBX_HEAP_VA
 #define W3_SURF_VA    0x8040000000ULL            /* USER_BASE + 1 GiB */
-#define W3_HEAP_MAX   SBX_HEAP_MAX               /* 192 MiB */
+/* SOMA_341_NAVEGADOR_MEMORIA: el monton del navegador era el de cualquier servicio aislado (192 MiB) y el motor lo tomaba por toda
+ * la memoria del equipo: 24 MiB para imagenes y "sin memoria para mas imagenes" en los periodicos aunque QEMU tuviera 4 GiB.
+ * Ahora el nucleo le da la mitad de la memoria libre al arrancarlo, entre 192 MiB y 768 MiB (lo que cabe hasta W3_SURF_VA), y se
+ * lo dice en W3C_INIT a[4] (MiB). El monton es bajo demanda: solo ocupa lo que se toca. */
+#define W3_HEAP_MAX   (768u << 20)
+#define W3_HEAP_MIN   (192u << 20)
+static inline uint32_t w3_heap_bytes(uint64_t free_bytes)
+{
+    uint64_t h = free_bytes / 2;
+    if (h < W3_HEAP_MIN) h = W3_HEAP_MIN;
+    if (h > W3_HEAP_MAX) h = W3_HEAP_MAX;
+    return (uint32_t)(h & ~((uint64_t)(1u << 20) - 1u));             /* MiB enteros */
+}
 #define W3_MAX_W      3840
 #define W3_MAX_H      2160
 #define W3_SURF_MAX   ((uint64_t)W3_MAX_W * W3_MAX_H * 4u)
@@ -48,7 +60,7 @@ enum { W3P_STATE = 0, W3P_FRAME = 1, W3P_SAVE = 2 /* SOMA_203: a = direccion en 
 #define W3F_FIXED 1u         /* frame_flags: la pagina tiene elementos fijos o pegajosos: el fotograma no se puede mostrar corrido */
 
 enum {                     /* ordenes nucleo -> motor (w3_cmd.op) */
-    W3C_INIT = 1,          /* a = {vw, vh, verificar_tls}; u64 = hora Unix (0 = desconocida); seed = 32 bytes al azar */
+    W3C_INIT = 1,          /* a = {vw, vh, verificar_tls, ip, monton_MiB}; u64 = hora Unix (0 = desconocida); seed = 32 bytes al azar */
     W3C_NAVIGATE,          /* a = {flags WPN_*}; datos = URL */
     W3C_HISTORY,           /* a = {delta} */
     W3C_VIEWPORT,          /* a = {vw, vh} */
@@ -78,6 +90,7 @@ struct w3_cmd {            /* al principio de W3_IN_VA; los datos van en W3_IN_V
     uint8_t  pad[256 - 88];
 };
 _Static_assert(sizeof(struct w3_cmd) == 256, "w3_cmd");
+_Static_assert(W3_HEAP_VA + W3_HEAP_MAX <= W3_SURF_VA, "el monton del navegador no puede pisar su superficie");
 
 #define W3_DD_MAX 96
 struct w3_state {          /* al principio de W3_OUT_VA */

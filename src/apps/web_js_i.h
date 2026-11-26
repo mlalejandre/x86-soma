@@ -223,6 +223,7 @@ jstr *js_intern(struct jrt *rt, jstr *s);
 jstr *js_intern_c(struct jrt *rt, const char *s);
 jstr *js_intern_n(struct jrt *rt, const char *s, uint32_t n);
 jstr *js_str_concat(struct jrt *rt, jstr *a, jstr *b);
+uint32_t js_str_hash(jstr *s);   /* SOMA_344_JS: huella de la cadena (se calcula la primera vez y se guarda) */
 int   js_str_eq(const jstr *a, const jstr *b);
 /* objetos */
 jobj *js_obj_new(struct jrt *rt, jobj *proto);

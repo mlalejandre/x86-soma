@@ -286,16 +286,21 @@ static void idle_thread_func(void *arg)
 }
 
 /* Hilo 2: VirtIO-NET Daemon de recepcion en segundo plano */
+/* SOMA_344_RED: con trafico (algo recibido en los ultimos 200 ms) pasa cada 1 ms; en reposo, cada 10 ms como antes (el consumo en
+ * reposo no cambia). Desde que los clientes de red van en ring 3, entre una espera y otra de sus llamadas era este hilo quien vaciaba la
+ * tarjeta: cada rafaga esperaba hasta 10 ms. */
 static void netd_thread_func(void *arg)
 {
     (void)arg;
+    uint64_t ultimo = 0;
     for (;;) {
+        int got = 0;
         net_lock();
-        while (net_poll()) {
-            /* Vaciar cola de recepcion */
-        }
+        while (net_poll()) got = 1;                     /* vaciar la cola de recepcion */
         net_unlock();
-        thread_sleep(10);
+        uint64_t now = timer_get_uptime_ms();
+        if (got) ultimo = now;
+        thread_sleep(now - ultimo < 200 ? 1 : 10);
     }
 }
 

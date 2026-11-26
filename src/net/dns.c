@@ -7,13 +7,11 @@
 #include "udp.h"
 #include "idt.h"
 #include "mem.h"
+#include "dns_proto.h"                      /* SOMA_340_RED_HOSTIL: la respuesta se lee con una funcion pura probada con datos hostiles */
 
 
 #define DNS_PORT          53
 #define DNS_LOCAL_PORT    40053
-#define DNS_HEADER_LEN    12
-#define DNS_TYPE_A        1
-#define DNS_CLASS_IN      1
 
 
 uint8_t net_dns[4] = { 10, 0, 2, 3 };
@@ -26,42 +24,10 @@ uint8_t net_dns[4] = { 10, 0, 2, 3 };
 static uint32_t dns_rand(void) { return rng_u32(); }
 
 
-static uint16_t rd16(const uint8_t *p)
-{
-    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
-}
-
-
 static void wr16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
     p[1] = (uint8_t)v;
-}
-
-
-/* Devuelve el offset posterior al nombre, o -1 si es invalido. */
-static int dns_skip_name(const uint8_t *m, int len, int off)
-{
-    while (off < len) {
-
-        uint8_t l = m[off];
-
-        if (l == 0) {
-            return off + 1;
-        }
-
-        if ((l & 0xC0) == 0xC0) {
-            return (off + 1 < len) ? off + 2 : -1;
-        }
-
-        if (l & 0xC0) {
-            return -1;
-        }
-
-        off += 1 + l;
-    }
-
-    return -1;
 }
 
 
@@ -172,60 +138,19 @@ static int dns_resolve_unlocked(const char *name, uint8_t *ip_out, uint32_t time
                 continue;       /* no viene del servidor DNS configurado */
             }
 
-            if (len < DNS_HEADER_LEN || rd16(resp) != id) {
+            uint16_t rcode = 0;
+            int r = dns_respuesta_a(resp, len, id, ip_out, &rcode);
+            if (r == DNS_R_AJENA) {
                 continue;       /* respuesta ajena: seguir esperando */
             }
-
-            uint16_t flags = rd16(resp + 2);
-            uint16_t rcode = flags & 0x000F;
-
-            if (!(flags & 0x8000) || rcode != 0) {
+            if (r == DNS_R_ERROR) {
                 kprint("DNS: server error, rcode=");
                 kprint_dec(rcode);
                 kprint("\n");
                 udp_unbind(lport);
                 return 0;
             }
-
-            int qd = rd16(resp + 4);
-            int an = rd16(resp + 6);
-            int off = DNS_HEADER_LEN;
-
-            for (int i = 0; i < qd; ++i) {
-
-                off = dns_skip_name(resp, len, off);
-
-                if (off < 0) break;
-
-                off += 4;
-            }
-
-            for (int i = 0; i < an && off > 0; ++i) {
-
-                off = dns_skip_name(resp, len, off);
-
-                if (off < 0 || off + 10 > len) break;
-
-                uint16_t type  = rd16(resp + off);
-                uint16_t cls   = rd16(resp + off + 2);
-                uint16_t rdlen = rd16(resp + off + 8);
-
-                off += 10;
-
-                if (off + rdlen > len) break;
-
-                if (type == DNS_TYPE_A && cls == DNS_CLASS_IN && rdlen == 4) {
-
-                    for (int k = 0; k < 4; ++k) {
-                        ip_out[k] = resp[off + k];
-                    }
-
-                    ok = 1;
-                    break;
-                }
-
-                off += rdlen;
-            }
+            ok = r == DNS_R_OK;
 
             if (!ok) {
                 kprint("DNS: no A record in response\n");

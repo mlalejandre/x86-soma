@@ -20,6 +20,16 @@ size_t dhcp_build(uint8_t *o, int type, uint32_t xid, const uint8_t mac[6], cons
     return 300;
 }
 
+/* SOMA_340_RED_HOSTIL: una mascara de verdad es una fila de unos seguida de ceros, de /8 a /32. Un servidor DHCP falso podia mandar
+ * 128.0.0.0 (o 1.2.3.4): el panel web, que solo atiende a la red local segun la mascara, habria atendido a media Internet. */
+int dhcp_mask_ok(const uint8_t m[4])
+{
+    uint32_t v = (uint32_t)m[0] << 24 | (uint32_t)m[1] << 16 | (uint32_t)m[2] << 8 | m[3];
+    if ((v & 0xFF000000u) != 0xFF000000u) return 0;                 /* menos de /8 (o sin mascara) */
+    uint32_t inv = ~v;
+    return (inv & (inv + 1u)) == 0;                                  /* los ceros, todos seguidos al final */
+}
+
 int dhcp_parse(const uint8_t *b, size_t len, uint32_t xid, const uint8_t mac[6], struct dhcp_lease *l)
 {
     if (len < 240) return -1;
@@ -48,6 +58,6 @@ int dhcp_parse(const uint8_t *b, size_t len, uint32_t xid, const uint8_t mac[6],
         p += 2u + n;
     }
     if (type != DHCP_OFFER && type != DHCP_ACK && type != DHCP_NAK) return -1;
-    if (type != DHCP_NAK && !l->mask[0]) { l->mask[0] = 255; l->mask[1] = 255; l->mask[2] = 255; l->mask[3] = 0; }
+    if (type != DHCP_NAK && !dhcp_mask_ok(l->mask)) { l->mask[0] = 255; l->mask[1] = 255; l->mask[2] = 255; l->mask[3] = 0; }
     return type;
 }

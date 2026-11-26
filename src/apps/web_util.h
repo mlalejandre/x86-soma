@@ -112,13 +112,24 @@ struct wb { char *p; uint32_t len, cap; int err; };
 size_t kheap_max_bytes(void);
 /* SOMA 189: "memoria grande" desde 960 MiB de monton (equipos con 2 GiB de RAM o mas). Antes pedia 2 GiB justos y un QEMU
  * de 4 GiB (monton de 2047 MiB) se quedaba fuera: 20 MiB para imagenes y "sin memoria para mas imagenes" en los periodicos. */
+#if defined(SOMA_WEBSVC)
+/* SOMA_341_NAVEGADOR_MEMORIA: en el proceso del navegador (ring 3) kheap_max_bytes() es SU monton (192..768 MiB), no el del nucleo:
+ * todo es para el navegador, asi que "memoria grande" desde 384 MiB y las imagenes pueden llevarse 1/4 (y el JavaScript 1/3). */
+static inline int web_big_mem(void) { return kheap_max_bytes() >= ((size_t)384 << 20); }
+#else
 static inline int web_big_mem(void) { return kheap_max_bytes() >= ((size_t)960 << 20); }
+#endif
 /* SOMA 188B: tope del monton JS = 1/4 del monton del kernel, entre 24 MiB y 1536 MiB (crece bajo demanda). El interprete no
  * tiene recolector de basura y la portada de Google gasta 260 MiB: con 1/6 y tope de 512 se quedaba corto en paginas grandes,
  * y los equipos con menos de 2 GiB de monton tenian 24 MiB fijos (QEMU con 512 MB: "memoria del script agotada"). */
 /* SOMA 189: memoria para imagenes decodificadas = 1/8 del monton, entre 20 y 192 MiB */
+#if defined(SOMA_WEBSVC)
+static inline uint32_t web_img_budget(void) { size_t m = kheap_max_bytes() / 4; if (m < ((size_t)20 << 20)) m = (size_t)20 << 20; if (m > ((size_t)192 << 20)) m = (size_t)192 << 20; return (uint32_t)m; }
+static inline uint32_t web_js_heap_big(void) { size_t m = kheap_max_bytes() / 3; if (m < ((size_t)24 << 20)) m = (size_t)24 << 20; if (m > ((size_t)1536 << 20)) m = (size_t)1536 << 20; return (uint32_t)m; }
+#else
 static inline uint32_t web_img_budget(void) { size_t m = kheap_max_bytes() / 8; if (m < ((size_t)20 << 20)) m = (size_t)20 << 20; if (m > ((size_t)192 << 20)) m = (size_t)192 << 20; return (uint32_t)m; }
 static inline uint32_t web_js_heap_big(void) { size_t m = kheap_max_bytes() / 4; if (m < ((size_t)24 << 20)) m = (size_t)24 << 20; if (m > ((size_t)1536 << 20)) m = (size_t)1536 << 20; return (uint32_t)m; }
+#endif
 #else
 static inline int web_big_mem(void) { return 1; }
 static inline uint32_t web_js_heap_big(void) { return 384u << 20; }

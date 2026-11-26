@@ -199,6 +199,8 @@ static void render_dashboard(char *resp_body, uint32_t max_len, uint32_t *body_p
     );
 }
 
+static int httpd_default_mode(void);
+
 static void serve_client(int h)
 {
     static char rx_buf[2048];
@@ -274,7 +276,9 @@ static void serve_client(int h)
     } else if (str_eq(path, "/api/blackboard")) {
         content_type = "application/json";
         static char bb_txt[1024];
-        int r = vfs_read("/agent/blackboard.txt", bb_txt, sizeof(bb_txt) - 1);
+        /* SOMA_340_RED_HOSTIL: la pizarra lleva la ultima respuesta del agente (lo que has preguntado). En una maquina virtual solo la
+         * ve el anfitrion; en un equipo real con `httpd on` la veria toda la WiFi: ahi no se sirve. */
+        int r = httpd_default_mode() ? vfs_read("/agent/blackboard.txt", bb_txt, sizeof(bb_txt) - 1) : -1;
         if (r > 0) bb_txt[r] = '\0'; else bb_txt[0] = '\0';
 
         soma_str_put(resp_body, 16384, &body_pos, "{\n  \"blackboard\": \"");

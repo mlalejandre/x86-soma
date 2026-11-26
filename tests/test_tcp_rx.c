@@ -103,7 +103,8 @@ static void sendseg(uint32_t seq, const uint8_t *d, int len, int fin)
 {
     uint8_t f[1700]; int n = tcp_seg(f, PSP, 80, seq, isn + 1, (uint8_t)(0x18 | (fin ? 1 : 0)), d, (uint16_t)len); w16(f + 14 + 20 + 14, 65535); fix_l4(f, n); push(f, (uint16_t)n); drain();
 }
-static uint8_t SRC[40000], OUT[40000];
+static uint8_t SRC[40000], OUT[70000];
+#define RXB 65535u   /* SOMA_344_RED: igual que TCP_RX_BUFFER en src/net/tcp.c (antes 32 KiB) */
 static void pat(uint8_t *b, int n, int seed) { for (int i = 0; i < n; ++i) b[i] = (uint8_t)((i * 31 + seed) ^ (i >> 7)); }
 static int readall(int h, uint8_t *o, int max) { int tot = 0, r; while (tot < max && (r = tcp_recv(h, o + tot, (uint16_t)(max - tot), 5)) > 0) tot += r; return tot; }
 
@@ -137,15 +138,15 @@ int main(void)
     CK(readall(srv, OUT, 500) == 500 && memcmp(OUT, SRC + 2000, 500) == 0, "C: contenido");
     c0 += 500;
     /* D) datos fuera de la ventana: se descartan y no corrompen el anillo */
-    sendseg(c0 + 40000, SRC, 100, 0); sendseg(c0, SRC + 3000, 100, 0);
+    sendseg(c0 + RXB + 5000, SRC, 100, 0); sendseg(c0, SRC + 3000, 100, 0);
     CK(g_ack == c0 + 100, "D: dato lejano ignorado (%u)", g_ack - c0);
     CK(readall(srv, OUT, 100) == 100 && memcmp(OUT, SRC + 3000, 100) == 0, "D: contenido");
     c0 += 100;
-    /* E) llenar el buffer (32 KiB): ventana anunciada llega a 0, el exceso se descarta, al leer se reabre */
-    for (int i = 0; i < 26; ++i) sendseg(c0 + (uint32_t)i * 1400, SRC + 3100 + (uint32_t)i * 1400 % 30000, 1400, 0);
+    /* E) llenar el buffer (64 KiB): ventana anunciada llega a 0, el exceso se descarta, al leer se reabre */
+    for (int i = 0; i < 50; ++i) sendseg(c0 + (uint32_t)i * 1400, SRC + 3100 + (uint32_t)i * 1400 % 30000, 1400, 0);
     CK(g_wnd < 2000, "E: ventana casi cerrada (%u)", g_wnd);
-    uint32_t got = g_ack - c0; CK(got <= 32768 && got >= 30000, "E: se aceptaron %u bytes (<= 32768)", got);
-    int rd = readall(srv, OUT, 40000); CK((uint32_t)rd == got, "E: se leyo lo aceptado (%d)", rd);
+    uint32_t got = g_ack - c0; CK(got <= RXB && got >= RXB - 2000, "E: se aceptaron %u bytes (<= 65535)", got);
+    int rd = readall(srv, OUT, (int)RXB); CK((uint32_t)rd == got, "E: se leyo lo aceptado (%d)", rd);
     CK(g_wnd >= 8000, "E: ventana reabierta tras leer (%u)", g_wnd);
     c0 += got;
     /* F) FIN en orden tras datos; FIN con hueco pendiente no se acepta hasta que llegue lo anterior */

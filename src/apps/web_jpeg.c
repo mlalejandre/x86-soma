@@ -176,6 +176,32 @@ static void idct(const int16_t *in, const uint16_t *q, uint8_t *out, int stride)
     }
 }
 
+/* SOMA_342_NAVEGADOR_AGIL: IDCT reducida (como jidctred de libjpeg): con scale 2 o 4 se calculaba la IDCT 8x8 entera y despues se
+ * promediaban los pixeles, asi que reducir apenas ahorraba trabajo. Ahora sale directamente un bloque de NxN (N = 8/scale) usando solo
+ * los coeficientes de frecuencia baja: T[x][u] = a(u) cos((2x+1)u pi / 2N) * 4096, con a(0) = 1 y a(u) = raiz de 2, la misma escala
+ * de continua que la IDCT 8x8 (un bloque plano da el mismo valor). Solo enteros: tambien vale en el nucleo de arm64. */
+int wj_red_off;                     /* 1 = como antes (IDCT 8x8 y promedio): solo para comparar en las pruebas */
+static const int32_t IDR4[4][4] = { { 4096, 5352, 4096, 2217 }, { 4096, 2217, -4096, -5352 }, { 4096, -2217, -4096, 5352 }, { 4096, -5352, 4096, -2217 } };
+static const int32_t IDR2[2][2] = { { 4096, 4096 }, { 4096, -4096 } };
+static void idct_red(const int16_t *in, const uint16_t *q, uint8_t *out, int stride, int N)
+{
+    const int32_t *T = N == 4 ? &IDR4[0][0] : &IDR2[0][0];
+    int32_t r[4][4];
+    for (int v = 0; v < N; v++)
+        for (int x = 0; x < N; x++) {
+            int32_t s = 0;
+            for (int u = 0; u < N; u++) s += DQ(in[v * 8 + u], q[v * 8 + u]) * T[x * N + u];
+            r[v][x] = DESC(s, 8);
+        }
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+            int64_t s = 0;
+            for (int v = 0; v < N; v++) s += (int64_t)r[v][x] * T[y * N + v];
+            int32_t p = (int32_t)((s + (1 << 18)) >> 19) + 128;
+            out[y * stride + x] = (uint8_t)(p < 0 ? 0 : (p > 255 ? 255 : p));
+        }
+}
+
 /* PARCHE 086: salida con reduccion en el dominio DCT (scale 1, 2, 4 u 8: la imagen sale ya pequena y gasta 1/scale^2 de memoria),
  * croma con interpolacion bilineal (antes se repetia el pixel: bordes de color en escalera) y JPEG de 4 componentes (CMYK / YCCK de Adobe). */
 int wj_decode_progressive(const uint8_t *d, uint32_t n, struct wimg *o) { return wj_decode(d, n, o, 1); }
@@ -252,6 +278,7 @@ int wj_decode(const uint8_t *d, uint32_t n, struct wimg *o, int scale)
                     uint8_t *dst = planes[i] + (size_t)by * bs * pw + bx * bs;
                     if (S == 1) { idct(cf, J->q[c->tq], dst, pw); continue; }
                     if (S == 8) { dst[0] = (uint8_t)clamp255(((DQ(cf[0], J->q[c->tq][0]) + 4) >> 3) + 128); continue; }
+                    if (!wj_red_off) { idct_red(cf, J->q[c->tq], dst, pw, bs); continue; }   /* SOMA_342_NAVEGADOR_AGIL */
                     idct(cf, J->q[c->tq], tmp, 8);
                     for (int yy = 0; yy < bs; yy++) for (int xx = 0; xx < bs; xx++) {
                         int sum = 0; for (int a = 0; a < S; a++) for (int b = 0; b < S; b++) sum += tmp[(yy * S + a) * 8 + xx * S + b];

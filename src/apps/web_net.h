@@ -58,4 +58,7 @@ int  wn_gateway_caps(void);
 int  wn_https_unverified(void);                                              /* SOMA_176A: https directo (TLS propio) sin verificar certificados */
 const char *wn_tls_last_error(void);
 int wn_https_directo(void);   /* SOMA_316_RED_AISLADA: 1 si la red es real (https con TLS propio; en QEMU va por la pasarela) */
+/* SOMA_343_DESCARGAS: conexiones keep-alive guardadas (web_net.c) */
+void wn_keepalive_prune(void);
+void wn_keepalive_stats(uint32_t *reused, uint32_t *nuevas);
 #endif

@@ -57,6 +57,24 @@ caso "ventana"         0 "frames 6
 printf 'print(typeof win.mouse().x, win.key()===win.UP, win.size().join("x"), win.rgb(1,2,3)); win.close()\n' > "$WS/w2.js"
 caso "win.mouse/key"   0 "number true 300x200 66051
 [win cerrada draws=0 presents=0]" 'w2.js' '' 3
+# SOMA_344_JS: cadenas con la huella perezosa: construidas con +=, usadas como claves de Map, nombres de propiedad, ===, switch,
+# Object.keys, JSON y la cadena vacia; y que un += de 20000 vueltas (montar HTML) no tarde segundos
+cat > "$WS/cad344.js" <<'FINJS'
+var s = ""; for (var i = 0; i < 3000; i++) s += "ab" + i;
+var m = new Map(); m.set("k" + "1", 5);
+var o = {}; o["x" + "y"] = 1;
+var t = ""; for (var j = 0; j < 3; j++) t += (j ? "," : "") + "k" + j;
+var w = {}; w[t.split(",")[0]] = 1; w["k1"] = 1; w["k" + 2] = 1;
+var sw; switch ("a" + "b") { case "ab": sw = "si"; break; default: sw = "no"; }
+print(s.length, m.get("k1"), o.xy, ("a" + "b") === "ab", JSON.parse(JSON.stringify({ ["c" + "d"]: 2 })).cd, sw,
+      JSON.stringify({ ["c" + "d"]: 2 }), Object.keys(w).join(), ("" + "") === "", ("ab" + "cdefg").length, m.has("k" + 1), "k1" in w);
+FINJS
+caso "cadenas 344"     0 '16890 5 1 true 2 si {"cd":2} k0,k1,k2 true 7 true true' 'cad344.js'
+cat > "$WS/html344.js" <<'FINJS'
+var s = ""; for (var i = 0; i < 20000; i++) s += '<li class="item-' + (i % 7) + '">' + i + "</li>"; print(s.length);
+FINJS
+t0=$(date +%s%N); caso "+= de 20000"  0 "568890" 'html344.js'
+dt=$(( ($(date +%s%N) - t0) / 1000000 )); echo "   (+= de 20000 vueltas: $dt ms)"
 if [ "$1" = "todo" ]; then   # tambien el nucleo con ASan/UBSan (lo pide parche_274 --comprobar; make pruebas-js lo hace aparte)
   if ${CC:-gcc} -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST $INC -Itests tests/test_jsrun_274.c src/apps/jsrun_core.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o "$O/uj" 2>/dev/null; then
     ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 "$O/uj" || bad=$((bad+1))

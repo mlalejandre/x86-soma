@@ -232,7 +232,7 @@ $(BUILD)/user/netsvc.elf: $(NETSVC_SRCS) src/user/sbxrt.h src/core/sbx_abi.h src
 # SOMA_205: el proceso de ring 3 no tiene hilos del nucleo: la descarga asincrona de imagenes/scripts (SOMA_WEB_ASYNC_IMAGES=1, la que usa ejecutar.py)
 # se fuerza a 0 aqui; en el proceso las descargas son sincronas. El motor que sigue en el nucleo conserva la bandera.
 # SOMA_202: el NAVEGADOR AISLADO: el motor web entero como proceso de ring 3 (src/user/websvc.c, src/core/web_r3_abi.h).
-WEBSVC_SRCS = src/user/websvc.c src/user/unet.c src/apps/web_page.c src/apps/web_html.c src/apps/web_css.c src/apps/web_layout.c $(wildcard src/apps/web_js_*.c) \
+WEBSVC_SRCS = src/user/websvc.c src/user/web_dl.c src/user/unet.c src/apps/web_page.c src/apps/web_html.c src/apps/web_css.c src/apps/web_layout.c $(wildcard src/apps/web_js_*.c) \
 	src/apps/web_f64.c src/apps/web_regex.c src/apps/web_font.c src/apps/web_net.c src/apps/web_inflate.c src/apps/web_img.c src/apps/web_jpeg.c src/core/jpeg.c \
 	src/apps/bmp_dec.c src/drivers/fb.c src/ui/gui_font.c src/ui/soma_fonts.c src/core/tls13.c src/core/tlscrypto.c src/core/crypto.c src/core/x509.c src/core/tls_roots.c
 WEBSVC_INC = -Isrc/apps -Isrc/net -Isrc/arch/x86_64 -Isrc/drivers -Isrc/ui -Isrc/fs -Isrc/fonts -Isrc/icons -Isrc/lang -Isrc/agent -Isrc
@@ -747,6 +747,15 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) -Isrc/agent tests/test_inv_tema_336.c src/agent/inv_tema.c -o build/tests/test_inv_tema_336   # SOMA_336_INVESTIGA_TEMAS
 	$(HOST_CC) $(TEST_CFLAGS) -Isrc/apps tests/test_noticias_337.c src/apps/noticias_rss.c -o build/tests/test_noticias_337   # SOMA_337_NOTICIAS
 	$(HOST_CC) $(TEST_CFLAGS) -DAGR_SOLO_PURO -Isrc/agent tests/test_agentes_338.c src/agent/agentes_reg.c -o build/tests/test_agentes_338   # SOMA_338_AGENTES
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/net tests/test_red_hostil_340.c src/net/dhcp_proto.c -o build/tests/test_red_hostil_340 && ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_red_hostil_340   # SOMA_340_RED_HOSTIL: DNS, DHCP y panel web con datos hostiles
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/core tests/test_uvc_hostil_340.c src/core/uvc.c -o build/tests/test_uvc_hostil_340 && ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_uvc_hostil_340   # SOMA_340_RED_HOSTIL: camara USB falsa
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/core tests/test_usbnet_171.c src/core/usbnet_proto.c -o build/tests/test_usbnet_171 && ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_usbnet_171   # SOMA_340_RED_HOSTIL: existia y no se ejecutaba
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/arch/x86_64 tests/test_usbdisk_162.c -o build/tests/test_usbdisk_162 && ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_usbdisk_162   # SOMA_340_RED_HOSTIL: existia y no se ejecutaba
+	$(HOST_CC) $(TEST_CFLAGS) -Wno-misleading-indentation tests/fuzz_net.c tests/stubs_netif.c src/net/net.c src/net/ip.c src/net/udp.c src/net/tcp.c -o build/tests/fuzz_net && ASAN_OPTIONS=detect_leaks=0 ./build/tests/fuzz_net 3000 1   # SOMA_340_RED_HOSTIL: la pila TCP/IP en cada make test (make fuzz-net para pasadas largas)
+	$(HOST_CC) $(TEST_CFLAGS) -Isrc/core tests/test_navegador_memoria_341.c -o build/tests/test_navegador_memoria_341 && ./build/tests/test_navegador_memoria_341   # SOMA_341_NAVEGADOR_MEMORIA (en QEMU: python3 tests/prueba_navegador_341.py)
+	$(HOST_CC) $(TEST_CFLAGS) -DWEB_HOST_TEST -Isrc/apps tests/test_jpeg_reducido_342.c src/apps/web_jpeg.c src/core/jpeg_enc.c src/core/uvc.c -o build/tests/test_jpeg_reducido_342 && ASAN_OPTIONS=detect_leaks=0 ./build/tests/test_jpeg_reducido_342   # SOMA_342_NAVEGADOR_AGIL
+	python3 tests/test_pasarela_342.py   # SOMA_342_NAVEGADOR_AGIL: la pasarela reutiliza conexiones (sin Internet)
+	@if [ "$$(uname -s)" = Linux ] && [ "$$(uname -m)" = x86_64 ]; then $(HOST_CC) -std=gnu11 -O1 -g -Wall -Wextra -Werror -Isrc/apps tests/test_web_dl_343.c src/user/web_dl.c -o build/tests/test_web_dl_343 && ./build/tests/test_web_dl_343; else echo "== test_web_dl_343: solo en Linux x86_64 (cambio de pila del navegador): SE OMITE"; fi   # SOMA_343_DESCARGAS
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_mp4_252.c -o build/tests/test_mp4_252   # SOMA_252_VIDEO_NATIVO
 	$(HOST_CC) $(TEST_CFLAGS) -DYT_HTTPS_PURE_ONLY tests/test_yt_inner_252.c src/apps/yt_https.c -o build/tests/test_yt_inner_252
 	./build/tests/test_lexer

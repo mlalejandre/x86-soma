@@ -7,6 +7,53 @@ todavía es software experimental. Esta fase sirve para encontrar fallos con má
 Desde el parche 311, lo que llega de Internet (páginas, correo, YouTube, noticias, TLS) y el motor de IA se procesan en
 servicios aislados de ring 3; el escritorio y las aplicaciones siguen en ring 0.  <!-- SOMA_339_GITHUB -->
 
+<!-- SOMA_344_RED_SCRIPTS_JS -->
+### Red más ágil, scripts en paralelo y cadenas de JavaScript más baratas (344)
+- La red del núcleo recoge los paquetes antes cuando hay tráfico (1 ms en vez de 10 ms), tiene más búferes de recepción
+  (virtio 64, Wi-Fi Intel 128) y una ventana TCP de 64 KiB. Un archivo de 4 MB con 20 ms de retardo: de 4,1 s a 2,8 s.
+- Los scripts de una página se descargan mientras se ejecuta el anterior, sin cambiar el orden de ejecución. Más dominios de
+  publicidad bloqueados (no los gestores de consentimiento).
+- JavaScript ya no calcula el hash de cada cadena nueva ni la pone a cero: una lista de 6000 elementos hecha con `+=` pasa de
+  3,5 s a 1,3 s. (La lista anterior decía que faltaba un recolector de basura: existe desde el parche 189.)
+
+<!-- SOMA_343_DESCARGAS -->
+### El navegador descarga en paralelo y reutiliza las conexiones (343)
+- Las imágenes se descargan de cuatro en cuatro (corrutinas en el proceso del navegador), en vez de una detrás de otra.
+- Las conexiones con cada servidor se guardan abiertas y se reutilizan: en la red real, un TLS por servidor y no uno por
+  recurso. La pasarela de QEMU también mantiene abierta la conexión con SOMA.
+- El núcleo admite 16 conexiones TCP (antes 8).
+- Portada de prueba con 120 fotos y 50 ms de latencia: de 14,4 s a 5,4 s, con 4 conexiones en vez de 121.
+
+<!-- SOMA_342_NAVEGADOR_AGIL -->
+### El navegador carga las páginas con fotos mucho más rápido (342)
+- Las fotos se decodifican al tamaño al que se ven (también con el ancho puesto por CSS y el alto automático), con una IDCT
+  reducida que de verdad ahorra trabajo.
+- Mientras llegan imágenes la página se repinta como mucho cuatro veces por segundo, no una vez por imagen.
+- La pasarela de QEMU reutiliza las conexiones con cada servidor (antes, un TLS completo por cada foto) y precarga más recursos.
+- Una portada de prueba con 120 fotos: de 18,5 s a 3,4 s en QEMU. Con 50 ms de latencia, cada recurso por la pasarela pasa
+  de 149 a 77 ms.
+
+<!-- SOMA_341_NAVEGADOR_MEMORIA -->
+### El navegador ya no se queda sin memoria con las páginas llenas de fotos (341)
+- Desde que el navegador va en ring 3 tenía 192 MiB fijos y se creía en un equipo pequeño: 24 MiB para imágenes, y en las
+  portadas de los periódicos «sin memoria para más imágenes» aunque QEMU tuviera 4 GiB. Ahora el núcleo le da la mitad de la
+  memoria libre al abrirlo (entre 192 y 768 MiB; solo ocupa lo que usa).
+- Las fotos con el ancho puesto por CSS se guardaban a su tamaño original (990×556: 2,2 MB aunque se vieran a 240 px). Ya
+  maquetadas se reducen a lo que se ve.
+- Una imagen que no cabe y está lejos de la vista ya no se da por perdida: se carga al acercarse.
+- En una portada de prueba con 120 fotos: antes 15 bien y 105 fallaban; ahora las 120, con 52 MiB (también con 512 MB de RAM).
+
+<!-- SOMA_340_RED_HOSTIL -->
+### Lo que llega de la red local y de USB, probado con datos hostiles (340)
+- La pila TCP/IP, las respuestas DNS, las ofertas DHCP, la cámara USB, la red por USB y el disco del sistema se prueban con
+  cientos de miles de mensajes hostiles en cada `make test` (y en la CI). Antes, el fuzzer de red solo corría a mano, y DNS y la
+  cámara no tenían ninguna prueba así.
+- Arreglado: un tamaño falso de una cámara USB desbordaba un entero con signo al elegir el formato.
+- Arreglado: un servidor DHCP falso podía mandar una máscara como `128.0.0.0` y abrir el panel web (`httpd on`) a media Internet.
+  Las máscaras no contiguas o más anchas que /8 pasan a /24.
+- En un equipo real, el panel web ya no sirve la pizarra de los agentes (lleva la última respuesta del agente). En la máquina
+  virtual, igual que antes.
+
 <!-- SOMA_339_GITHUB -->
 ### Listo para publicar: README, exportadores y CI (339)
 - README al día: la red sin clientes en el núcleo (tabla de servicios de ring 3), la IA local, Noticias, Discos, Agentes, Fecha

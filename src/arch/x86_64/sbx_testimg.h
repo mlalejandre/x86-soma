@@ -1120,7 +1120,7 @@ static const struct sbx_testimg sbx_testimg[] = {
     { "jpeg_base", sbxti_jpeg_base, 1381, 1, 0, 0, 0, 48, 40, 0x65025f37u },
     { "jpeg_prog", sbxti_jpeg_prog, 1277, 1, 0, 0, 0, 48, 40, 0x65025f37u },
     { "jpeg_cmyk", sbxti_jpeg_cmyk, 1571, 1, 0, 0, 0, 48, 40, 0x13e4b72fu },
-    { "jpeg_big_fit", sbxti_jpeg_big_fit, 17733, 2, 100, 80, 0, 160, 120, 0xd1f7ad1au },
+    { "jpeg_big_fit", sbxti_jpeg_big_fit, 17733, 2, 100, 80, 0, 160, 120, 0x78875cfeu },   /* SOMA_342_NAVEGADOR_AGIL: IDCT reducida (antes 0xd1f7ad1a) */
     { "jpeg_big", sbxti_jpeg_big_fit, 17733, 1, 0, 0, 0, 640, 480, 0x224f086eu },
     { "bmp24", sbxti_bmp24, 1134, 1, 0, 0, 0, 23, 15, 0x6d5266f2u },
     { "bmp32_raw", sbxti_bmp32_raw, 890, 3, 0, 0, 0, 19, 11, 0xcc72ae7cu },

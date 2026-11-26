@@ -856,7 +856,7 @@ static void mcpy(uint8_t *d, const void *s, uint32_t n) { for (uint32_t i = 0; i
 static void mzero(void *d, uint32_t n) { for (uint32_t i = 0; i < n; i++) ((uint8_t *)d)[i] = 0; }
 
 /* ---------------------------------------------------------------- tramas recibidas hacia la pila IP */
-#define RXQ_N 48
+#define RXQ_N 128   /* SOMA_344_RED: 48 -> 128 tramas en espera hacia la pila IP (una ventana TCP de 64 KiB son 45) */
 static uint8_t (*rxq_buf)[1600]; static uint16_t rxq_len[RXQ_N];         /* en memoria del PMM (la imagen del kernel no puede crecer) */
 static volatile uint32_t rxq_head, rxq_tail;
 static void rxq_push(const uint8_t *dst, const uint8_t *src, const uint8_t *type_and_payload, uint32_t n)
