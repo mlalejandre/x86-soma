@@ -1,4 +1,5 @@
 /* SOMA_266_AVISO: el aviso en el orbe (gui_prompter.c con las imitaciones del banco del 259): se ve al momento y la respuesta lo sustituye entera. */
+#define PRM_SIN_MD 1   /* SOMA_334_ORBE_MD: aqui se prueba el formateador de antes */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,8 @@ static int letra = 2;
 int lcm_cfg_get(int q) { return q == 6 ? letra : 0; }
 static void chat_fase(const char *q) { (void)q; }                 /* SOMA_285_CHAT: el chat no esta en este banco */
 static void chat_fase_orden(const char *l) { (void)l; }
+static void agentes_reg_fase(const char *q) { (void)q; }          /* SOMA_338_AGENTES: la aplicacion Agentes no esta en este banco */
+static void agentes_reg_orden(const char *l) { (void)l; }
 #include "gui_prompter.c"
 
 

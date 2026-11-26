@@ -210,6 +210,8 @@ static void her_draw_one_window_chrome(struct her_win_node *win, int is_active)
         case APP_YOUTUBE:        title = "YouTube"; break;                    /* SOMA_250_YOUTUBE */
         case APP_SETTINGS:       title = "Ajustes"; break;
         case APP_SYSMON:         title = "Monitor del sistema"; break;
+        case APP_DISCOS:         title = "Discos"; break;          /* SOMA_331_DISCOS */
+        case APP_NOTICIAS:       title = "Noticias"; break;        /* SOMA_337_NOTICIAS */
         case APP_AGENDA:         title = "Calendario"; break;                /* SOMA_272_AGENDA */
         case APP_CORREO:         title = "Correo"; break;                    /* SOMA_295_CORREO */
         case APP_RECORDER:       title = "Grabadora"; break;

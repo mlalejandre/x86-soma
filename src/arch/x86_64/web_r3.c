@@ -22,7 +22,8 @@
 #include "tls_trust.h"
 
 uint64_t timer_get_uptime_ms(void);
-extern const uint8_t _binary_websvc_elf_start[], _binary_websvc_elf_end[];
+#include "progz.h"
+PROGZ_DECL(websvc);                                         /* SOMA_314_PROGZ: websvc.elf va comprimido en la imagen */
 
 #define Q_N 64
 struct qcmd { uint32_t seq, op, len; int32_t a[8]; char *data; };
@@ -139,7 +140,12 @@ int web_r3_start(int vw, int vh)
     sp.regions[0] = &r_in; sp.regions[1] = &r_out; sp.regions[2] = &r_heap; sp.regions[3] = &r_surf; sp.nregions = 4;
     sp.reserve_frames = SBX_RESERVE_FRAMES;
     int idx = -2, err = 0;
-    for (int tries = 0; tries < 200 && idx == -2; ++tries) { idx = usermode_exec_ex("navegador", _binary_websvc_elf_start, (size_t)(_binary_websvc_elf_end - _binary_websvc_elf_start), 0x7FFFFF00u, &sp, &err); if (idx == -2) thread_sleep(5); }
+    struct progz pz;                                         /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */
+    if (progz_abre(PROGZ(websvc), "navegador", &pz) != 0) idx = -1;
+    else {
+        for (int tries = 0; tries < 200 && idx == -2; ++tries) { idx = usermode_exec_ex("navegador", pz.elf, pz.len, 0x7FFFFF00u, &sp, &err); if (idx == -2) thread_sleep(5); }
+        progz_cierra(&pz);
+    }
     if (idx < 0) { kprint("[WEB-R3] no se pudo lanzar el proceso del navegador (error "); kprint_dec((uint32_t)(-err)); kprint(")\n"); teardown(); return -1; }
     g_idx = idx; g_up = 1; g_starts++; g_last_sys = timer_get_uptime_ms(); g_in_wait = 0;
     int32_t a[4] = { vw, vh, tls13_verify, (int32_t)(((uint32_t)net_ip[0] << 24) | ((uint32_t)net_ip[1] << 16) | ((uint32_t)net_ip[2] << 8) | net_ip[3]) };

@@ -82,7 +82,8 @@ def sha256(p):
 def compilar(local):
     titulo("1/3  COMPILANDO SOMA (build/usb/EFI/BOOT/BOOTX64.EFI)")
     cflags = os.environ.get("SOMA_EXTRA_CFLAGS", "-DSOMA_WEB_ASYNC_IMAGES=1")
-    make = ["make", "ARCH=x86_64", "PLATFORM=qemu_virt", f"EXTRA_CFLAGS={cflags}", "t480s-usb"]
+    # SOMA_328_COMPILA_RAPIDO: carpeta propia (build/t480s): no pisa los objetos de la compilacion normal (otras opciones)
+    make = ["make", "ARCH=x86_64", "PLATFORM=qemu_virt", "BUILD=build/t480s", f"EXTRA_CFLAGS={cflags}", "t480s-usb"]
     if local:
         r = subprocess.run(make, cwd=ROOT)
     else:

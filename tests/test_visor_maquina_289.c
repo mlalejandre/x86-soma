@@ -52,6 +52,8 @@ int wn_fetch(const struct wn_req *rq, struct wn_resp *rs)
     uint32_t L = (uint32_t)strlen(g_red_body); rs->body = malloc(L + 1); memcpy(rs->body, g_red_body, L + 1); rs->len = L; return 0;
 }
 void wn_free(struct wn_resp *rs) { free(rs->body); rs->body = 0; }
+int wn_fetch_isolated(const struct wn_req *rq, struct wn_resp *rs) { return wn_fetch(rq, rs); }   /* SOMA_317: el visor descarga con netsvc */
+void wn_free_isolated(struct wn_resp *rs) { wn_free(rs); }
 /* lector de PDF: instancias de mentira */
 static int pv_sel = 1, pv_used[9], pv_open[9], pv_pintado, pv_teclas, pv_clics; static uint8_t *pv_data[9]; static char pv_err[64];
 int pdfview_inst_new(void) { for (int k = 2; k <= 8; k++) if (!pv_used[k]) { pv_used[k] = 1; pv_sel = k; return k; } return 0; }

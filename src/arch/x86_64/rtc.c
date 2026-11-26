@@ -19,7 +19,7 @@ static uint8_t bcd2bin(uint8_t val)
     return ((val >> 4) * 10) + (val & 0x0F);
 }
 
-void rtc_get_datetime(struct rtc_time *t)
+void rtc_leer_hw(struct rtc_time *t)          /* SOMA_332_HORA: antes rtc_get_datetime */
 {
     while (cmos_is_updating()) cpu_pause();
     t->sec   = cmos_read(0x00);

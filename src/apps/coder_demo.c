@@ -6,6 +6,7 @@
 #include "llm.h"
 #include "lang.h"
 #include "vm.h"
+#include "mem.h"        /* SOMA_323_BSS: kmalloc */
 
 static uint32_t sl(const char *s) { uint32_t n = 0; while (s && s[n]) n++; return n; }
 static int has(const char *h, const char *n) { uint32_t ln = sl(n); if (!ln) return 1; for (; *h; h++) { uint32_t i = 0; while (i < ln && h[i] == n[i]) i++; if (i == ln) return 1; } return 0; }
@@ -56,16 +57,19 @@ static int demo_llm(const char *prompt, char *out, uint32_t max, uint32_t timeou
 }
 
 /* ---------------------------------------------------------------- ejecucion de pruebas (captura de la salida del hilo actual) */
-static struct soma_vm g_demo_vm;
+/* SOMA_323_BSS: la maquina virtual de la demo (627 KiB) se reserva al ejecutar y se libera despues; antes ocupaba memoria siempre */
 static int demo_run(const uint8_t *bc, uint32_t len, const char *input, char *out, uint32_t max)
 {
+    struct soma_vm *vm = (struct soma_vm *)kmalloc(sizeof *vm);
+    if (!vm) { if (out && max) { const char *m = "sin memoria para la maquina virtual"; uint32_t i = 0; while (m[i] && i + 1 < max) { out[i] = m[i]; i++; } out[i] = 0; } return -1; }
     uint64_t old = vm_step_limit; vm_step_limit = 1500000;                 /* un bucle infinito se detecta en una fraccion de segundo */
     console_capture_begin(out, max, input);
-    vm_init(&g_demo_vm);
-    int rc = vm_run(&g_demo_vm, bc, len);
-    vm_release(&g_demo_vm);
+    vm_init(vm);
+    int rc = vm_run(vm, bc, len);
+    vm_release(vm);
     console_capture_end();
     vm_step_limit = old;
+    kfree(vm);
     return rc;
 }
 

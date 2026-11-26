@@ -31,5 +31,8 @@ int  blk_write(int dev, uint64_t lba, uint32_t n, const void *buf);
 /* Copia n sectores entre dispositivos (destino de prueba), troceando; con verify relee el destino y compara. */
 int  blk_copy(int src, uint64_t slba, int dst, uint64_t dlba, uint64_t n, int verify);
 const char *blk_err_str(int e);
+/* SOMA_331_DISCOS: permite escribir en un disco real hasta reiniciar. Solo la llama el gestor de discos (discos.c) despues de que
+ * el usuario escriba el nombre del disco, y nunca para el disco del sistema. 0 = hecho; <0 = no tiene escritura */
+int  blk_desbloquea(int dev);
 int  blk_scan(void);                                    /* arch: detecta y registra los discos del sistema; devuelve cuantos */
 #endif

@@ -58,6 +58,13 @@ int blk_write(int dev, uint64_t lba, uint32_t n, const void *buf)
     return 0;
 }
 
+int blk_desbloquea(int dev)
+{
+    if (dev < 0 || dev >= ndev || !devs[dev].write) return BLK_E_RO;
+    devs[dev].test_disk = 1;
+    return 0;
+}
+
 int blk_copy(int src, uint64_t slba, int dst, uint64_t dlba, uint64_t n, int verify)
 {
     static uint8_t a[BLK_CHUNK * 512], b[BLK_CHUNK * 512];

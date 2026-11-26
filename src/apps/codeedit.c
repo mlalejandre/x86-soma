@@ -280,12 +280,15 @@ int ce_save(void)
 int ce_save_as(const char *p) { char old[128]; scpy(old, path_, sizeof old); scpy(path_, p, sizeof path_); if (ce_save()) return 1; scpy(path_, old, sizeof path_); return 0; }
 /* SOMA_180: un solo bufer temporal para recargar, reemplazar todo, reescribir lineas y pegar (antes cuatro de CE_MAX, 768 KiB de BSS de mas:
  * la imagen del kernel rozaba el limite de 14 MiB). Cada funcion lo llena y lo entrega a edit() antes de volver; ninguna llama a otra. */
-static char ce_tmp[CE_MAX];
+/* SOMA_323_BSS: y ya no ocupa memoria hasta que se usa el editor (se reserva la primera vez y se queda) */
+static char *ce_tmp_p;
+static char *ce_tmp(void) { if (!ce_tmp_p) ce_tmp_p = (char *)kmalloc(CE_MAX); return ce_tmp_p; }
 int ce_reload_keep_undo(void)
 {
     uint32_t len = 0; char *d = vfs_read_alloc(path_, &len);
     if (!d) return 0;
-    char *const tmp = ce_tmp;
+    char *const tmp = ce_tmp();
+    if (!tmp) { kfree(d); return 0; }
     uint32_t n = normalize(d, len, tmp, CE_MAX); kfree(d);
     if (n == N && memcmp(tmp, B, n) == 0) return 0;
     int l = line_of(ce_cur), sro = ro; ro = 0;
@@ -348,7 +351,8 @@ static void replace_one(void)
 static void replace_all(void)
 {
     int n = slen(find_s), rn = slen(pr_b); if (!n) return;
-    char *const tmp = ce_tmp; uint32_t o = 0; int cnt = 0;
+    char *const tmp = ce_tmp(); uint32_t o = 0; int cnt = 0;
+    if (!tmp) return;
     for (uint32_t p = 0; p < N;) {
         if (p + n <= N && match_at(p, find_s, n)) { if (o + rn >= CE_MAX - 1) return; memcpy(tmp + o, pr_b, (uint32_t)rn); o += rn; p += n; cnt++; }
         else tmp[o++] = B[p++];
@@ -369,7 +373,8 @@ static void block_lines(int *l0, int *l1)
 /* reescribe las lineas l0..l1 aplicando fn a cada una; un solo paso de deshacer */
 static void rewrite_lines(int l0, int l1, int mode, int arg)
 {
-    char *const tmp = ce_tmp; uint32_t o = 0;
+    char *const tmp = ce_tmp(); uint32_t o = 0;
+    if (!tmp) return;
     uint32_t s = lstart(l0), e = lend(l1);
     int all_com = 1, minind = 1 << 30;
     for (int l = l0; l <= l1; l++) {
@@ -422,7 +427,8 @@ int ce_clip_op(int op)
     if (op == CLIP_OP_PASTE) {
         uint32_t n = 0; const char *t = clip_text(&n);
         if (!t || !n) return 1;
-        char *const tmp = ce_tmp; uint32_t m = normalize(t, n, tmp, CE_MAX);
+        char *const tmp = ce_tmp(); if (!tmp) return 1;
+        uint32_t m = normalize(t, n, tmp, CE_MAX);
         replace_sel(tmp, m, 2);
         return 1;
     }

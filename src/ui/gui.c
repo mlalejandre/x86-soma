@@ -57,6 +57,12 @@
 #include "pdfview.h"   /* PARCHE 088 */
 #include "acct.h"      /* PARCHE 089 */
 #include "sysmon.h"                                /* PARCHE 085 */
+#include "discos_gui.h"                            /* SOMA_331_DISCOS */
+#include "noticias_gui.h"                          /* SOMA_337_NOTICIAS */
+#include "noticias_rss.h"
+#include "agentes_gui.h"                           /* SOMA_338_AGENTES */
+#include "agentes_reg.h"
+#include "hora.h"                                  /* SOMA_332_HORA */
 #include "agenda_gui.h"                            /* SOMA_272_AGENDA */
 #include "correo.h"                                /* SOMA_295_CORREO */
 #include "recorder.h"                               /* SOMA_177_T480S */
@@ -104,7 +110,9 @@ enum app_mode {
     APP_CAPTURE,   /* SOMA_179_T480S: captura de pantalla y audio interno */
     APP_YOUTUBE,   /* SOMA_250_YOUTUBE: videos de YouTube (busqueda y reproduccion en directo) */
     APP_AGENDA,    /* SOMA_272_AGENDA: calendario */
-    APP_CORREO     /* SOMA_295_CORREO: correo electronico (IMAP/SMTP) con IA */
+    APP_CORREO,    /* SOMA_295_CORREO: correo electronico (IMAP/SMTP) con IA */
+    APP_DISCOS,    /* SOMA_331_DISCOS: discos, particiones, formato e imagenes */
+    APP_NOTICIAS   /* SOMA_337_NOTICIAS: noticias por categorias, con resumen de la IA */
 };
 
 static enum app_mode current_app = APP_DESKTOP;
@@ -313,6 +321,8 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_SETTINGS:       return 760u;   /* PARCHE 085 */
     case APP_PDF:            return 760u;   /* PARCHE 088 */
     case APP_SYSMON:         return 900u;   /* PARCHE 089 */
+    case APP_DISCOS:         return 920u;   /* SOMA_331_DISCOS */
+    case APP_NOTICIAS:       return 760u;   /* SOMA_337_NOTICIAS */
     case APP_AGENDA:         return 860u;   /* SOMA_272_AGENDA */
     case APP_CORREO:         return 960u;   /* SOMA_295_CORREO: carpetas + lista + lectura */
     case APP_RECORDER:       return 800u;   /* SOMA_177_T480S; SOMA_210: con la lista de grabaciones a la vista */
@@ -324,7 +334,7 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_YOUTUBE:        return 760u;   /* SOMA_250_YOUTUBE: reproductor + lista lateral */
     case APP_SOMA_APP:       return 320u; /*PL12_APP_MIN_W*/
     case APP_TERMINAL_SHELL: return 360u;
-    case APP_AGENTS:         return 400u;
+    case APP_AGENTS:         return 640u;   /* SOMA_338_AGENTES: panel con especialistas y misiones */
     default:                 return 340u;
     }
 }
@@ -635,6 +645,24 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         if (current_app == APP_SETTINGS && !her_dragging && !her_resizing && settings_tick()) {   /* SOMA_175C: Ajustes > Redes al dia */
             HER_SYNC_WIN(); settings_render_window(win_x, win_y, win_w, win_h, 1); fb_present();   /* SOMA_175C2: solo su ventana (antes */
         }                                                                                         /* se recomponia todo el escritorio) */
+        if (current_app == APP_DISCOS && !her_dragging && !her_resizing && discos_gui_tick()) {   /* SOMA_331_DISCOS: progreso de lo que se esta escribiendo */
+            HER_SYNC_WIN(); discos_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
+        }
+        if (current_app == APP_AGENTS && !her_dragging && !her_resizing && agentes_gui_tick()) {   /* SOMA_338_AGENTES: la mision en curso, al momento */
+            HER_SYNC_WIN(); agentes_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
+        }
+        if (current_app == APP_NOTICIAS && !her_dragging && !her_resizing && noticias_gui_tick()) {   /* SOMA_337_NOTICIAS: titulares y resumen al llegar */
+            HER_SYNC_WIN(); noticias_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
+        }
+        {   /* SOMA_333_SALIDA: lo que imprime el programa que lanzo el programador (se recoge aunque su ventana no este delante) */
+            static uint64_t cr_t, cr_full; uint64_t t = timer_get_uptime_ms();
+            if (t - cr_t >= 50 && !her_dragging && !her_resizing) {
+                cr_t = t;
+                int cr = coder_app_tick();
+                if (cr && current_app == APP_CODER_APP) { HER_SYNC_WIN(); coder_app_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                else if (cr == 1 && t - cr_full >= 250) { cr_full = t; HER_SYNC_WIN(); her_refresh_all(); fb_present(); }
+            }
+        }
         if (tbg_state == 2) {           /* SOMA_175B3: termino una orden lenta del terminal */
             int old_slot = her_term_live;
             if (her_tbg_slot > 0 && her_tbg_slot < 16 && her_term_sessions[her_tbg_slot].used)
@@ -859,7 +887,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
 
         if (now - last_clock_time >= 1000) {
             last_clock_time = now;
-            struct rtc_time t; rtc_get_datetime(&t);
+            struct rtc_time t; hora_local(&t);           /* SOMA_332_HORA */
             char cstr[16]; uint32_t cp = 0;
             cstr[cp++] = (char)('0' + (t.hour / 10)); cstr[cp++] = (char)('0' + (t.hour % 10)); cstr[cp++] = ':';
             cstr[cp++] = (char)('0' + (t.min / 10)); cstr[cp++] = (char)('0' + (t.min % 10)); cstr[cp++] = ':';
@@ -1063,6 +1091,12 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     if (fm_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held(), rclick))
                         fm_render_window(win_x, win_y, win_w, win_h, 1);
                 }
+                if (current_app == APP_AGENTS && !her_dragging && !her_resizing) {     /* SOMA_338_AGENTES: rueda y resaltado */
+                    if (agentes_gui_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel)) { agentes_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
+                if (current_app == APP_NOTICIAS && !her_dragging && !her_resizing) {   /* SOMA_337_NOTICIAS: rueda y resaltado */
+                    if (noticias_gui_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel)) { noticias_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
                 if (current_app == APP_CODER_APP && !her_dragging && !her_resizing) {   /* PARCHE 093: arrastre de seleccion y rueda */
                     if (coder_app_mouse(mouse_x, mouse_y, wheel, mouse_left_held())) { coder_app_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
@@ -1256,6 +1290,20 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                     if (current_app == APP_SYSMON) {                 /* PARCHE 089 */
                         if (sysmon_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h) == 2) { HER_SYNC_WIN(); her_refresh_all(); }
                         else sysmon_render_window(win_x, win_y, win_w, win_h, 1);
+                    } else
+                    if (current_app == APP_DISCOS) {                 /* SOMA_331_DISCOS */
+                        discos_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        discos_gui_render(win_x, win_y, win_w, win_h, 1);
+                    } else
+                    if (current_app == APP_AGENTS) {                 /* SOMA_338_AGENTES: Detener, Probar */
+                        agentes_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        agentes_gui_render(win_x, win_y, win_w, win_h, 1);
+                    } else
+                    if (current_app == APP_NOTICIAS) {               /* SOMA_337_NOTICIAS: un titular se abre en el Navegador */
+                        if (noticias_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h) == 3) {
+                            char url[NT_URL]; const char *u = noticias_gui_url(); uint32_t k = 0; while (u[k] && k + 1 < sizeof url) { url[k] = u[k]; k++; } url[k] = 0;
+                            her_open_app(APP_WEB_BROWSER, cur_w, cur_h); HER_SYNC_WIN(); browser_load_url(url); her_refresh_all();
+                        } else noticias_gui_render(win_x, win_y, win_w, win_h, 1);
                     } else
                     if (current_app == APP_PDF) {                    /* PARCHE 088 */
                         pdfview_handle_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
@@ -1524,8 +1572,9 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 fb_present();
                 continue;
             }
-            if (current_app == APP_AGENTS) {
-                agents_render_window(win_x, win_y, win_w, win_h, 1);
+            if (current_app == APP_AGENTS) {                     /* SOMA_338_AGENTES: Esc cierra la ventana */
+                if (!agentes_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }
+                agentes_gui_render(win_x, win_y, win_w, win_h, 1);
                 fb_present();
                 continue;
             }
@@ -1555,6 +1604,14 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             if (current_app == APP_SYSMON) {                     /* PARCHE 089 */
                 if (c == 27) { her_close_current_app_vortex(); continue; }
                 sysmon_handle_key(c); sysmon_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
+            if (current_app == APP_DISCOS) {                     /* SOMA_331_DISCOS: Esc cierra el dialogo; sin dialogo, la ventana */
+                if (!discos_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }
+                discos_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
+            if (current_app == APP_NOTICIAS) {                   /* SOMA_337_NOTICIAS: Esc cierra los ajustes; sin ajustes, la ventana */
+                if (!noticias_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }
+                noticias_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
             }
             if (current_app == APP_PDF) {                        /* PARCHE 088 */
                 if (c == 27) { her_close_current_app_vortex(); continue; }

@@ -85,3 +85,5 @@ void thread_preempt_point(void) { }
 /* SOMA_235_PROGRAMADOR: reloj fijo para sys.hour() ... sys.year() en las pruebas: 20/11/2026 13:45:07 */
 #include "rtc.h"
 void rtc_get_datetime(struct rtc_time *t) { t->year = 2026; t->month = 11; t->day = 20; t->hour = 13; t->min = 45; t->sec = 7; }
+#include "hora.h"                       /* SOMA_332_HORA: el programador pide la hora local; aqui, la misma fija */
+void hora_local(struct rtc_time *t) { rtc_get_datetime(t); }

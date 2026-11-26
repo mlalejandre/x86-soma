@@ -7,6 +7,7 @@
  * Solo en x86_64 (el reproductor nativo no existe en aarch64: alli sigue haciendo falta el servicio).
  * Tambien reproduce cualquier MP4 de una direccion http(s):  youtube mp4 <direccion>. */
 #include "yt_inner.h"
+#include "yt_aislado.h"   /* SOMA_315_YOUTUBE_AISLADO: las respuestas de YouTube se leen en leesvc (ring 3) */
 #ifdef __x86_64__
 #include "../user/vplay/vp_abi.h"
 #endif
@@ -42,8 +43,10 @@ static int nat_search(const char *q, struct yt_item *out, int max, const volatil
     int n = -1;
     if (st == -3) n = -2;
     else if (st == 200) {
-        n = yti_parse_search((const char *)b, len, out, max);
-        if (n == 0 && !yti_find((const char *)b, (const char *)b + len, "\"estimatedResults\"")) { yt_put(err, emax, &ep, "YouTube ha respondido algo que SOMA no entiende (puede haber cambiado: hace falta actualizar)"); n = -1; }
+        int estimado = 0;
+        n = yti_busca_aislado((const char *)b, len, out, max, &estimado);                  /* SOMA_315_YOUTUBE_AISLADO */
+        if (n < 0) { yt_put(err, emax, &ep, "No se ha podido leer la respuesta de YouTube"); n = -1; }
+        else if (n == 0 && !estimado) { yt_put(err, emax, &ep, "YouTube ha respondido algo que SOMA no entiende (puede haber cambiado: hace falta actualizar)"); n = -1; }
     } else if (st > 0) { yt_put(err, emax, &ep, "YouTube ha rechazado la busqueda (HTTP "); yt_put_dec(err, emax, &ep, (uint64_t)st); yt_put(err, emax, &ep, ")"); }
     kfree(b);
     return n;
@@ -69,8 +72,9 @@ static int nat_player(const char *id, struct yti_player *o, char *err, uint32_t 
     int ok = 0;
     if (st == 200) {
         static char d[6200];
-        ok = yti_parse_player_ex((const char *)b, len, o, d, sizeof d, conf.api[0] != 0);      /* con una base propia (pruebas) el video puede venir de cualquier sitio */
-        if (!ok) yt_put(err, emax, &ep, "YouTube ha respondido algo que SOMA no entiende (puede haber cambiado: hace falta actualizar)");
+        ok = yti_ficha_aislada((const char *)b, len, o, d, sizeof d, conf.api[0] != 0);       /* con una base propia (pruebas) el video puede venir de cualquier sitio */
+        if (ok < 0) { yt_put(err, emax, &ep, "No se ha podido leer la respuesta de YouTube"); ok = 0; }        /* SOMA_315_YOUTUBE_AISLADO */
+        else if (!ok) yt_put(err, emax, &ep, "YouTube ha respondido algo que SOMA no entiende (puede haber cambiado: hace falta actualizar)");
         else { yt_scopy(nat_desc, sizeof nat_desc, d); yt_scopy(nat_desc_id, sizeof nat_desc_id, id); nat_views = o->views; }
     } else if (st > 0) { yt_put(err, emax, &ep, "YouTube ha rechazado la peticion del video (HTTP "); yt_put_dec(err, emax, &ep, (uint64_t)st); yt_put(err, emax, &ep, ")"); }
     kfree(b);

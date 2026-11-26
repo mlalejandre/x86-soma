@@ -40,7 +40,48 @@ NET_TEXT = b"".join(b"SOMA netsvc linea %04d\n" % i for i in range(500))        
 NET_BIN = bytes((i * 7 + 3) % 251 for i in range(300000))
 
 
-def serve(d, port=0):
+def tls_material(td):
+    """SOMA_316_RED_AISLADA: una autoridad de prueba y un certificado para 10.0.2.2 (con openssl; vale OpenSSL o LibreSSL).
+    Devuelve (autoridad.pem, certificado.pem, clave.pem) o None si no se puede (la prueba de TLS se omite)."""
+    if not shutil.which("openssl"): return None
+    ca_k, ca_p, s_k, s_csr, s_p, ext = (os.path.join(td, n) for n in ("ca.key", "ca.pem", "s.key", "s.csr", "s.pem", "ext.cnf"))
+    open(ext, "w").write("subjectAltName=IP:10.0.2.2\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
+    q = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    try:
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", ca_k, "-out", ca_p, "-days", "2", "-subj", "/CN=SOMA prueba CA"], **q)
+        subprocess.run(["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-keyout", s_k, "-out", s_csr, "-subj", "/CN=10.0.2.2"], **q)
+        subprocess.run(["openssl", "x509", "-req", "-in", s_csr, "-CA", ca_p, "-CAkey", ca_k, "-CAcreateserial", "-out", s_p, "-days", "2", "-extfile", ext], **q)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return ca_p, s_p, s_k
+def serve_starttls(tm):
+    """SOMA_326_TUNEL_TLS: un servidor al estilo de SMTP/IMAP: saluda en claro, acepta STARTTLS, pasa a TLS 1.3 y hace eco."""
+    import socket, ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.minimum_version = ssl.TLSVersion.TLSv1_3; ctx.load_cert_chain(tm[1], tm[2])
+    ls = socket.socket(); ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); ls.bind(("0.0.0.0", 0)); ls.listen(8)
+    def uno(c):
+        try:
+            c.sendall(b"220 SOMA prueba\r\n")
+            l = b""
+            while not l.endswith(b"\n"):
+                x = c.recv(1)
+                if not x: return
+                l += x
+            if not l.upper().startswith(b"STARTTLS"): return
+            c.sendall(b"220 adelante\r\n")
+            s = ctx.wrap_socket(c, server_side=True); g = s.makefile("rb")
+            while True:
+                l = g.readline()
+                if not l: break
+                s.sendall(b"eco: " + l)
+        except Exception:
+            pass
+    def bucle():
+        while True:
+            c, _ = ls.accept(); threading.Thread(target=uno, args=(c,), daemon=True).start()
+    threading.Thread(target=bucle, daemon=True).start()
+    return ls.getsockname()[1]
+def serve(d, port=0, tls=None):
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a, **k): pass
         protocol_version = "HTTP/1.1"
@@ -48,13 +89,38 @@ def serve(d, port=0):
             self.send_response(code); self.send_header("Content-Type", ctype)
             for k, v in extra: self.send_header(k, v)
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+        def do_POST(self):                               # SOMA_325_LLM_AISLADO: un falso /v1/chat/completions (compatible con OpenAI)
+            import json as _js
+            n = int(self.headers.get("Content-Length", "0") or 0); cuerpo = self.rfile.read(n)
+            if self.path == "/v1/embeddings":            # SOMA_327_RED_FUERA: servidor de embeddings de la memoria (sin clave)
+                if b'"input"' not in cuerpo: return self._send(400, b'{"error":"falta input"}', "application/json")
+                v = [round(((i * 37) % 19 - 9) / 10.0, 3) for i in range(16)]
+                return self._send(200, _js.dumps({"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": v}]}).encode(), "application/json")
+            if self.path != "/v1/chat/completions": return self._send(404, b"no existe")
+            if "Authorization" not in self.headers:      # SOMA_327_RED_FUERA: el servidor local (llama-server): sin clave y lento
+                import time as _t; _t.sleep(1.5)
+                r = {"id": "l", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": "hola desde el LLM local"}, "finish_reason": "stop"}]}
+                try: return self._send(200, _js.dumps(r).encode(), "application/json")
+                except OSError: return None              # cancelado: el cliente ya cerro
+            if self.headers.get("Authorization") != "Bearer sk-prueba-325":
+                return self._send(401, b'{"error":{"message":"Incorrect API key (servidor falso)","type":"invalid_request_error"}}', "application/json")
+            txt = "hola desde el servidor falso" if b'"modelo-prueba"' in cuerpo else "falta el modelo en la peticion"
+            r = {"id": "x", "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "content": txt}, "finish_reason": "stop"}]}
+            return self._send(200, _js.dumps(r).encode(), "application/json")
         def do_GET(self):                                # PARCHE 139: la pagina va comprimida (gzip): la inflara el servicio zdec
             import gzip as _gz
+            if self.path == "/health": return self._send(200, b'{"status":"ok"}', "application/json")   # SOMA_327_RED_FUERA: llama-server
+            if self.path.startswith("/yt/buscar?q="):    # SOMA_327_RED_FUERA: el servicio de YouTube de casa (HTTP/1.0, Connection: close)
+                return self._send(200, ("resultado falso: " + self.path.split("=", 1)[1]).encode())
             if self.path.startswith("/n/"):              # PARCHE 142: rutas para el cliente HTTP aislado (netsvc)
                 if self.path == "/n/text": return self._send(200, NET_TEXT)
                 if self.path == "/n/gz": return self._send(200, _gz.compress(NET_TEXT), extra=[("Content-Encoding", "gzip")])
                 if self.path == "/n/redir": return self._send(302, b"", extra=[("Location", "/n/text")])
                 if self.path == "/n/bin": return self._send(200, NET_BIN, "application/octet-stream")
+                if self.path == "/n/lento":              # SOMA_317: una descarga que no llega (para cancelarla)
+                    import time as _t; _t.sleep(20)
+                    try: return self._send(200, NET_TEXT)
+                    except OSError: return None              # el cliente ya cerro (lo esperado)
                 if self.path == "/n/chunk":
                     self.send_response(200); self.send_header("Content-Type", "text/plain"); self.send_header("Transfer-Encoding", "chunked"); self.end_headers()
                     for i in range(0, len(NET_TEXT), 700): part = NET_TEXT[i:i + 700]; self.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
@@ -69,6 +135,10 @@ def serve(d, port=0):
                 super().do_GET()
     h = functools.partial(Quiet, directory=d)
     srv = http.server.ThreadingHTTPServer(("0.0.0.0", port), h)
+    if tls:                                               # SOMA_316_RED_AISLADA: el mismo sitio por HTTPS (solo TLS 1.3, como SOMA)
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.minimum_version = ssl.TLSVersion.TLSv1_3; ctx.load_cert_chain(tls[1], tls[2])
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -92,6 +162,15 @@ def main():
             tests += "+web+net+wref"
             extra = ["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0",
                      "-fw_cfg", f"name=opt/soma/url,string=http://10.0.2.2:{srv.server_address[1]}/index.html"]
+            tm = tls_material(td)                         # SOMA_316_RED_AISLADA: HTTPS verificado (netsvc y nucleo)
+            if tm:
+                stls = serve(site, 0, tm)
+                tests += "+tls"
+                extra += ["-fw_cfg", f"name=opt/soma/starttls,string={serve_starttls(tm)}"]    # SOMA_326_TUNEL_TLS
+                extra += ["-fw_cfg", f"name=opt/soma/tlsurl,string=https://10.0.2.2:{stls.server_address[1]}",
+                          "-fw_cfg", f"name=opt/soma/tlsca,file={tm[0]}"]
+            else:
+                print("[sbx] sin openssl (o no genera certificados): se omite la prueba de TLS")
         if a.srcfs:                                       # PARCHE 140: disco con las fuentes empaquetadas por el empaquetador real
             img = os.path.join(td, "hdd.img")
             subprocess.check_call([sys.executable, "tests/test_srcfs_pack.py", "--emit", img, os.path.join(td, "m.txt")], stdout=subprocess.DEVNULL)
@@ -104,7 +183,7 @@ def main():
         except subprocess.TimeoutExpired:
             rc = None
         text = open(ser, errors="replace").read() if os.path.exists(ser) else ""
-    i = min([k for k in (text.find("SBX: servicios aislados"), text.find("USERMODE: prueba"), text.find("SBXWEB:"), text.find("SBXSRC:"), text.find("SBXNET:"), text.find("SBXWREF:")) if k >= 0], default=-1)
+    i = min([k for k in (text.find("SBX: servicios aislados"), text.find("USERMODE: prueba"), text.find("SBXWEB:"), text.find("SBXSRC:"), text.find("SBXNET:"), text.find("SBXWREF:"), text.find("SBXTLS:")) if k >= 0], default=-1)
     print(text[i:] if i >= 0 else text[-3000:])
     if "KERNEL PANIC" in text: print("[sbx] PANICO del kernel"); return 1
     if rc == 97: print("[sbx] todo bien"); return 0

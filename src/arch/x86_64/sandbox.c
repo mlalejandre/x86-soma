@@ -99,6 +99,11 @@ static int validate_reply(struct sbx_call *c, struct uregion *out, struct uregio
 int sbx_run(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms) { return sbx_run_caps(c, elf, elf_len, max_ms, 0); }
 int sbx_run_caps(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms, uint32_t extra_sysmask)
 {
+    return sbx_run_caps_cancel(c, elf, elf_len, max_ms, extra_sysmask, 0);
+}
+/* SOMA_317_DESCARGAS_AISLADAS: lo mismo, y si *cancel se pone a 1 el proceso se para (la llamada devuelve un error) */
+int sbx_run_caps_cancel(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms, uint32_t extra_sysmask, const volatile int *cancel)
+{
     st.runs++;
     if (!c || !elf || (c->len && !c->data) || c->len > SBX_IN_MAX || c->in.heap_bytes == 0 || c->in.heap_bytes > SBX_HEAP_MAX) return SBX_E_ARGS;
     const uint64_t NXR = VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_NX, NXW = NXR | VMM_FLAG_WRITABLE;
@@ -108,7 +113,7 @@ int sbx_run_caps(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t m
     region_write(&c->r_in, 0, &c->in, sizeof c->in);
     if (c->len) region_write(&c->r_in, 64, c->data, c->len);
 
-    struct uexec_spec sp;
+    struct uexec_spec sp; sp.may_thr = 0;   /* SOMA_329 */
     sp.sysmask = (1u << SYS_EXIT) | extra_sysmask;
     sp.regions[0] = &c->r_in; sp.regions[1] = &c->r_out; sp.regions[2] = &c->r_heap; sp.regions[3] = 0;
     sp.nregions = 3;
@@ -122,13 +127,50 @@ int sbx_run_caps(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t m
         thread_sleep(5);
     }
     if (idx < 0) { st.spawn_fail++; return SBX_E_SPAWN; }
-    c->exit_code = usermode_wait(idx);
+    c->exit_code = usermode_wait_cancel(idx, cancel);
     uint64_t dt = timer_get_uptime_ms() - t0;
     st.last_ms = dt; st.total_ms += dt; if (dt > st.max_ms) st.max_ms = dt;
 
     if (c->exit_code == USER_EXIT_NOMEM) { st.oom++; return SBX_E_HEAPOOM; }
     if (c->exit_code != 0) { st.died++; return SBX_E_DIED; }
     return validate_reply(c, &c->r_out, &c->r_heap);
+}
+
+/* SOMA_326_TUNEL_TLS: lanza el proceso SIN ESPERAR, con una region compartida mas (sh_pages paginas a cero en sh_va, lectura y escritura
+ * para el proceso; el nucleo la ve 1:1 en sh->frames). Devuelve el indice del proceso o < 0. Se termina con sbx_termina. */
+int sbx_lanza(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms, uint32_t extra_sysmask, struct uregion *sh, uint64_t sh_va, uint32_t sh_pages)
+{
+    st.runs++;
+    sh->frames = 0; sh->npages = 0;
+    if (!c || !elf || !sh || (c->len && !c->data) || c->len > SBX_IN_MAX || c->in.heap_bytes == 0 || c->in.heap_bytes > SBX_HEAP_MAX) return SBX_E_ARGS;
+    const uint64_t NXR = VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_NX, NXW = NXR | VMM_FLAG_WRITABLE;
+    uint32_t in_pages = (uint32_t)((64u + c->len + 4095u) / 4096u);
+    if (region_init(&c->r_in, SBX_IN_VA, in_pages, NXR, 0) || region_init(&c->r_out, SBX_OUT_VA, 1, NXW, 0) ||
+        region_init(&c->r_heap, SBX_HEAP_VA, c->in.heap_bytes / 4096u, NXW, 1) || region_init(sh, sh_va, sh_pages, NXW, 0)) {
+        sbx_release(c); region_free(sh); return SBX_E_NOMEM;
+    }
+    region_write(&c->r_in, 0, &c->in, sizeof c->in);
+    if (c->len) region_write(&c->r_in, 64, c->data, c->len);
+    struct uexec_spec sp; sp.may_thr = 0;   /* SOMA_329 */
+    sp.sysmask = (1u << SYS_EXIT) | extra_sysmask;
+    sp.regions[0] = &c->r_in; sp.regions[1] = &c->r_out; sp.regions[2] = &c->r_heap; sp.regions[3] = sh;
+    sp.nregions = 4;
+    sp.reserve_frames = sbx_reserve_override ? sbx_reserve_override : SBX_RESERVE_FRAMES;
+    int idx = -2, err = 0;
+    for (int tries = 0; tries < 400; ++tries) {
+        idx = usermode_exec_ex("tlstun", elf, elf_len, max_ms, &sp, &err);
+        if (idx != -2) break;
+        thread_sleep(5);
+    }
+    if (idx < 0) { st.spawn_fail++; sbx_release(c); region_free(sh); return SBX_E_SPAWN; }
+    return idx;
+}
+/* para el proceso (si sigue vivo), lo recoge y libera sus regiones */
+void sbx_termina(struct sbx_call *c, int idx, struct uregion *sh)
+{
+    if (idx >= 0) { if (usermode_proc_alive(idx)) usermode_stop(idx); c->exit_code = usermode_wait(idx); }
+    sbx_release(c);
+    region_free(sh);
 }
 
 int sbx_copy_data(const struct sbx_call *c, void *dst, uint64_t n)
@@ -156,6 +198,8 @@ static void svc_elf(int id, const uint8_t **e, size_t *n)
     else if (id == SBX_SVC_ZLIB) { *e = _binary_zdec_elf_start; *n = (size_t)(_binary_zdec_elf_end - _binary_zdec_elf_start); }
     else if (id == SBX_SVC_PDF) { *e = _binary_pdfsvc_elf_start; *n = (size_t)(_binary_pdfsvc_elf_end - _binary_pdfsvc_elf_start); }
     else if (id == SBX_SVC_NET) { *e = _binary_netsvc_elf_start; *n = (size_t)(_binary_netsvc_elf_end - _binary_netsvc_elf_start); }
+    else if (id == SBX_SVC_MIME) { *e = _binary_mimesvc_elf_start; *n = (size_t)(_binary_mimesvc_elf_end - _binary_mimesvc_elf_start); }   /* SOMA_311 */
+    else if (id == SBX_SVC_LEE) { *e = _binary_leesvc_elf_start; *n = (size_t)(_binary_leesvc_elf_end - _binary_leesvc_elf_start); }      /* SOMA_312 */
     else { *e = _binary_sbxevil_elf_start; *n = (size_t)(_binary_sbxevil_elf_end - _binary_sbxevil_elf_start); }
 }
 
@@ -191,7 +235,7 @@ static int svc_start(struct sbx_svc *s)
         uint8_t *p = (uint8_t *)f; for (int b = 0; b < 4096; ++b) p[b] = 0;
         s->r_in.frames[0] = f; s->r_in.used = 1;
     }
-    struct uexec_spec sp;
+    struct uexec_spec sp; sp.may_thr = 0;   /* SOMA_329 */
     sp.sysmask = (1u << SYS_EXIT) | (1u << SYS_SVC_NEXT);
     if (s->id == SBX_SVC_NET) sp.sysmask |= USER_SYS_NET_MASK | (1u << SYS_SLEEP) | (1u << SYS_UPTIME_MS);   /* PARCHE 142: solo netsvc tiene red */
     sp.regions[0] = &s->r_in; sp.regions[1] = &s->r_out; sp.regions[2] = &s->r_heap; sp.regions[3] = 0;

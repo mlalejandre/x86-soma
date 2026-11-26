@@ -73,6 +73,7 @@ static void agent_turn_finish(void)
 {
     const uint32_t wrap = 76;
     her_agent_busy = 0;
+    agentes_reg_fin(agent_last_response);                       /* SOMA_338_AGENTES: si se detuvo, agent_run no llego a cerrarla */
     (void)chat_agente_fin(agent_last_response);                 /* SOMA_285_CHAT: si el turno era del chat, la respuesta va a su conversacion */
     g_agent_mis_ptr = 0;
     her_finish_turn(agent_last_response);
@@ -88,11 +89,39 @@ int gui_is_running(void) { return g_gui_loop_on; }   /* PARCHE 097 */
  * si Ajustes > Voz lo tiene activado (la respuesta de verdad corta la lectura), y con la pantalla cedida un momento se pone en la
  * conversacion y en el orbe, que siguen trabajando. Sin escritorio, nada (el aviso ya salio por el terminal). */
 void gui_aviso(const char *texto);
+#if defined(__x86_64__)
+/* SOMA_330_RESPUESTA_PRIMERO: el aviso hablado espera un poco. Si la respuesta llega antes (lo normal con un modelo rapido), no se
+ * dice: la respuesta tiene prioridad sobre cualquier muletilla. Tampoco se repite la misma frase si se dijo hace poco: en una
+ * conversacion seguida, "se lo paso al modelo de IA" no se oye en cada pregunta. En el orbe y en la conversacion sale siempre. */
+#define AVISO_ESPERA_MS 2500u
+#define AVISO_REPETIR_MS 120000u
+static volatile uint32_t g_av_gen;
+static char g_av_txt[900];
+static uint64_t g_av_dicho_t; static uint32_t g_av_dicho_h;
+static uint32_t av_huella(const char *s) { uint32_t h = 2166136261u; for (uint32_t i = 0; s[i] && i < 48; ++i) h = (h ^ (uint8_t)s[i]) * 16777619u; return h; }
+static void aviso_voz(void *arg)
+{
+    uint32_t gen = (uint32_t)(uintptr_t)arg, seq0 = voz_reply_seq();
+    for (uint32_t t = 0; t < AVISO_ESPERA_MS; t += 20) {
+        thread_sleep(20);
+        if (gen != g_av_gen || !g_agent_thr_on || g_agent_thr_done || voz_reply_seq() != seq0) return;   /* ya hay respuesta */
+    }
+    uint64_t ahora = timer_get_uptime_ms(); uint32_t h = av_huella(g_av_txt);
+    if (h == g_av_dicho_h && ahora - g_av_dicho_t < AVISO_REPETIR_MS) return;                             /* la misma, hace poco */
+    g_av_dicho_h = h; g_av_dicho_t = ahora;
+    (void)voz_speak_reply(g_av_txt);
+}
+#endif
 void gui_aviso(const char *texto)
 {
     if (!texto || !*texto || !g_gui_loop_on) return;
 #if defined(__x86_64__)
-    (void)voz_speak_reply(texto);
+    {
+        uint32_t k = 0; while (texto[k] && k + 1 < sizeof g_av_txt) { g_av_txt[k] = texto[k]; k++; }
+        g_av_txt[k] = 0;
+        uint32_t gen = ++g_av_gen;
+        (void)thread_create("aviso_voz", aviso_voz, (void *)(uintptr_t)gen);
+    }
 #endif
     int tok = gui_enter();
     if (!tok) return;
@@ -102,6 +131,16 @@ void gui_aviso(const char *texto)
     gui_leave(tok);
 }
 int gui_agent_busy(void) { return g_agent_thr_on; }
+/* SOMA_334_ORBE_MD: pone un texto (Markdown) en el orbe desde cualquier hilo ("orbe <archivo.md>"): con el turno de pantalla */
+int gui_orbe_texto(const char *texto)
+{
+    if (!texto || !*texto || !g_gui_loop_on) return 0;
+    int tok = gui_turn_begin();
+    if (!tok) return 0;
+    her_aviso(texto);
+    gui_turn_end(tok);
+    return 1;
+}
 
 /* SOMA_256: detener la mision en marcha. El hilo del agente se mata (thread_kill cierra sus conexiones TCP y suelta sus cerrojos; el
  * cambio de hilo es cooperativo, asi que no queda a medias dentro del montón) y el bucle principal cierra el turno como si hubiera

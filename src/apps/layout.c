@@ -61,7 +61,7 @@ enum { F_NONE = 0, F_PATH, F_PROMPT };
 static struct tfield ly_ptf, ly_tf; static int ly_fields; static int ly_focus, ly_hover = -1;   /* SOMA_254: campos de texto, foco y boton bajo el raton */
 static char ly_status[112]; static int ly_status_ok = 1;
 static int ly_scroll, ly_view, ly_px = 15, ly_drag_sb, ly_drag_y0, ly_drag_s0;
-static struct tex_op ly_ops[OPS_CAP]; static char ly_pool[POOL_CAP];
+static struct tex_op *ly_ops; static char *ly_pool;   /* SOMA_323_BSS: se reservan la primera vez que se maqueta (antes ~630 KiB siempre) */
 static struct tex_out ly_out;
 static int ly_dirty = 1, ly_w_cached, ly_px_cached;
 static int ly_doc_h = 100;
@@ -367,6 +367,13 @@ static void typeset_if_needed(const struct ll *L)
 {
     if (ly_font_gen != wf_ui_gen()) { ly_font_gen = wf_ui_gen(); ly_dirty = 1; }
     if (!ly_dirty && ly_w_cached == L->col_w && ly_px_cached == ly_px) return;
+    if (!ly_ops) ly_ops = (struct tex_op *)kmalloc(OPS_CAP * sizeof(struct tex_op));
+    if (!ly_pool) ly_pool = (char *)kmalloc(POOL_CAP);
+    if (!ly_ops || !ly_pool) {
+        ly_out.nops = 0; ly_out.npool = 0; ly_out.height = 0; ly_dirty = 0; ly_w_cached = L->col_w; ly_px_cached = ly_px; ly_doc_h = 112;
+        status("Sin memoria para maquetar el documento", 0);
+        return;
+    }
     ly_out.ops = ly_ops; ly_out.cap = OPS_CAP; ly_out.pool = ly_pool; ly_out.poolcap = POOL_CAP;
     int r = tex_typeset(ly_src, ly_src_len, L->col_w, ly_px, &g_metrics, &ly_out);
     ly_dirty = 0; ly_w_cached = L->col_w; ly_px_cached = ly_px;

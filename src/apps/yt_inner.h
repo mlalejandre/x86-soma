@@ -50,7 +50,7 @@ static inline void yti_put_cp(char *o, uint32_t max, uint32_t *n, uint32_t cp, i
 }
 /* p apunta dentro de una cadena JSON (tras la comilla de apertura). La descodifica y LIMPIA en out (anade a partir de *n).
  * Devuelve el puntero tras la comilla de cierre, o 0 si la cadena no termina antes de end. */
-static inline const char *yti_str(const char *p, const char *end, char *out, uint32_t max, uint32_t *n, int keep_nl)
+static inline const char *yti_str_(const char *p, const char *end, char *out, uint32_t max, uint32_t *n, int keep_nl)
 {
     while (p < end) {
         unsigned char c = (unsigned char)*p;
@@ -78,6 +78,14 @@ static inline const char *yti_str(const char *p, const char *end, char *out, uin
         p += len;
     }
     return 0;
+}
+/* SOMA_315_YOUTUBE_AISLADO: out queda SIEMPRE terminada. Antes, una cadena sin cerrar (respuesta cortada) dejaba lo escrito sin
+ * terminador, y quien no miraba el 0 (canal, estado, motivo, titulo y autor de la ficha) la leia hasta lo que hubiera detras. */
+static inline const char *yti_str(const char *p, const char *end, char *out, uint32_t max, uint32_t *n, int keep_nl)
+{
+    const char *r = yti_str_(p, end, out, max, n, keep_nl);
+    if (!r && max) out[*n < max ? *n : max - 1] = 0;
+    return r;
 }
 /* Lo mismo sin limpiar (para direcciones): solo deshace los escapes. 0 si no cabe o no termina. */
 static inline const char *yti_raw(const char *p, const char *end, char *out, uint32_t max)
@@ -257,9 +265,9 @@ static inline void yti_thumb_url(char *o, uint32_t max, const char *id)
  * para la aplicacion YouTube nativa. A diferencia de wn_fetch (web_net.c) lee el cuerpo segun llega (un video de decenas
  * de megas no cabe en memoria), deja elegir User-Agent y devuelve el tamano total de Content-Range. */
 
-struct tls13;
+struct tun;
 struct yh {
-    int h; struct tls13 *tls; int tls_on;
+    int h; struct tun *tn; int tls_on;      /* SOMA_326_TUNEL_TLS: la conexion es un tunel (src/apps/tun_tls.c); h >= 0 = abierta */
     uint8_t *rb; uint32_t rn, rp;           /* bufer de lectura */
     int chunked, done; uint64_t left;        /* cuerpo: por trozos / bytes que quedan (~0 = hasta que cierren) */
     uint32_t chunk_left; int chunk_state;

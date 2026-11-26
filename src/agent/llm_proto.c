@@ -28,10 +28,10 @@ static void sb_json(struct sb *b, const char *s)
     }
 }
 
-static const char *const NAMES[LLM_NPROV] = { "local", "openai", "claude", "gemini" };
-static const char *const LABELS[LLM_NPROV] = { "Local / red local", "ChatGPT (OpenAI)", "Claude (Anthropic)", "Gemini (Google)" };
-static const char *const DEF_BASE[LLM_NPROV] = { "http://192.168.1.200:8087", "https://api.openai.com", "https://api.anthropic.com", "https://generativelanguage.googleapis.com" };
-static const char *const DEF_MODEL[LLM_NPROV] = { "nail-35b", "", "claude-sonnet-5-5", "" };
+static const char *const NAMES[LLM_NPROV] = { "local", "openai", "claude", "gemini", "soma" };
+static const char *const LABELS[LLM_NPROV] = { "Local / red local", "ChatGPT (OpenAI)", "Claude (Anthropic)", "Gemini (Google)", "En SOMA (motor local)" };
+static const char *const DEF_BASE[LLM_NPROV] = { "http://192.168.1.200:8087", "https://api.openai.com", "https://api.anthropic.com", "https://generativelanguage.googleapis.com", "http://soma" };
+static const char *const DEF_MODEL[LLM_NPROV] = { "nail-35b", "", "claude-sonnet-5-5", "", "lfm2" };
 
 const char *llm_prov_name(int p) { return p >= 0 && p < LLM_NPROV ? NAMES[p] : "?"; }
 const char *llm_prov_label(int p) { return p >= 0 && p < LLM_NPROV ? LABELS[p] : "?"; }
@@ -193,7 +193,7 @@ static int prep(const struct llm_conf *c, struct llm_http *h, int need_model)
     if (p < 0 || p >= LLM_NPROV) return LLM_P_BADURL;
     if (!base_host(c->base[p], &hl, &https)) return LLM_P_BADURL;
     if (need_model && !c->model[p][0]) return LLM_P_NOMODEL;
-    if (p != LLM_LOCAL && !c->key[p][0]) return LLM_P_NOKEY;
+    if (p != LLM_LOCAL && p != LLM_SOMA && !c->key[p][0]) return LLM_P_NOKEY;   /* SOMA_329: el motor local no tiene clave */
     if (c->key[p][0] && !https && !llm_base_is_private(c->base[p])) return LLM_P_INSECURE;
     struct sb b = { h->headers, 0, sizeof h->headers, 0 };
     if (c->key[p][0]) {

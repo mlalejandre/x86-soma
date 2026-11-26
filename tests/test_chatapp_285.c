@@ -107,6 +107,8 @@ int llm_chat_hist(const char *system, const struct llm_msg *m, int n, const stru
 static int g_fetch_n;
 int wn_fetch(const struct wn_req *rq, struct wn_resp *rs) { (void)rq; g_fetch_n++; rs->status = 200; rs->len = 64; rs->body = malloc(64); memset(rs->body, 7, 64); return 0; }
 void wn_free(struct wn_resp *rs) { free(rs->body); rs->body = 0; }
+int wn_fetch_isolated(const struct wn_req *rq, struct wn_resp *rs) { return wn_fetch(rq, rs); }   /* SOMA_317: chat.c descarga con netsvc */
+void wn_free_isolated(struct wn_resp *rs) { wn_free(rs); }
 int wi_decode_fit(const uint8_t *d, uint32_t n, struct wimg *o, int maxw, int maxh)
 {
     (void)d; (void)n; (void)maxw; (void)maxh;

@@ -15,7 +15,8 @@
 #include "console.h"
 #include "../../user/vplay/vp_abi.h"
 
-extern const uint8_t _binary_vplay_elf_start[], _binary_vplay_elf_end[];
+#include "progz.h"
+PROGZ_DECL(vplay);                                          /* SOMA_314_PROGZ: vplay.elf va comprimido en la imagen */
 
 #define FEED_CHUNK   (256u * 1024u)
 #define SYSMASK      ((1u << SYS_EXIT) | (1u << SYS_YIELD) | (1u << SYS_SLEEP) | (1u << SYS_UPTIME_MS) | \
@@ -99,10 +100,11 @@ static void vplay_thread(void *arg)
     if (!why) {
         struct vp_ctrl *c = (struct vp_ctrl *)(uintptr_t)sh.frames[0];
         c->version = VP_VERSION; c->paused = (uint32_t)I->paused; c->mode = I->mode; c->out_max_ms = I->max_ms; c->magic = VP_MAGIC;
-        struct uexec_spec sp; sp.sysmask = SYSMASK; sp.nregions = 2; sp.regions[0] = &heap; sp.regions[1] = &sh; sp.regions[2] = sp.regions[3] = 0;
+        struct uexec_spec sp; sp.may_thr = 0; sp.sysmask = SYSMASK; sp.nregions = 2; sp.regions[0] = &heap; sp.regions[1] = &sh; sp.regions[2] = sp.regions[3] = 0;
         sp.reserve_frames = 4096;                              /* el monton no crece si quedan menos de 16 MiB libres */
         int e = 0;
-        pid = usermode_exec_ex(idx ? "vpaudio" : "vplay", _binary_vplay_elf_start, (size_t)(_binary_vplay_elf_end - _binary_vplay_elf_start), 8u * 3600u * 1000u, &sp, &e);
+        pid = -1;                                              /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */
+        { struct progz pz; if (progz_abre(PROGZ(vplay), "vplay", &pz) == 0) { pid = usermode_exec_ex(idx ? "vpaudio" : "vplay", pz.elf, pz.len, 8u * 3600u * 1000u, &sp, &e); progz_cierra(&pz); } }
         if (pid < 0) why = "No se pudo lanzar el reproductor de video (sin procesos libres o memoria)";
         else if (I->gen == my) { I->sh = sh; I->ctrl = c; }
     }

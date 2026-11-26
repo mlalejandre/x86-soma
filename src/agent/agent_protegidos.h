@@ -19,7 +19,17 @@ static const char *const agent_protegidos[] = {
     "switch.s", "sysdisk.h", "tcp_policy.h", "thread.c", "thread.h", "tls13.c", "tls13.h", "tls_roots.c",
     "tls_trust.c", "tlscrypto.c", "uaccess.h", "user_path.h", "usermode.c", "usermode.h", "virtio_blk.c",
     "virtio_blk.h", "vmm.c", "vmm.h", "web_net.c", "web_page.c", "web_r3.c", "web_r3.h", "web_r3_abi.h", "websvc.c",
-    "wpa.c", "x509.c", "x509.h", 0
+    "wpa.c", "x509.c", "x509.h",
+    "mimesvc.c", "correo_sbx.h", "correo_sbx.c",   /* SOMA_311_CORREO_AISLADO */
+    "leesvc.c", "web_aislado.h", "web_aislado.c",   /* SOMA_312_WEB_AISLADA */
+    "progz.c", "progz.h", "progz_fmt.h",            /* SOMA_314_PROGZ */
+    "yt_aislado.h", "yt_aislado.c",                 /* SOMA_315_YOUTUBE_AISLADO */
+    "netsvc.c", "web_net_sbx.c",                    /* SOMA_316_RED_AISLADA */
+    "tlstun.c", "tun_tls.c", "tun_tls.h", "tun_abi.h",   /* SOMA_326_TUNEL_TLS */
+    "ia.cpp", "ia_rt.cpp", "ia_extra.c", "ia_libc2.c", "ia.ld", "ia_abi.h", "ia_sys.c", "ia_sys.h",   /* SOMA_329_IA_LOCAL */
+    "discos_core.c", "discos_core.h", "discos.c", "discos.h",   /* SOMA_331_DISCOS */
+    "hora.c", "hora.h", "zona.c", "zona.h",         /* SOMA_332_HORA */
+    0
 };
 
 /* Copia en out (max bytes, con terminador) la ruta del principio de s: salta espacios, quita "/" y "src/" del principio y

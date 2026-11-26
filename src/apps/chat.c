@@ -330,13 +330,13 @@ static void img_una(struct img *m)                      /* baja una imagen (en e
         z = (uint8_t *)&rs_; for (uint32_t i = 0; i < sizeof rs_; i++) z[i] = 0;
         char url[200]; scpy(url, m->src, sizeof url);
         rq.url = url; rq.timeout_ms = 20000; rq.max_body = 8u << 20; rq.want_binary = 1; rq.accept = "image/*";
-        int rc = wn_fetch(&rq, &rs_);
+        int rc = wn_fetch_isolated(&rq, &rs_);   /* SOMA_317_DESCARGAS_AISLADAS: la URL la elige la respuesta del modelo: con netsvc (ring 3) */
         if (rc == 0 && rs_.status == 200 && rs_.body && rs_.len > 0) {
             uint8_t *d = (uint8_t *)kmalloc(rs_.len);
             if (d) { mcpy(d, rs_.body, rs_.len); m->data = d; m->len = rs_.len; m->st = IM_BYTES; }
             else m->st = IM_ERR;
         } else m->st = IM_ERR;
-        wn_free(&rs_);
+        wn_free_isolated(&rs_);
         cambia();
     }
 }

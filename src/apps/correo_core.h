@@ -128,6 +128,9 @@ enum { CO_CAT_NADA = 0, CO_CAT_IMPORTANTE, CO_CAT_PERSONAL, CO_CAT_TRABAJO, CO_C
 const char *co_cat_nombre(int cat);
 /* cabeceras de un FETCH -> co_msg (lo que se ve en la lista) */
 void co_msg_de_cab(struct co_msg *m, const char *cab, uint32_t n);
+/* SOMA_311_CORREO_AISLADO: la ficha entera de la lista: cabeceras + extracto del principio del cuerpo + si tiene adjuntos.
+ * Conserva uid, flags y tam de m. cuerpo puede ser 0 (solo cabeceras). Antes estaba en correo_red.c (msg_de_fetch). */
+void co_ficha(struct co_msg *m, const char *cab, uint32_t cab_n, const char *cuerpo, uint32_t cuerpo_n);
 uint32_t co_msgs_serializa(const struct co_msg *v, int n, char *out, uint32_t cap);   /* bytes; 0 si no cabe */
 int      co_msgs_carga(const char *t, uint32_t n, struct co_msg *v, int max);          /* cuantos */
 

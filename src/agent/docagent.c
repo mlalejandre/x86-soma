@@ -229,6 +229,7 @@ void docagent_slug(const char *t, char *out, int max)
 #include "png_enc.h"
 #include "pdfw.h"
 #include "rtc.h"
+#include "hora.h"
 #include "thread.h"
 
 #define DOC_MAX     (96u * 1024u)
@@ -326,7 +327,7 @@ static int issues_of(struct dg_doc *d, char *out, uint32_t max) { return dg_chec
 static void today(char *o, uint32_t max)
 {
     static const char *const M[] = { "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre" };
-    struct rtc_time t; rtc_get_datetime(&t);
+    struct rtc_time t; hora_local(&t);           /* SOMA_332_HORA */
     uint32_t p = 0; o[0] = 0;
     if (t.year < 2024 || t.month < 1 || t.month > 12) return;
     putn(o, max, &p, t.day); put(o, max, &p, " de "); put(o, max, &p, M[t.month - 1]); put(o, max, &p, " de "); putn(o, max, &p, t.year);

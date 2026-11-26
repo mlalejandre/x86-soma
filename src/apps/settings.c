@@ -4,6 +4,9 @@
 #include "settings.h"
 #include "agenda.h"                    /* SOMA_272_AGENDA */
 #include "agenda_gui.h"
+#include "agenda_core.h"
+#include "hora.h"                      /* SOMA_332_HORA */
+#include "zona.h"
 #include "fb.h"
 #include "fs.h"
 #include "web_font.h"
@@ -74,6 +77,7 @@ static void res_apply(void) { uint32_t w, h; if (g_res >= res_count()) g_res = 0
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
 static void s_cat(char *d, const char *s, int max) { int i = s_len(d), j = 0; while (s && s[j] && i + 1 < max) d[i++] = s[j++]; d[i] = 0; }
 static void s_num(char *d, int max, int v) { char t[12]; int n = 0; do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v && n < 11); char r[12]; for (int i = 0; i < n; i++) r[i] = t[n - 1 - i]; r[n] = 0; s_cat(d, r, max); }
+static void s_num2(char *d, int max, int v) { if (v < 10) s_cat(d, "0", max); s_num(d, max, v); }   /* SOMA_332_HORA */
 static int g_wf = -1;
 static int has_wf(void) { if (g_wf < 0) g_wf = wf_init() ? 1 : 0; return g_wf; }
 static int tw(const char *s, int px, int bold) { int n = s_len(s); return has_wf() ? wf_width(s, (uint32_t)n, px, bold ? WF_BOLD : 0) : n * 8; }
@@ -128,6 +132,7 @@ int settings_editor_face(void) { return font_sysfont_off() ? FFACE_MONO : g_edit
 static void settings_load_sound(void);
 void settings_load(void)
 {
+    hora_carga();                                                       /* SOMA_332_HORA: zona horaria guardada */
     settings_load_sound();                                              /* SOMA_250_TTS: volumen y microfono guardados */
     if (g_loaded) return;
     g_loaded = 1;
@@ -297,7 +302,8 @@ __attribute__((unused)) static void button(int x, int y, int w, const char *t, i
 #define PAGE_SONIDO  7     /* SOMA_250_TTS */
 #define PAGE_SISTEMA 8
 #define PAGE_ACERCA  9
-#define NITEMS 12       /* SOMA_257_LCM: + LCM; SOMA_272_AGENDA: + Avisos */
+#define NITEMS 13       /* SOMA_257_LCM: + LCM; SOMA_272_AGENDA: + Avisos; SOMA_332_HORA: + Fecha y hora */
+#define PAGE_HORA 12    /* SOMA_332_HORA */
 #define PAGE_AVISOS 11  /* SOMA_272_AGENDA */
 #define PAGE_LCM 10     /* SOMA_257_LCM */
 static struct llm_conf g_ia;                          /* copia de trabajo; se guarda con "Guardar y probar" */
@@ -306,7 +312,7 @@ static const int IA_FMAX[4] = { LLM_BASE_MAX - 1, LLM_MODEL_MAX - 1, LLM_KEY_MAX
 static const char *const IA_FIELD[4] = { "servidor", "modelo", "clave", "clave-lanzador" };
 static int g_ia_listmode;                             /* SOMA_196: 0 = modelos del servidor en marcha; 1 = modelos que el lanzador puede arrancar */
 static char g_ia_pick[LLM_MODEL_MAX];
-static int ia_nf(void) { return g_ia.prov == LLM_LOCAL ? 4 : 3; }      /* el lanzador solo existe para el servidor local */
+static int ia_nf(void) { return g_ia.prov == LLM_LOCAL ? 4 : g_ia.prov == LLM_SOMA ? 2 : 3; }   /* el lanzador solo existe para el servidor local; SOMA_329: el motor local no tiene clave */
 static int g_ia_loaded, g_ia_focus = -1, g_ia_show, g_ia_first;
 static char g_ia_msg[220]; static int g_ia_msg_ok;
 static volatile int g_ia_busy, g_ia_job, g_ia_ver; static int g_ia_seen;
@@ -356,7 +362,7 @@ static void ia_worker(void *arg)                       /* la red va en su hilo: 
         int ok = llm_chat("Responde unicamente con estas tres palabras: SOMA TEST OK", reply, sizeof reply, 60000);
         g_ia_msg[0] = 0;
         if (ok) { s_cat(g_ia_msg, "Funciona (", sizeof g_ia_msg); s_num(g_ia_msg, sizeof g_ia_msg, (int)(timer_get_uptime_ms() - t0)); s_cat(g_ia_msg, " ms). El modelo responde: ", sizeof g_ia_msg); s_cat(g_ia_msg, reply, sizeof g_ia_msg); }
-        else { s_cat(g_ia_msg, "No funciona. ", sizeof g_ia_msg); s_cat(g_ia_msg, llm_last_error, sizeof g_ia_msg); if (g_ia.prov == LLM_LOCAL) s_cat(g_ia_msg, ". Si esta apagado: Arrancar servidor.", sizeof g_ia_msg); }
+        else { s_cat(g_ia_msg, "No funciona. ", sizeof g_ia_msg); s_cat(g_ia_msg, llm_last_error, sizeof g_ia_msg); if (g_ia.prov == LLM_LOCAL) s_cat(g_ia_msg, ". Si esta apagado: Arrancar servidor.", sizeof g_ia_msg); }   /* SOMA_329: el motor local explica que falta en llm_last_error */
         for (int i = 0; g_ia_msg[i]; i++) if (g_ia_msg[i] == '\n' || g_ia_msg[i] == '\r') g_ia_msg[i] = ' ';
         g_ia_msg_ok = ok;
     } else {
@@ -385,8 +391,10 @@ static int ia_tick(void) { if (g_ia_seen != g_ia_ver) { g_ia_seen = g_ia_ver; re
 
 static int voz_page_tick(void);   /* SOMA_246_VOZ_MODELOS (abajo) */
 static uint32_t g_sig; static uint64_t g_last_tick;
+static int hora_tick(void);
 int settings_tick(void)
 {
+    if (g_page == PAGE_HORA) return hora_tick();                         /* SOMA_332_HORA: el reloj de la pagina, al segundo */
     if (g_page == PAGE_IA) return ia_tick();
     if (g_page == PAGE_VOZ) return voz_page_tick();                     /* SOMA_246_VOZ_MODELOS */
     if (g_page != 1) return 0;
@@ -614,14 +622,14 @@ static void ia_field(int x, int y, int w, const char *s, int focus, const char *
 static void render_ia(const struct sl *L)
 {
     struct ial A; ia_load(); ia_lay(L, &A);
-    static const char *const prov[4] = { "Local / red", "ChatGPT", "Claude", "Gemini" };
+    static const char *const prov[5] = { "Local / red", "ChatGPT", "Claude", "Gemini", "En SOMA" };   /* SOMA_329_IA_LOCAL */
     static const char *const lab[4] = { "Servidor", "Modelo", "Clave", "Lanzador" };
     static const char *const hint[4] = { "ip:puerto o https://servidor", "pulsa Ver modelos o escribe el nombre", "clave de la API", "clave que muestra soma_lanzador.py en el servidor" };
     tx(L->cx, L->y + 18, 30, "Inteligencia artificial", 20, KC_TXT, 1);
     tx(L->cx, L->y + 46, 22, "El modelo de lenguaje del orbe y los agentes: local o por API.", 12, KC_DIM, 0);
     card(L->cx, A.c1_y, L->cw, A.c1_h);
     tx(L->cx + 20, A.c1_y + 10, 22, "Proveedor", 14, KC_TXT, 1);
-    seg(L->cx + 20, A.seg_y, L->seg_w, 4, g_ia.prov, prov);
+    seg(L->cx + 20, A.seg_y, L->seg_w, 5, g_ia.prov, prov);
     for (int k = 0; k < A.nf; k++) {
         tx(L->cx + 20, A.f_y[k], 30, lab[k], 13, KC_DIM, 0);
         if (k >= 2) {
@@ -630,7 +638,7 @@ static void render_ia(const struct sl *L)
             m[n] = 0;
             ia_field(A.f_x, A.f_y[k], A.f_w - 52, m, g_ia_focus == k, k == 2 && g_ia.prov == LLM_LOCAL ? "no hace falta (solo si tu servidor la pide)" : hint[k]);
             if (k == 2) tx(A.eye_x + 4, A.f_y[k], 30, g_ia_show ? "ocultar" : "ver", 11, KC_ACC, 0);
-        } else ia_field(A.f_x, A.f_y[k], A.f_w, g_ia_f[k], g_ia_focus == k, hint[k]);
+        } else ia_field(A.f_x, A.f_y[k], A.f_w, g_ia_f[k], g_ia_focus == k, g_ia.prov == LLM_SOMA ? (k == 0 ? "no hace falta: corre en este equipo" : "nombre del .gguf (p. ej. lfm2)") : hint[k]);
     }
     button(A.b1_x, A.btn_y, A.b1_w, g_ia_busy && g_ia_job == 1 ? "Probando..." : "Guardar y probar", 1);
     button(A.b2_x, A.btn_y, A.b2_w, g_ia_busy && g_ia_job == 2 ? "Pidiendo..." : "Ver modelos", 0);
@@ -651,8 +659,8 @@ static void render_ia(const struct sl *L)
     fb_reset_clip();
     if (A.c2_h < 70) return;
     card(L->cx, A.c2_y, L->cw, A.c2_h);
-    tx(L->cx + 20, A.c2_y + 8, 22, g_ia_listmode && g_ia_nmodels ? "Modelos que el servidor puede arrancar" : "Modelos del servidor", 14, KC_TXT, 1);
-    if (!g_ia_nmodels) { tx(L->cx + 20, A.list_y, 24, g_ia.prov == LLM_LOCAL ? "Pulsa Ver modelos para preguntar al servidor cuales tiene." : "Pon la clave y pulsa Ver modelos para ver los de tu cuenta.", 12, KC_FAINT, 0); return; }
+    tx(L->cx + 20, A.c2_y + 8, 22, g_ia_listmode && g_ia_nmodels ? "Modelos que el servidor puede arrancar" : g_ia.prov == LLM_SOMA ? "Modelos en este equipo (/modelos)" : "Modelos del servidor", 14, KC_TXT, 1);
+    if (!g_ia_nmodels) { tx(L->cx + 20, A.list_y, 24, g_ia.prov == LLM_LOCAL ? "Pulsa Ver modelos para preguntar al servidor cuales tiene." : g_ia.prov == LLM_SOMA ? "Pulsa Ver modelos para ver los .gguf instalados." : "Pon la clave y pulsa Ver modelos para ver los de tu cuenta.", 12, KC_FAINT, 0); return; }
     if (g_ia_nmodels > A.rows) {
         char b[40]; b[0] = 0; s_num(b, sizeof b, g_ia_first + 1); s_cat(b, "-", sizeof b); s_num(b, sizeof b, g_ia_first + A.rows < g_ia_nmodels ? g_ia_first + A.rows : g_ia_nmodels); s_cat(b, " de ", sizeof b); s_num(b, sizeof b, g_ia_nmodels);
         tx(A.pg_x - tw(b, 11, 0) - 10, A.c2_y + 8, 22, b, 11, KC_FAINT, 0);
@@ -673,9 +681,11 @@ static int click_ia(const struct sl *L, int32_t mx, int32_t my)
     int was = g_ia_focus; g_ia_focus = -1;
     if (my >= A.seg_y && my < A.seg_y + 32 && mx >= L->cx + 20 && mx < L->cx + 20 + L->seg_w) {
         if (g_ia_busy) return 1;
-        int p = seg_index(L, mx, 4);
+        int p = seg_index(L, mx, 5);
         if (p != g_ia.prov) { (void)ia_fields_to(0); g_ia.prov = p; ia_fields_from(); g_ia_nmodels = 0; g_ia_listmode = 0; g_ia_show = 0;
-            g_ia_msg[0] = 0; s_cat(g_ia_msg, p == LLM_LOCAL ? "Servidor de tu equipo o de tu red local (llama.cpp, Ollama, LM Studio...). Pulsa Guardar y probar." : "Hace falta la clave de la API de ese proveedor. Lo que preguntes viajara a sus servidores.", sizeof g_ia_msg); g_ia_msg_ok = -1; }
+            g_ia_msg[0] = 0; s_cat(g_ia_msg, p == LLM_LOCAL ? "Servidor de tu equipo o de tu red local (llama.cpp, Ollama, LM Studio...). Pulsa Guardar y probar."
+                                         : p == LLM_SOMA ? "El modelo corre aqui, sin servidor ni red (modelos pequenos, p. ej. LFM2.5 350M). Copia el .gguf en la carpeta MODELOS del pendrive."
+                                         : "Hace falta la clave de la API de ese proveedor. Lo que preguntes viajara a sus servidores.", sizeof g_ia_msg); g_ia_msg_ok = -1; }
         return 1;
     }
     for (int k = 0; k < A.nf; k++) if (my >= A.f_y[k] && my < A.f_y[k] + 30 && mx >= A.f_x && mx < A.f_x + A.f_w) {
@@ -724,7 +734,7 @@ static int sb_y(const struct sl *L, int i) { return L->y + (sb_step(L) < 40 ? 52
 static void render_sidebar(const struct sl *L)
 {
     tx(L->x + 18, L->y + 14, 30, "Ajustes", 18, KC_TXT, 1);
-    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de", "LCM", "Avisos" };   /* SOMA_257_LCM */   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
+    static const char *const items[NITEMS] = { "Apariencia", "Redes", "Fuentes", "IA", "Pantalla", "Iconos", "Voz", "Sonido", "Sistema", "Acerca de", "LCM", "Avisos", "Fecha y hora" };   /* SOMA_257_LCM; SOMA_332_HORA */   /* SOMA_250: Sonido */   /* SOMA_195: IA; SOMA_225: Pantalla e Iconos; SOMA_226: Sistema y Acerca de; SOMA_246: Voz */
     for (int i = 0; i < NITEMS; i++) {
         int st = sb_step(L), ih = st - 6, iy = sb_y(L, i), on = i == g_page;
         if (on) { fb_fill_rounded_rect(L->x + 10, iy, L->side_w - 20, ih, 9, KC_SELBG); fb_fill_rounded_rect(L->x + 10, iy + ih / 2 - 9, 3, 18, 1, KC_ACC); }
@@ -739,6 +749,7 @@ static void render_sidebar(const struct sl *L)
         else if (i == PAGE_SONIDO) { fb_fill_rect((uint32_t)(ix - 8), (uint32_t)(icy - 3), 4, 6, ic & 0xFFFFFF); fb_line_aa((ix - 4) * 16, (icy - 3) * 16, (ix + 1) * 16, (icy - 8) * 16, 22, ic); fb_line_aa((ix + 1) * 16, (icy - 8) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_line_aa((ix - 4) * 16, (icy + 3) * 16, (ix + 1) * 16, (icy + 8) * 16, 22, ic); fb_stroke_rrect_aa(ix + 3, icy - 4, 6, 8, 4, ic); }   /* altavoz */
         else if (i == PAGE_SISTEMA) { fb_stroke_rrect_aa(ix - 6, icy - 6, 12, 12, 3, ic); for (int k = 0; k < 3; k++) { fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy - 9), 1, 3, ic & 0xFFFFFF); fb_fill_rect((uint32_t)(ix - 4 + k * 4), (uint32_t)(icy + 7), 1, 3, ic & 0xFFFFFF); } }
         else if (i == PAGE_LCM) { fb_stroke_rrect_aa(ix - 8, icy - 7, 16, 14, 5, ic); tx(ix - 4, iy, ih, "L", 11, ic & 0xFFFFFF, 1); }   /* SOMA_257_LCM */
+        else if (i == PAGE_HORA) { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix, (uint32_t)(icy - 5), 1, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix, (uint32_t)icy, 4, 1, ic & 0xFFFFFF); }   /* SOMA_332_HORA: reloj */
         else if (i == PAGE_AVISOS) { fb_stroke_rrect_aa(ix - 7, icy - 8, 14, 12, 6, ic); fb_fill_rect((uint32_t)(ix - 9), (uint32_t)(icy + 4), 18, 2, ic & 0xFFFFFF); fb_fill_rrect_aa(ix - 2, icy + 7, 5, 3, 1, ic); }   /* SOMA_272_AGENDA: campana */
         else { fb_stroke_rrect_aa(ix - 8, icy - 8, 16, 16, 8, ic); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 1, 2, 6, ic & 0xFFFFFF); fb_fill_rect((uint32_t)ix - 1, (uint32_t)icy - 5, 2, 2, ic & 0xFFFFFF); }
         tx(L->x + 46, iy, ih, items[i], 13, on ? 0x00FFFFFF : KC_DIM, on);
@@ -1758,6 +1769,108 @@ void settings_goto_avisos(void) { g_page = PAGE_AVISOS; }
 void settings_goto_lcm(void) { g_page = PAGE_LCM; }
 /* SOMA_257_LCM fin */
 
+/* ================================================================ SOMA_332_HORA: pagina Fecha y hora */
+static int g_hreg = -1;                                       /* grupo de zonas a la vista (-1: el de la zona elegida) */
+static int hora_tick(void)
+{
+    static int64_t ult; static uint32_t ver;
+    int64_t s = hora_utc_seg();
+    if (s == ult && ver == hora_version()) return 0;
+    ult = s; ver = hora_version();
+    return 1;
+}
+struct hl { int c1, c2, reg_y, grid_y, cols, cell_w, rows, c3, rel_y, c2_h; };
+static int zonas_grupo(int g, int *idx, int max)
+{
+    int n = 0;
+    for (int i = 0; i < zona_n() && n < max; i++) if (zona_i(i)->grupo == g) idx[n++] = i;
+    return n;
+}
+static void hora_lay(const struct sl *L, struct hl *H, int nz)
+{
+    H->c1 = L->y + 84;
+    H->c2 = H->c1 + 150;
+    H->reg_y = H->c2 + 44;
+    H->grid_y = H->reg_y + 46;
+    H->cols = L->cw >= 620 ? 3 : 2;
+    H->cell_w = (L->cw - 40 - (H->cols - 1) * 8) / H->cols;
+    H->rows = (nz + H->cols - 1) / H->cols;
+    H->c2_h = H->grid_y + H->rows * 36 + 12 - H->c2;
+    H->c3 = H->c2 + H->c2_h + 16;
+    H->rel_y = H->c3 + 70;
+}
+static void render_hora(const struct sl *L)
+{
+    hora_carga();
+    int zi = hora_zona();
+    if (g_hreg < 0) g_hreg = zi >= 0 && zona_i(zi) ? zona_i(zi)->grupo : ZG_EUROPA;
+    int idx[64]; int nz = zonas_grupo(g_hreg, idx, 64);
+    struct hl H; hora_lay(L, &H, nz);
+    char b[128], d[16], n[64];
+    tx(L->cx, L->y + 18, 30, "Fecha y hora", 20, KC_TXT, 1);
+    tx(L->cx, L->y + 46, 22, "La hora del escritorio, la agenda, el agente y los programas.", 12, KC_DIM, 0);
+    /* la hora de ahora */
+    card(L->cx, H.c1, L->cw, 134);
+    struct rtc_time t; hora_local(&t);
+    b[0] = 0; s_num2(b, sizeof b, t.hour); s_cat(b, ":", sizeof b); s_num2(b, sizeof b, t.min); s_cat(b, ":", sizeof b); s_num2(b, sizeof b, t.sec);
+    tx(L->cx + 20, H.c1 + 14, 52, b, 36, KC_TXT, 1);
+    int64_t dia = zona_dias(t.year, t.month, t.day);
+    b[0] = 0; s_cat(b, ag_nombre_dia(zona_dia_semana(dia)), sizeof b); s_cat(b, ", ", sizeof b); s_num(b, sizeof b, t.day); s_cat(b, " de ", sizeof b);
+    s_cat(b, ag_nombre_mes(t.month), sizeof b); s_cat(b, " de ", sizeof b); s_num(b, sizeof b, t.year);
+    tx(L->cx + 20, H.c1 + 66, 24, b, 14, KC_TXT, 0);
+    hora_nombre_zona(n, sizeof n); zona_texto_desfase(hora_desfase(), d, sizeof d);
+    b[0] = 0; s_cat(b, n, sizeof b); s_cat(b, "  -  ", sizeof b); s_cat(b, d, sizeof b);
+    if (zi >= 0 && zona_i(zi) && zona_i(zi)->regla != ZR_NADA) s_cat(b, hora_verano() ? "  -  horario de verano" : "  -  horario de invierno", sizeof b);
+    tx(L->cx + 20, H.c1 + 94, 22, b, 12, KC_ACC, 0);
+    hora_utc(&t);
+    b[0] = 0; s_cat(b, "UTC ", sizeof b); s_num2(b, sizeof b, t.hour); s_cat(b, ":", sizeof b); s_num2(b, sizeof b, t.min);
+    tx(L->cx + L->cw - 20 - tw(b, 12, 0), H.c1 + 94, 22, b, 12, KC_DIM, 0);
+    /* la zona */
+    card(L->cx, H.c2, L->cw, H.c2_h);
+    tx(L->cx + 20, H.c2 + 12, 24, "Zona horaria", 14, KC_TXT, 1);
+    tx(L->cx + 140, H.c2 + 12, 24, "(o con la orden: hora zona <ciudad o UTC+2>)", 11, KC_FAINT, 0);
+    static const char *const reg[ZG_N] = { "Europa y Africa", "America", "Asia y Oceania" };
+    seg(L->cx + 20, H.reg_y, L->seg_w, ZG_N, g_hreg, reg);
+    for (int k = 0; k < nz; k++) {
+        const struct zona *z = zona_i(idx[k]);
+        int cx = L->cx + 20 + (k % H.cols) * (H.cell_w + 8), cy = H.grid_y + (k / H.cols) * 36, on = idx[k] == zi;
+        fb_fill_rounded_rect(cx, cy, H.cell_w, 30, 8, on ? 0x00283449 : 0x000C1119);
+        if (on) fb_stroke_rrect_aa(cx, cy, H.cell_w, 30, 8, 0xFF000000u | KC_ACC);
+        zona_texto_desfase(z->std, d, sizeof d);
+        int dw = tw(d, 10, 0);
+        fb_set_clip(cx + 10, cy, H.cell_w - dw - 26, 30); tx(cx + 10, cy + 1, 28, z->nombre, 12, on ? 0x00FFFFFF : KC_TXT, on); fb_reset_clip();
+        tx(cx + H.cell_w - dw - 10, cy + 1, 28, d, 10, KC_FAINT, 0);
+    }
+    if (zi == ZONA_MANUAL) { zona_texto_desfase(hora_manual(), d, sizeof d); b[0] = 0; s_cat(b, "Ahora: desfase fijo ", sizeof b); s_cat(b, d, sizeof b); tx(L->cx + 20, H.grid_y + H.rows * 36 - 4, 20, b, 11, KC_ACC, 0); }
+    /* el reloj del equipo */
+    card(L->cx, H.c3, L->cw, 150);
+    tx(L->cx + 20, H.c3 + 12, 24, "El reloj del equipo guarda", 14, KC_TXT, 1);
+    tx(L->cx + 20, H.c3 + 38, 22, "Linux y macOS lo ponen en UTC; Windows, en hora local. Si el equipo tambien arranca Windows y la hora sale corrida, elige Hora local.", 11, KC_DIM, 0);
+    static const char *const rl[2] = { "UTC (recomendado)", "Hora local (Windows)" };
+    seg(L->cx + 20, H.rel_y, L->seg_w, 2, hora_reloj_local(), rl);
+    cbot(H.c3 + 150);
+}
+static int click_hora(const struct sl *L, int32_t mx, int32_t my)
+{
+    int idx[64]; int nz = zonas_grupo(g_hreg < 0 ? 0 : g_hreg, idx, 64);
+    struct hl H; hora_lay(L, &H, nz);
+    int in_seg = mx >= L->cx + 20 && mx < L->cx + 20 + L->seg_w;
+    if (in_seg && my >= H.reg_y && my < H.reg_y + 32) { g_hreg = seg_index(L, mx, ZG_N); return 1; }
+    if (in_seg && my >= H.rel_y && my < H.rel_y + 32) { hora_pon_reloj_local(seg_index(L, mx, 2)); return 1; }
+    if (my >= H.grid_y && my < H.grid_y + H.rows * 36 && mx >= L->cx + 20) {
+        int c = (mx - L->cx - 20) / (H.cell_w + 8), r = (my - H.grid_y) / 36;
+        int k = r * H.cols + c;
+        if (c < H.cols && k < nz && (my - H.grid_y) % 36 < 30) {
+            hora_pon_zona_i(idx[k]);
+            g_msg[0] = 0; s_cat(g_msg, "Zona guardada en /etc/hora.conf", sizeof g_msg);
+            return 1;
+        }
+    }
+    return 0;
+}
+void settings_goto_hora(void) { g_page = PAGE_HORA; g_hreg = -1; }
+/* SOMA_332_HORA fin */
+
 #define NPAGES NITEMS
 static int g_sc[NPAGES], g_sc_max[NPAGES], g_sdrag;           /* SOMA_227_IMAGEN: desplazamiento por pagina */
 static int sc_page(void) { return g_page >= 0 && g_page < NPAGES ? g_page : 0; }
@@ -1790,6 +1903,7 @@ void settings_render_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int 
     case PAGE_ACERCA:   render_acerca(&C); break;
     case PAGE_LCM:      render_lcm(&C); break;          /* SOMA_257_LCM */
     case PAGE_AVISOS:   render_avisos(&C); break;       /* SOMA_272_AGENDA */
+    case PAGE_HORA:     render_hora(&C); break;         /* SOMA_332_HORA */
     default:            render_apariencia(&C); break;
     }
     g_clon = 0; (fb_reset_clip)();
@@ -1892,6 +2006,7 @@ int settings_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32
     if (g_page == PAGE_SONIDO) return click_sonido(&L, mx, my);        /* SOMA_250_TTS */
     if (g_page == PAGE_LCM) return click_lcm(&L, mx, my);              /* SOMA_257_LCM */
     if (g_page == PAGE_AVISOS) return click_avisos(&L, mx, my);        /* SOMA_272_AGENDA */
+    if (g_page == PAGE_HORA) return click_hora(&L, mx, my);            /* SOMA_332_HORA */
     if (my >= L.sl_y - 6 && my < L.sl_y + 26 && mx >= L.sl_x - 12 && mx < L.sl_x + L.sl_w + 12) { g_drag = 1; int c = set_opacity_from(&L, mx); if (c) save(); return c; }
     if (mx >= L.tg_x && mx < L.tg_x + 44 && my >= L.tg_y && my < L.tg_y + 24) { g_active_opaque = !g_active_opaque; save(); return 1; }
     if (click_reset(&L, mx, my, L.reset_y)) return 1;

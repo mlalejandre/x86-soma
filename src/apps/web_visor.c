@@ -119,11 +119,12 @@ void wv_descarga(void)
         rq.accept = tipo == WT_PDF ? "application/pdf,*/*;q=0.5" : "application/x-tex,text/plain,*/*;q=0.5";
         for (uint32_t i = 0; i < sizeof rs; i++) ((char *)&rs)[i] = 0;
         rq.cancel = &s_cancelar;                               /* al cerrar el visor (otra pagina, otra pestana) se corta */
-        if (wn_fetch(&rq, &rs) != 0 || !rs.body) {
-            char m[160] = "No se pudo descargar: "; s_cat(m, rs.err[0] ? rs.err : "error de red", sizeof m); wn_free(&rs); falla(gen, m); return;
+        /* SOMA_317_DESCARGAS_AISLADAS: con netsvc (ring 3, un proceso por descarga): el HTTP y el TLS del servidor, fuera del nucleo */
+        if (wn_fetch_isolated(&rq, &rs) != 0 || !rs.body) {
+            char m[160] = "No se pudo descargar: "; s_cat(m, rs.err[0] ? rs.err : "error de red", sizeof m); wn_free_isolated(&rs); falla(gen, m); return;
         }
-        if (rs.status >= 400) { char m[64] = "El servidor respondio HTTP "; s_num(m, sizeof m, (uint32_t)rs.status); wn_free(&rs); falla(gen, m); return; }
-        d = (uint8_t *)rs.body; n = rs.len; rs.body = 0; wn_free(&rs);       /* el cuerpo pasa a ser nuestro */
+        if (rs.status >= 400) { char m[64] = "El servidor respondio HTTP "; s_num(m, sizeof m, (uint32_t)rs.status); wn_free_isolated(&rs); falla(gen, m); return; }
+        d = (uint8_t *)rs.body; n = rs.len; rs.body = 0; wn_free_isolated(&rs);       /* el cuerpo pasa a ser nuestro */
         s_ruta[0] = 0;
     }
     if (tipo == WT_PDF && !wt_tipo_resp("", d, n)) {

@@ -25,11 +25,14 @@
 #include "fs.h"        /* SOMA_246: /etc/voz.conf */
 #include "habla_texto.h"   /* SOMA_250_TTS */
 #include "unidades.h"      /* SOMA_267_DISCOS: modelos en la unidad MODELOS */
+#include "audio_sys.h"     /* SOMA_330: audio_sys_flush */
 
-extern const uint8_t _binary_voz_elf_start[], _binary_voz_elf_end[];
+#include "progz.h"
+PROGZ_DECL(voz);                                            /* SOMA_314_PROGZ: voz.elf va comprimido en la imagen */
 
 static struct kmutex lk; static int lk_init;
 static volatile int g_idx = -1, g_stopped;
+static volatile int g_sp_cancel, g_sp_proc;                /* SOMA_256: parar durante la preparacion / el proceso de lectura esta en marcha */
 
 static uint32_t slen(const char *s) { uint32_t n = 0; while (s && s[n]) n++; return n; }
 static void sput(char *o, uint32_t cap, uint32_t *p, const char *s) { while (s && *s && *p + 1 < cap) o[(*p)++] = *s++; if (cap) o[*p < cap ? *p : cap - 1] = 0; }
@@ -180,14 +183,17 @@ static int run_proc(const char *args, uint64_t heap_mib, char *out, uint32_t cap
     if (!r.frames) { kmutex_unlock(&lk); if (!out) kprint("voz: sin memoria para preparar el proceso\n"); return -4; }
     for (uint32_t k = 0; k < r.npages; ++k) r.frames[k] = 0;
     int err = 0;
-    int idx = usermode_exec_region("voz", _binary_voz_elf_start, (size_t)(_binary_voz_elf_end - _binary_voz_elf_start),
-                                   30u * 60u * 1000u, args, USER_SYS_DEFAULT, &r, &err);
+    int idx = -2;                                            /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */
+    { struct progz pz; if (progz_abre(PROGZ(voz), "voz", &pz) == 0) { idx = usermode_exec_region("voz", pz.elf, pz.len, 30u * 60u * 1000u, args, USER_SYS_DEFAULT, &r, &err); progz_cierra(&pz); } }
     int64_t code = -1;
     if (idx >= 0) {
         int guest = 0;
         if (out) usermode_redirect(idx, out, cap, "");
         else if (console_capture_active()) guest = console_capture_guest(usermode_proc_tid(idx));
         g_stopped = 0; g_idx = idx;
+        /* SOMA_330_RESPUESTA_PRIMERO: una lectura que se mando parar mientras se preparaba (descomprimir y lanzar el programa) ya no
+         * llego a ver g_idx: antes sonaba entera aunque la respuesta de verdad ya hubiera llegado. Ahora se para nada mas lanzarla. */
+        if (g_sp_proc && g_sp_cancel) { g_stopped = 1; usermode_stop(idx); }
         code = usermode_wait(idx);
         g_idx = -1;
         if (guest) (void)console_capture_guest(0);
@@ -492,7 +498,6 @@ int voz_voice_install(char *msg, uint32_t cap)
 }
 
 /* Lee el texto en voz alta (sincrono). Con out, la salida del programa va ahi; sin out, a la consola. */
-static volatile int g_sp_cancel, g_sp_proc;                /* SOMA_256: parar durante la preparacion / el proceso de lectura esta en marcha */
 int voz_speak_run(const char *text, uint32_t len, char *out, uint32_t cap)
 {
     uint32_t p = 0;
@@ -694,8 +699,13 @@ struct reply_job { char *text; uint32_t len, seq; };
 static void reply_thread(void *arg)
 {
     struct reply_job *j = (struct reply_job *)arg;
-    if (g_sp_state) voz_speak_stop();
-    for (int i = 0; i < 3000 && g_sp_state; i++) thread_sleep(1);     /* la lectura anterior termina de pararse */
+    /* SOMA_330_RESPUESTA_PRIMERO: la respuesta manda. Lo que se este leyendo (el aviso "se lo paso al modelo...") se corta YA: se para el
+     * proceso y se tira el sonido que quedaba en la cola de la tarjeta, sin esperar a que termine la frase. */
+    if (voz_speaking()) { voz_speak_stop(); (void)audio_sys_flush(); }
+    for (int i = 0; i < 3000 && voz_speaking(); i++) {
+        thread_sleep(1);
+        if (i == 1500) { voz_speak_stop(); (void)audio_sys_flush(); }   /* por si la parada llego en el momento de lanzarlo */
+    }
     char vp[96]; uint64_t vs = 0;
     int ok = j->seq == g_reply_seq;                                    /* si llego otra respuesta mientras, gana la nueva */
     if (ok && voz_voice(vp, sizeof vp, &vs) != 0) {
@@ -708,6 +718,7 @@ static void reply_thread(void *arg)
     if (ok && j->seq == g_reply_seq && !g_sp_state) (void)voz_speak_start(j->text, j->len);
     kfree(j->text); kfree(j);
 }
+uint32_t voz_reply_seq(void) { return g_reply_seq; }      /* SOMA_330: cambia con cada respuesta que el orbe manda leer */
 int voz_speak_reply(const char *text)
 {
     tts_load();

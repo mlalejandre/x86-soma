@@ -80,13 +80,38 @@ _Static_assert(sizeof(struct sbx_pdf_op) == 52, "sbx_pdf_op debe ocupar 52 bytes
 
 /* ---- PARCHE 142: servicio netsvc: cliente HTTP (web_net.c) con la capacidad de red. ---- */
 #define SBX_NET_FETCH 1
-struct sbx_net_req {          /* al principio de los datos; detras: url, metodo, tipo de contenido y cuerpo (sin NUL) */
+struct sbx_net_req {          /* al principio de los datos; detras: url, metodo, tipo de contenido, cuerpo, accept, anclas y cabeceras (sin NUL) */
     uint32_t url_len, method_len, ctype_len, body_len;
     uint32_t timeout_ms, max_body;
-    uint32_t flags;           /* bit 0 want_binary, bit 1 no_redirect, bit 2 via_gateway */
+    uint32_t flags;           /* bit 0 want_binary, bit 1 no_redirect, bit 2 via_gateway; SOMA_316_RED_AISLADA: bit 3 direct (TLS
+                               * propio aunque haya pasarela), bit 4 la red es real (https directo), bit 5 verificar certificados */
+    uint32_t accept_len;      /* SOMA_316_RED_AISLADA: cabecera Accept (<= SBX_NET_ACCEPT_MAX) */
+    uint32_t anclas_len;      /* SOMA_316_RED_AISLADA: autoridades del usuario (/etc/tls_confianza.pem, <= SBX_NET_ANCLAS_MAX) */
+    uint32_t hdr_len;         /* SOMA_325_LLM_AISLADO: cabeceras propias ("Nombre: valor\r\n...", <= SBX_NET_HDR_MAX), al final */
+    uint64_t unix_time;       /* SOMA_316_RED_AISLADA: la hora, para las fechas de los certificados (0 = no se comprueban) */
+    uint8_t  semilla[32];     /* SOMA_316_RED_AISLADA: azar del nucleo para TLS (claves efimeras); nueva en cada peticion */
 };
+#define SBX_NET_F_DIRECT   (1u << 3)
+#define SBX_NET_F_REAL     (1u << 4)
+#define SBX_NET_F_VERIFICA (1u << 5)
+#define SBX_NET_ACCEPT_MAX 256u
+#define SBX_NET_ANCLAS_MAX (256u * 1024u)
+#define SBX_NET_HDR_MAX    4096u
 /* respuesta: status 0 = hubo respuesta HTTP (val[0] = codigo, val[1] = redirecciones, val[2] = via_gateway), -1 = error de red;
  * inline = ctype NUL charset NUL final_url NUL err NUL; data = cuerpo */
+
+/* ---- SOMA_311_CORREO_AISLADO: servicio mimesvc: lee el correo (correo_core.c). Sin estado entre peticiones. ---- */
+#define SBX_MIME_LEE    1     /* datos = mensaje entero; arg = {cap_texto} -> val = {1 si lo entiende}; data = struct co_mime + texto (texto_n bytes) */
+#define SBX_MIME_ADJ    2     /* datos = struct co_adj + mensaje; arg = {cap} -> val = {bytes}; data = el adjunto decodificado (<= cap) */
+#define SBX_MIME_FICHA  3     /* datos = cabeceras (arg0 bytes) + principio del cuerpo (arg1 bytes); arg2 = hay cuerpo -> inline = struct co_msg */
+
+/* ---- SOMA_312_WEB_AISLADA: servicio leesvc: lee lo que el agente trae de Internet (web_lee.c, busca_web.c) ---- */
+#define SBX_LEE_TEXTO   1     /* datos = HTML; arg = {cap, cap_titulo} -> val = {bytes}; data = texto; inline = titulo */
+#define SBX_LEE_WIKI    2     /* datos = idioma (16 bytes, con NUL) + JSON de Wikipedia; arg = {cap, max} -> val = {resultados}; data = texto */
+#define SBX_LEE_DDG     3     /* datos = HTML de DuckDuckGo ligero; arg = {cap, max} -> val = {resultados}; data = texto */
+#define SBX_LEE_YT_BUSCA 4    /* SOMA_315: datos = JSON de la busqueda de YouTube; arg = {cap, max} -> val = {n, estimatedResults}; data = struct yt_item[n] */
+#define SBX_LEE_YT_FICHA 5    /* SOMA_315: datos = JSON del reproductor; arg = {cap, dmax, any_host} -> val = {1 si es de YouTube}; data = struct yti_player + descripcion */
+#define SBX_LEE_RSS     6     /* SOMA_337_NOTICIAS: datos = fuente por defecto (64 bytes, con NUL) + XML RSS/Atom; arg = {cap, max} -> val = {n}; data = struct nt_item[n] */
 
 /* ---- servicio sbxevil (solo pruebas): ataques al propio mecanismo ---- */
 #define SBX_EVIL_SYSCALL    1   /* intenta write/open/fb: debe morir DENIED */

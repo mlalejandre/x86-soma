@@ -30,6 +30,7 @@
 #include "sysicon.h"
 #include "png_enc.h"
 #include "docagent.h"   /* SOMA_248_DOC */
+#include "coder_run.h"  /* SOMA_333_SALIDA */
 
 /* PARCHE 094: toda la interfaz del Coder con la fuente antialiasada del sistema (antes: mapa de bits 8x8) */
 static int cdr_wf(void) { static int v = -1; if (v < 0) v = wf_init() ? 1 : 0; return v; }
@@ -451,7 +452,7 @@ static volatile int g_need_reload = 0;
 
 /* Buffers de trabajo estaticos */
 static char     cdr_src[CDR_SRC_MAX];
-static uint8_t  cdr_bc[262144];   /* SOMA_264_LANG: antes 32 KB */
+#define CDR_BC_MAX 262144u               /* SOMA_264_LANG: antes 32 KB. SOMA_323_BSS: se reserva al compilar y se libera */
 static uint32_t cdr_bc_len = 0;
 static uint32_t cdr_orig_len = 0;
 static uint32_t cdr_orig_hash = 0;
@@ -514,7 +515,11 @@ static int cdr_verify(const char *path)
         return 0;
     }
     lang_lint(cdr_src, (uint32_t)r, &cdr_rep);
-    if (lang_compile(cdr_src, (uint32_t)r, cdr_bc, sizeof(cdr_bc), &bl) != 0) {
+    uint8_t *cdr_bc = (uint8_t *)kmalloc(CDR_BC_MAX);
+    if (!cdr_bc) { cdr_diag.line = 0; cdr_copy(cdr_diag.msg, sizeof cdr_diag.msg, "sin memoria para compilar"); cdr_diag_valid = 1; return 0; }
+    int crc = lang_compile(cdr_src, (uint32_t)r, cdr_bc, CDR_BC_MAX, &bl);
+    kfree(cdr_bc);
+    if (crc != 0) {
         lang_get_diagnostic(&cdr_diag);
         cdr_diag_valid = 1;
         return 0;
@@ -971,12 +976,27 @@ done:
 
 /* PARCHE 098: las apps se lanzan SIEMPRE en su propio hilo (con buffer de salida, el despachador las pone en segundo plano);
  * antes se ejecutaban dentro del hilo del escritorio y un bucle de juego lo congelaba todo. */
+static void ide_say(const char *m, uint32_t col);
+static int  ide_focus;           /* 0 editor, 1 campo IA, 3 entrada del panel Salida (SOMA_333_SALIDA) */
+static char ide_out_in[160]; static int ide_out_in_len, ide_out_scroll;   /* SOMA_333_SALIDA: lo que se escribe para el programa */
+static char ide_out_path[128];                                               /* lo ultimo que se ejecuto ("Otra vez") */
+static int  ide_out_y, ide_out_h, ide_out_x, ide_out_w, ide_out_rows;
 static void cdr_run_app(const char *path)
 {
     static char out[512]; char cmd[160];
-    if (cdr_is_ext(path)) {                                   /* SOMA_239: en el Terminal (salida, input() y Esc); SOMA_265_CC: C con cc -run; SOMA_275_HTML: js y html abrir */
-        cdr_copy(cmd, sizeof cmd, cdr_is_html(path) ? "html abrir " : cdr_is_js(path) ? "js " : cdr_is_c(path) ? "cc -run " : "python "); cdr_cat(cmd, sizeof cmd, path);
-        gui_terminal_run(cmd);
+    if (cdr_is_html(path)) {                                  /* SOMA_275_HTML: la pagina se abre en el navegador; SOMA_333_SALIDA: sin Terminal */
+        cdr_copy(cmd, sizeof cmd, "html abrir "); cdr_cat(cmd, sizeof cmd, path);
+        out[0] = 0; dispatch_command(cmd, out, sizeof out);
+        return;
+    }
+    if (cdr_is_ext(path)) {                                   /* SOMA_333_SALIDA: Python, C y JavaScript en el panel Salida del programador (antes, el Terminal) */
+        cdr_copy(cmd, sizeof cmd, cdr_is_js(path) ? "js " : cdr_is_c(path) ? "cc -run " : "python "); cdr_cat(cmd, sizeof cmd, path);
+        const char *nm = path; for (const char *q = path; *q; q++) if (*q == '/') nm = q + 1;
+        cdr_copy(ide_out_path, sizeof ide_out_path, path);
+        int r = crun_start(cmd, nm);
+        if (r == -1) ide_say("Ya hay un programa en marcha: paralo (Esc o Parar en el panel Salida) antes de lanzar otro.", CDR_C_AMBER);
+        else if (r < 0) ide_say("No se puede ejecutar ahora: el Terminal tiene una orden en marcha.", CDR_C_RED);
+        else { ide_focus = 3; ide_out_in_len = 0; ide_out_in[0] = 0; ide_out_scroll = 0; }
         return;
     }
     cdr_copy(cmd, sizeof cmd, "app "); cdr_cat(cmd, sizeof cmd, path);
@@ -1141,9 +1161,9 @@ extern int keyboard_shift_held(void);
 
 struct ide_btn { int x, y, w, h; int id; const char *tip; };   /* SOMA_240_ICONOS: tip = nombre si el boton es solo icono */
 static int ide_hover_id;          /* boton de la barra bajo el raton (0 = ninguno) */
-enum { IB_NEW = 1, IB_OPEN, IB_SAVE, IB_SAVEAS, IB_UNDO, IB_REDO, IB_FIND, IB_REPL, IB_GOTO, IB_COMMENT, IB_VERIFY, IB_RUN, IB_IA, IB_IA_FIELD, IB_IA_CANCEL };
+enum { IB_NEW = 1, IB_OPEN, IB_SAVE, IB_SAVEAS, IB_UNDO, IB_REDO, IB_FIND, IB_REPL, IB_GOTO, IB_COMMENT, IB_VERIFY, IB_RUN, IB_IA, IB_IA_FIELD, IB_IA_CANCEL,
+       IB_OUT_STOP, IB_OUT_CLOSE, IB_OUT_IN, IB_OUT_AGAIN };   /* SOMA_333_SALIDA */
 static struct ide_btn ide_btns[24]; static int ide_nb;
-static int  ide_focus;           /* 0 editor, 1 campo IA */
 static char ide_ia[384]; static int ide_ia_len;
 static char ide_msg[160]; static uint32_t ide_msg_col = CDR_C_GRAY;
 static char ide_prob[4][112]; static int ide_prob_line[4], ide_prob_n, ide_prob_ok = -1;
@@ -1336,7 +1356,8 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
     int body_y = y0 + 36;
     int status_y = y1 - 24, ia_y = status_y - 48;
     int prob_h = ide_prob_n ? 30 + ide_prob_n * 18 : 0;
-    int ed_bottom = ia_y - 8 - (prob_h ? prob_h + 8 : 0);
+    int out_h = crun_visible() ? (ia_y - body_y > 520 ? 200 : 150) : 0;     /* SOMA_333_SALIDA: panel con lo que imprime el programa */
+    int ed_bottom = ia_y - 8 - (prob_h ? prob_h + 8 : 0) - (out_h ? out_h + 8 : 0);
 
     /* ---- explorador ---- */
     int ex_w = (w >= 800) ? 220 : 0;
@@ -1413,6 +1434,63 @@ static void ide_render(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint32_t 
             fb_fill_rounded_rect(x0 + 16, py + 3, 9, 9, 4, col);
             fb_set_clip(x0 + 30, py, w - 44, 18);
             font_draw_string((uint32_t)(x0 + 34), (uint32_t)(py + 2), ide_prob[i], ide_prob_line[i] ? 0x00FECDD3u : col, 1);
+            fb_reset_clip();
+        }
+    }
+
+    /* ---- SOMA_333_SALIDA: salida del programa en marcha (antes se abria el Terminal) ---- */
+    ide_out_h = out_h; ide_out_rows = 0;
+    if (out_h) {
+        int oy = ia_y - 8 - out_h, run = crun_estado() == CRUN_MARCHA, in_h = run ? 34 : 0;
+        ide_out_x = x0; ide_out_y = oy; ide_out_w = w;
+        ide_card(x0, oy, w, out_h, 0x00070C14u, run ? 0x001E40AFu : 0x001A2335u);
+        si_icon(SI_TERMINAL, x0 + 21, oy + 17, 14, run ? 0x0060A5FAu : CDR_C_GRAY);
+        font_draw_string((uint32_t)(x0 + 34), (uint32_t)(oy + 11), "SALIDA", CDR_C_DIM, 1);
+        int hx = x0 + 34 + cdr_tw("SALIDA") + 12;
+        font_draw_string((uint32_t)hx, (uint32_t)(oy + 11), crun_nombre(), CDR_C_WHITE, 1);
+        hx += cdr_tw(crun_nombre()) + 12;
+        {   char st[64]; uint32_t ms = crun_ms(); st[0] = 0;
+            if (run) cdr_cat(st, sizeof st, "en marcha  ");
+            else cdr_cat(st, sizeof st, crun_parado() ? "parado a los " : crun_fallo() ? "fallo a los " : "termino en ");
+            cdr_cat_u32(st, sizeof st, ms / 1000); cdr_cat(st, sizeof st, ","); cdr_cat_u32(st, sizeof st, ms / 100 % 10); cdr_cat(st, sizeof st, " s");
+            int sw = cdr_tw(st) + 26;
+            int fallo = !run && crun_fallo();
+            uint32_t cbg = run ? 0x00132A4Au : crun_parado() ? 0x002A1F0Au : fallo ? 0x004C1D2Bu : 0x000F3B2Eu,
+                     cdot = run ? ((timer_get_uptime_ms() / 400) % 2 ? 0x0060A5FAu : 0x001D4ED8u) : crun_parado() ? CDR_C_AMBER : fallo ? CDR_C_RED : CDR_C_GREEN;
+            fb_fill_rounded_rect(hx, oy + 7, sw, 20, 10, cbg);
+            fb_fill_rounded_rect(hx + 8, oy + 14, 7, 7, 3, cdot);
+            font_draw_string((uint32_t)(hx + 20), (uint32_t)(oy + 11), st, 0x00CBD5E1u, 1);
+        }
+        int bx2 = x0 + w - 8;
+        if (run) { bx2 -= ide_btn_w("Parar", SI_STOP, 0); int b = bx2; ide_add_btn_i(&b, oy + 4, "Parar", IB_OUT_STOP, SI_STOP, 0, 0x003A121Du, CDR_C_RED, 0x00FECDD3u); }
+        else {
+            bx2 -= ide_btn_w("Cerrar", SI_CLOSE, 0); int b = bx2; ide_add_btn_i(&b, oy + 4, "Cerrar", IB_OUT_CLOSE, SI_CLOSE, 0, CDR_C_PANEL, CDR_C_BORDER2, CDR_C_SOFT);
+            bx2 -= 6 + ide_btn_w("Otra vez", SI_PLAY, 0); b = bx2; ide_add_btn_i(&b, oy + 4, "Otra vez", IB_OUT_AGAIN, SI_PLAY, 0, 0x00173A7Au, 0x0060A5FAu, CDR_C_WHITE);
+        }
+        fb_fill_rect((uint32_t)(x0 + 1), (uint32_t)(oy + 36), (uint32_t)(w - 2), 1, 0x001A2335u);
+        int ty = oy + 42, rows = (out_h - 48 - in_h) / 17; if (rows < 1) rows = 1;
+        ide_out_rows = rows;
+        int n = crun_lineas(), mxs = n - rows; if (mxs < 0) mxs = 0;
+        if (ide_out_scroll > mxs) ide_out_scroll = mxs;
+        if (ide_out_scroll < 0) ide_out_scroll = 0;
+        int first = n - rows - ide_out_scroll; if (first < 0) first = 0;
+        fb_set_clip(x0 + 10, ty, w - 20, rows * 17);
+        for (int i = first; i < n && i < first + rows; i++)
+            font_draw_string((uint32_t)(x0 + 14), (uint32_t)(ty + (i - first) * 17), crun_linea(i), 0x00D7DEE8u, 1);
+        if (!n) font_draw_string((uint32_t)(x0 + 14), (uint32_t)ty, run ? "(todavia no ha escrito nada)" : "(no escribio nada)", 0x00566479u, 1);
+        fb_reset_clip();
+        if (ide_out_scroll) { const char *m = "rueda: mas abajo"; font_draw_string((uint32_t)(x0 + w - 20 - cdr_tw(m)), (uint32_t)(ty), m, 0x00566479u, 1); }
+        if (run) {                                                       /* lo que se escribe para el programa (input, scanf) */
+            int iy = oy + out_h - in_h - 2;
+            fb_fill_rounded_rect(x0 + 8, iy, w - 16, 28, 8, ide_focus == 3 ? 0x000B1A33u : 0x00090F1Bu);
+            if (ide_focus == 3) fb_stroke_rrect_aa(x0 + 8, iy, w - 16, 28, 8, 0xFF3B82F6u);
+            if (ide_nb < 24) { ide_btns[ide_nb].x = x0 + 8; ide_btns[ide_nb].y = iy; ide_btns[ide_nb].w = w - 16; ide_btns[ide_nb].h = 28; ide_btns[ide_nb].id = IB_OUT_IN; ide_btns[ide_nb].tip = 0; ide_nb++; }
+            fb_set_clip(x0 + 12, iy, w - 24, 28);
+            int ix = x0 + 16; const char *pr = crun_prompt();
+            if (pr[0]) { font_draw_string((uint32_t)ix, (uint32_t)(iy + 8), pr, 0x0093C5FDu, 1); ix += cdr_tw(pr) + 4; }
+            if (ide_out_in_len) { font_draw_string((uint32_t)ix, (uint32_t)(iy + 8), ide_out_in, CDR_C_WHITE, 1); ix += cdr_tw(ide_out_in); }
+            else if (!pr[0]) font_draw_string((uint32_t)ix, (uint32_t)(iy + 8), ide_focus == 3 ? "" : "Haz clic aqui para escribirle al programa (Intro envia la linea, Esc lo para)", 0x00566479u, 1);
+            if (ide_focus == 3 && (timer_get_uptime_ms() / 500) % 2 == 0) fb_fill_rect((uint32_t)(ix + 1), (uint32_t)(iy + 6), 2, 16, 0x0093C5FDu);
             fb_reset_clip();
         }
     }
@@ -1515,6 +1593,10 @@ static int ide_click(int mx, int my)
         case IB_IA: ide_ask_soma(); break;
         case IB_IA_FIELD: { extern int keyboard_shift_held(void); ide_focus = 1; ui_tf_init(); tf_press(&tf_ia, mx, my, keyboard_shift_held()); } break;
         case IB_IA_CANCEL: coder_cancel_job(); ide_say("Cancelando la tarea de SOMA...", CDR_C_AMBER); break;
+        case IB_OUT_STOP: crun_parar(); break;                                   /* SOMA_333_SALIDA */
+        case IB_OUT_CLOSE: crun_cerrar(); if (ide_focus == 3) ide_focus = 0; break;
+        case IB_OUT_AGAIN: if (ide_out_path[0]) cdr_run_app(ide_out_path); break;
+        case IB_OUT_IN: ide_focus = 3; break;
         }
         return 1;
     }
@@ -1536,6 +1618,16 @@ static int ide_click(int mx, int my)
 static void ide_key(char c)
 {
     int k = (uint8_t)c;
+    if (ide_focus == 3) {                                  /* SOMA_333_SALIDA: escribiendo para el programa */
+        if (crun_estado() != CRUN_MARCHA) { ide_focus = 0; }
+        else {
+            if (k == '\n' || k == '\r') { (void)crun_feed(ide_out_in); ide_out_in_len = 0; ide_out_in[0] = 0; ide_out_scroll = 0; }
+            else if (k == 8 || k == 127) { while (ide_out_in_len > 0 && ((unsigned char)ide_out_in[ide_out_in_len - 1] & 0xC0) == 0x80) ide_out_in_len--; if (ide_out_in_len > 0) ide_out_in_len--; ide_out_in[ide_out_in_len] = 0; }
+            else if (k == 9) ide_focus = 0;
+            else if (k >= 32 && ide_out_in_len < (int)sizeof ide_out_in - 1) { ide_out_in[ide_out_in_len++] = c; ide_out_in[ide_out_in_len] = 0; }
+            return;
+        }
+    }
     if (ide_focus == 1) {                                  /* PARCHE 099: campo de texto completo */
         extern int keyboard_last_mods(void);
         int md = keyboard_last_mods();
@@ -2071,15 +2163,38 @@ void coder_app_handle_key(char c)
     ui_key(c);
 }
 
+int coder_app_run_path(const char *path)
+{
+    if (crun_estado() == CRUN_MARCHA) return -1;
+    cdr_tab_cur = CDR_TAB_EDITOR;
+    cdr_run_app(path);
+    return crun_estado() == CRUN_MARCHA || !cdr_is_ext(path) || cdr_is_html(path) ? 0 : -2;
+}
+/* SOMA_333_SALIDA: la GUI lo llama a menudo; 1 si la ventana tiene que redibujarse (salida nueva, el contador de tiempo) */
+int coder_app_tick(void)
+{
+    int r = crun_poll();                                              /* 1: hay salida nueva */
+    if (!r && crun_estado() == CRUN_MARCHA) {
+        static uint64_t ult; uint64_t t = timer_get_uptime_ms();
+        if (t - ult >= 500) { ult = t; r = 2; }                       /* 2: solo el reloj y el cursor */
+    }
+    return r;
+}
+
 /* PARCHE 093: Esc, portapapeles y raton para el editor */
 int coder_app_escape(void)
 {
+    if (cdr_tab_cur == CDR_TAB_EDITOR && ide_focus == 3) {             /* SOMA_333_SALIDA: Esc para el programa; si ya termino, cierra el panel */
+        if (crun_estado() == CRUN_MARCHA) crun_parar(); else { crun_cerrar(); ide_focus = 0; }
+        return 1;
+    }
     if (cdr_tab_cur != CDR_TAB_EDITOR) { if (ui_focus) { ui_focus = 0; return 1; } return 0; }
     if (ide_focus == 1) { ide_focus = 0; return 1; }
     return ce_escape();
 }
 int coder_app_clip_op(int op)
 {
+    if (cdr_tab_cur == CDR_TAB_EDITOR && ide_focus == 3) return 0;      /* SOMA_333_SALIDA: escribiendo para el programa: no va al editor */
     ui_tf_init();
     if (cdr_tab_cur != CDR_TAB_EDITOR) { if (ui_focus) { tf_clip(ui_focus, op); cdr_sync_inputs(); return 1; } return 0; }
     if (ide_focus == 1) { tf_clip(&tf_ia, op); ide_ia_len = (int)cdr_len(ide_ia); return 1; }
@@ -2089,6 +2204,10 @@ int coder_app_mouse(int32_t mx, int32_t my, int wheel, int held)
 {
     ui_tf_init();
     if (cdr_tab_cur == CDR_TAB_EDITOR) {
+        if (wheel && ide_out_h && mx >= ide_out_x && mx < ide_out_x + ide_out_w && my >= ide_out_y && my < ide_out_y + ide_out_h) {
+            ide_out_scroll -= wheel * 3; if (ide_out_scroll < 0) ide_out_scroll = 0;            /* SOMA_333_SALIDA: rueda en la salida */
+            return 1;
+        }
         if (wheel && ide_ex_w && mx >= ide_ex_x && mx < ide_ex_x + ide_ex_w) {     /* PARCHE 101: rueda en el explorador */
             ide_ex_scroll += wheel * 2;
             int mxs = project_count - ide_ex_rows; if (mxs < 0) mxs = 0;

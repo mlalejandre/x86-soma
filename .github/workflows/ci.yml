@@ -30,7 +30,7 @@ jobs:
       - name: Dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc make binutils grub-pc-bin grub-common xorriso mtools \
+          sudo apt-get install -y gcc g++ make binutils grub-pc-bin grub-common xorriso mtools \
             qemu-system-x86 qemu-system-arm gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             python3-pil   # SOMA_302_CI: tools/mkavi.py (video de prueba de fault-check) usa Pillow
       - name: 'Compilar (sin warnings: -Werror)'
@@ -52,3 +52,15 @@ jobs:
       - name: Panic con backtrace y vigilante (solo x86_64)
         if: matrix.arch == 'x86_64'
         run: make ARCH=x86_64 fault-check
+
+  # SOMA_339_GITHUB: lo mismo que hace ejecutar.py: compilar dentro del contenedor del Dockerfile (Debian, otro gcc y otra glibc).
+  # El motor de IA del 329 enlazaba en Ubuntu y no en Debian, y la CI de arriba (Ubuntu) no lo vio.
+  docker-build:
+    name: Compilar en el contenedor del Dockerfile (Debian)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir soma-toolchain
+        run: docker build --platform linux/amd64 -t soma-toolchain .
+      - name: 'Compilar x86_64 (sin warnings: -Werror)'
+        run: docker run --rm --platform linux/amd64 -u "$(id -u):$(id -g)" -v "$PWD:/soma" -w /soma soma-toolchain make ARCH=x86_64 WERROR=1

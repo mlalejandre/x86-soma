@@ -24,7 +24,8 @@
 #include "tcp.h"        /* PARCHE 142 */
 #include "dns.h"
 #include "net.h"
-#include "rtc.h"        /* SOMA_237_PYTHON */
+#include "rtc.h"
+#include "hora.h"     /* SOMA_332_HORA */        /* SOMA_237_PYTHON */
 int gui_is_running(void);
 #include "gui.h"                /* SOMA_239: gui_soma_win_* */
 
@@ -76,6 +77,7 @@ struct uproc {
     uint32_t rd_cap, rd_len;
     const char *rd_in;                      /* SOMA_239: entrada fija (lineas con \n); agotada = fin de entrada */
     int      may_thr;                       /* SOMA_244_HILOS: puede lanzar hilos en los nucleos secundarios */
+    uint64_t fs_base;                       /* SOMA_329_IA_LOCAL: base de FS (SYS_SOMA_FS); 0 = ninguna */
 };
 
 static struct uproc procs[USER_MAX_PROCS];
@@ -630,7 +632,7 @@ static int64_t sys_soma_con(uint64_t op, uint64_t ubuf, uint64_t len)
     }
     if (op == 1) {
         if (!user_range(ubuf, 6 * sizeof(int64_t), 1)) return E_FAULT;
-        struct rtc_time t; rtc_get_datetime(&t);
+        struct rtc_time t; hora_local(&t);                         /* SOMA_332_HORA: la hora local (datetime.now) */
         int64_t v[6] = { t.year, t.month, t.day, t.hour, t.min, t.sec };
         copy_to_user(ubuf, v, sizeof v);
         return 0;
@@ -716,7 +718,7 @@ static int64_t sys_soma_thr(uint64_t op, uint64_t a1)
         if (!user_range_ok(a1, 32)) return E_FAULT;
         uint64_t q[4]; copy_from_user(q, a1, 32);
         if (q[0] < USER_BASE || q[0] - USER_BASE >= USER_CODE_AREA || q[3] < USER_BASE || q[3] - USER_BASE >= USER_CODE_AREA) return -22;
-        return smp_user_start(up->as, q[0], q[1], q[2], q[3], up->tid);
+        return smp_user_start(up->as, q[0], q[1], q[2], q[3], up->tid, up->fs_base);
     }
     if (op == 2) {
         for (;;) {
@@ -749,10 +751,24 @@ int64_t usermode_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
         usermode_cur->exit_code = USER_EXIT_QUOTA;
         usermode_leave(USER_EXIT_QUOTA);
     }
+    /* SOMA_317_DESCARGAS_AISLADAS: el plazo (y usermode_stop) tambien se mira al entrar en una llamada. Antes solo en el tick de reloj
+     * que caia en ring 3, y un proceso que pasa casi todo el tiempo esperando dentro del nucleo (la red) tardaba segundos en parar. */
+    if (timer_get_uptime_ms() >= usermode_cur->deadline_ms) {
+        kprint("[USER] proceso terminado: supero el limite de tiempo\n");
+        usermode_cur->exit_code = USER_EXIT_TIMEOUT;
+        usermode_leave(USER_EXIT_TIMEOUT);
+    }
     /* SOMA_192: un programa NORMAL (filtro por defecto) que pide una llamada inexistente o sin capacidad recibe ENOSYS, como antes del
      * parche 138, y sigue vivo: asi lo exige el oraculo de `usfuzz` (que fallaba desde entonces: los procesos morian con DENIED).
      * Los procesos AISLADOS (filtro restringido: decodificadores, PDF, red) siguen muriendo al primer intento. */
     if (nr == SYS_SOMA_THR && usermode_cur->may_thr) return sys_soma_thr(a0, a1);   /* SOMA_244_HILOS: solo el proceso de voz */
+    if (nr == SYS_SOMA_FS && usermode_cur->may_thr) {                                /* SOMA_329_IA_LOCAL */
+        /* solo direcciones de usuario canonicas: wrmsr con una no canonica daria #GP en el nucleo */
+        if (a0 < USER_BASE || a0 >= USER_BASE + 0x8000000000ULL - 4096) return -22;
+        usermode_cur->fs_base = a0;
+        wrmsr(0xC0000100u, a0);
+        return 0;
+    }
     if ((nr >= 32 || !(usermode_cur->sysmask & (1u << nr))) && usermode_cur->sysmask == USER_SYS_DEFAULT) return SOMA_ENOSYS;
     if (nr >= 32 || !(usermode_cur->sysmask & (1u << nr))) {        /* PARCHE 138: filtro por proceso (aislados: solo exit) */
         kprint("[USER] proceso terminado: llamada al sistema no permitida por su filtro\n");
@@ -954,6 +970,8 @@ void arch_thread_switch(struct tcb *prev, struct tcb *next)
         if (nu) __asm__ volatile ("fxrstor64 %0" : : "m"(*(uint8_t (*)[512])nu->fpu) : "memory");
     }
     if (nu) {
+        static uint64_t fs_actual;                             /* SOMA_329_IA_LOCAL: base de FS del proceso (el nucleo no usa FS) */
+        if (nu->fs_base != fs_actual) { wrmsr(0xC0000100u, nu->fs_base); fs_actual = nu->fs_base; }
         tss_set_rsp0(nu->kstack);
         vmm_load_as(nu->as);
     } else {
@@ -1010,6 +1028,7 @@ static struct uproc *slot_begin(void)
             up->sysmask = USER_SYS_DEFAULT; up->reserve_frames = 0; up->nregions = 0;   /* PARCHE 138 */
             up->rd_out = 0; up->rd_cap = up->rd_len = 0; up->rd_in = 0;                 /* SOMA_239 */
             up->may_thr = 0;                                                            /* SOMA_244 */
+            up->fs_base = 0;                                                            /* SOMA_329 */
             for (int k = 0; k < USER_MAX_REGIONS; ++k) up->regions[k] = 0;
             /* estado inicial de la FPU: FCW=0x037F (todas las excepciones enmascaradas, doble extendida), MXCSR=0x1F80
              * (idem SSE, redondeo al mas cercano), registros vacios: igual que tras FNINIT */
@@ -1142,8 +1161,9 @@ int usermode_exec_region(const char *name, const void *img, size_t len, uint32_t
     sp.sysmask = sysmask;
     sp.regions[0] = r; sp.nregions = 1;
     sp.reserve_frames = 16384;                                     /* la region no crece si al sistema le quedarian menos de 64 MiB */
+    sp.may_thr = 1;
     int idx = exec_common(name, img, len, max_ms, args, &sp, err);
-    if (idx >= 0) procs[idx].may_thr = 1;                          /* SOMA_244_HILOS: aun no ha corrido (planificador cooperativo) */
+
     return idx;
 }
 
@@ -1179,6 +1199,7 @@ static int exec_common(const char *name, const void *img, size_t len, uint32_t m
         up->sysmask = sp->sysmask ? sp->sysmask : USER_SYS_DEFAULT;
         up->reserve_frames = sp->reserve_frames;
         up->nregions = sp->nregions;
+        up->may_thr = sp->may_thr ? 1 : 0;                       /* SOMA_244_HILOS / SOMA_329: aun no ha corrido (planificador cooperativo) */
         for (int i = 0; i < sp->nregions; ++i) up->regions[i] = sp->regions[i];
     }
     return slot_launch(up, name, im.entry, max_ms, args);
@@ -1189,6 +1210,21 @@ int64_t usermode_wait(int idx)
     if (idx < 0 || idx >= USER_MAX_PROCS || procs[idx].state == 0) return -3000;
     struct uproc *up = &procs[idx];
     while (up->state != 2) thread_sleep(1);
+    int64_t code = up->exit_code;
+    up->state = 0;
+    return code;
+}
+/* SOMA_317_DESCARGAS_AISLADAS: como usermode_wait, pero si *cancel se pone a 1 el proceso se para (usermode_stop) y se espera a que
+ * termine. Lo usan las descargas que se cancelan (el visor de documentos al cerrarse). */
+int64_t usermode_wait_cancel(int idx, const volatile int *cancel)
+{
+    if (idx < 0 || idx >= USER_MAX_PROCS || procs[idx].state == 0) return -3000;
+    struct uproc *up = &procs[idx];
+    int parado = 0;
+    while (up->state != 2) {
+        if (cancel && *cancel && !parado) { usermode_stop(idx); parado = 1; }
+        thread_sleep(1);
+    }
     int64_t code = up->exit_code;
     up->state = 0;
     return code;

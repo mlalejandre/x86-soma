@@ -1,4 +1,6 @@
 #include "lang/lang.h"
+#include "hora.h"     /* SOMA_332_HORA */
+#include "agentes_reg.h"  /* SOMA_338_AGENTES */
 #include "arch.h"
 #include "agent_net.h"
 #include "agent.h"
@@ -1789,7 +1791,7 @@ static int direct_answer(const struct agent_profile *agent, const char *mission)
     char *prompt = (char *)kmalloc(PC + 1), *reply = (char *)kmalloc(RC + 1);
     if (!prompt || !reply) { if (prompt) kfree(prompt); if (reply) kfree(reply); return 0; }
     uint32_t pl = 0;
-    struct rtc_time t; rtc_get_datetime(&t);
+    struct rtc_time t; hora_local(&t);                                   /* SOMA_332_HORA: la fecha de donde esta la persona */
     fb_puts(prompt, PC, &pl, "FECHA: "); fb_put_dec(prompt, PC, &pl, t.year); fb_putc(prompt, PC, &pl, '-');
     if (t.month < 10) fb_putc(prompt, PC, &pl, '0');
     fb_put_dec(prompt, PC, &pl, t.month); fb_putc(prompt, PC, &pl, '-');
@@ -1935,9 +1937,11 @@ static void agent_run_core(const char *agent_name, const char *mission);
 void agent_run(const char *agent_name, const char *mission)     /* SOMA_277_MEMORIA: la extraccion de hechos espera a que ningun agente este usando el LLM */
 {
     if (delegation_depth == 0) g_voz_resp[0] = 0;                      /* SOMA_290_VOZ_CODIGO: nada de una mision anterior */
+    agentes_reg_mision(mission);                                        /* SOMA_338_AGENTES (las delegaciones cuentan en la de fuera) */
     memoria_agente_entra();
     agent_run_core(agent_name, mission);
     memoria_agente_sale();
+    agentes_reg_fin(agent_last_response);
 }
 static void agent_run_core(const char *agent_name, const char *mission)
 {
@@ -2139,10 +2143,8 @@ static void agent_run_core(const char *agent_name, const char *mission)
     for (int step = 1; step <= max_steps; ++step) {
         ap_len = 0;
         struct rtc_time cur_t;
-        rtc_get_datetime(&cur_t);
+        hora_local(&cur_t);                                   /* SOMA_332_HORA: en la zona elegida (antes UTC+2 fijo) */
         uint32_t cur_y = cur_t.year, cur_mo = cur_t.month, cur_d = cur_t.day;
-        uint32_t cur_h = cur_t.hour + 2;
-        if (cur_h >= 24) { cur_h -= 24; cur_d += 1; }
 
         /* SOMA_251_RUTAS: primero lo que no cambia (identidad, herramientas, reglas) y al final la mision y el historial: el servidor
          * reutiliza el prompt ya procesado de una mision a otra (antes la mision iba al principio y se procesaba todo cada vez) */
@@ -2229,6 +2231,15 @@ static void agent_run_core(const char *agent_name, const char *mission)
         fb_putc(agent_prompt_buf, TP, &ap_len, '-');
         if (cur_d < 10) fb_putc(agent_prompt_buf, TP, &ap_len, '0');
         fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_d);
+        {   /* SOMA_332_HORA: y la hora local, con su zona */
+            char zn[64]; hora_nombre_zona(zn, sizeof zn);
+            fb_putc(agent_prompt_buf, TP, &ap_len, ' ');
+            if (cur_t.hour < 10) fb_putc(agent_prompt_buf, TP, &ap_len, '0');
+            fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_t.hour); fb_putc(agent_prompt_buf, TP, &ap_len, ':');
+            if (cur_t.min < 10) fb_putc(agent_prompt_buf, TP, &ap_len, '0');
+            fb_put_dec(agent_prompt_buf, TP, &ap_len, cur_t.min);
+            fb_puts(agent_prompt_buf, TP, &ap_len, " (hora local: "); fb_puts(agent_prompt_buf, TP, &ap_len, zn); fb_putc(agent_prompt_buf, TP, &ap_len, ')');
+        }
         fb_puts(agent_prompt_buf, TP, &ap_len, "\n\nMISION DEL USUARIO: '");
         { const char *p_mval = mission; while (*p_mval && ap_len < TP - 2400) agent_prompt_buf[ap_len++] = *p_mval++; }
         fb_puts(agent_prompt_buf, TP, &ap_len, "'.\n");

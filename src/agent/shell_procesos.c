@@ -81,7 +81,8 @@ static int cmd_exec(const char *args, char *out_buf, uint32_t max_out)
  * propio: lo de siempre + leer la consola y los archivos del VFS (escribir solo en /workspace). Si la orden se ejecuta capturada
  * (terminal de la GUI), el proceso comparte la captura: su salida aparece en el terminal y su entrada son lineas vacias. */
 #if defined(__x86_64__)
-extern const uint8_t _binary_python_elf_start[], _binary_python_elf_end[];
+#include "progz.h"
+PROGZ_DECL(python);                                         /* SOMA_314_PROGZ: python.elf va comprimido en la imagen */
 static volatile int g_python_idx = -1;                       /* proceso de la orden python en marcha (para pararlo con Esc) */
 static volatile int g_python_stopped;
 #endif
@@ -131,8 +132,8 @@ static int cmd_python(const char *args, char *out_buf, uint32_t max_out)
     int capturing = console_capture_active();
     uint32_t ms = n == 0 ? 8u * 3600u * 1000u : 10u * 60u * 1000u;   /* interactivo: 8 h; script: 10 min */
     int err = 0;
-    int idx = usermode_exec_caps("python", _binary_python_elf_start, (size_t)(_binary_python_elf_end - _binary_python_elf_start),
-                                 ms, a, USER_SYS_PYTHON, &err);
+    int idx = -2;                                                    /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */
+    { struct progz pz; if (progz_abre(PROGZ(python), "python", &pz) == 0) { idx = usermode_exec_caps("python", pz.elf, pz.len, ms, a, USER_SYS_PYTHON, &err); progz_cierra(&pz); } }
     if (idx < 0) {
         soma_str_put(out_buf, max_out, &pos, err ? "python: interprete no valido: " : "python: sin recursos (procesos o memoria)");
         if (err) soma_str_put(out_buf, max_out, &pos, elf_strerror(err));
@@ -141,7 +142,7 @@ static int cmd_python(const char *args, char *out_buf, uint32_t max_out)
     int guest = capturing && console_capture_guest(usermode_proc_tid(idx));
     g_python_stopped = 0;
     g_python_idx = idx;
-    int64_t code = usermode_wait(idx);
+    int64_t code = guest ? shell_espera_proc(idx) : usermode_wait(idx);   /* SOMA_333_SALIDA */
     g_python_idx = -1;
     if (guest) (void)console_capture_guest(0);
     if (usermode_python_window_take()) gui_soma_win_close();       /* SOMA_239: la ventana que abrio el script no se queda huerfana */
@@ -191,6 +192,16 @@ static int cmd_habla(const char *args, char *out_buf, uint32_t max_out)
     soma_str_put(out_buf, max_out, &pos, "habla: de momento solo en x86_64");
 #endif
     return 1;
+}
+
+/* SOMA_329_IA_LOCAL: el motor de IA local (ver src/arch/x86_64/ia_sys.c) */
+static int cmd_ia(const char *args, char *out_buf, uint32_t max_out)
+{
+#if defined(__x86_64__)
+    return ia_cmd(args, out_buf, max_out);
+#else
+    (void)args; uint32_t pos = 0; soma_str_put(out_buf, max_out, &pos, "ia: el motor de IA local solo esta en x86_64 (necesita AVX2 en ring 3)\n"); return 1;
+#endif
 }
 
 /* SOMA_241_VOZ: voz a texto con whisper.cpp (ver src/arch/x86_64/voz_sys.c). Los audios y el modelo estan en el almacen BIGFS. */
@@ -270,8 +281,8 @@ int shell_python_source(int check, const char *src, uint32_t len, const char *in
     src_lock();
     usermode_python_set_source(src, len);
     int err = 0;
-    int idx = usermode_exec_caps("python", _binary_python_elf_start, (size_t)(_binary_python_elf_end - _binary_python_elf_start),
-                                 max_ms ? max_ms : 5000, check ? "-s" : "-x", USER_SYS_PYTHON, &err);
+    int idx = -2;                                                    /* SOMA_314_PROGZ */
+    { struct progz pz; if (progz_abre(PROGZ(python), "python", &pz) == 0) { idx = usermode_exec_caps("python", pz.elf, pz.len, max_ms ? max_ms : 5000, check ? "-s" : "-x", USER_SYS_PYTHON, &err); progz_cierra(&pz); } }
     int64_t code = -1;
     if (idx >= 0) {                                   /* salida y entrada propias: no usa la captura de la consola (que no se anida) */
         usermode_redirect(idx, out, cap, input ? input : "");
@@ -297,7 +308,7 @@ int shell_python_source(int check, const char *src, uint32_t len, const char *in
  *   cc -run hola.c [argumentos]                                    compila y ejecuta
  *   cc -run hola.elf [argumentos]                                  ejecuta uno ya compilado */
 #if defined(__x86_64__)
-extern const uint8_t _binary_cc_elf_start[], _binary_cc_elf_end[];
+PROGZ_DECL(cc);                                             /* SOMA_314_PROGZ: cc.elf va comprimido en la imagen */
 #define CC_RUN_ELF "/workspace/.cc_run.elf"
 #define CC_PROG_ELF "/workspace/.programa.elf"
 /* lanza un proceso con las capacidades de Python/C y espera; con out != 0, su salida va a out y su entrada es input */
@@ -312,10 +323,20 @@ static int64_t cc_proc(const char *name, const void *img, size_t len, uint32_t m
     else guest = console_capture_active() && console_capture_guest(usermode_proc_tid(idx));
     g_python_stopped = 0;
     g_python_idx = idx;                                                   /* Esc en el terminal lo para, como a python */
-    int64_t code = usermode_wait(idx);
+    int64_t code = guest ? shell_espera_proc(idx) : usermode_wait(idx);   /* SOMA_333_SALIDA */
     g_python_idx = -1;
     if (guest) (void)console_capture_guest(0);
     if (usermode_python_window_take()) gui_soma_win_close();
+    return code;
+}
+/* SOMA_314_PROGZ: cc_proc con el compilador incrustado (se descomprime para lanzarlo y se libera al terminar) */
+static int64_t cc_proc_cc(uint32_t ms, const char *args, char *out, uint32_t cap, const char *input, int *err)
+{
+    struct progz pz;
+    *err = 0;
+    if (progz_abre(PROGZ(cc), "cc", &pz) != 0) return -1000001;
+    int64_t code = cc_proc("cc", pz.elf, pz.len, ms, args, out, cap, input, err);
+    progz_cierra(&pz);
     return code;
 }
 static const char *cc_motivo(int64_t code)
@@ -367,7 +388,7 @@ static int cmd_cc(const char *args, char *out_buf, uint32_t max_out)
         while (n && a[n - 1] == ' ') n--;
         a[n] = 0;
         int err;
-        int64_t code = cc_proc("cc", _binary_cc_elf_start, (size_t)(_binary_cc_elf_end - _binary_cc_elf_start), 120000, a, 0, 0, 0, &err);
+        int64_t code = cc_proc_cc(120000, a, 0, 0, 0, &err);
         if (code < -1000000) { soma_str_put(out_buf, max_out, &pos, "cc: no se pudo lanzar el compilador"); return 1; }
         if (code < 0 && !g_python_stopped) { kprint("cc: el compilador termino ("); kprint(cc_motivo(code)); kprint(")\n"); }
         return 1;
@@ -389,7 +410,7 @@ static int cmd_cc(const char *args, char *out_buf, uint32_t max_out)
         for (uint32_t i = 0; i < pl && n + 1 < sizeof a; ++i) a[n++] = path[i];
         a[n] = 0;
         int err;
-        int64_t code = cc_proc("cc", _binary_cc_elf_start, (size_t)(_binary_cc_elf_end - _binary_cc_elf_start), 120000, a, 0, 0, 0, &err);
+        int64_t code = cc_proc_cc(120000, a, 0, 0, 0, &err);
         if (code < -1000000) { soma_str_put(out_buf, max_out, &pos, "cc: no se pudo lanzar el compilador"); return 1; }
         if (code != 0) { if (code < 0 && !g_python_stopped) { kprint("cc: el compilador termino ("); kprint(cc_motivo(code)); kprint(")\n"); } return 1; }
         (void)cc_run_elf(CC_RUN_ELF, rest, out_buf, max_out, &pos);
@@ -414,8 +435,7 @@ int shell_c_source(int check, const char *src, uint32_t len, const char *input, 
     src_lock();
     usermode_python_set_source(src, len);
     int err;
-    int64_t code = cc_proc("cc", _binary_cc_elf_start, (size_t)(_binary_cc_elf_end - _binary_cc_elf_start), 20000, check ? "-s" : "-x",
-                           out, cap, "", &err);
+    int64_t code = cc_proc_cc(20000, check ? "-s" : "-x", out, cap, "", &err);
     usermode_python_set_source(0, 0);
     if (code < -1000000) { kmutex_unlock(&g_src_lk); return -1; }
     if (code == USER_EXIT_TIMEOUT) { kmutex_unlock(&g_src_lk); return 2; }

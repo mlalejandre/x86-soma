@@ -20,6 +20,9 @@ int  llm_diagnose(const char *user_question, char *reply_out, uint32_t reply_max
 int  llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
 
 /* Extrae un campo clave de un objeto JSON bare-metal */
+struct http_response;
+int  llm_http_local(const uint8_t ip[4], uint16_t port, const char *path, const char *body, char *resp_buf, uint32_t cap,
+                    struct http_response *r, uint32_t ms, const volatile int *cancel);   /* SOMA_327_RED_FUERA: servidor local sin clave */
 int  llm_json_get(const char *json, const char *key, char *out, uint32_t max);
 
 /* SOMA_195: configuracion del modelo de lenguaje (llm_proto.h): proveedor, servidor, modelo y clave. Se guarda en /etc/llm.conf. */

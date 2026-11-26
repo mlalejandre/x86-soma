@@ -1,6 +1,15 @@
 /* PARCHE 138: QEMU fw_cfg por E/S (selector 16 bits en 0x510, datos en 0x511). Sin QEMU la firma no coincide y no se lee nada. */
 #include "fwcfg.h"
 #include "io.h"
+#include "thread.h"
+
+/* SOMA_329_IA_LOCAL: fw_cfg tiene UN selector: si un hilo lee un archivo grande por partes (y cede la CPU entre partes) y otro
+ * selecciona otro archivo, el primero sigue leyendo el del segundo. Pasaba al instalar un modelo en QEMU mientras el orbe miraba si
+ * habia voz: el modelo quedaba corrupto. Quien lee por partes reserva fw_cfg (fwcfg_reserva/fwcfg_libera); los demas esperan. */
+static struct tcb *volatile g_dueno;
+static void espera_libre(void) { while (g_dueno && g_dueno != thread_current()) thread_yield(); }
+void fwcfg_reserva(void) { espera_libre(); g_dueno = thread_current(); }
+void fwcfg_libera(void) { if (g_dueno == thread_current()) g_dueno = 0; }
 
 static void sel(uint16_t k) { outw(0x510, k); }
 static uint8_t rd8(void) { return inb(0x511); }
@@ -10,6 +19,7 @@ static uint16_t rdbe16(void) { uint16_t v = (uint16_t)(rd8() << 8); return (uint
 uint32_t fwcfg_read_file(const char *name, char *out, uint32_t max)
 {
     if (!out || max == 0) return 0;
+    espera_libre();
     out[0] = 0;
     sel(0x0000);
     if (rd8() != 'Q' || rd8() != 'E' || rd8() != 'M' || rd8() != 'U') return 0;
@@ -37,6 +47,7 @@ uint32_t fwcfg_read_file(const char *name, char *out, uint32_t max)
  * fwcfg_open selecciona el archivo y devuelve su tamano (0 si no esta); despues fwcfg_read_seq lee los bytes en orden. */
 uint32_t fwcfg_open(const char *name)
 {
+    espera_libre();
     sel(0x0000);
     if (rd8() != 'Q' || rd8() != 'E' || rd8() != 'M' || rd8() != 'U') return 0;
     sel(0x0019);

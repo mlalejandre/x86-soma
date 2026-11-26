@@ -272,18 +272,9 @@ static int find_hdr_end(const char *p, uint32_t n)
 }
 /* SOMA_176A: HTTPS directo. En QEMU (red 10.0.2.x) las paginas https siguen yendo por la pasarela del anfitrion; en una red real
  * (el portatil) no existe pasarela y SOMA habla TLS 1.3 directamente con el sitio. El certificado NO se verifica (ver tls13.c). */
-#ifdef SOMA_NETSVC      /* servicio aislado de ring 3 (netsvc.elf): sin TLS propio, https sigue por la pasarela */
-static int https_direct(void) { return 0; }
-static int nsvc_tls_connect(struct tls13 *t, const struct tls_io *io, const char *sni, uint32_t ms) { (void)t; (void)io; (void)sni; (void)ms; return -1; }
-static int nsvc_tls_send(struct tls13 *t, const void *d, uint32_t n) { (void)t; (void)d; (void)n; return -1; }
-static int nsvc_tls_recv(struct tls13 *t, void *b, uint32_t m, uint32_t ms) { (void)t; (void)b; (void)m; (void)ms; return TLS_IO_ERR; }
-static void nsvc_tls_close(struct tls13 *t) { (void)t; }
-static const char *nsvc_tls_err_name(int e) { (void)e; return "TLS no disponible"; }
-#define tls13_connect nsvc_tls_connect
-#define tls13_send nsvc_tls_send
-#define tls13_recv nsvc_tls_recv
-#define tls13_close nsvc_tls_close
-#define tls13_err_name nsvc_tls_err_name
+#ifdef SOMA_NETSVC      /* SOMA_316_RED_AISLADA: servicio aislado de ring 3 (netsvc.elf): con TLS propio; si la red es real lo dice el nucleo */
+extern int netsvc_https_directo;
+static int https_direct(void) { return netsvc_https_directo; }
 #else
 extern uint8_t net_ip[4];
 #ifdef __x86_64__
@@ -304,6 +295,7 @@ static int https_direct(void)
 #if !defined(SOMA_NETSVC) && !defined(WEB_HOST_TEST)
 #include "tls_trust.h"
 int wn_https_unverified(void) { return https_direct() && !tls13_verify; }   /* SOMA_194: candado ambar solo con soma.tlsverificar=off; si no, verde = certificado verificado */
+int wn_https_directo(void) { return https_direct(); }                    /* SOMA_316_RED_AISLADA: se lo dice a netsvc */
 #else
 int wn_https_unverified(void) { return https_direct(); }                 /* para el candado del navegador */
 #endif

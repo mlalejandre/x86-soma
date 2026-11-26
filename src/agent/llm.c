@@ -48,7 +48,57 @@ int llm_conf_save(const struct llm_conf *c)
     g_conf = *c; g_conf_loaded = 1;
     return vfs_write("/etc/llm.conf", t, n) < 0 ? -1 : 0;
 }
-/* "http://A.B.C.D:puerto" sin clave: el camino de siempre (cliente HTTP minimo del nucleo) */
+/* SOMA_327_RED_FUERA: el servidor local sin clave (y el de embeddings de la memoria) por netsvc en x86_64: ring 3, un proceso por
+ * peticion, hasta 10 min. Mismo contrato que http_post_json / http_get (body = 0: GET). En aarch64 (sin EL0) el cliente minimo de
+ * siempre: alli wn_fetch_isolated seria el cliente del navegador, que fallaba con el servidor de casa (parche 286). */
+int llm_http_local(const uint8_t ip[4], uint16_t port, const char *path, const char *body, char *resp_buf, uint32_t cap,
+                   struct http_response *r, uint32_t ms, const volatile int *cancel)
+{
+    r->body = 0; r->body_len = 0; r->status_code = 0;
+#if defined(__x86_64__)
+    char url[96]; uint32_t k = 0;   /* en la pila: lo llaman el chat y la memoria desde hilos distintos */
+    const char *pre = "http://"; while (*pre) url[k++] = *pre++;
+    for (int i = 0; i < 4; ++i) { char d[4]; int n = 0; uint32_t v = ip[i]; do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) url[k++] = d[--n]; if (i < 3) url[k++] = '.'; }
+    url[k++] = ':'; { char d[6]; int n = 0; uint32_t v = port; do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) url[k++] = d[--n]; }
+    for (const char *q = path; *q && k + 1 < sizeof url; ++q) url[k++] = *q;
+    url[k] = 0;
+    return wn_http_simple(url, body, resp_buf, cap, r, ms, cancel);
+#else
+    (void)cancel;
+    net_client_lock();
+    int code = body ? http_post_json(ip, port, path, body, resp_buf, cap, r, ms) : http_get(ip, port, path, resp_buf, cap, r, ms);
+    net_client_unlock();
+    return code;
+#endif
+}
+/* SOMA_329_IA_LOCAL: proveedor "En SOMA": el modelo (un .gguf de /modelos) corre en el motor local de ring 3 (src/arch/x86_64/ia_sys.c).
+ * Recibe el mismo cuerpo que un servidor compatible con OpenAI y devuelve la misma respuesta. Si el modelo no esta en el almacen, se
+ * copia una vez de la carpeta MODELOS del pendrive. Devuelve los bytes de la respuesta o < 0 (motivo en llm_last_error). */
+#if defined(__x86_64__)
+#include "ia_sys.h"
+#include "ia_abi.h"
+#endif
+static int llm_soma(const struct llm_conf *c, const char *body, uint32_t blen, char *resp, uint32_t cap, uint32_t ms, const volatile int *cancel)
+{
+#if defined(__x86_64__)
+    static char ruta[160], err[220];
+    const char *m = c->model[LLM_SOMA];
+    if (ia_modelo_ruta(m, ruta, sizeof ruta) != 0) {
+        if (ia_instala(m, err, sizeof err) != 0 || ia_modelo_ruta(m, ruta, sizeof ruta) != 0) {
+            set_err("LLM: no esta el modelo en /modelos ni en la carpeta MODELOS del pendrive: ", m);
+            return -1;
+        }
+    }
+    int n = ia_orden(IA_CMD_CHAT, ruta, body, blen, resp, cap, ms, cancel, err, sizeof err);
+    if (n < 0) { set_err(n == -2 && !cancel ? "LLM: el modelo no admite imagenes: " : "LLM (motor local): ", err); return n == -2 ? -2 : -1; }
+    return n;
+#else
+    (void)c; (void)body; (void)blen; (void)resp; (void)cap; (void)ms; (void)cancel;
+    set_err("LLM: el motor local solo esta en x86_64", "");
+    return -1;
+#endif
+}
+/* "http://A.B.C.D:puerto" sin clave: el servidor local (SOMA_327: por netsvc en x86_64, ver llm_http_local) */
 static int conf_legacy(uint8_t ip[4], uint16_t *port)
 {
     const struct llm_conf *c = llm_conf_get();
@@ -350,12 +400,23 @@ static int llm_health_unlocked(void)
     if (!ensure_llm_buffers()) return 0;
     struct http_response resp;
     uint8_t ip[4]; uint16_t port;
+    if (llm_conf_get()->prov == LLM_SOMA) {               /* SOMA_329_IA_LOCAL: "sano" = el modelo esta en el almacen (o en el pendrive) */
+#if defined(__x86_64__)
+        char r[160]; const char *why;
+        if (!ia_disponible(&why)) { set_err("LLM: ", why); return 0; }
+        if (ia_modelo_ruta(llm_conf_get()->model[LLM_SOMA], r, sizeof r) == 0) return 1;
+        set_err("LLM: no esta el modelo en /modelos: ", llm_conf_get()->model[LLM_SOMA]);
+#else
+        set_err("LLM: el motor local solo esta en x86_64", "");
+#endif
+        return 0;
+    }
     if (!conf_legacy(ip, &port)) {                       /* SOMA_195: API en la nube o servidor con nombre/clave: "sano" = bien configurado (sin gastar una peticion) */
         struct llm_http h; int r = llm_proto_models(llm_conf_get(), &h);
         if (r != LLM_P_OK) { set_err("LLM: ", llm_proto_strerror(r)); return 0; }
         return 1;
     }
-    int code = http_get(ip, port, "/health", http_resp_buf, g_resp_cap, &resp, 5000);   /* SOMA_260_LLM_TAM */
+    int code = llm_http_local(ip, port, "/health", 0, http_resp_buf, g_resp_cap, &resp, 5000, 0);   /* SOMA_260_LLM_TAM; SOMA_327 */
     if (code != 200) set_err("LLM: el servidor local no responde en ", llm_conf_get()->base[LLM_LOCAL]);
     return (code == 200);
 }
@@ -385,12 +446,17 @@ static int llm_fetch(const struct llm_http *h, const char *body, uint32_t blen, 
     rq.url = h->url; rq.method = h->method; rq.body = body; rq.body_len = blen; rq.ctype = "application/json"; rq.accept = "application/json";
     rq.timeout_ms = timeout_ms; rq.max_body = llm_tam()->http; rq.no_redirect = 1;   /* SOMA_260_LLM_TAM: antes 256 KB */      /* sin redirecciones: la clave no viaja a otro sitio */
     rq.extra_headers = h->headers; rq.direct = 1;
-    return wn_fetch(&rq, rs);
+    return wn_fetch_isolated(&rq, rs);         /* SOMA_325_LLM_AISLADO: HTTP y TLS en netsvc (ring 3), un proceso por peticion */
 }
 static void llm_fetch_error(int rc, const struct wn_resp *rs)
 {
     static char m[160];
-    if (rc != 0) { const char *t = wn_tls_last_error(); set_err("LLM: sin conexion con el servidor: ", rs->err[0] ? rs->err : (t[0] ? t : "error de red")); if (t[0] && rs->err[0]) { uint32_t n = 0; while (llm_last_error[n]) n++; if (n < sizeof llm_last_error - 4) { llm_last_error[n++] = ' '; llm_last_error[n++] = '('; while (*t && n < sizeof llm_last_error - 2) llm_last_error[n++] = *t++; llm_last_error[n++] = ')'; llm_last_error[n] = 0; } } return; }
+#ifdef __x86_64__
+    const char *t = "";                         /* SOMA_325_LLM_AISLADO: el motivo de TLS ya viene en rs->err (netsvc); el del nucleo no es de esta peticion */
+#else
+    const char *t = wn_tls_last_error();
+#endif
+    if (rc != 0) { set_err("LLM: sin conexion con el servidor: ", rs->err[0] ? rs->err : (t[0] ? t : "error de red")); if (t[0] && rs->err[0]) { uint32_t n = 0; while (llm_last_error[n]) n++; if (n < sizeof llm_last_error - 4) { llm_last_error[n++] = ' '; llm_last_error[n++] = '('; while (*t && n < sizeof llm_last_error - 2) llm_last_error[n++] = *t++; llm_last_error[n++] = ')'; llm_last_error[n] = 0; } } return; }
     if (rs->body && llm_proto_error(rs->body, m, sizeof m)) { set_err(rs->status == 401 || rs->status == 403 ? "LLM: el proveedor rechaza la clave: " : "LLM: el proveedor responde: ", m); return; }
     char st[40] = "LLM: respuesta HTTP "; uint32_t n = 20; int v = rs->status; char d[8]; int k = 0;
     do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v > 0 && k < 7);
@@ -458,11 +524,18 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
     int blen = llm_proto_chat(c, prompt, json_mode, payload_buf, g_pay_cap, &h);
     if (blen < 0) { set_err("LLM: ", llm_proto_strerror(blen)); kprint(llm_last_error); kprint("\n"); goto out; }
     uint8_t ip[4]; uint16_t port;
+    if (c->prov == LLM_SOMA) {                                                              /* SOMA_329_IA_LOCAL */
+        int n = llm_soma(c, payload_buf, (uint32_t)blen, http_resp_buf, g_resp_cap, timeout_ms, 0);
+        if (n >= 0 && !llm_proto_reply(c, http_resp_buf, reply_out, reply_max)) set_err("LLM: la respuesta del motor local no trae texto", "");
+        else if (n >= 0) ok = 1;
+        if (!ok) { kprint(llm_last_error); kprint("\n"); }
+        if (ok) llm_marca_recorte(reply_out, reply_max);
+        trace_record(t_start, slen_(prompt), n >= 0 ? http_resp_buf : 0, ok ? slen_(reply_out) : 0, ok);
+        goto out;
+    }
     if (conf_legacy(ip, &port)) {                                                           /* el camino de siempre */
         struct http_response resp;
-        net_client_lock();
-        int code = http_post_json(ip, port, "/v1/chat/completions", payload_buf, http_resp_buf, g_resp_cap, &resp, timeout_ms);
-        net_client_unlock();
+        int code = llm_http_local(ip, port, "/v1/chat/completions", payload_buf, http_resp_buf, g_resp_cap, &resp, timeout_ms, 0);   /* SOMA_327 */
         if (code != 200) {
             set_err("LLM: el servidor local no responde bien en ", c->base[LLM_LOCAL]);
             kprint("LLM: HTTP error status "); if (code >= 0) kprint_dec((uint32_t)code); else kprint("CONN_ERR"); kprint("\n");
@@ -481,7 +554,7 @@ static int llm_request(const char *prompt, int json_mode, char *reply_out, uint3
         else ok = 1;
         if (ok) llm_marca_recorte(reply_out, reply_max);                                    /* SOMA_260_LLM_TAM */
         trace_record(t_start, slen_(prompt), rc == 0 ? rs.body : 0, ok ? slen_(reply_out) : 0, ok);
-        wn_free(&rs);
+        wn_free_isolated(&rs);
     }
 out:
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
@@ -524,14 +597,27 @@ int llm_chat_hist(const char *system, const struct llm_msg *msgs, int nmsg, cons
     {   /* SOMA_286_YOUTUBE: el servidor local (http://IP:puerto sin clave) va por el mismo camino que el agente (llm_request), el que
          * funciona en la red de casa. Antes iba por el cliente del navegador y YouTube y el chat decian "sin conexion con el servidor". */
         uint8_t lip[4]; uint16_t lport;
+        if (c->prov == LLM_SOMA) {                                                          /* SOMA_329_IA_LOCAL */
+            uint64_t t_start = timer_get_uptime_ms();
+            uint32_t pchars = slen_(system); for (int k = 0; k < nmsg; k++) pchars += slen_(msgs[k].text);
+            if (!ensure_llm_buffers_ex(1)) { set_err("LLM: sin memoria para la respuesta", ""); goto out; }
+            int n = llm_soma(c, body, (uint32_t)blen, http_resp_buf, g_resp_cap, timeout_ms, cancel);
+            if (cancel && *cancel) { set_err("LLM: cancelado", ""); ok = 0; }
+            else if (n == -2) {
+                g_novis_prov = c->prov; for (int i = 0; i < LLM_MODEL_MAX; i++) { g_novis_model[i] = c->model[c->prov][i]; if (!g_novis_model[i]) break; }
+                ok = -2;
+            } else if (n >= 0 && llm_proto_reply(c, http_resp_buf, reply_out, reply_max)) ok = 1;
+            else if (n >= 0) set_err("LLM: la respuesta del motor local no trae texto", "");
+            if (ok == 1) llm_marca_recorte(reply_out, reply_max);
+            trace_record(t_start, pchars, n >= 0 ? http_resp_buf : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
+            goto out;
+        }
         if (conf_legacy(lip, &lport)) {
             uint64_t t_start = timer_get_uptime_ms();
             uint32_t pchars = slen_(system); for (int k = 0; k < nmsg; k++) pchars += slen_(msgs[k].text);
             if (!ensure_llm_buffers_ex(1)) { set_err("LLM: sin memoria para la respuesta", ""); goto out; }
             struct http_response resp; memset(&resp, 0, sizeof resp);
-            net_client_lock();
-            int code = http_post_json(lip, lport, "/v1/chat/completions", body, http_resp_buf, g_resp_cap, &resp, timeout_ms);
-            net_client_unlock();
+            int code = llm_http_local(lip, lport, "/v1/chat/completions", body, http_resp_buf, g_resp_cap, &resp, timeout_ms, cancel);   /* SOMA_327 */
             if (cancel && *cancel) { set_err("LLM: cancelado", ""); ok = 0; }
             else if (code != 200) {
                 static char m[200]; m[0] = 0;
@@ -559,7 +645,7 @@ int llm_chat_hist(const char *system, const struct llm_msg *msgs, int nmsg, cons
         rq.timeout_ms = timeout_ms; rq.max_body = tam_max(1u << 20, llm_tam()->http); rq.no_redirect = 1; rq.extra_headers = h.headers; rq.direct = 1; rq.cancel = cancel;
         uint64_t t_start = timer_get_uptime_ms();
         uint32_t pchars = slen_(system); for (int k = 0; k < nmsg; k++) pchars += slen_(msgs[k].text);
-        int rc = wn_fetch(&rq, &rs);
+        int rc = wn_fetch_isolated(&rq, &rs);   /* SOMA_325_LLM_AISLADO */
         if (rc != 0 || rs.status != 200 || !rs.body) {
             static char m[200]; m[0] = 0;
             if (rc == 0 && rs.body) (void)llm_proto_error(rs.body, m, sizeof m);
@@ -572,7 +658,7 @@ int llm_chat_hist(const char *system, const struct llm_msg *msgs, int nmsg, cons
         else ok = 1;
         if (ok == 1) llm_marca_recorte(reply_out, reply_max);                               /* SOMA_260_LLM_TAM */
         trace_record(t_start, pchars, rc == 0 ? rs.body : 0, ok == 1 ? slen_(reply_out) : 0, ok == 1);
-        wn_free(&rs);
+        wn_free_isolated(&rs);
     }
 out:
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
@@ -604,7 +690,7 @@ int llm_launcher_models(char *out, uint32_t max)
     while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
     int n = launcher_call(LLM_L_MODELS, 0, &rs);
     if (n == 0) n = llm_proto_model_list(&oa, rs.body, out, max); else n = -1;
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
     return n;
 }
@@ -623,7 +709,7 @@ int llm_launcher_status(char *model, uint32_t mmax)
             if (r < 0) set_err("Lanzador: ", det[0] ? det : "el servidor no arranco");
         }
     }
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
     return r;
 }
@@ -632,7 +718,7 @@ static int launcher_post(int what, const char *model)
     static struct wn_resp rs;
     while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
     int r = launcher_call(what, model, &rs);
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
     return r;
 }
@@ -651,7 +737,7 @@ int llm_launcher_emb_status(void)
             if (r < 0) set_err("Lanzador: ", det[0] ? det : "el servidor de embeddings no arranco");
         }
     }
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
     return r;
 }
@@ -703,6 +789,24 @@ int llm_list_models(char *out, uint32_t max)
     const struct llm_conf *c = llm_conf_get();
     static struct llm_http h; static struct wn_resp rs;
     if (max) out[0] = 0;
+    if (c->prov == LLM_SOMA) {                           /* SOMA_329_IA_LOCAL: los .gguf de /modelos, por su nombre sin la ruta */
+#if defined(__x86_64__)
+        static char t[4096]; int n = ia_modelos(t, sizeof t), k = 0; uint32_t o = 0;
+        for (const char *l = t; *l && k < n;) {
+            const char *e = l; while (*e && *e != '\n') e++;
+            const char *nb = l; for (const char *q = l; q < e; q++) if (*q == '/') nb = q + 1;
+            const char *fin = nb; while (fin < e && !(fin[0] == '.' && fin[1] == 'g' && fin[2] == 'g' && fin[3] == 'u' && fin[4] == 'f')) fin++;
+            for (const char *q = nb; q < fin && o + 2 < max; q++) out[o++] = *q;
+            if (o + 1 < max) out[o++] = '\n';
+            k++; l = *e ? e + 1 : e;
+        }
+        if (max) out[o < max ? o : max - 1] = 0;
+        if (!n) set_err("LLM: no hay modelos .gguf en /modelos (copialos en la carpeta MODELOS del pendrive; ia instalar <nombre>)", "");
+        return n;
+#else
+        set_err("LLM: el motor local solo esta en x86_64", ""); return -1;
+#endif
+    }
     int r = llm_proto_models(c, &h);
     if (r != LLM_P_OK) { set_err("LLM: ", llm_proto_strerror(r)); return -1; }
     while (__atomic_test_and_set(&g_llm_busy, __ATOMIC_ACQUIRE)) thread_sleep(5);
@@ -711,7 +815,7 @@ int llm_list_models(char *out, uint32_t max)
     int rc = llm_fetch(&h, 0, 0, 15000, &rs);
     if (rc != 0 || rs.status != 200 || !rs.body) llm_fetch_error(rc, &rs);
     else n = llm_proto_model_list(c, rs.body, out, max);
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     __atomic_clear(&g_llm_busy, __ATOMIC_RELEASE);
     return n;
 }
@@ -790,11 +894,9 @@ int llm_diagnose(const char *user_question, char *reply_out, uint32_t reply_max,
 }
 
 int llm_health(void)
-{
-    net_client_lock();
-    int r = llm_health_unlocked();
-    net_client_unlock();
-    return r;
+{   /* SOMA_327_RED_FUERA: sin el cerrojo de red aqui: llm_http_local lo coge alrededor del cliente minimo (aarch64), y en x86_64 netsvc
+     * lo coge en cada llamada al sistema; retenerlo mientras se espera a netsvc lo bloqueaba (y con el, a toda la red) hasta el plazo. */
+    return llm_health_unlocked();
 }
 
 int llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)

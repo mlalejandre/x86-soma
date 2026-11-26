@@ -51,4 +51,5 @@ int  voz_voice_list(char (*paths)[96], uint64_t *sizes, int max);   /* voces ins
 int  voz_voice_speakers(const char *path);                 /* hablantes de una voz (num_speakers de su .json; 1 si no dice) */
 void voz_voice_label(const char *path, char *out, uint32_t cap);   /* "Davefx (Espana, calidad media)" */
 int  voz_speak_reply(const char *text);                    /* el orbe lee su respuesta si esta activado (0 = empezo) */
+uint32_t voz_reply_seq(void);                              /* SOMA_330: numero de la ultima lectura pedida por el orbe */
 #endif

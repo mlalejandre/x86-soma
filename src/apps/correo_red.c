@@ -1,5 +1,6 @@
 /* correo_red.c: SOMA_295_CORREO: sesiones IMAP4rev1 (RFC 3501) y SMTP (RFC 5321) sobre el transporte que se le de. Ver correo_red.h. */
 #include "correo_red.h"
+#include "correo_sbx.h"   /* SOMA_311_CORREO_AISLADO */
 
 static void mcpy(void *d, const void *s, uint32_t n) { uint8_t *a = (uint8_t *)d; const uint8_t *b = (const uint8_t *)s; for (uint32_t i = 0; i < n; i++) a[i] = b[i]; }
 static void mmov(char *d, const char *s, uint32_t n) { for (uint32_t i = 0; i < n; i++) d[i] = s[i]; }   /* d < s */
@@ -202,21 +203,7 @@ struct col_m { struct co_msg *out; int max, n; uint32_t desde; };
 static void msg_de_fetch(struct co_msg *m, const struct co_fetch *f)
 {
     m->uid = f->uid; m->flags = f->flags; m->tam = f->tam;
-    co_msg_de_cab(m, f->cab ? f->cab : "", f->cab ? f->cab_n : 0);
-    if (!f->cab || !f->cuerpo) return;
-    uint32_t n = f->cab_n + f->cuerpo_n + 4;
-    char *raw = (char *)co_alloc(n + 1), *tx = (char *)co_alloc(4000); struct co_mime *mm = (struct co_mime *)co_alloc(sizeof *mm);
-    if (raw && tx && mm) {
-        uint32_t p = 0; mcpy(raw, f->cab, f->cab_n); p = f->cab_n;
-        if (p < 2 || raw[p - 1] != '\n' || (raw[p - 2] != '\n' && !(p >= 4 && raw[p - 3] == '\n'))) { raw[p++] = '\r'; raw[p++] = '\n'; }
-        mcpy(raw + p, f->cuerpo, f->cuerpo_n); p += f->cuerpo_n; raw[p] = 0;
-        if (co_mime_lee(raw, p, mm, tx, 4000)) {
-            co_extracto(tx, mm->texto_n, m->extracto, sizeof m->extracto);
-            int reales = 0; for (int i = 0; i < mm->nadj; i++) if (!mm->adj[i].en_linea) reales++;
-            if (reales) m->adj = 1;
-        }
-    }
-    co_free(raw); co_free(tx); co_free(mm);
+    correo_ficha(m, f->cab, f->cab ? f->cab_n : 0, f->cab ? f->cuerpo : 0, f->cuerpo_n);   /* SOMA_311_CORREO_AISLADO: en ring 3 */
 }
 static void cb_fetch_m(struct co_imap *s, const char *r, uint32_t n, void *u)
 {

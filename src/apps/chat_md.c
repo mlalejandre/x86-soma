@@ -44,7 +44,9 @@ static int pre(const char *s, int n, const char *p) { int i = 0; while (p[i]) { 
 static int W(struct L *L, const char *s, int n, int px, int fl) { return n > 0 ? L->m->width(s, n, px, fl, L->m->u) : 0; }
 static int ASC(struct L *L, int px) { return L->m->ascent(px, L->m->u); }
 static int DSC(struct L *L, int px) { return L->m->descent(px, L->m->u); }
-static int u8back(const char *s, int n) { while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) n--; return n; }
+/* retrocede n hasta el principio de un caracter UTF-8 de s (len bytes). SOMA_321_CHAT_MD_HOSTIL: el final (n >= len) siempre es un
+ * limite valido y no se lee: antes se miraba s[len], un byte pasado el final de la palabra (fuera del pool si era la ultima). */
+static int u8back(const char *s, int n, int len) { if (n >= len) return len; while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) n--; return n; }
 
 static uint32_t pool_put(struct L *L, const char *s, uint32_t n)
 {
@@ -52,6 +54,15 @@ static uint32_t pool_put(struct L *L, const char *s, uint32_t n)
     if (o->npool + n > o->poolcap) { o->full = 1; return o->npool; }
     for (uint32_t i = 0; i < n; i++) o->pool[o->npool + i] = s[i];
     uint32_t r = o->npool; o->npool += n; return r;
+}
+/* SOMA_321_CHAT_MD_HOSTIL: como pool_put, pero si no cabe deja *n a 0. Antes, con el pool lleno, varias llamadas guardaban la
+ * longitud pedida sin haber escrito nada: la palabra, el enlace o el codigo apuntaban a bytes pasado el final del pool, y medirlos
+ * y dibujarlos leia fuera de el (un mensaje enorme, por ejemplo un bloque de codigo de cientos de KB en una respuesta del modelo). */
+static uint32_t pool_dup(struct L *L, const char *s, uint32_t *n)
+{
+    uint32_t r = pool_put(L, s, *n);
+    if (L->o->full && r + *n > L->o->npool) *n = 0;
+    return r;
 }
 static struct md_op *op_new(struct L *L, int type)
 {
@@ -185,14 +196,14 @@ static void add_text(struct L *L, const char *s, int n, const struct sty *st)
             while (i < n && (is_sp(s[i]) || s[i] == '\n')) i++;
             struct at *a = at_new(L, A_SPACE, st); if (!a) return;
             int px = sty_px(L, st); a->w = W(L, " ", 1, px, sty_fl(st)); a->asc = ASC(L, px); a->desc = DSC(L, px);
-            if (st->deco & D_CODE) { a->k = A_WORD; a->s = pool_put(L, " ", 1); a->n = 1; at_measure(L, a); }
+            if (st->deco & D_CODE) { a->k = A_WORD; a->n = 1; a->s = pool_dup(L, " ", &a->n); at_measure(L, a); }
             continue;
         }
         int j = i;
         /* palabra: hasta un espacio; se corta tambien despues de / - para que las URL largas partan */
         while (j < n && !is_sp(s[j]) && s[j] != '\n') { j++; if (j - i > 1 && (s[j - 1] == '/' || s[j - 1] == '-') && j < n && !is_sp(s[j])) break; }
         struct at *a = at_new(L, A_WORD, st); if (!a) return;
-        a->s = pool_put(L, s + i, (uint32_t)(j - i)); a->n = (uint32_t)(j - i);
+        a->n = (uint32_t)(j - i); a->s = pool_dup(L, s + i, &a->n);
         at_measure(L, a);
         i = j;
     }
@@ -260,8 +271,8 @@ __attribute__((noinline)) static void add_math(struct L *L, const char *s, int n
 static void add_img(struct L *L, const char *src, int n, const char *alt, int an, const struct sty *st)
 {
     struct at *a = at_new(L, A_IMG, st); if (!a) return;
-    a->s = pool_put(L, src, (uint32_t)n); a->n = (uint32_t)n;
-    int w = 320, h = 200, r = L->m->image ? L->m->image(L->o->pool + a->s, n, &w, &h, L->m->u) : -1;
+    a->n = (uint32_t)n; a->s = pool_dup(L, src, &a->n);
+    int w = 320, h = 200, r = (L->m->image && a->n) ? L->m->image(L->o->pool + a->s, (int)a->n, &w, &h, L->m->u) : -1;   /* SOMA_321: lo que cupo */
     if (r != 0 || w <= 0 || h <= 0) { w = 320; h = r < 0 ? 64 : 180; }
     a->w = w; a->ox = 0; a->asc = h; a->desc = 0;
     (void)alt; (void)an; a->oy = r;
@@ -339,7 +350,7 @@ static int html_tag(struct L *L, const char *s, int n, int i, struct sty *st, in
     case 12: in.deco |= D_SUP; break;
     case 13: in.deco |= D_SUB; break;
     case 14: in.deco |= D_MARK; break;
-    case 15: { int a0, an; if (html_attr(t, tn, "href", &a0, &an)) { uint32_t u = pool_put(L, t + a0, (uint32_t)an); in.link = (int16_t)zone_new(L, MDZ_LINK, u, (uint32_t)an); in.col = L->t->link; in.deco |= D_UNDER; L->o->links++; } break; }
+    case 15: { int a0, an; if (html_attr(t, tn, "href", &a0, &an)) { uint32_t un = (uint32_t)an, u = pool_dup(L, t + a0, &un); in.link = (int16_t)zone_new(L, MDZ_LINK, u, un); in.col = L->t->link; in.deco |= D_UNDER; L->o->links++; } break; }
     }
     if (in.deco & D_CODE) { add_text(L, s + e + 1, cs - e - 1, &in); }
     else inl(L, s + e + 1, cs - e - 1, in, lvl + 1);
@@ -377,7 +388,7 @@ static void inl(struct L *L, const char *s, int n, struct sty st, int lvl)
                 FLUSH(); int a0 = r, a1 = j; if (a1 - a0 >= 2 && s[a0] == ' ' && s[a1 - 1] == ' ') { a0++; a1--; }
                 struct sty cs = st; cs.deco |= D_CODE; cs.col = L->t->inl_fg;
                 /* el codigo en linea va en una sola pieza si es corto (no se parte por espacios) */
-                if (a1 - a0 <= 24) { struct at *a = at_new(L, A_WORD, &cs); if (a) { a->s = pool_put(L, s + a0, (uint32_t)(a1 - a0)); a->n = (uint32_t)(a1 - a0); at_measure(L, a); } }
+                if (a1 - a0 <= 24) { struct at *a = at_new(L, A_WORD, &cs); if (a) { a->n = (uint32_t)(a1 - a0); a->s = pool_dup(L, s + a0, &a->n); at_measure(L, a); } }
                 else add_text(L, s + a0, a1 - a0, &cs);
                 i = j + tl; continue;
             }
@@ -417,8 +428,8 @@ static void inl(struct L *L, const char *s, int n, struct sty st, int lvl)
                     int sp = u0; while (sp < u1 && !is_sp(s[sp])) sp++;
                     if (sp > u0 && s[u0] == '<' && s[sp - 1] == '>') { u0++; sp--; }
                     FLUSH();
-                    struct sty ls = st; uint32_t u = pool_put(L, s + u0, (uint32_t)(sp - u0));
-                    ls.link = (int16_t)zone_new(L, MDZ_LINK, u, (uint32_t)(sp - u0)); ls.col = L->t->link; ls.deco |= D_UNDER; L->o->links++;
+                    struct sty ls = st; uint32_t un = (uint32_t)(sp - u0), u = pool_dup(L, s + u0, &un);
+                    ls.link = (int16_t)zone_new(L, MDZ_LINK, u, un); ls.col = L->t->link; ls.deco |= D_UNDER; L->o->links++;
                     inl(L, s + i + 1, j - i - 1, ls, lvl + 1);
                     i = k + 1; continue;
                 }
@@ -427,8 +438,8 @@ static void inl(struct L *L, const char *s, int n, struct sty st, int lvl)
         if (c == '<') {
             int j = i + 1; while (j < n && s[j] != '>' && !is_sp(s[j])) j++;
             if (j < n && s[j] == '>' && (es_url_ini(s + i + 1, j - i - 1) || pre(s + i + 1, j - i - 1, "mailto:"))) {
-                FLUSH(); struct sty ls = st; uint32_t u = pool_put(L, s + i + 1, (uint32_t)(j - i - 1));
-                ls.link = (int16_t)zone_new(L, MDZ_LINK, u, (uint32_t)(j - i - 1)); ls.col = L->t->link; ls.deco |= D_UNDER; L->o->links++;
+                FLUSH(); struct sty ls = st; uint32_t un = (uint32_t)(j - i - 1), u = pool_dup(L, s + i + 1, &un);
+                ls.link = (int16_t)zone_new(L, MDZ_LINK, u, un); ls.col = L->t->link; ls.deco |= D_UNDER; L->o->links++;
                 add_text(L, s + i + 1, j - i - 1, &ls); i = j + 1; continue;
             }
             FLUSH();
@@ -444,8 +455,8 @@ static void inl(struct L *L, const char *s, int n, struct sty st, int lvl)
                 j--;
             }
             if (j - i > 8) {
-                FLUSH(); struct sty ls = st; uint32_t u = pool_put(L, s + i, (uint32_t)(j - i));
-                ls.link = (int16_t)zone_new(L, MDZ_LINK, u, (uint32_t)(j - i)); ls.col = L->t->link; ls.deco |= D_UNDER; L->o->links++;
+                FLUSH(); struct sty ls = st; uint32_t un = (uint32_t)(j - i), u = pool_dup(L, s + i, &un);
+                ls.link = (int16_t)zone_new(L, MDZ_LINK, u, un); ls.col = L->t->link; ls.deco |= D_UNDER; L->o->links++;
                 add_text(L, s + i, j - i, &ls); i = j; continue;
             }
         }
@@ -488,10 +499,10 @@ static int cabe(struct L *L, const char *s, int n, int px, int fl, int avail)
 {
     int lo = 1, hi = n, best = 1;
     while (lo <= hi) {
-        int mid = (lo + hi) / 2, m = u8back(s, mid); if (m <= 0) m = mid;
+        int mid = (lo + hi) / 2, m = u8back(s, mid, n); if (m <= 0) m = mid;
         if (W(L, s, m, px, fl) <= avail) { best = m; lo = mid + 1; } else hi = mid - 1;
     }
-    best = u8back(s, best); if (best <= 0) { best = 1; while (best < n && ((uint8_t)s[best] & 0xC0) == 0x80) best++; }
+    best = u8back(s, best, n); if (best <= 0) { best = 1; while (best < n && ((uint8_t)s[best] & 0xC0) == 0x80) best++; }
     return best;
 }
 static int flow(struct L *L, int a0, int a1, int x, int y, int w, int align, int emit, int *maxw);
@@ -858,8 +869,8 @@ __attribute__((noinline)) static int code_block(struct L *L, const char *lang, i
         if (!k) { const char *d = "c\303\263digo"; while (*d) lab[k++] = *d++; }
         lab[k] = 0;
         op_text_str(L, x + 14, y + hd / 2 + ASC(L, 12) / 2 - 1, lab, 12, MD_F_BOLD, t->muted);
-        uint32_t cs = pool_put(L, code, (uint32_t)n);
-        int z = zone_new(L, MDZ_COPY, cs, (uint32_t)n);
+        uint32_t csn = (uint32_t)n, cs = pool_dup(L, code, &csn);
+        int z = zone_new(L, MDZ_COPY, cs, csn);
         int bw = W(L, "Copiar", 6, 12, 0) + 30;
         zone_grow(L, z, x + w - bw - 6, y + 4, bw, hd - 8);
         /* icono de copiar: dos rectangulos */
@@ -1216,5 +1227,10 @@ int md_layout(const char *src, uint32_t len, int width, int base_px, const struc
     L.S->nar = 0; L.S->na = 0; L.S->ntx = 0; L.S->ntp = 0;
     if (!src || !len || width < 40) return 0;
     o->height = blocks(&L, src, (int)len, 0, 0, width);
+    /* SOMA_321_CHAT_MD_HOSTIL: red de seguridad para quien dibuja: ninguna operacion ni zona apunta fuera de lo escrito en el pool */
+    for (int i = 0; i < o->nops; i++)
+        if ((o->ops[i].type == MD_TEXT || o->ops[i].type == MD_IMG) && (o->ops[i].s > o->npool || o->ops[i].n > o->npool - o->ops[i].s)) { o->ops[i].s = 0; o->ops[i].n = 0; }
+    for (int i = 0; i < o->nz; i++)
+        if (o->z[i].s > o->npool || o->z[i].n > o->npool - o->z[i].s) { o->z[i].s = 0; o->z[i].n = 0; }
     return o->height;
 }

@@ -10,6 +10,7 @@
 #include "fb.h"
 #include "gui.h" /*PL12_GUI_INC*/
 #include "rtc.h"
+#include "hora.h"     /* SOMA_332_HORA */
 
 extern uint64_t timer_get_uptime_ms(void);
 
@@ -1884,7 +1885,7 @@ static int vm_run_inner(struct soma_vm *vm, const uint8_t *bytecode, uint32_t le
         case OP_SYS_CLOCK: {                                           /* SOMA_235_PROGRAMADOR: sys.hour() ... sys.year() */
             if (vm->ip + 1 > vm->code_len) return -1;
             uint8_t f = vm->code[vm->ip++];
-            struct rtc_time t; rtc_get_datetime(&t);
+            struct rtc_time t; hora_local(&t);                         /* SOMA_332_HORA: la hora de pared */
             int64_t v = f == 0 ? t.hour : f == 1 ? t.min : f == 2 ? t.sec : f == 3 ? t.day : f == 4 ? t.month : t.year;
             struct vm_val res = { VAL_INT, v, {0}, 0, 0 };
             if (!push_val(vm, res)) return -1;

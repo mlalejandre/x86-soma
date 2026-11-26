@@ -122,8 +122,12 @@ uint32_t wl_texto(const char *html, uint32_t n, char *out, uint32_t cap, char *t
         uint32_t util_n = 0; for (uint32_t i = 0, ls = 0; i <= q; i++) if (i == q || out[i] == '\n') { if (util(out + ls, i - ls)) util_n += i - ls; ls = i + 1; }
         if (util_n < 400) q = extrae(s, e, out, cap, titulo, tcap);
     } else q = extrae(s, e, out, cap, titulo, tcap);
-    /* filtro de lineas: solo las utiles, sin repetir la anterior, separadas por una linea en blanco */
-    uint32_t w = 0, ls = 0; uint32_t prev_s = 0, prev_n = 0; int primero = 1;
+    /* filtro de lineas: solo las utiles, sin repetir la anterior, separadas por una linea en blanco.
+     * SOMA_313_LECTOR_WEB: se hace en dos pasadas sobre el mismo bufer. Antes se escribia "\n\n" entre lineas en una sola pasada,
+     * pero en el original solo habia un "\n": con dos lineas utiles seguidas la escritura adelantaba a la lectura y machacaba la
+     * linea siguiente (salia una ristra de saltos de linea y el parrafo se perdia).
+     * 1) compactar con UN salto: lo escrito nunca pasa de lo leido (cada linea util ya tenia al menos su "\n" detras); */
+    uint32_t w = 0, ls = 0; uint32_t prev_s = 0, prev_n = 0, nlin = 0;
     for (uint32_t i = 0; i <= q; i++) {
         if (i < q && out[i] != '\n') continue;
         uint32_t a0 = ls, n0 = i - ls; ls = i + 1;
@@ -131,14 +135,25 @@ uint32_t wl_texto(const char *html, uint32_t n, char *out, uint32_t cap, char *t
         while (n0 && out[a0 + n0 - 1] == ' ') n0--;
         if (!util(out + a0, n0)) continue;
         if (n0 == prev_n) { uint32_t k = 0; while (k < n0 && out[prev_s + k] == out[a0 + k]) k++; if (k == n0) continue; }
-        if (!primero) { out[w++] = '\n'; out[w++] = '\n'; }
-        primero = 0;
+        if (nlin) out[w++] = '\n';
         prev_s = w;
-        for (uint32_t k = 0; k < n0; k++) out[w++] = out[a0 + k];      /* w <= a0 siempre: se copia hacia delante sin pisar */
-        prev_n = n0;
+        for (uint32_t k = 0; k < n0; k++) out[w++] = out[a0 + k];      /* w <= a0: hacia delante sin pisar */
+        prev_n = n0; nlin++;
     }
-    out[w] = 0;
-    return w;
+    /* 2) cada salto pasa a ser doble, de derecha a izquierda; si no cabe en cap - 1, fuera lineas del final hasta que quepa */
+    while (nlin > 1 && w + (nlin - 1) > cap - 1) {
+        while (w && out[w - 1] != '\n') w--;
+        if (w) w--;
+        nlin--;
+    }
+    if (nlin <= 1) { out[w] = 0; return w; }
+    uint32_t total = w + (nlin - 1), d = total;
+    for (uint32_t i = w; i-- > 0; ) {
+        out[--d] = out[i];
+        if (out[i] == '\n') out[--d] = '\n';
+    }
+    out[total] = 0;
+    return total;
 }
 
 void wl_dominio(const char *url, char *out, uint32_t cap)

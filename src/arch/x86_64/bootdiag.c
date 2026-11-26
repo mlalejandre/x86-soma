@@ -11,6 +11,7 @@
 #include "pci.h"
 #include "bootfb.h"
 #include "rtc.h"
+#include "hora.h"     /* SOMA_332_HORA */
 #include "fs.h"
 #include "e1000e.h"
 #include "soma_str.h"
@@ -203,12 +204,12 @@ uint32_t bootdiag_report(char *out, uint32_t max)
     char *klog = (char *)kmalloc(kcap + 1);
     if (klog) kn = klog_snapshot(klog, kcap + 1);
 
-    struct rtc_time t; rtc_get_datetime(&t);
+    struct rtc_time t; hora_local(&t);           /* SOMA_332_HORA */
     soma_sbuf_append_str(&o, "SOMA 0.3 pre-beta - informe de arranque y hardware\n");
     soma_sbuf_append_str(&o, "Compartelo en https://github.com/mlalejandre/x86-soma/issues o en los comentarios del canal.\n");
     soma_sbuf_append_str(&o, "No contiene contrasenas ni claves: solo el equipo, los dispositivos y el registro del nucleo.\n");
     soma_sbuf_append_str(&o, "Generado: "); soma_sbuf_append_u64(&o, t.year); soma_sbuf_append_str(&o, "-"); od2(&o, t.month); soma_sbuf_append_str(&o, "-"); od2(&o, t.day); soma_sbuf_append_str(&o, " ");
-    od2(&o, t.hour); soma_sbuf_append_str(&o, ":"); od2(&o, t.min); soma_sbuf_append_str(&o, " (reloj del equipo), "); soma_sbuf_append_u64(&o, timer_get_uptime_ms() / 1000); soma_sbuf_append_str(&o, " s tras encender\n");
+    od2(&o, t.hour); soma_sbuf_append_str(&o, ":"); od2(&o, t.min); soma_sbuf_append_str(&o, " (hora local), "); soma_sbuf_append_u64(&o, timer_get_uptime_ms() / 1000); soma_sbuf_append_str(&o, " s tras encender\n");
     soma_sbuf_append_str(&o, "Compilado: " __DATE__ "\nOpciones de arranque: "); soma_sbuf_append_str(&o, bootinfo_cmdline()[0] ? bootinfo_cmdline() : "(ninguna)"); soma_sbuf_append_str(&o, "\n");
 
     uint32_t body = o.len;                                             /* desde aqui se filtran las lineas con claves */

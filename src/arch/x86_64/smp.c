@@ -417,6 +417,7 @@ struct ujob {
     uint32_t owner;
     uint64_t fault_rip, fault_cr2; int fault_vec;
     uint8_t *trap_stack;
+    uint64_t fs;                                         /* SOMA_329_IA_LOCAL: base de FS del proceso */
 };
 _Static_assert(__builtin_offsetof(struct ujob, exit_rip) == 40, "struct ujob: desplazamientos del ensamblador");
 #define UJOB_TRAP 16384
@@ -435,6 +436,7 @@ static void smp_user_job(int idx, int n, void *arg)
     __asm__ volatile ("fninit");
     { uint32_t mx = 0x1F80; __asm__ volatile ("ldmxcsr %0" : : "m"(mx)); }
     if (usermode_avx2_ok()) __asm__ volatile ("vzeroall" ::: "memory");
+    wrmsr_(0xC0000100u, j->fs);                          /* SOMA_329_IA_LOCAL: la base de FS del proceso (0 si no tiene) */
     j->in_user = 1;
     int64_t st = smp_user_enter(j);
     j->in_user = 0;
@@ -473,7 +475,7 @@ int smp_user_free(void)
     return n;
 }
 /* Lanza un hilo de usuario en un nucleo libre. Devuelve el nucleo (>0) o <0 (-11 = no hay nucleo libre, -12 sin memoria). */
-int smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint64_t exit_rip, uint32_t owner)
+int smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint64_t exit_rip, uint32_t owner, uint64_t fs)
 {
     if (!g_enabled || g_ncpu < 2 || __atomic_load_n(&g_busy, __ATOMIC_ACQUIRE)) return -11;
     int c;
@@ -482,7 +484,7 @@ int smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint6
     struct ujob *j = &g_ujob[c];
     if (!j->trap_stack) { j->trap_stack = (uint8_t *)kmalloc(UJOB_TRAP); if (!j->trap_stack) return -12; }
     j->cr3 = cr3; j->rip = rip; j->rsp = rsp; j->arg = arg; j->exit_rip = exit_rip; j->owner = owner;
-    j->status = 0; j->in_user = 0; j->fault_vec = -1;
+    j->status = 0; j->in_user = 0; j->fault_vec = -1; j->fs = fs;
     j->state = 1;
     __atomic_add_fetch(&g_user_cores, 1, __ATOMIC_SEQ_CST);
     struct slot *s = &g_slot[c];

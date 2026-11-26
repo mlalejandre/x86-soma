@@ -45,6 +45,35 @@ static int cmd_monitor(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+/* SOMA_338_AGENTES: "agentes" - la mision en curso, los especialistas, las misiones recientes y la actividad */
+void gui_open_agentes(void);
+static int cmd_agentes(const char *args, char *out_buf, uint32_t max_out)
+{
+    { extern int gui_is_running(void); if (gui_is_running()) gui_open_agentes(); }   /* y la ventana, si hay escritorio */
+    return agentes_cmd(args, out_buf, max_out);
+}
+
+/* SOMA_337_NOTICIAS: "noticias" - sin argumentos abre la aplicacion; con categoria, los titulares; resumen, guardar, ajustes */
+void gui_open_noticias(void);
+int gui_is_running(void);
+static int cmd_noticias(const char *args, char *out_buf, uint32_t max_out)
+{
+    if (agent_net_denied("noticias", args, out_buf, max_out)) return 1;
+    while (args && *args == ' ') args++;
+    if ((!args || !*args) && gui_is_running()) gui_open_noticias();
+    return noticias_cmd(args, out_buf, max_out);
+}
+
+/* SOMA_331_DISCOS: "discos" - gestor de discos (sin argumentos abre la aplicacion y da la lista) */
+void gui_open_discos(void);
+int gui_is_running(void);
+static int cmd_discos(const char *args, char *out_buf, uint32_t max_out)
+{
+    while (args && *args == ' ') args++;
+    if ((!args || !*args) && gui_is_running()) gui_open_discos();
+    return discos_cmd(args, out_buf, max_out);
+}
+
 /* PARCHE 088: "imagen [archivo]" - visor de imagenes */
 static int cmd_imagen(const char *args, char *out_buf, uint32_t max_out)
 {
@@ -240,13 +269,44 @@ static int cmd_coderlog(const char *args, char *out_buf, uint32_t max_out)
 }
 
 /* PARCHE 093: "studio [archivo.soma]" abre SOMA Studio con el editor */
+static int studio_pal(const char *a, const char *w) { while (*w && *a == *w) { a++; w++; } return !*w && (*a == 0 || *a == ' '); }
 static int cmd_studio(const char *args, char *out_buf, uint32_t max_out)
 {
     uint32_t p = 0;
     while (args && *args == ' ') args++;
+    /* SOMA_333_SALIDA: studio salida (lo que imprimio el programa); lanzarlo es la orden "ejecutar" */
+    if (args && studio_pal(args, "salida")) {
+        (void)crun_poll();
+        int n = crun_lineas();
+        for (int i = 0; i < n; i++) { soma_str_put(out_buf, max_out, &p, crun_linea(i)); soma_str_put(out_buf, max_out, &p, "\n"); }
+        if (crun_prompt()[0]) { soma_str_put(out_buf, max_out, &p, crun_prompt()); soma_str_put(out_buf, max_out, &p, "\n"); }
+        soma_str_put(out_buf, max_out, &p, crun_estado() == CRUN_MARCHA ? "[en marcha]" : crun_estado() == CRUN_FIN ? (crun_parado() ? "[parado]" : crun_fallo() ? "[termino con error]" : "[terminado]") : "[nada en marcha]");
+        soma_str_put(out_buf, max_out, &p, crun_visible() ? " [panel visible]" : " [panel oculto]");
+        return 1;
+    }
     if (args && *args) coder_app_load_project(args);
     gui_open_coder_app();
     soma_str_put(out_buf, max_out, &p, "SOMA Studio abierto.");
+    return 1;
+}
+
+/* SOMA_333_SALIDA: "ejecutar <archivo>" lanza un programa como el boton Ejecutar de SOMA Studio (su salida en el panel Salida);
+ * "ejecutar escribir <linea>" le da una linea (input()); "ejecutar parar" lo detiene. No es segura para el agente: ejecuta codigo. */
+static int cmd_ejecutar(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t p = 0;
+    while (args && *args == ' ') args++;
+    if (!args || !*args) { soma_str_put(out_buf, max_out, &p, "uso: ejecutar /workspace/programa.py | ejecutar escribir <linea> | ejecutar parar   (salida: studio salida)"); return 1; }
+    if (studio_pal(args, "escribir")) {
+        const char *l = args + 8; if (*l == ' ') l++;
+        (void)crun_poll();
+        soma_str_put(out_buf, max_out, &p, crun_feed(l) == 0 ? "Enviado." : "No hay ningun programa esperando.");
+        return 1;
+    }
+    if (studio_pal(args, "parar")) { crun_parar(); soma_str_put(out_buf, max_out, &p, "Parado."); return 1; }
+    coder_app_load_project(args); gui_open_coder_app();
+    int r = coder_app_run_path(args);
+    soma_str_put(out_buf, max_out, &p, r == 0 ? "En marcha; su salida, con: studio salida" : r == -1 ? "Ya hay un programa en marcha (ejecutar parar)." : "No se pudo lanzar.");
     return 1;
 }
 
@@ -419,12 +479,33 @@ static int cmd_escritorio(const char *args, char *out_buf, uint32_t max_out)
     if (out_buf && max_out) out_buf[0] = 0;
     return 1;
 }
+/* SOMA_334_ORBE_MD: "orbe <archivo.md>" (una ruta) pone ese texto en el orbe, con su formato (para ver como queda una respuesta) */
+int gui_orbe_texto(const char *texto);
+static int orbe_muestra(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t p = 0;
+    while (args && *args == ' ') args++;
+    if (!args || !*args) { soma_str_put(out_buf, max_out, &p, "uso: orbe /workspace/texto.md"); return 1; }
+    if (!gui_is_running()) { soma_str_put(out_buf, max_out, &p, "orbe: el escritorio no esta en marcha"); return 1; }
+    const uint32_t CAP = 64u * 1024u;
+    char *b = (char *)kmalloc(CAP + 1);
+    if (!b) { soma_str_put(out_buf, max_out, &p, "orbe: sin memoria"); return 1; }
+    int n = vfs_read(args, b, CAP);
+    if (n <= 0) { kfree(b); soma_str_put(out_buf, max_out, &p, "orbe: no se puede leer "); soma_str_put(out_buf, max_out, &p, args); return 1; }
+    b[n] = 0;
+    int ok = gui_orbe_texto(b);
+    kfree(b);
+    soma_str_put(out_buf, max_out, &p, ok ? "En el orbe." : "orbe: el escritorio no ha dado turno de pantalla");
+    return 1;
+}
+
 /* SOMA_164B_T480S: "orbe prueba" */
 extern int orb_parallel_selftest(char *out, uint32_t max);
 static int cmd_orbe(const char *args, char *out_buf, uint32_t max_out)
 {
     (void)args;
     while (args && *args == ' ') args++;
+    if (args && args[0] == '/') return orbe_muestra(args, out_buf, max_out);   /* SOMA_334_ORBE_MD */
     if (args && args[0] == 'p') {
         static char b[512];
         orb_parallel_selftest(b, sizeof b);
@@ -792,6 +873,7 @@ static int cmd_ajustes(const char *args, char *out_buf, uint32_t max_out)
     if (args && args[0] == 'v' && args[1] == 'o' && args[2] == 'z') { void settings_goto_voz(void); settings_goto_voz(); }   /* SOMA_246: "ajustes voz" */
     if (args && args[0] == 's' && args[1] == 'o' && args[2] == 'n') { void settings_goto_sonido(void); settings_goto_sonido(); }   /* SOMA_250: "ajustes sonido" */
     if (args && args[0] == 'l' && args[1] == 'c' && args[2] == 'm') { void settings_goto_lcm(void); settings_goto_lcm(); }     /* SOMA_257_LCM: "ajustes lcm" */
+    if (args && (args[0] == 'h' || args[0] == 'f') && (args[1] == 'o' || args[1] == 'e')) { void settings_goto_hora(void); settings_goto_hora(); }   /* SOMA_332_HORA: "ajustes hora" / "ajustes fecha" */
     gui_open_settings();
     soma_str_put(out_buf, max_out, &p, "Ajustes abiertos.");
     return 1;

@@ -19,16 +19,27 @@ static int imax(int a, int b) { return a > b ? a : b; }
 static int op_add(int type, int x, int y, int w, int h, int px, int style, uint32_t rgb, uint32_t s, uint32_t n)
 {
     if (O->nops >= O->cap) { FULL = 1; return -1; }
+    if ((type == TOP_TEXT || type == TOP_IMAGE) && (s > O->npool || n > O->npool - s)) { s = 0; n = 0; }   /* SOMA_322: no cupo en el pool */
     struct tex_op *p = &O->ops[O->nops];
     p->type = (uint8_t)type; p->style = (uint8_t)style; p->px = (int16_t)px; p->x = x; p->y = y; p->w = w; p->h = h; p->rgb = rgb; p->s = s; p->n = n;
     return O->nops++;
 }
 static uint32_t pool_put(const char *s, uint32_t n)
 {
-    if (O->npool + n + 1 > O->poolcap) { FULL = 1; return 0; }
+    /* SOMA_322_TEX_HOSTIL: si no cabe devuelve el final de lo escrito (antes 0): asi s + n > npool delata que no se copio y nadie
+     * lee n bytes que no existen. Antes, con el pool lleno, las operaciones de texto quedaban con s = 0 y la longitud entera, y
+     * quien dibuja leia fuera del pool. */
+    if (n >= O->poolcap || O->npool + n + 1 > O->poolcap) { FULL = 1; return O->npool; }
     uint32_t at = O->npool;
     for (uint32_t i = 0; i < n; i++) O->pool[at + i] = s[i];
     O->pool[at + n] = 0; O->npool += n + 1;
+    return at;
+}
+/* como pool_put, pero si no cabe deja *n a 0 (para los pares posicion y longitud que se leen despues) */
+static uint32_t pool_dupn(const char *s, uint32_t *n)
+{
+    uint32_t at = pool_put(s, *n);
+    if (at > O->npool || *n > O->npool - at) *n = 0;
     return at;
 }
 static void shift_ops(int a, int b, int dx, int dy)
@@ -126,7 +137,7 @@ static void mappend(int list, int child)
 static int matom(const char *t, int n, int cls, int sty)
 {
     int x = mnew(K_ATOM); if (x < 0) return -1;
-    MN[x].s = pool_put(t, (uint32_t)n); MN[x].n = (uint32_t)n; MN[x].cls = (uint8_t)cls; MN[x].sty = (uint8_t)sty;
+    MN[x].n = (uint32_t)n; MN[x].s = pool_dupn(t, &MN[x].n); MN[x].cls = (uint8_t)cls; MN[x].sty = (uint8_t)sty;
     return x;
 }
 
@@ -288,8 +299,8 @@ static int parse_mlist(int stop_rbrace)
                 MN[node].a = parse_mlist(0);
                 skip_sp();
                 if (pk() == '\\') { P++; uint32_t a2, k2; read_cmd(&a2, &k2); if (seq(S + a2, k2, "right")) delim_tok(&ds, &dn, br); else { br[0] = 0; P = a2 - 1; } } else br[0] = 0;
-                MN[node].s = pool_put(bl, (uint32_t)slen(bl)); MN[node].n = (uint32_t)slen(bl);
-                MN[node].s2 = pool_put(br, (uint32_t)slen(br)); MN[node].n2 = (uint32_t)slen(br);
+                MN[node].n = (uint32_t)slen(bl); MN[node].s = pool_dupn(bl, &MN[node].n);
+                MN[node].n2 = (uint32_t)slen(br); MN[node].s2 = pool_dupn(br, &MN[node].n2);
                 MN[node].cls = C_INNER;
             } else if (seq(cmd, n, "text") || seq(cmd, n, "textrm") || seq(cmd, n, "mathrm") || seq(cmd, n, "operatorname") || seq(cmd, n, "textbf") || seq(cmd, n, "mathbf") || seq(cmd, n, "textit") || seq(cmd, n, "mathit") || seq(cmd, n, "mathsf") || seq(cmd, n, "mathtt")) {
                 uint32_t a, b; read_group(&a, &b);
@@ -322,7 +333,7 @@ static int parse_mlist(int stop_rbrace)
                     for (int i = 0; BIGOPS[i].name && node < 0; i++) if (seq(cmd, n, BIGOPS[i].name)) { node = matom(BIGOPS[i].u, slen(BIGOPS[i].u), C_OP, 0); MN[node].ex = 1; MN[node].lim = BIGOPS[i].limits ? 3 : 0; }
                     for (int i = 0; FUNCS[i] && node < 0; i++) if (seq(cmd, n, FUNCS[i])) node = matom(cmd, (int)n, C_OP, 0x80);
                     for (int i = 0; LIMFUNCS[i] && node < 0; i++) if (seq(cmd, n, LIMFUNCS[i])) { node = matom(cmd, (int)n, C_OP, 0x80); MN[node].lim = 3; }
-                    if (node < 0) { int e = mnew(K_ERR); if (e < 0) break; MN[e].s = pool_put(S + s - 1, n + 1); MN[e].n = n + 1; node = e; O->errors++; }
+                    if (node < 0) { int e = mnew(K_ERR); if (e < 0) break; MN[e].n = (uint32_t)(n + 1); MN[e].s = pool_dupn(S + s - 1, &MN[e].n); node = e; O->errors++; }
                 }
             }
         } else if (c >= '0' && c <= '9') {
@@ -361,13 +372,14 @@ static int env_matrix(uint32_t na, uint32_t nn)            /* \begin{pmatrix} ..
     MN[node].a = parse_mlist(0);
     skip_sp();
     if (pk() == '\\') { P++; uint32_t a, k; read_cmd(&a, &k); if (seq(S + a, k, "end")) { uint32_t g0, g1; read_group(&g0, &g1); } }
-    MN[node].s = pool_put(l, (uint32_t)slen(l)); MN[node].n = (uint32_t)slen(l);
-    MN[node].s2 = pool_put(r, (uint32_t)slen(r)); MN[node].n2 = (uint32_t)slen(r);
+    MN[node].n = (uint32_t)slen(l); MN[node].s = pool_dupn(l, &MN[node].n);
+    MN[node].n2 = (uint32_t)slen(r); MN[node].s2 = pool_dupn(r, &MN[node].n2);
     MN[node].cls = C_INNER;
     return node;
 }
 
 /* ---------------------------------------------------------------- maquetacion de formulas */
+#define TEX_DPX_MAX 4000                  /* SOMA_322_TEX_HOSTIL: tamano maximo de un delimitador que crece (px) */
 struct box { int w, asc, desc; };
 static int axis_of(int px) { return px * 27 / 100; }
 static int spx(int px) { int s = px * 7 / 10; return s < 7 ? 7 : s; }
@@ -384,7 +396,8 @@ static struct box delim_box(const char *t, int n, int px, int half)
 {
     struct box b = { 0, 0, 0 };
     if (n <= 0) { b.w = px / 6; return b; }
-    int dpx = (2 * half) * 100 / 92; if (dpx < px) dpx = px;
+    /* SOMA_322_TEX_HOSTIL: acotado (antes (2 * half) * 100 desbordaba un int con formulas enormes; y el tamano va en un int16_t) */
+    int dpx = half > TEX_DPX_MAX ? TEX_DPX_MAX : (int)((2LL * half) * 100 / 92); if (dpx > TEX_DPX_MAX) dpx = TEX_DPX_MAX; if (dpx < px) dpx = px;
     int o = O->nops;
     b = glyph_box(t, n, dpx, 0, TEX_INK);
     /* centrar el glifo en el eje: la caja del glifo va de -0.72*dpx a +0.22*dpx (aprox.) */
@@ -636,7 +649,7 @@ static int add_word(const char *t, int n)
     if (nit >= IT_MAX) { FULL = 1; return -1; }
     struct item *it = &IT[nit++];
     it->kind = IT_WORD; it->style = (uint8_t)ST.style; it->px = (int16_t)ST.px; it->rgb = ST.rgb;
-    it->s = pool_put(t, (uint32_t)n); it->n = (uint32_t)n;
+    it->n = (uint32_t)n; it->s = pool_dupn(t, &it->n);
     it->w = tw(t, n, ST.px, ST.style); it->asc = asc_of(ST.px); it->desc = desc_of(ST.px);
     return 0;
 }
@@ -1008,7 +1021,7 @@ static void do_item(void)
     if (k == 2) {                                             /* description: termino en negrita en linea */
         struct sty s = ST; ST.style |= TS_BOLD; add_word(lab, slen(lab)); ST = s; add_space(); return;
     }
-    pend_label_s = pool_put(lab, (uint32_t)slen(lab)); pend_label_n = (uint32_t)slen(lab);
+    pend_label_n = (uint32_t)slen(lab); pend_label_s = pool_dupn(lab, &pend_label_n);
     pend_label_px = BASE; pend_label_style = k == 1 ? TS_BOLD : 0;
     pend_label_w = tw(lab, slen(lab), BASE, pend_label_style);
     if (pend_label_w < BASE / 2) pend_label_w = BASE / 2;
@@ -1297,5 +1310,8 @@ int tex_typeset(const char *src, uint32_t len, int width, int base_px, const str
     nlabs = 0;
     pass_no = 1; run(src, len, width);                       /* 1: recoge \label para \ref hacia delante */
     pass_no = 2; run(src, len, width);
+    /* SOMA_322_TEX_HOSTIL: red de seguridad para quien dibuja: ninguna operacion apunta fuera de lo escrito en el pool */
+    for (int i = 0; i < o->nops; i++)
+        if ((o->ops[i].type == TOP_TEXT || o->ops[i].type == TOP_IMAGE) && (o->ops[i].s > o->npool || o->ops[i].n > o->npool - o->ops[i].s)) { o->ops[i].s = 0; o->ops[i].n = 0; }
     return FULL ? -1 : 0;
 }

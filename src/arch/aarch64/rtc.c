@@ -1,6 +1,6 @@
 #include "rtc.h"
 
-void rtc_get_datetime(struct rtc_time *t)
+void rtc_leer_hw(struct rtc_time *t)          /* SOMA_332_HORA: antes rtc_get_datetime */
 {
     if (!t) return;
     volatile uint32_t *pl031_dr = (volatile uint32_t *)0x09010000;

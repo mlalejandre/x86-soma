@@ -10,6 +10,14 @@ void co_num(char *d, uint32_t cap, uint64_t v) { char t[24]; int k = 0; do { t[k
 static int lw(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 int co_ieq(const char *a, const char *b) { while (*a && *b) { if (lw((unsigned char)*a) != lw((unsigned char)*b)) return 0; a++; b++; } return *a == *b; }
 int co_iempieza(const char *s, const char *p) { while (*p) { if (lw((unsigned char)*s) != lw((unsigned char)*p)) return 0; s++; p++; } return 1; }
+/* SOMA_319_CORREO_PROTO: como co_iempieza pero sin pasar de n bytes de s. Lo usan los lectores de lo que manda el servidor (IMAP,
+ * SMTP): reciben (r, n) y la respuesta no tiene por que acabar en NUL. */
+static int iempieza_n(const char *s, uint32_t n, const char *p)
+{
+    uint32_t i = 0;
+    for (; p[i]; ++i) if (i >= n || lw((unsigned char)s[i]) != lw((unsigned char)p[i])) return 0;
+    return 1;
+}
 const char *co_ibusca(const char *s, uint32_t n, const char *p)
 {
     uint32_t m = co_len(p);
@@ -852,9 +860,9 @@ int co_imap_etiqueta(const char *r, uint32_t n, const char *tag, char *texto, ui
     if (n < tl + 3 || r[tl] != ' ') return 0;
     for (uint32_t i = 0; i < tl; i++) if (r[i] != tag[i]) return 0;
     const char *s = r + tl + 1; uint32_t sn = n - tl - 1;
-    int v = co_iempieza(s, "OK") ? 1 : (co_iempieza(s, "NO") || co_iempieza(s, "BAD")) ? -1 : 0;
+    int v = iempieza_n(s, sn, "OK") ? 1 : (iempieza_n(s, sn, "NO") || iempieza_n(s, sn, "BAD")) ? -1 : 0;
     if (!v) return 0;
-    uint32_t k = co_iempieza(s, "BAD") ? 3 : 2; while (k < sn && s[k] == ' ') k++;
+    uint32_t k = iempieza_n(s, sn, "BAD") ? 3 : 2; while (k < sn && s[k] == ' ') k++;
     uint32_t e = k; while (e < sn && s[e] != '\r' && s[e] != '\n') e++;
     co_cpyn(texto, s + k, e - k, cap);
     return v;
@@ -866,21 +874,23 @@ static uint32_t valor(const char *r, uint32_t i, uint32_t n, const char **dat, u
     *dat = 0; *datn = 0;
     i = salta_esp(r, i, n);
     if (i >= n) return n;
+    /* SOMA_319_CORREO_PROTO: ningun indice pasa de n (antes, una \ al final de una cadena, un [ sin cerrar o un literal {N} sin
+     * salto de linea lo dejaban 1 o 2 bytes mas alla, y el dato devuelto era mas largo que lo que quedaba del bufer) */
     if (r[i] == '"') {
-        uint32_t a = ++i; while (i < n && r[i] != '"') { if (r[i] == '\\') i++; i++; }
+        uint32_t a = ++i; while (i < n && r[i] != '"') { if (r[i] == '\\' && i + 1 < n) i++; i++; }
         *dat = r + a; *datn = i - a; return i < n ? i + 1 : n;
     }
     if (r[i] == '{') {
-        uint32_t v = 0; i++; while (i < n && r[i] >= '0' && r[i] <= '9') v = v * 10 + (uint32_t)(r[i++] - '0');
+        uint32_t v = 0; i++; while (i < n && r[i] >= '0' && r[i] <= '9') { v = v > 0x0FFFFFFFu ? 0xFFFFFFFFu : v * 10 + (uint32_t)(r[i] - '0'); i++; }
         while (i < n && r[i] != '\n') i++;
-        i++;
-        if (i + v > n) v = n > i ? n - i : 0;
+        if (i < n) i++;
+        if (v > n - i) v = n - i;
         *dat = r + i; *datn = v; return i + v;
     }
     if (r[i] == '(') {
         uint32_t a = i; int prof = 0;
         while (i < n) {
-            if (r[i] == '"') { i++; while (i < n && r[i] != '"') { if (r[i] == '\\') i++; i++; } i++; continue; }
+            if (r[i] == '"') { i++; while (i < n && r[i] != '"') { if (r[i] == '\\' && i + 1 < n) i++; i++; } if (i < n) i++; continue; }
             if (r[i] == '{') { const char *d; uint32_t dn; i = valor(r, i, n, &d, &dn); continue; }
             if (r[i] == '(') prof++;
             else if (r[i] == ')') { prof--; if (!prof) { i++; break; } }
@@ -889,7 +899,7 @@ static uint32_t valor(const char *r, uint32_t i, uint32_t n, const char **dat, u
         *dat = r + a; *datn = i - a; return i;
     }
     uint32_t a = i;
-    while (i < n && r[i] != ' ' && r[i] != ')' && r[i] != '\r' && r[i] != '\n') { if (r[i] == '[') { while (i < n && r[i] != ']') i++; } i++; }
+    while (i < n && r[i] != ' ' && r[i] != ')' && r[i] != '\r' && r[i] != '\n') { if (r[i] == '[') { while (i < n && r[i] != ']') i++; if (i >= n) break; } i++; }
     *dat = r + a; *datn = i - a; return i;
 }
 static uint32_t numero(const char *s, uint32_t n) { uint32_t v = 0; for (uint32_t i = 0; i < n && s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (uint32_t)(s[i] - '0'); return v; }
@@ -909,7 +919,7 @@ int co_imap_fetch(const char *r, uint32_t n, struct co_fetch *f)
     if (n < 10 || r[0] != '*' || r[1] != ' ') return 0;
     uint32_t i = 2, s = 0; while (i < n && r[i] >= '0' && r[i] <= '9') s = s * 10 + (uint32_t)(r[i++] - '0');
     i = salta_esp(r, i, n);
-    if (!co_iempieza(r + i, "FETCH")) return 0;
+    if (!iempieza_n(r + i, n - i, "FETCH")) return 0;
     i = salta_esp(r, i + 5, n);
     if (i >= n || r[i] != '(') return 0;
     i++; f->seq = s;
@@ -918,17 +928,17 @@ int co_imap_fetch(const char *r, uint32_t n, struct co_fetch *f)
         if (i >= n || r[i] == ')') break;
         uint32_t a = i;
         while (i < n && r[i] != ' ' && r[i] != '(' && r[i] != '"' && r[i] != '{' && r[i] != ')') {
-            if (r[i] == '[') { while (i < n && r[i] != ']') i++; }
+            if (r[i] == '[') { while (i < n && r[i] != ']') i++; if (i >= n) break; }
             i++;
         }
         uint32_t nl = i - a; const char *nom = r + a;
         const char *d; uint32_t dn;
         i = valor(r, i, n, &d, &dn);
-        if (nl == 3 && co_iempieza(nom, "UID")) f->uid = numero(d, dn);
-        else if (nl == 5 && co_iempieza(nom, "FLAGS")) { f->flags = banderas(d, dn); f->tiene_flags = 1; }
-        else if (nl == 11 && co_iempieza(nom, "RFC822.SIZE")) f->tam = numero(d, dn);
-        else if (co_iempieza(nom, "BODY[") || co_iempieza(nom, "RFC822")) {
-            if (d && dn == 3 && co_iempieza(d, "NIL")) continue;
+        if (nl == 3 && iempieza_n(nom, nl, "UID")) f->uid = numero(d, dn);
+        else if (nl == 5 && iempieza_n(nom, nl, "FLAGS")) { f->flags = banderas(d, dn); f->tiene_flags = 1; }
+        else if (nl == 11 && iempieza_n(nom, nl, "RFC822.SIZE")) f->tam = numero(d, dn);
+        else if (iempieza_n(nom, nl, "BODY[") || iempieza_n(nom, nl, "RFC822")) {
+            if (d && dn == 3 && iempieza_n(d, dn, "NIL")) continue;
             if (co_ibusca(nom, nl, "HEADER")) { f->cab = d; f->cab_n = dn; }
             else { f->cuerpo = d; f->cuerpo_n = dn; }
         }
@@ -952,7 +962,7 @@ int co_imap_list(const char *r, uint32_t n, struct co_carpeta *c)
     mset(c, 0, sizeof *c);
     if (n < 10 || r[0] != '*') return 0;
     uint32_t i = salta_esp(r, 1, n);
-    if (co_iempieza(r + i, "LIST ")) i += 5; else if (co_iempieza(r + i, "XLIST ")) i += 6; else if (co_iempieza(r + i, "LSUB ")) i += 5; else return 0;
+    if (iempieza_n(r + i, n - i, "LIST ")) i += 5; else if (iempieza_n(r + i, n - i, "XLIST ")) i += 6; else if (iempieza_n(r + i, n - i, "LSUB ")) i += 5; else return 0;
     const char *fl, *del, *nom; uint32_t fln, deln, nomn;
     i = valor(r, i, n, &fl, &fln);
     i = valor(r, i, n, &del, &deln);
@@ -993,7 +1003,7 @@ uint32_t co_imap_search(const char *r, uint32_t n, uint32_t *uids, uint32_t max)
 {
     if (n < 8 || r[0] != '*') return 0;
     uint32_t i = salta_esp(r, 1, n);
-    if (!co_iempieza(r + i, "SEARCH")) return 0;
+    if (!iempieza_n(r + i, n - i, "SEARCH")) return 0;
     i += 6; uint32_t k = 0;
     while (i < n && k < max) {
         i = salta_esp(r, i, n);
@@ -1066,10 +1076,10 @@ uint32_t co_smtp_caps(const char *r, uint32_t n)
         uint32_t e = i; while (e < n && r[e] != '\n') e++;
         if (e - i > 4) {
             const char *l = r + i + 4; uint32_t ln = e - i - 4;
-            if (co_iempieza(l, "STARTTLS")) c |= CO_S_STARTTLS;
-            if (co_iempieza(l, "8BITMIME")) c |= CO_S_8BIT;
-            if (co_iempieza(l, "SMTPUTF8")) c |= CO_S_UTF8;
-            if (co_iempieza(l, "AUTH")) {
+            if (iempieza_n(l, ln, "STARTTLS")) c |= CO_S_STARTTLS;
+            if (iempieza_n(l, ln, "8BITMIME")) c |= CO_S_8BIT;
+            if (iempieza_n(l, ln, "SMTPUTF8")) c |= CO_S_UTF8;
+            if (iempieza_n(l, ln, "AUTH")) {
                 if (co_imap_cap(l, ln, "PLAIN")) c |= CO_S_PLAIN;
                 if (co_imap_cap(l, ln, "LOGIN")) c |= CO_S_LOGIN;
                 if (co_imap_cap(l, ln, "XOAUTH2")) c |= CO_S_XOAUTH;
@@ -1262,6 +1272,24 @@ void co_msg_de_cab(struct co_msg *m, const char *cab, uint32_t n)
     if (co_cabecera(cab, n, "Content-Type", v, 2048) >= 0 && co_iempieza(v, "multipart/mixed")) m->adj = 1;
     for (char *p = m->asunto; *p; p++) if (*p == '\t') *p = ' ';
     co_free(v); co_free(d);
+}
+void co_ficha(struct co_msg *m, const char *cab, uint32_t cab_n, const char *cuerpo, uint32_t cuerpo_n)
+{
+    co_msg_de_cab(m, cab ? cab : "", cab ? cab_n : 0);
+    if (!cab || !cuerpo) return;
+    uint32_t n = cab_n + cuerpo_n + 4;
+    char *raw = (char *)co_alloc(n + 1), *tx = (char *)co_alloc(4000); struct co_mime *mm = (struct co_mime *)co_alloc(sizeof *mm);
+    if (raw && tx && mm) {
+        uint32_t p = 0; mcpy(raw, cab, cab_n); p = cab_n;
+        if (p < 2 || raw[p - 1] != '\n' || (raw[p - 2] != '\n' && !(p >= 4 && raw[p - 3] == '\n'))) { raw[p++] = '\r'; raw[p++] = '\n'; }
+        mcpy(raw + p, cuerpo, cuerpo_n); p += cuerpo_n; raw[p] = 0;
+        if (co_mime_lee(raw, p, mm, tx, 4000)) {
+            co_extracto(tx, mm->texto_n, m->extracto, sizeof m->extracto);
+            int reales = 0; for (int i = 0; i < mm->nadj; i++) if (!mm->adj[i].en_linea) reales++;
+            if (reales) m->adj = 1;
+        }
+    }
+    co_free(raw); co_free(tx); co_free(mm);
 }
 static void pon_campo(char *o, uint32_t cap, uint32_t *p, const char *s)
 {

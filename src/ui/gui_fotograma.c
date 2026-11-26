@@ -513,44 +513,7 @@ static void render_desktop(void)
         (void)fb_debug_verify(0x00000000);
 }
 
-static void agents_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, int cursor_visible)
-{
-    (void)cursor_visible;
-    if (ww < 180u || wh < 160u) return;
-    fb_fill_rect(wx, wy, ww, wh, 0x000B1220);
-    fb_fill_rounded_rect((int32_t)(wx + 12u), (int32_t)(wy + 10u), (int32_t)(ww - 24u), 30, 5, 0x00131E2A);
-    font_draw_string(wx + 24u, wy + 20u, "AGENTES DISPONIBLES", 0x00F8FAFC, 1);
-    font_draw_string(wx + 24u, wy + 48u, "Jerarquia de coordinacion de SOMA", 0x0064778A, 1);
-
-    uint32_t root_x = wx + 24u, root_y = wy + 68u;
-    uint32_t card_x = wx + 54u;
-    uint32_t card_w = ww > 86u ? ww - 78u : ww - 62u;
-    fb_fill_rounded_rect((int32_t)root_x, (int32_t)root_y, (int32_t)(ww - 48u), 48, 6, 0x00113343);
-    fb_draw_rounded_rect((int32_t)root_x, (int32_t)root_y, (int32_t)(ww - 48u), 48, 6, COLOR_CYAN);
-    font_draw_string(root_x + 12u, root_y + 10u, "SOMA  -  ORQUESTADOR PRINCIPAL", COLOR_CYAN, 1);
-    font_draw_string(root_x + 12u, root_y + 28u, "Coordina especialistas y deriva operaciones de sistema.", 0x00CBD5E1, 1);
-
-    uint32_t branch_x = wx + 38u;
-    fb_fill_rect(branch_x, root_y + 48u, 2u, 230u, 0x00334155);
-
-    uint32_t y1 = wy + 132u, y2 = wy + 220u, y3 = wy + 308u;
-    uint32_t ys[3] = { y1, y2, y3 };
-    const char *names[3] = { "Mayordomo  -  Operaciones del sistema", "Buscador  -  Web e investigacion", "Maquetador  -  Documentos y composicion" };
-    const char *descs[3] = {
-        "Ejecuta rapido RAM, disco, VFS, busquedas y gestion de archivos.",
-        "Investiga informacion web, actualidad y consultas de conocimiento.",
-        "Organiza contenido en documentos estructurados con layout SOMA."
-    };
-    const uint32_t colors[3] = { 0x0034D399, 0x00F59E0B, 0x000EA5E9 };
-    for (int i = 0; i < 3; ++i) {
-        fb_fill_rect(branch_x, ys[i] + 26u, 16u, 2u, 0x00334155);
-        fb_fill_rounded_rect((int32_t)card_x, (int32_t)ys[i], (int32_t)card_w, 66, 6, 0x00101827);
-        fb_draw_rounded_rect((int32_t)card_x, (int32_t)ys[i], (int32_t)card_w, 66, 6, colors[i]);
-        font_draw_string(card_x + 12u, ys[i] + 12u, names[i], colors[i], 1);
-        font_draw_string(card_x + 12u, ys[i] + 34u, descs[i], 0x00CBD5E1, 1);
-    }
-    font_draw_string(wx + 22u, wy + wh - 20u, "Tareas comunes: RAM | Disco | Buscar archivo | Crear carpeta", 0x0064778A, 1);
-}
+/* SOMA_338_AGENTES: la aplicacion Agentes esta ahora en src/apps/agentes_gui.c (un panel vivo; antes tres tarjetas fijas aqui) */
 
 static void her_render_app_body(enum app_mode app, uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, int is_focused)
 {
@@ -578,11 +541,13 @@ static void her_render_app_body(enum app_mode app, uint32_t wx, uint32_t wy, uin
     case APP_CODER_APP:      coder_app_render_window(wx, wy, ww, wh, is_focused); break;
     case APP_MEDIA:          media_render_window(wx, wy, ww, wh, is_focused);   break;
     case APP_YOUTUBE:        youtube_render_window(wx, wy, ww, wh, is_focused); break;   /* SOMA_250_YOUTUBE */
-    case APP_AGENTS:        agents_render_window(wx, wy, ww, wh, is_focused);  break;
+    case APP_AGENTS:        agentes_gui_render(wx, wy, ww, wh, is_focused);    break;   /* SOMA_338_AGENTES */
     case APP_SOMA_APP:      gui_soma_win_render_body(wx, wy, ww, wh);          break; /*PL12_RENDER_BODY*/
     case APP_SETTINGS:      settings_render_window(wx, wy, ww, wh, is_focused); break;
     case APP_PDF:           pdfview_render_window(wx, wy, ww, wh, is_focused); break;   /* PARCHE 088 */
     case APP_SYSMON:        sysmon_render_window(wx, wy, ww, wh, is_focused);  break;   /* PARCHE 089 */
+    case APP_DISCOS:        discos_gui_render(wx, wy, ww, wh, is_focused);     break;   /* SOMA_331_DISCOS */
+    case APP_NOTICIAS:      noticias_gui_render(wx, wy, ww, wh, is_focused);   break;   /* SOMA_337_NOTICIAS */
     case APP_AGENDA:        agenda_gui_render_window(wx, wy, ww, wh, is_focused); break;   /* SOMA_272_AGENDA */
     case APP_CORREO:        correo_render_window(wx, wy, ww, wh, is_focused); break;       /* SOMA_295_CORREO */
     case APP_RECORDER:      recorder_render_window(wx, wy, ww, wh, is_focused); break;  /* SOMA_177_T480S */
@@ -715,7 +680,7 @@ struct her_bc { int used; enum app_mode app; int slot; uint32_t x, y, w, h; int 
  * sin limite de tiempo, haya o no actividad del raton, y sin sumas de comprobacion. */
 static int her_app_version(enum app_mode a, uint32_t *v)
 {
-    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; case APP_AGENT_CHAT: *v = chat_version(); return 1; case APP_CORREO: *v = correo_version(); return 1; default: return 0; }   /* SOMA_295_CORREO */   /* SOMA_283_MEMORIA_APP; SOMA_285_CHAT */
+    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_DISCOS: *v = discos_gui_version(); return 1; case APP_NOTICIAS: *v = noticias_gui_version(); return 1; case APP_AGENTS: *v = agentes_gui_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; case APP_AGENT_CHAT: *v = chat_version(); return 1; case APP_CORREO: *v = correo_version(); return 1; default: return 0; }   /* SOMA_295_CORREO */   /* SOMA_283_MEMORIA_APP; SOMA_285_CHAT */
 }
 static uint32_t her_bc_gen(void) { return wf_ui_gen() ^ ((uint32_t)settings_opacity() << 20) ^ ((uint32_t)settings_active_opaque() << 28); }
 static struct her_bc her_bcs[HER_MAX_WINDOWS];
@@ -970,6 +935,9 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     case APP_LAYOUT:       layout_init();   break;          /* PARCHE 084: conserva el documento abierto */
     case APP_PDF:          pdfview_init();  break;          /* PARCHE 088 */
     case APP_SYSMON:       sysmon_init();   break;          /* PARCHE 089 */
+    case APP_DISCOS:       discos_gui_init(); break;        /* SOMA_331_DISCOS */
+    case APP_NOTICIAS:     noticias_gui_init(); break;      /* SOMA_337_NOTICIAS */
+    case APP_AGENTS:       agentes_gui_init(); break;       /* SOMA_338_AGENTES */
     case APP_AGENDA:       agenda_gui_init(); break;        /* SOMA_272_AGENDA */
     case APP_CORREO:       correo_init(); break;            /* SOMA_295_CORREO */
     case APP_RECORDER:     recorder_init(); break;          /* SOMA_177_T480S */

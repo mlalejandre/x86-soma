@@ -3,6 +3,7 @@
 #ifndef YT_HTTPS_PURE_ONLY
 #include "tls13.h"
 #include "tls_trust.h"
+#include "tun_tls.h"     /* SOMA_326_TUNEL_TLS */
 #include "tcp.h"
 #include "dns.h"
 #include "net.h"
@@ -75,45 +76,24 @@ static void putn(char *o, uint32_t max, uint32_t *p, uint64_t v) { char t[24]; i
 #define RB_CAP 16384u
 #define HEAD_MAX 12288u
 
-struct tioc { int h; };
-static struct tioc g_tio[4];                                   /* uno por conexion viva (video, busqueda, miniaturas...) */
-static int tio_send(void *c, const uint8_t *d, uint32_t n) { int h = ((struct tioc *)c)->h; while (n) { uint32_t k = n > 4096 ? 4096 : n; if (tcp_send(h, d, k) < 0) return -1; d += k; n -= k; } return 0; }
-static int tio_recv(void *c, uint8_t *d, uint32_t max, uint32_t to) { int r = tcp_recv(((struct tioc *)c)->h, d, (uint16_t)(max > 16384 ? 16384 : max), to); return r == TCP_EOF ? TLS_IO_EOF : r == TCP_ERR ? TLS_IO_ERR : r; }
-static uint64_t tio_now(void) { return timer_get_uptime_ms(); }
-static void tio_yield(void) { thread_yield(); }
-
-static int raw_send(struct yh *c, const void *d, uint32_t n)
-{
-    if (c->tls_on) return tls13_send(c->tls, d, n);
-    const uint8_t *p = (const uint8_t *)d;
-    while (n) { uint32_t k = n > 4096 ? 4096 : n; if (tcp_send(c->h, p, k) < 0) return -1; p += k; n -= k; }
-    return 0;
-}
+/* SOMA_326_TUNEL_TLS: la conexion es un tunel (src/apps/tun_tls.c): en x86_64 el TCP, el TLS y los certificados de YouTube y de
+ * googlevideo se hacen en un proceso de ring 3; aqui solo pasa el HTTP en claro. */
+static int raw_send(struct yh *c, const void *d, uint32_t n) { return c->tn ? tun_envia(c->tn, d, n) : -1; }
 /* > 0 bytes, 0 nada aun, -1 cerrado, -2 error */
-static int raw_recv(struct yh *c, uint8_t *b, uint32_t max, uint32_t to)
-{
-    if (c->tls_on) { int r = tls13_recv(c->tls, b, max, to); return r == TLS_IO_EOF ? -1 : r == TLS_IO_ERR ? -2 : r; }
-    int r = tcp_recv(c->h, b, (uint16_t)(max > 16384 ? 16384 : max), to);
-    return r == TCP_EOF ? -1 : r == TCP_ERR ? -2 : r;
-}
+static int raw_recv(struct yh *c, uint8_t *b, uint32_t max, uint32_t to) { return c->tn ? tun_recibe(c->tn, b, max, to) : -2; }
 
 void yh_close(struct yh *c, int abort_now)
 {
-    if (c->h >= 0) {
-        if (c->tls_on && c->tls && !abort_now) tls13_close(c->tls);
-        if (abort_now) tcp_abort(c->h); else tcp_close(c->h);
-        for (int i = 0; i < 4; ++i) if (g_tio[i].h == c->h) g_tio[i].h = -1;
-    }
-    if (c->tls) kfree(c->tls);
+    if (c->tn) tun_cierra(c->tn, abort_now);
     if (c->rb) kfree(c->rb);
-    c->h = -1; c->tls = 0; c->rb = 0; c->tls_on = 0;
+    c->h = -1; c->tn = 0; c->rb = 0; c->tls_on = 0;
 }
 
 static int open_once(struct yh *c, const struct yh_url *u, const char *method, const char *headers, const char *body, uint32_t blen,
                      int64_t range_from, struct yh_head *hd, uint32_t timeout_ms, char *err, uint32_t emax)
 {
     uint32_t ep = 0; uint8_t ip[4]; int isip = 1, parts = 0; uint32_t v = 0, dig = 0;
-    c->h = -1; c->tls = 0; c->rb = 0; c->tls_on = 0; c->rn = c->rp = 0; c->chunked = 0; c->done = 0; c->left = ~0ULL; c->chunk_left = 0; c->chunk_state = 0;
+    c->h = -1; c->tn = 0; c->rb = 0; c->tls_on = 0; c->rn = c->rp = 0; c->chunked = 0; c->done = 0; c->left = ~0ULL; c->chunk_left = 0; c->chunk_state = 0;
     for (const char *p = u->host; ; ++p) {                     /* a.b.c.d o un nombre */
         if (*p >= '0' && *p <= '9') { v = v * 10 + (uint32_t)(*p - '0'); if (++dig > 3 || v > 255) { isip = 0; break; } }
         else if (*p == '.' || !*p) { if (!dig || parts > 3) { isip = 0; break; } ip[parts++] = (uint8_t)v; v = 0; dig = 0; if (!*p) break; }
@@ -123,24 +103,18 @@ static int open_once(struct yh *c, const struct yh_url *u, const char *method, c
         net_client_lock(); int ok = dns_resolve(u->host, ip, 5000); net_client_unlock();
         if (!ok) { put(err, emax, &ep, "No se encuentra "); put(err, emax, &ep, u->host); put(err, emax, &ep, " (sin red o sin DNS)"); return -1; }
     }
-    net_client_lock(); c->h = tcp_connect(ip, u->port, 8000); net_client_unlock();
-    if (c->h < 0) { put(err, emax, &ep, "No se pudo conectar con "); put(err, emax, &ep, u->host); return -1; }
+    {   /* SOMA_326_TUNEL_TLS */
+        char m[160];
+        c->tn = tun_abre(ip, (uint16_t)u->port, u->tls, u->host, timeout_ms > 15000 ? 15000 : timeout_ms, m, sizeof m);
+        if (!c->tn) {
+            if (!u->tls || (m[0] == 'n' && m[1] == 'o' && m[2] == ' ' && m[3] == 's')) { put(err, emax, &ep, "No se pudo conectar con "); put(err, emax, &ep, u->host); }
+            else { put(err, emax, &ep, "Conexion segura con "); put(err, emax, &ep, u->host); put(err, emax, &ep, " rechazada: "); put(err, emax, &ep, m); }
+            return -1;
+        }
+        c->h = 0; c->tls_on = u->tls ? 1 : 0;
+    }
     c->rb = (uint8_t *)kmalloc(RB_CAP);
     if (!c->rb) { put(err, emax, &ep, "Sin memoria"); yh_close(c, 1); return -1; }
-    if (u->tls) {
-        c->tls = (struct tls13 *)kmalloc(sizeof(struct tls13));
-        struct tioc *t = 0; for (int i = 0; i < 4 && !t; ++i) if (g_tio[i].h <= 0) t = &g_tio[i];
-        if (!c->tls || !t) { put(err, emax, &ep, c->tls ? "Demasiadas conexiones seguras a la vez" : "Sin memoria"); yh_close(c, 1); return -1; }
-        t->h = c->h;
-        struct tls_io io = { t, tio_send, tio_recv, tio_now, tio_yield };
-        tls_trust_setup();                                      /* raices de confianza, hora y anclas propias (como hace el navegador) */
-        int r = tls13_connect(c->tls, &io, u->host, timeout_ms > 15000 ? 15000 : timeout_ms);
-        if (r) {
-            put(err, emax, &ep, "Conexion segura con "); put(err, emax, &ep, u->host); put(err, emax, &ep, " rechazada: "); put(err, emax, &ep, tls13_err_name(c->tls->err));
-            yh_close(c, 1); return -1;
-        }
-        c->tls_on = 1;
-    }
     uint32_t cap = 2600 + sl(u->path) + (headers ? sl(headers) : 0);
     char *rq = (char *)kmalloc(cap); uint32_t p = 0;
     if (!rq) { put(err, emax, &ep, "Sin memoria"); yh_close(c, 1); return -1; }
@@ -182,7 +156,7 @@ int yh_open(struct yh *c, const char *url, const char *method, const char *heade
     struct yh_url u; struct yh_head *hd = (struct yh_head *)kmalloc(sizeof *hd);
     if (total) *total = 0;
     if (err && emax) err[0] = 0;
-    c->h = -1; c->tls = 0; c->rb = 0;
+    c->h = -1; c->tn = 0; c->rb = 0;
     if (!hd) return -1;
     int st = -1;
     for (int hop = 0; hop < 5; ++hop) {

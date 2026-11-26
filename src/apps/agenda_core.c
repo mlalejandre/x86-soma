@@ -59,8 +59,10 @@ static int64_t ultimo_domingo(int y, int m)            /* dia (desde 1970) del u
     int64_t u = ag_dias(y, m, ag_dias_mes(y, m));
     return u - (ag_dia_semana(u) + 1) % 7;               /* domingo = 6 */
 }
+int (*ag_desfase_fn)(int64_t min_utc);                /* SOMA_332_HORA: lo pone hora.c con la zona elegida */
 int64_t ag_utc_a_local(int64_t min_utc)
 {
+    if (ag_desfase_fn) return min_utc + ag_desfase_fn(min_utc);
     int y, mo, d, h, mi; ag_desde_min(min_utc, &y, &mo, &d, &h, &mi);
     int64_t ini = ultimo_domingo(y, 3) * 1440 + 60, fin = ultimo_domingo(y, 10) * 1440 + 60;   /* 01:00 UTC */
     return min_utc + ((min_utc >= ini && min_utc < fin) ? 120 : 60);

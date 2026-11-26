@@ -158,7 +158,9 @@ void *memchr(const void *s, int c, size_t n) { const unsigned char *p = s; for (
  * que solo se usan si se lanza una excepcion, cosa que aqui no ocurre nunca (las __throw_* terminan el programa). */
 void __stack_chk_fail(void) { static const char m[] = "voz: pila corrompida\n"; sc3(SYS_WRITE, (long)m, sizeof m - 1, 0); voz_exit(134); }
 void abort(void);
+#ifndef IA_EXC   /* SOMA_329_IA_LOCAL: el motor de IA enlaza el desenrollador de verdad (libgcc_eh) */
 void _Unwind_Resume(void *e) { (void)e; abort(); }
+#endif
 char *strerror(int e) { (void)e; return (char *)"error"; }
 int isspace(int c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
 int isdigit(int c) { return c >= '0' && c <= '9'; }

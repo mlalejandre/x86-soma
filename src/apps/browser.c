@@ -174,8 +174,10 @@ int browser_r3_wanted(void)
     return SOMA_WEB_R3_DEFAULT;
 }
 int browser_r3_active(void) { return s_r3; }
+int browser_r3_prueba_fallo;                     /* SOMA_318_NAVEGADOR_CERRADO: solo autopruebas: el proceso "no arranca" */
 static int r3_ensure(struct wpage *p)
 {
+    if (browser_r3_prueba_fallo) return 0;
     if (web_r3_alive()) return 1;
     web_r3_set_log(r3_log);
     if (web_r3_start(p->vw > 0 ? p->vw : 1024, p->vh > 0 ? p->vh : 700) != 0) return 0;
@@ -249,22 +251,35 @@ static int bx_navigate(struct wpage *p, const char *url, int flags)
     if (!s_r3) return wp_navigate(p, url, flags);
     const struct w3_state *st = web_r3_state();
     if (!r3_ensure(p)) {
-        uint32_t starts = 0; web_r3_stats(&starts, 0, 0, 0, 0);
-        if (starts) return -1;
-        /* el proceso no ha llegado a arrancar ni una vez (sin memoria, sin ranuras): esta sesion sigue con el motor dentro del nucleo */
-        struct wpage *np = wp_new();
-        if (!np) return -1;
-        kprint("[WEB] AVISO: no se pudo lanzar el navegador aislado; esta sesion usa el motor dentro del nucleo.\n");
-        memcpy(np->hist, p->hist, sizeof np->hist); np->hn = p->hn; np->hpos = p->hpos;
-        if (p->vw > 0 && p->vh > 0) wp_set_viewport(np, p->vw, p->vh);
-        s_r3 = 0; s_pg = np;                              /* la sombra no se libera: puede quedar algun puntero a ella en la pila de quien llama */
-        return wp_navigate(np, url, flags);
+        /* SOMA_318_NAVEGADOR_CERRADO: si el proceso aislado no arranca (sin memoria, sin ranuras de proceso, el programa incrustado
+         * no se descomprime) la pagina NO se abre. Antes, si no habia arrancado ni una vez, la sesion seguia en silencio con el motor
+         * web (HTML, CSS y JavaScript) dentro del nucleo: agotar los recursos bastaba para que una pagina corriera en ring 0. El motor
+         * del nucleo solo se usa si se pide en /etc/navegador.conf (aislado=no). */
+        kprint("[WEB] no se pudo lanzar el navegador aislado (memoria o procesos): por seguridad la pagina no se abre dentro del nucleo\n");
+        p->status_kind = WPS_ERR;
+        wu_copy(p->status, "No arranca el navegador aislado (falta memoria o procesos): cierra algo y vuelve a intentarlo", sizeof p->status);
+        return -1;
     }
     if (r3_force_hist || (st && (p->hn != st->hn || p->hpos != st->hpos))) { r3_force_hist = 0; r3_push_hist(p); }   /* la interfaz cambio el historial (pestana nueva o restaurada) */
     int32_t a[1] = { flags };
     int r = r3_run(p, W3C_NAVIGATE, a, 1, url, 180000);
     r3_hist_dirty = 1;
     return r;
+}
+/* SOMA_318_NAVEGADOR_CERRADO: autoprueba (sandbox_test.c). Con el proceso aislado sin poder arrancar, navegar devuelve error, la
+ * sesion sigue en modo aislado (no se cambia al motor del nucleo) y la barra de estado lo explica. 1 = bien. */
+int browser_prueba_cerrado(void)
+{
+    struct wpage *p = (struct wpage *)kmalloc(sizeof *p);
+    if (!p) return 0;
+    memset(p, 0, sizeof *p); p->hpos = -1;
+    int antes = s_r3;
+    s_r3 = 1; browser_r3_prueba_fallo = 1;
+    int r = bx_navigate(p, "http://10.0.2.2/", 0);
+    int ok = r == -1 && s_r3 == 1 && p->status_kind == WPS_ERR && p->status[0];
+    browser_r3_prueba_fallo = 0; s_r3 = antes;
+    kfree(p);
+    return ok;
 }
 static void bx_history_go(struct wpage *p, int delta)
 {

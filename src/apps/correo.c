@@ -5,6 +5,7 @@
 #include "correo.h"
 #include "correo_core.h"
 #include "correo_red.h"
+#include "correo_sbx.h"   /* SOMA_311_CORREO_AISLADO: los mensajes se leen en el servicio aislado */
 #include "fb.h"
 #include "gui_font.h"
 #include "web_font.h"
@@ -22,6 +23,7 @@
 #include "net.h"
 #include "tls13.h"
 #include "tls_trust.h"
+#include "tun_tls.h"     /* SOMA_326_TUNEL_TLS */
 #endif
 
 extern int keyboard_ctrl_held(void);
@@ -356,7 +358,7 @@ static void abre_comun(int c, uint32_t uid, char *raw, uint32_t rn, int cortado)
     uint32_t tcap = rn + 4096 < TXT_CAP ? rn + 4096 : TXT_CAP;
     char *tx = (char *)co_alloc(tcap);
     if (!mm || !tx) { co_free(mm); co_free(tx); co_free(raw); toast("Sin memoria para abrir el correo", 1); return; }
-    co_mime_lee(raw, rn, mm, tx, tcap);
+    correo_mime_lee(raw, rn, mm, tx, tcap);                 /* SOMA_311_CORREO_AISLADO: en el servicio aislado */
     if (cortado) mm->truncado = 1;
     /* de una vez */
     char *r0 = g_raw; struct co_mime *m0 = g_mime; char *t0 = g_txt;
@@ -797,7 +799,7 @@ static void j_guarda_adj(struct trabajo *j)
     if (g_raw_cortado && a->off + a->len >= g_raw_n) { toast("Este adjunto es demasiado grande para SOMA (el correo lleg\303\263 cortado)", 1); return; }
     uint32_t cap = a->len + 16; uint8_t *b = (uint8_t *)co_alloc(cap);
     if (!b) { toast("Sin memoria para el adjunto", 1); return; }
-    uint32_t n = co_adj_saca(g_raw, g_raw_n, a, b, cap);
+    uint32_t n = correo_adj_saca(g_raw, g_raw_n, a, b, cap);   /* SOMA_311_CORREO_AISLADO */
     char ruta[200] = "/usuario/"; scat(ruta, a->nombre, sizeof ruta);
     if (vfs_write(ruta, (const char *)b, n) < 0) toast("No se pudo guardar el adjunto", 1);
     else { char t[260] = "Guardado en "; scat(t, ruta, sizeof t); toast(t, 0); }
@@ -2190,27 +2192,18 @@ int correo_cmd(const char *args, char *out, uint32_t cap)
 
 /* ================================================================ el transporte en SOMA: TCP y TLS 1.3 */
 #ifndef SOMA_CORREO_HOST
-struct co_tcp { int h; int on; struct tls13 *tls; };
-static int tio_send(void *c, const uint8_t *d, uint32_t n) { int h = ((struct co_tcp *)c)->h; while (n) { uint32_t k = n > 4096 ? 4096 : n; if (tcp_send(h, d, k) < 0) return -1; d += k; n -= k; } return 0; }
-static int tio_recv(void *c, uint8_t *d, uint32_t max, uint32_t to) { int r = tcp_recv(((struct co_tcp *)c)->h, d, (uint16_t)(max > 16384 ? 16384 : max), to); return r == TCP_EOF ? TLS_IO_EOF : r == TCP_ERR ? TLS_IO_ERR : r; }
-static uint64_t tio_now(void) { return timer_get_uptime_ms(); }
-static void tio_yield(void) { thread_yield(); }
-static int tr_tls(struct co_tcp *k, const char *host, char *err, uint32_t ecap)
+/* SOMA_326_TUNEL_TLS: la conexion es un tunel (src/apps/tun_tls.c): en x86_64 el TCP, el TLS y los certificados del servidor de
+ * correo se hacen en un proceso de ring 3; aqui solo pasa el texto en claro de IMAP y SMTP. */
+struct co_tcp { struct tun *t; };
+static void err_tls(char *err, uint32_t ecap, const char *host, const char *m)
 {
-    if (!k->tls) k->tls = (struct tls13 *)kmalloc(sizeof(struct tls13));
-    if (!k->tls) { co_cpy(err, "Sin memoria para la conexi\303\263n segura", ecap); return -1; }
-    struct tls_io io = { k, tio_send, tio_recv, tio_now, tio_yield };
-    tls_trust_setup();
-    if (tls13_connect(k->tls, &io, host, 15000)) {
-        co_cpy(err, "Conexi\303\263n segura con ", ecap); co_cat(err, host, ecap); co_cat(err, " rechazada: ", ecap); co_cat(err, tls13_err_name(k->tls->err), ecap);
-        if (k->tls->err == TLS_E_VERSION || k->tls->err == TLS_E_HELLO || k->tls->err == TLS_E_ALERT) co_cat(err, " (SOMA solo habla TLS 1.3: puede que ese servidor no lo tenga)", ecap);
-        return -1;
-    }
-    k->on = 1; return 0;
+    co_cpy(err, "Conexi\303\263n segura con ", ecap); co_cat(err, host, ecap); co_cat(err, " rechazada: ", ecap); co_cat(err, m, ecap);
+    co_cat(err, " (SOMA solo habla TLS 1.3: puede que ese servidor no lo tenga)", ecap);
 }
 static int tr_abre(void *c, const char *host, uint16_t port, int tls, char *err, uint32_t ecap)
 {
-    struct co_tcp *k = (struct co_tcp *)c; k->on = 0; k->h = -1;
+    struct co_tcp *k = (struct co_tcp *)c;
+    if (k->t) { tun_cierra(k->t, 1); k->t = 0; }
     uint8_t ip[4]; int isip = 1, parts = 0; uint32_t v = 0, dig = 0;
     for (const char *p = host; ; ++p) {
         if (*p >= '0' && *p <= '9') { v = v * 10 + (uint32_t)(*p - '0'); if (++dig > 3 || v > 255) { isip = 0; break; } }
@@ -2221,37 +2214,44 @@ static int tr_abre(void *c, const char *host, uint16_t port, int tls, char *err,
         net_client_lock(); int ok = dns_resolve(host, ip, 6000); net_client_unlock();
         if (!ok) { co_cpy(err, "No se encuentra ", ecap); co_cat(err, host, ecap); co_cat(err, " (sin red o sin DNS)", ecap); return -1; }
     }
-    net_client_lock(); k->h = tcp_connect(ip, port, 10000); net_client_unlock();
-    if (k->h < 0) { co_cpy(err, "No se pudo conectar con ", ecap); co_cat(err, host, ecap); co_cat(err, ":", ecap); co_num(err, ecap, port); return -1; }
-    if (tls && tr_tls(k, host, err, ecap)) { tcp_abort(k->h); k->h = -1; return -1; }
+    char m[160];
+    k->t = tun_abre(ip, port, tls, host, 15000, m, sizeof m);
+    if (!k->t) {
+        int conecta = co_ieq(m, "no se pudo conectar");
+        if (!tls || conecta) {
+            co_cpy(err, "No se pudo conectar con ", ecap); co_cat(err, host, ecap); co_cat(err, ":", ecap); co_num(err, ecap, port);
+            if (!conecta) { co_cat(err, " (", ecap); co_cat(err, m, ecap); co_cat(err, ")", ecap); }
+        } else err_tls(err, ecap, host, m);
+        return -1;
+    }
     return 0;
 }
-static int tr_starttls(void *c, const char *host, char *err, uint32_t ecap) { return tr_tls((struct co_tcp *)c, host, err, ecap); }
-static int tr_envia(void *c, const void *d, uint32_t n) { struct co_tcp *k = (struct co_tcp *)c; return k->on ? tls13_send(k->tls, d, n) : tio_send(k, (const uint8_t *)d, n); }
+static int tr_starttls(void *c, const char *host, char *err, uint32_t ecap)
+{
+    struct co_tcp *k = (struct co_tcp *)c; char m[160];
+    if (tun_starttls(k->t, host, m, sizeof m)) { err_tls(err, ecap, host, m); return -1; }
+    return 0;
+}
+static int tr_envia(void *c, const void *d, uint32_t n) { struct co_tcp *k = (struct co_tcp *)c; return k->t ? tun_envia(k->t, d, n) : -1; }
 static int tr_recibe(void *c, char *b, uint32_t max, uint32_t to)
 {
     struct co_tcp *k = (struct co_tcp *)c;
-    if (k->h < 0) return -1;
-    int r = k->on ? tls13_recv(k->tls, b, max, to) : tio_recv(k, (uint8_t *)b, max, to);
-    return r == TLS_IO_EOF || r == TLS_IO_ERR ? -1 : r;
+    if (!k->t) return -1;
+    int r = tun_recibe(k->t, b, max, to);
+    return r < 0 ? -1 : r;
 }
-static void tr_cierra(void *c)
-{
-    struct co_tcp *k = (struct co_tcp *)c;
-    if (k->h >= 0) { if (k->on) tls13_close(k->tls); tcp_close(k->h); }
-    k->h = -1; k->on = 0;
-}
+static void tr_cierra(void *c) { struct co_tcp *k = (struct co_tcp *)c; if (k->t) tun_cierra(k->t, 0); k->t = 0; }
 static uint64_t tr_ms(void) { return timer_get_uptime_ms(); }
 void correo_transporte(struct co_tr *t)
 {
     struct co_tcp *k = (struct co_tcp *)kmalloc(sizeof *k);
-    if (k) { k->h = -1; k->on = 0; k->tls = 0; }
+    if (k) k->t = 0;
     t->ctx = k; t->abre = tr_abre; t->starttls = tr_starttls; t->envia = tr_envia; t->recibe = tr_recibe; t->cierra = tr_cierra; t->ms = tr_ms; t->cancela = 0;
 }
 void correo_transporte_libera(struct co_tr *t)
 {
     struct co_tcp *k = (struct co_tcp *)t->ctx;
-    if (k) { tr_cierra(k); if (k->tls) kfree(k->tls); kfree(k); }
+    if (k) { tr_cierra(k); kfree(k); }
     t->ctx = 0;
 }
 #endif

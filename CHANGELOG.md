@@ -3,8 +3,214 @@
 ## v0.3.0-prebeta — fase pre-beta
 
 Primera versión que se publica como **pre-beta**: el sistema es usable a diario en el emulador y en el ThinkPad T480s, pero
-todavía es software experimental (todo el núcleo, las aplicaciones y el navegador corren en ring 0). Esta fase sirve para
-encontrar fallos con más gente y más hardware antes de una beta.
+todavía es software experimental. Esta fase sirve para encontrar fallos con más gente y más hardware antes de una beta.
+Desde el parche 311, lo que llega de Internet (páginas, correo, YouTube, noticias, TLS) y el motor de IA se procesan en
+servicios aislados de ring 3; el escritorio y las aplicaciones siguen en ring 0.  <!-- SOMA_339_GITHUB -->
+
+<!-- SOMA_339_GITHUB -->
+### Listo para publicar: README, exportadores y CI (339)
+- README al día: la red sin clientes en el núcleo (tabla de servicios de ring 3), la IA local, Noticias, Discos, Agentes, Fecha
+  y hora y el panel Salida del Studio.
+- `exportar_txt.py` ya no exporta ningún `.conf` (antes solo se saltaba una lista de nombres conocidos) ni archivos `.env`;
+  temas nuevos en los dos exportadores (noticias, agentes, servicios de ring 3, y los que faltaban).
+- La CI compila también dentro del contenedor del `Dockerfile` (Debian), el mismo con el que compila `ejecutar.py`: el fallo de
+  enlace del 329 en Debian no se habría visto en la CI, que usa Ubuntu.
+- `.gitignore`: ningún `.conf` se sube.
+
+<!-- SOMA_338_AGENTES -->
+### La aplicación Agentes, ahora un panel vivo (338)
+- Muestra la misión en curso con los especialistas por los que pasa y un botón para detenerla; los ocho especialistas con lo
+  que hacen, si trabajan ahora y cuántas veces lo han hecho (con «Probar»); las misiones recientes con su resultado y duración;
+  y la actividad de los agentes. Orden `agentes` con lo mismo en texto.
+
+<!-- SOMA_337_NOTICIAS -->
+### Aplicación de Noticias (337)
+- Nueva aplicación Noticias (icono NOTICIAS, orden `noticias`): categorías a elegir, noticias locales por ciudad o región,
+  canales RSS propios, titulares con medio y hora, y un clic para leer la noticia en el Navegador.
+- Resumen con IA de cada categoría, con cita [n] de cada dato y la lista de fuentes; «Guardar en memoria» lo lleva al cartucho
+  de memoria Noticias (se crea solo).
+- Los canales se descargan y se leen en ring 3 (netsvc y leesvc): el XML de Internet no se analiza en el núcleo.
+
+<!-- SOMA_336_INVESTIGA_TEMAS -->
+### El investigador adapta fuentes e informe al tema (336)
+- Detecta si la pregunta es de deportes, salud, ciencia, tecnología o actualidad, y si hace falta lo de hoy o de esta semana.
+- Lee primero las mejores fuentes para ese tema (organismos sanitarios en salud, prensa deportiva y sitios oficiales en
+  deportes, NASA/Nature/CSIC en ciencia, documentación oficial en tecnología, agencias en actualidad) y descarta foros,
+  tiendas y webs de remedios. Para ciencia, salud y tecnología busca también en la Wikipedia en inglés.
+- El informe sigue reglas del tema: fechas y marcadores en deportes, prudencia y fuentes oficiales en salud, consenso frente a
+  hipótesis en ciencia. Arreglado: con un modelo que razona no proponía búsquedas.
+
+<!-- SOMA_335_YT_BUSQUEDAS -->
+### YouTube: el buscador con IA propone búsquedas de verdad (335)
+- Con un modelo que razona, el buscador acababa buscando la frase entera: el límite de 200 fichas se gastaba pensando. Ahora
+  tiene 1200, se queda solo con la respuesta (sin `<think>` ni el razonamiento) y descarta frases largas.
+- Si el modelo no propone nada (o no hay modelo), se busca lo esencial de la petición: «quiero ver vídeos de cómo hacer pan
+  sin amasar, por favor» → «cómo hacer pan sin amasar».
+
+<!-- SOMA_334_ORBE_MD -->
+### El orbe dibuja tablas, LaTeX y código como el chat (334)
+- La respuesta del orbe usa el maquetador del chat: tablas de verdad, fórmulas LaTeX con el motor de SOMA (fracciones,
+  raíces, matrices, entornos) y bloques de código con fondo y resaltado. Se mantiene el revelado de arriba abajo, el
+  seguimiento automático y el razonamiento detrás, apagado.
+- Nueva orden `orbe <archivo.md>` para ver un texto con formato en el orbe.
+
+<!-- SOMA_333_SALIDA -->
+### El programador ya no abre el Terminal al ejecutar (333)
+- Python, C y JavaScript se ejecutan con su salida en el panel «Salida» del propio programador: se le puede escribir al
+  programa (`input()`), Esc lo para y «Otra vez» lo relanza. Si no imprime nada (un juego con su ventana), el panel se
+  cierra solo al terminar. Las páginas HTML se abren directamente en el navegador.
+
+<!-- SOMA_332_HORA -->
+### Zona horaria: el reloj ya no va una hora atrasado (332)
+- El reloj del escritorio enseñaba la hora UTC del equipo: en España, una hora menos en invierno. Ahora todo (reloj, `date`, el
+  agente, la agenda, el programador, Python, las fechas de los archivos del pendrive) usa la zona elegida con su horario de verano.
+- Nueva página Ajustes > Fecha y hora y orden `hora` (`hora zona <ciudad o UTC+2>`, `hora zonas`, `hora reloj utc|local`).
+  55 zonas con las reglas de verano vigentes. Para equipos que también arrancan Windows: `hora reloj local`.
+- Arreglado: `date` sumaba 2 horas todo el año y el agente podía ver el día 32 al pasar la medianoche.
+
+<!-- SOMA_331_DISCOS -->
+### Discos: particiones, formato e imágenes (331)
+- Nueva aplicación «Discos»: ve todos los discos y sus particiones, crea tablas GPT o MBR, crea, borra y formatea particiones
+  (exFAT o FAT32) y graba imágenes `.img`/`.iso` con verificación. También como orden `discos`.
+- Los discos siguen protegidos: para escribir hay que desbloquearlos tecleando su nombre; el del sistema no se desbloquea.
+- Las tablas de particiones se leen sin fiarse del disco (CRC, límites, cadenas EBR acotadas).
+
+<!-- SOMA_330_RESPUESTA_PRIMERO -->
+### La respuesta de verdad antes que la muletilla (330)
+- El aviso hablado («se lo paso al modelo de IA…») espera 2,5 s: si la respuesta llega antes, no se dice. La misma frase no se
+  repite si se dijo hace menos de 2 minutos. En el orbe y en la conversación sale siempre.
+- Cuando llega la respuesta, lo que se esté leyendo se corta al momento, también el sonido que quedaba en la tarjeta. Antes, si la
+  parada llegaba mientras se preparaba la lectura, el aviso sonaba entero.
+
+<!-- SOMA_329_IA_LOCAL -->
+### Motor de IA local: embeddings y LLM pequeños sin servidor (329)
+- Nuevo motor de IA en ring 3 (llama.cpp con AVX2 y varios hilos): carga modelos GGUF de `/modelos` y los mantiene en memoria
+  mientras se usan; se para solo tras 10 minutos sin uso.
+- La memoria calcula sus vectores con él (`memoria config emb_motor local|servidor|auto`; en `auto` lo usa si está el modelo).
+- Nuevo proveedor de LLM «En SOMA» (Ajustes > Inteligencia artificial) para modelos pequeños como LFM2.5-350M.
+- Orden `ia` (estado, modelos, instalar, chat, embed, parar). Los modelos se copian de la carpeta MODELOS del pendrive.
+- El núcleo sigue sin coma flotante: toda la aritmética del modelo está en ring 3.
+- Enlaza también con la libstdc++ de Debian (la del `Dockerfile`) y con glibc anterior a la 2.38: faltaban `mbsrtowcs` y
+  `__isoc99_sscanf` en la libc del motor.
+
+<!-- SOMA_328_COMPILA_RAPIDO -->
+### Compilar es mucho más rápido (328)
+- `make` usa todos los procesadores, cada objeto depende solo de las cabeceras que incluye y los programas de ring 3 se compilan
+  en paralelo y solo lo que cambió. `ejecutar.py` ya no borra `build/` en cada ciclo. Sin cambios: unos 0,2 s; tocando un archivo
+  `.c`, segundos.
+- Arreglado: el navegador aislado no se recompilaba al cambiar una cabecera.
+
+<!-- SOMA_327_RED_FUERA -->
+### Ningún cliente de red en el núcleo (327)
+- El servidor local del LLM sin clave (salud, agente y chat), los embeddings de la memoria y las órdenes `search` y `curl` van
+  por `netsvc` (ring 3, un proceso por petición, hasta 10 minutos de espera y cancelables). El servicio de YouTube de casa va
+  por el túnel de ring 3 del 326.
+- Prueba nueva en QEMU con un LLM local, un servidor de embeddings y un servicio de YouTube simulados.
+
+<!-- SOMA_326_TUNEL_TLS -->
+### El correo y YouTube, sin TLS en el núcleo (326)
+- Cada conexión del correo (IMAP y SMTP, también con STARTTLS) y de YouTube nativo va por un túnel de ring 3 (`tlstun`, un
+  proceso por conexión) que hace el TCP, el TLS 1.3 y los certificados; el núcleo solo ve el texto en claro.
+- Pueden correr 16 procesos de usuario a la vez (antes 8).
+
+<!-- SOMA_325_LLM_AISLADO -->
+### El cliente del LLM, fuera del núcleo (325)
+- Las peticiones a proveedores en la nube o a servidores con clave van por `netsvc` (ring 3, un proceso por petición); la clave
+  viaja en sus cabeceras y el búfer se borra al terminar. El servidor local sin clave sigue por el camino de siempre.
+- Prueba nueva en QEMU con un servidor de LLM falso por HTTPS.
+
+<!-- SOMA_324_PRUEBA_CC -->
+### La prueba de `cc` en QEMU vuelve a pasar (324)
+- `tests/prueba_cc_265.py` daba 7/16 por un fallo del arnés (la consola expandía `$d` y una orden pasaba de 1 KiB), no del
+  compilador. Ahora manda los programas en hexadecimal y por trozos: 16/16.
+
+<!-- SOMA_323_BSS -->
+### 2 MiB menos de imagen (323)
+- La demo del programador, el maquetador LaTeX, la comprobación del programador, el editor de código y una autoprueba reservan
+  sus búferes grandes al usarse, no en el arranque. La imagen baja del 60,7 % al 56,3 % de su presupuesto.
+
+<!-- SOMA_322_TEX_HOSTIL -->
+### LaTeX: lo mismo que en el chat, y un desbordamiento de enteros (322)
+- El motor LaTeX (visor de documentos, maquetador y fórmulas del chat) tenía el mismo fallo que el maquetador de Markdown: con el
+  pool lleno, textos que apuntaban más allá de lo escrito. Y un delimitador que crece (`\left(` alrededor de algo enorme)
+  desbordaba un entero. Fuzzer nuevo en `make test`.
+
+<!-- SOMA_321_CHAT_MD_HOSTIL -->
+### Chat: el maquetador de Markdown ya no lee fuera de su memoria (321)
+- Con un mensaje enorme (por ejemplo, un bloque de código de cientos de KB en una respuesta del modelo) el pool de 768 KiB se
+  llenaba y varias palabras, enlaces, imágenes y bloques de código quedaban apuntando más allá de lo escrito: medirlos y dibujarlos
+  leía fuera del pool. Y al partir una palabra demasiado ancha se miraba un byte de más. Lo encontró un fuzzer nuevo que genera
+  Markdown con estructura (ahora en `make test`).
+
+<!-- SOMA_320_ENTRADAS_HOSTILES -->
+### Pruebas con datos hostiles de la wifi y del LLM (320)
+- Dos pruebas nuevas en `make test` para lo que llega por el aire (balizas, escaneo y el saludo WPA, también con el MIC bien
+  calculado, como haría un punto de acceso falso que sabe la contraseña) y para las respuestas del servidor del LLM. No
+  encontraron fallos: quedan para que no aparezcan.
+
+<!-- SOMA_319_CORREO_PROTO -->
+### Correo: arreglado un desbordamiento al leer lo que manda el servidor IMAP (319)
+- Un literal `{4294967295}` hacía que el núcleo diera por bueno un cuerpo de 4 GB dentro de una respuesta de 44 bytes y leyera
+  memoria que no era suya. Lo encontró un fuzzer nuevo de los lectores IMAP y SMTP, que ahora corre en `make test`; de paso se
+  acotan todas sus lecturas a la longitud recibida.
+
+<!-- SOMA_318_NAVEGADOR_CERRADO -->
+### El navegador ya no se pasa al núcleo si el proceso aislado no arranca (318)
+- Antes, sin memoria o sin procesos libres, la sesión seguía en silencio con el motor web (y su JavaScript) dentro del núcleo.
+  Ahora la página no se abre, la barra de estado lo explica y se reintenta en la siguiente navegación.
+
+<!-- SOMA_317_DESCARGAS_AISLADAS -->
+### Las demás descargas, fuera del núcleo; cancelar un proceso al momento (317)
+- Las imágenes de las respuestas del chat, el visor de documentos y la orden `tls` descargan con `netsvc` (ring 3, un proceso
+  por descarga). En el núcleo solo queda el cliente del LLM.
+- Las descargas aisladas se pueden cancelar (el visor al cerrarse), y un proceso que se para muere en ~10 ms en lugar de >2 s.
+- Las autopruebas de QEMU esperan a que termine el arranque: ya no dan fugas falsas.
+
+<!-- SOMA_316_RED_AISLADA -->
+### Lo que el agente descarga de Internet, fuera del núcleo; y `descargar https://` en hardware real (316)
+- `netsvc`, el cliente HTTP aislado de ring 3 (parche 142), lleva ahora su propio TLS 1.3 con verificación de certificados,
+  como el navegador aislado. Las descargas de `investiga` y `search` van por él: el apretón TLS, los certificados (X.509) y
+  las respuestas HTTP (chunked, gzip, redirecciones) de cualquier web ya no se analizan en ring 0, y no se mandan las cookies
+  del navegador.
+- Cada descarga va en un proceso nuevo que termina con ella: una respuesta hostil no puede quedarse para espiar las siguientes.
+- `descargar https://...` funciona en hardware real (antes `netsvc` solo sabía HTTPS a través de la pasarela de QEMU).
+- Prueba nueva en QEMU con una autoridad y un servidor HTTPS de prueba: lo mismo que el núcleo, y rechaza lo que no es de fiar.
+
+<!-- SOMA_315_YOUTUBE_AISLADO -->
+### YouTube nativo: sus respuestas se leen fuera del núcleo (315)
+- La búsqueda y la ficha de los vídeos (el JSON que devuelve youtube.com) ya no se analizan en ring 0: lo hace `leesvc`, el
+  lector aislado del parche 312, con el mismo código. El núcleo sanea lo que devuelve; la dirección del vídeo, que va a la
+  petición HTTP, solo puede llevar ASCII visible y tiene que ser de YouTube.
+- Arreglado de paso: una respuesta cortada dejaba el canal, el estado o el autor sin terminador.
+
+<!-- SOMA_314_PROGZ -->
+### Imagen más ligera: los programas grandes van comprimidos (314)
+- El navegador, el reproductor, `voz`, `js`, `cc` y `python` van en la imagen comprimidos con zlib (de 8,2 MB a 4,0 MB) y se
+  descomprimen al lanzarlos, en el servicio aislado `zdec`, con comprobación de tamaño y huella. La imagen baja del 68,8 % al
+  60,3 % de su presupuesto.
+- Si un programa incrustado está dañado no se ejecuta y la consola lo dice.
+
+<!-- SOMA_313_LECTOR_WEB -->
+### El lector de páginas web ya no pierde párrafos (313)
+- `wl_texto` (`investiga` y `search`) compactaba las líneas útiles en el mismo búfer y, con dos seguidas, machacaba la segunda: de
+  un artículo normal el modelo recibía el título, cientos de líneas vacías y el último párrafo. Ahora se hace en dos pasadas y
+  llega el texto entero.
+
+<!-- SOMA_312_WEB_AISLADA -->
+### Lo que el agente lee de Internet, fuera del núcleo (312)
+- El texto de las páginas web que lee `investiga` y los resultados de Wikipedia y DuckDuckGo de `search` ya no se analizan en
+  ring 0. Lo hace `leesvc`, un servicio aislado de ring 3 que solo puede llamar a `exit`, con el mismo código. El núcleo sanea
+  lo que devuelve.
+- Si una página tumba al lector, cuenta como no leída y el agente sigue. Pruebas en QEMU: páginas reales y 300 mutiladas dan lo
+  mismo que en el núcleo.
+
+<!-- SOMA_311_CORREO_AISLADO -->
+### El correo se lee fuera del núcleo (311)
+- Leer un correo (MIME, base64, quoted-printable, juegos de caracteres, RFC 2047, HTML), decodificar sus adjuntos y hacer la ficha
+  de la lista ya no se hace en ring 0. Lo hace `mimesvc`, un servicio aislado de ring 3 que solo puede llamar a `exit`, con el mismo
+  código de antes. El núcleo sanea todo lo que devuelve.
+- Si un mensaje tumba al lector, la aplicación lo dice («correo ilegible») y el sistema sigue. No se vuelve a intentar en el núcleo.
+- Pruebas en QEMU: mensajes reales y 300 mutilados dan lo mismo que en el núcleo, sin pérdidas de memoria. Cuesta 0,8 ms por correo.
 
 <!-- SOMA_310_PRESUPUESTO -->
 ### El tamaño del núcleo, vigilado en la CI (310)

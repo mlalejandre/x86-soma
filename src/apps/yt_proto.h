@@ -524,6 +524,10 @@ static inline int yt_ai_add(char q[][YT_AI_QLEN], int n, const char *a, uint32_t
     while (len >= 2 && (*a == '"' || *a == '\'') && a[len - 1] == *a) { a++; len -= 2; }
     while (len && *a == ' ') { a++; len--; }
     if (len < 2 || len >= YT_AI_QLEN || n >= YT_AI_QMAX || a[len - 1] == ':') return n;
+    {   /* SOMA_335_YT_BUSQUEDAS: una frase larga ("Vale, el usuario quiere...") no es una busqueda */
+        int pal = 1; for (uint32_t k = 0; k < len; ++k) if (a[k] == ' ' && k + 1 < len && a[k + 1] != ' ') pal++;
+        if (pal > 9) return n;
+    }
     for (int i = 0; i < n; ++i) {                                 /* repetida */
         uint32_t k = 0; while (k < len && q[i][k] == a[k]) k++;
         if (k == len && !q[i][k]) return n;
@@ -532,6 +536,94 @@ static inline int yt_ai_add(char q[][YT_AI_QLEN], int n, const char *a, uint32_t
     q[n][len] = 0;
     return n + 1;
 }
+/* SOMA_335_YT_BUSQUEDAS: de lo que devuelve el LLM, solo la respuesta: sin el razonamiento (los modelos que razonan lo mandan
+ * aparte, "[Razonamiento]: ... [Respuesta]: ...", o dentro de <think>...</think>; si el razonamiento se quedo sin cerrar, no hay
+ * respuesta). En el sitio; devuelve la longitud. */
+static inline uint32_t yt_ai_respuesta(char *r)
+{
+    uint32_t n = yt_slen(r);
+    static const char RZ[] = "[Razonamiento]:", RS[] = "[Respuesta]:";
+    for (uint32_t i = 0; i + sizeof RS - 1 <= n; ++i) {
+        uint32_t k = 0; while (RS[k] && r[i + k] == RS[k]) k++;
+        if (!RS[k]) { uint32_t a = i + k, o = 0; while (a < n) r[o++] = r[a++]; r[o] = 0; n = o; break; }
+    }
+    { uint32_t k = 0; while (RZ[k] && r[k] == RZ[k]) k++; if (!RZ[k]) { r[0] = 0; return 0; } }   /* solo razonamiento */
+    for (;;) {                                                    /* <think> ... </think> */
+        uint32_t i = 0, a = n;
+        for (; i + 7 <= n; ++i) if (r[i] == '<' && r[i + 1] == 't' && r[i + 2] == 'h' && r[i + 3] == 'i' && r[i + 4] == 'n' && r[i + 5] == 'k' && r[i + 6] == '>') { a = i; break; }
+        if (a == n) break;
+        uint32_t e = n;
+        for (i = a + 7; i + 8 <= n; ++i) if (r[i] == '<' && r[i + 1] == '/' && r[i + 2] == 't' && r[i + 3] == 'h' && r[i + 4] == 'i' && r[i + 5] == 'n' && r[i + 6] == 'k' && r[i + 7] == '>') { e = i + 8; break; }
+        uint32_t o = a; for (i = e; i < n; ++i) r[o++] = r[i];
+        r[o] = 0; n = o;
+    }
+    return n;
+}
+
+/* SOMA_335_YT_BUSQUEDAS: sin LLM (o si no propone nada), una busqueda sacada de la peticion: sin "quiero ver videos de",
+ * "ponme", "en YouTube", "por favor"... "quiero ver videos de como hacer pan sin amasar, por favor" -> "como hacer pan sin
+ * amasar". Si no queda nada, la peticion tal cual. */
+static inline int yt_pal_es(const char *a, uint32_t n, const char *w)    /* la palabra a[0..n) es w (sin mayusculas ni tildes) */
+{
+    uint32_t i = 0, k = 0;
+    while (i < n && w[k]) {
+        unsigned char c = (unsigned char)a[i];
+        if (c == 0xC3 && i + 1 < n) {
+            unsigned char d = (unsigned char)a[i + 1] | 0x20; char e = 0;
+            if (d == 0xA1) e = 'a'; else if (d == 0xA9) e = 'e'; else if (d == 0xAD) e = 'i'; else if (d == 0xB3) e = 'o'; else if (d == 0xBA || d == 0xBC) e = 'u'; else if (d == 0xB1) e = 'n';
+            if (!e || e != w[k]) return 0;
+            i += 2; k++; continue;
+        }
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+        if (c != (unsigned char)w[k]) return 0;
+        i++; k++;
+    }
+    return i == n && !w[k];
+}
+static inline int yt_pal_en(const char *a, uint32_t n, const char *const *lista)
+{
+    for (int i = 0; lista[i]; ++i) if (yt_pal_es(a, n, lista[i])) return 1;
+    return 0;
+}
+static inline uint32_t yt_consulta_local(const char *t, char *o, uint32_t cap)
+{
+    static const char *const DELANTE[] = { "quiero", "quisiera", "me", "gustaria", "encantaria", "ver", "mirar", "busca", "buscame",
+        "buscar", "buscarme", "busques", "pon", "ponme", "poner", "ponerme", "mostrarme", "ensenarme", "encontrarme", "reproduce", "ensename", "muestrame", "encuentra", "encuentrame", "necesito",
+        "dame", "hay", "puedes", "podrias", "oye", "hola", "soma", "por", "favor", "porfa", "en", "youtube", "un", "una", "unos",
+        "unas", "algun", "alguno", "algunos", "algunas", "el", "la", "los", "las", "video", "videos", "clip", "clips", "de", "sobre",
+        "acerca", "del", "que", "trate", "traten", "hable", "hablen", "y", "a", "algo", "tutorial", "tutoriales", 0 };
+    static const char *const DETRAS[] = { "por", "favor", "porfa", "gracias", "en", "de", "youtube", "please", "y", "a", 0 };
+    struct { const char *a; uint32_t n; } w[48]; int nw = 0;
+    const char *s = t;
+    while (*s && nw < 48) {                                        /* palabras (la puntuacion las separa y se va) */
+        while (*s == ' ' || *s == ',' || *s == '.' || *s == '!' || *s == '?' || *s == ';' || *s == ':' || *s == '"' || *s == '\'' || *s == '\n' || *s == '\t'
+               || ((unsigned char)s[0] == 0xC2 && ((unsigned char)s[1] == 0xBF || (unsigned char)s[1] == 0xA1))) s += ((unsigned char)s[0] == 0xC2) ? 2 : 1;
+        if (!*s) break;
+        const char *a = s;
+        while (*s && *s != ' ' && *s != ',' && *s != '.' && *s != '!' && *s != '?' && *s != ';' && *s != ':' && *s != '"' && *s != '\n' && *s != '\t'
+               && !((unsigned char)s[0] == 0xC2 && ((unsigned char)s[1] == 0xBF || (unsigned char)s[1] == 0xA1))) s++;
+        w[nw].a = a; w[nw].n = (uint32_t)(s - a); nw++;
+    }
+    int ini = 0, fin = nw;
+    int tutorial = 0;
+    while (ini < fin && yt_pal_en(w[ini].a, w[ini].n, DELANTE)) { if (yt_pal_es(w[ini].a, w[ini].n, "tutorial") || yt_pal_es(w[ini].a, w[ini].n, "tutoriales")) tutorial = 1; ini++; }
+    while (fin > ini && yt_pal_en(w[fin - 1].a, w[fin - 1].n, DETRAS)) fin--;
+    uint32_t p = 0;
+    if (cap) o[0] = 0;
+    for (int i = ini; i < fin; ++i) {
+        if (yt_pal_es(w[i].a, w[i].n, "youtube")) {                /* "... en YouTube" en medio */
+            if (p >= 3 && (yt_pal_es(o + p - 2, 2, "en") || yt_pal_es(o + p - 2, 2, "de")) && o[p - 3] == ' ') p -= 3;
+            continue;
+        }
+        if (p && p + 1 < cap) o[p++] = ' ';
+        for (uint32_t k = 0; k < w[i].n && p + 1 < cap; ++k) o[p++] = w[i].a[k];
+    }
+    if (tutorial && p && p + 9 < cap) { const char *x = " tutorial"; while (*x) o[p++] = *x++; }
+    if (cap) o[p < cap ? p : cap - 1] = 0;
+    if (!p) { p = 0; while (t[p] && p + 1 < cap) { o[p] = t[p]; p++; } if (cap) o[p] = 0; }
+    return p;
+}
+
 static inline int yt_ai_queries(const char *r, char q[][YT_AI_QLEN])
 {
     int n = 0;

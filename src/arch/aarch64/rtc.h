@@ -12,6 +12,7 @@ struct rtc_time {
     uint8_t  sec;
 };
 
-void rtc_get_datetime(struct rtc_time *t);
+void rtc_get_datetime(struct rtc_time *t);   /* SOMA_332_HORA: siempre UTC (lo da hora.c); para ensenarla, hora_local() */
+void rtc_leer_hw(struct rtc_time *t);        /* el reloj del equipo tal cual (puede guardar la hora local, como Windows) */
 
 #endif

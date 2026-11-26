@@ -14,6 +14,10 @@
 #include "idt.h"
 #include "rtc.h"
 #include "agenda.h"                /* SOMA_280_IMPORTAR: la agenda entra en el contexto */
+#if defined(__x86_64__)
+#include "ia_sys.h"                /* SOMA_329_IA_LOCAL: embeddings con el motor local (ring 3) */
+#include "ia_abi.h"
+#endif
 
 #define CONF "/etc/memoria.conf"
 #define QN 6                                   /* mensajes esperando la extraccion de hechos */
@@ -25,6 +29,9 @@ struct conf {
     int n_hechos, n_epis;                      /* cuantos recuerdos se inyectan en el prompt */
     uint8_t ip[4]; uint16_t port; int srv;     /* servidor de embeddings (srv = 0: sin servidor, solo busqueda lexical) */
     char url[80], modelo[40];
+    int motor;                                 /* SOMA_329_IA_LOCAL: 0 auto (local si hay modelo en /modelos), 1 local, 2 servidor */
+    int local;                                 /* se usa el motor local (calculado por conf_srv) */
+    char ruta_local[160];                      /* el GGUF del motor local */
 };
 struct qitem { char texto[MC_TEXTO_MAX + 1]; uint32_t t, intentos; uint64_t desde; };
 
@@ -115,6 +122,15 @@ static int parse_url(const char *u, uint8_t ip[4], uint16_t *port)
 static void conf_srv(struct conf *c)
 {
     c->srv = c->url[0] ? parse_url(c->url, c->ip, &c->port) : 0;
+    c->local = 0; c->ruta_local[0] = 0;
+#if defined(__x86_64__)
+    /* SOMA_329_IA_LOCAL: con el modelo de embeddings (p. ej. bge-m3) en /modelos, la memoria calcula los vectores en SOMA mismo (motor
+     * local en ring 3) sin servidor. "auto": local si esta el modelo; si no, el servidor de siempre. */
+    if (c->motor != 2 && ia_disponible(0)) {
+        int hay = ia_modelo_ruta(c->modelo, c->ruta_local, sizeof c->ruta_local) == 0;
+        if (hay || c->motor == 1) { c->local = 1; c->srv = 1; }
+    }
+#endif
 }
 static void conf_defecto(struct conf *c)
 {
@@ -154,6 +170,7 @@ static void conf_carga(void)
                 else if (eq(k, "episodios")) g_c.n_epis = x < 0 ? 0 : x > 60 ? 60 : x;
                 else if (eq(k, "emb_url")) { uint32_t i = 0; while (v[i] && i < sizeof g_c.url - 1) { g_c.url[i] = v[i]; i++; } g_c.url[i] = 0; }
                 else if (eq(k, "emb_modelo")) { uint32_t i = 0; while (v[i] && i < sizeof g_c.modelo - 1) { g_c.modelo[i] = v[i]; i++; } g_c.modelo[i] = 0; }
+                else if (eq(k, "emb_motor")) g_c.motor = eq(v, "local") ? 1 : eq(v, "servidor") ? 2 : 0;   /* SOMA_329 */
             }
             *e = sv; l = sv ? e + 1 : e;
         }
@@ -171,6 +188,7 @@ static void conf_guarda(void)
     op(t, sizeof t, &p, "\nepisodios="); opd(t, sizeof t, &p, (uint32_t)g_c.n_epis);
     op(t, sizeof t, &p, "\nemb_url="); op(t, sizeof t, &p, g_c.url);
     op(t, sizeof t, &p, "\nemb_modelo="); op(t, sizeof t, &p, g_c.modelo);
+    op(t, sizeof t, &p, "\nemb_motor="); op(t, sizeof t, &p, g_c.motor == 1 ? "local" : g_c.motor == 2 ? "servidor" : "auto");
     op(t, sizeof t, &p, "\n");
     sys_write(CONF, t, p);
 }
@@ -191,6 +209,13 @@ static int json_esc(char *o, uint32_t cap, uint32_t *p, const char *s, uint32_t 
 static int emb_texto(const char *txt, int8_t *out, uint32_t *dim)
 {
     static char body[3200], *resp;
+#if defined(__x86_64__)
+    {   /* SOMA_329_IA_LOCAL: en "auto", si aparece el modelo en /modelos (instalado despues de arrancar) se pasa al motor local */
+        static uint64_t mirado;
+        uint64_t t = timer_get_uptime_ms();
+        if (g_c.motor == 0 && !g_c.local && (!mirado || t - mirado > 60000)) { mirado = t; conf_srv(&g_c); }
+    }
+#endif
     if (!g_c.srv || !txt || !*txt) return 0;
     uint64_t now = timer_get_uptime_ms();
     if (g_emb_cae_hasta && now < g_emb_cae_hasta) return 0;
@@ -203,9 +228,23 @@ static int emb_texto(const char *txt, int8_t *out, uint32_t *dim)
         json_esc(body, sizeof body - 64, &p, txt, 1500);
         op(body, sizeof body, &p, "\",\"model\":\""); op(body, sizeof body, &p, g_c.modelo); op(body, sizeof body, &p, "\"}");
         struct http_response r; r.body = 0; r.body_len = 0; r.status_code = 0;
-        net_client_lock();
-        int code = http_post_json(g_c.ip, g_c.port, "/v1/embeddings", body, resp, 80 * 1024, &r, 8000);
-        net_client_unlock();
+        int code;
+#if defined(__x86_64__)
+        if (g_c.local) {                       /* SOMA_329_IA_LOCAL: el motor local devuelve el mismo JSON que /v1/embeddings */
+            static char err[200];
+            if (!g_c.ruta_local[0] && ia_modelo_ruta(g_c.modelo, g_c.ruta_local, sizeof g_c.ruta_local) != 0) {
+                static int intentado;              /* sin el modelo en /modelos: una vez por arranque se copia del pendrive */
+                if (!intentado) { intentado = 1; (void)ia_instala(g_c.modelo, err, sizeof err); kprint("memoria: "); kprint(err); kprint("\n"); }
+                (void)ia_modelo_ruta(g_c.modelo, g_c.ruta_local, sizeof g_c.ruta_local);
+            }
+            uint32_t n = 0; while (txt[n] && n < 6000) n++;
+            int k = g_c.ruta_local[0] ? ia_orden(IA_CMD_EMBED, g_c.ruta_local, txt, n, resp, 80 * 1024, 180000, 0, err, sizeof err) : -1;
+            if (k < 0 && g_c.ruta_local[0]) { kprint("memoria: motor local: "); kprint(err); kprint("\n"); }
+            code = k >= 0 ? 200 : -1;
+            if (k >= 0) { r.body = resp; r.body_len = (uint32_t)k; r.status_code = 200; }
+        } else
+#endif
+        code = llm_http_local(g_c.ip, g_c.port, "/v1/embeddings", body, resp, 80 * 1024, &r, 8000, 0);   /* SOMA_327_RED_FUERA: por netsvc */
         if (code == 200 && r.body) {
             int d = mc_parse_embedding(r.body, out, MC_DIM_MAX);
             if (d > 0) { *dim = (uint32_t)d; g_dim_servidor = d; ok = 1; g_emb_ok++; }
@@ -213,6 +252,19 @@ static int emb_texto(const char *txt, int8_t *out, uint32_t *dim)
         if (!ok) { g_emb_mal++; g_emb_cae_hasta = timer_get_uptime_ms() + 30000u; }
     }
     kmutex_unlock(&g_emb_mx);
+    return ok;
+}
+
+/* SOMA_327_RED_FUERA: prueba (tools/sbx_check.py): un embedding contra el servidor de url, por el camino real (netsvc) */
+int memoria_prueba_emb(const char *url, const char *txt, uint32_t *dim)
+{
+    static int8_t v[MC_DIM_MAX];
+    struct conf antes = g_c;
+    uint32_t i = 0; while (url && url[i] && i + 1 < sizeof g_c.url) { g_c.url[i] = url[i]; i++; } g_c.url[i] = 0;
+    g_c.motor = 2;                                     /* SOMA_329: esta prueba es la del servidor */
+    conf_srv(&g_c); g_emb_cae_hasta = 0; *dim = 0;
+    int ok = emb_texto(txt, v, dim);
+    g_c = antes; g_emb_cae_hasta = 0;
     return ok;
 }
 
@@ -1231,6 +1283,41 @@ static int copia_a_cart(uint8_t *sel, int dest, int mover, char *msg, uint32_t c
     op(msg, cap, &p, ".");
     return 0;
 }
+/* SOMA_337_NOTICIAS: guarda un texto en el cartucho llamado "nombre" (lo crea si no existe) sin cambiar el primario. Lo usa la
+ * aplicacion de Noticias ("Guardar en memoria"). Si ya estaba, se refuerza. 0 = bien. */
+int memoria_guarda_en_cartucho(const char *nombre, const char *desc, const char *texto, const char *fuente, char *msg, uint32_t cap)
+{
+    uint32_t p = 0; if (cap) msg[0] = 0;
+    if (!lista()) { op(msg, cap, &p, "La memoria no esta activa (memoria config activa 1)."); return -1; }
+    if (!nombre || !*nombre || !texto || !*texto) { op(msg, cap, &p, "Nada que guardar."); return -1; }
+    int8_t v[MC_DIM_MAX]; uint32_t d = 0;
+    int t = emb_texto(texto, v, &d);                              /* antes de tomar nada: puede tardar */
+    excl_entra();
+    int i = cart_busca(nombre);
+    if (i < 0) { char t2[120]; i = cart_nuevo(nombre, desc, t2, sizeof t2); if (i < 0) { excl_sale(); op(msg, cap, &p, t2); return -1; } }
+    if (i == g_prim) {                                            /* el primario: como cualquier recuerdo */
+        excl_sale();
+        uint32_t id = guarda_celda(texto, fuente, 6);
+        if (!id) { op(msg, cap, &p, "La memoria esta llena."); return -1; }
+        op(msg, cap, &p, "Guardado (#"); opd(msg, cap, &p, id); op(msg, cap, &p, ")."); return 0;
+    }
+    int tmp; struct mc *m = cart_mc(i, &tmp);
+    if (!m) { excl_sale(); op(msg, cap, &p, "Sin memoria para cargar el cartucho."); return -1; }
+    if (!tmp) kmutex_lock(&g_mx);                                 /* un cartucho conectado lo lee el agente */
+    uint32_t ex = mc_find_exacto(m, MC_CELDA, texto), id = ex;
+    if (ex) mc_refuerza(m, ex, m->tick);
+    else id = mc_add(m, MC_CELDA, MC_ROL_USUARIO, texto, fuente, 6, ahora(), m->tick, t ? v : 0, t ? d : 0);
+    cuenta_mc(m, &g_cart[i].celdas, &g_cart[i].nodos, &g_cart[i].kb);
+    if (!tmp) kmutex_unlock(&g_mx);
+    char pf[40]; pref_de(i, pf); guarda_en(pf, m);
+    if (tmp) mc_suelta(m);
+    excl_sale();
+    registro_guarda();
+    g_ver++;
+    if (!id) { op(msg, cap, &p, "El cartucho esta lleno."); return -1; }
+    op(msg, cap, &p, "Guardado en "); op(msg, cap, &p, g_cart[i].nombre); op(msg, cap, &p, " (#"); opd(msg, cap, &p, id); op(msg, cap, &p, ").");
+    return 0;
+}
 static int cart_clona(int i, const char *nombre, char *msg, uint32_t cap)
 {
     if (i < 0 || !g_cart[i].usado) { MSG("No existe ese cartucho."); return -1; }
@@ -1395,7 +1482,7 @@ void memoria_vista(struct mem_vista *v)
     v->srv = g_c.srv; v->srv_dim = g_dim_servidor; v->emb_ok = g_emb_ok; v->emb_mal = g_emb_mal;
     uint64_t now = timer_get_uptime_ms();
     v->emb_caido = g_emb_cae_hasta && now < g_emb_cae_hasta;
-    scopy(v->url, g_c.url, sizeof v->url); scopy(v->modelo, g_c.modelo, sizeof v->modelo);
+    scopy(v->url, g_c.local ? "motor local de SOMA" : g_c.url, sizeof v->url); scopy(v->modelo, g_c.modelo, sizeof v->modelo);   /* SOMA_329 */
     kmutex_lock(&g_mx);
     mc_stats(&g_m, &v->celdas, &v->episodios, &v->archivadas, &v->sustituidas, &v->sin_vec);
     for (uint32_t i = 1; i <= MC_NODOS_MAX; i++) if (g_m.nodo[i].usado) v->nodos++;
@@ -1528,7 +1615,9 @@ int memoria_cmd(const char *args, char *out, uint32_t max)
         op(out, max, &p, " | sustituidos: "); opd(out, max, &p, s); op(out, max, &p, " | archivados: "); opd(out, max, &p, a); op(out, max, &p, "\n");
         op(out, max, &p, "  sin embedding aun: "); opd(out, max, &p, v); op(out, max, &p, " | archivos: "); opd(out, max, &p, nf); op(out, max, &p, "/"); opd(out, max, &p, MC_MAX_SHARDS);
         op(out, max, &p, " | en cola de extraccion: "); opd(out, max, &p, qn); op(out, max, &p, "\n");
-        op(out, max, &p, "  embeddings: "); op(out, max, &p, g_c.srv ? g_c.url : "sin servidor (busqueda por palabras)");
+        op(out, max, &p, "  embeddings: ");
+        if (g_c.local) { op(out, max, &p, "motor local de SOMA ("); op(out, max, &p, g_c.ruta_local[0] ? g_c.ruta_local : "falta el modelo en /modelos"); op(out, max, &p, ")"); }   /* SOMA_329 */
+        else op(out, max, &p, g_c.srv ? g_c.url : "sin servidor (busqueda por palabras)");
         if (g_c.srv) { op(out, max, &p, " ["); op(out, max, &p, g_c.modelo); op(out, max, &p, g_dim_servidor ? ", " : ", sin probar"); if (g_dim_servidor) { opd(out, max, &p, (uint32_t)g_dim_servidor); op(out, max, &p, " dimensiones"); } op(out, max, &p, "]"); }
         { uint32_t nodos, sin_n, ids_[1]; kmutex_lock(&g_mx); nodos = mc_recuenta(&g_m); sin_n = 0; for (uint32_t i = 0; i < g_m.n; i++) if (g_m.it[i].kind == MC_CELDA && g_m.it[i].estado == MC_ACTIVO && !g_m.it[i].nodo) sin_n++; (void)ids_;
           uint32_t tk = g_m.tick, ps = g_m.pasos, ni = g_ninforme; kmutex_unlock(&g_mx);
@@ -1543,7 +1632,7 @@ int memoria_cmd(const char *args, char *out, uint32_t max)
     }
     if (eq(sub, "ayuda")) {
         op(out, max, &p, "memoria estado | memoria recordar TEXTO | memoria buscar CONSULTA | memoria ver ID | memoria olvidar ID | memoria borrar ID | memoria cartucho [lista|nuevo|usar|conectar|desconectar|exportar|clonar|vaciar|borrar] | memoria arbol | memoria sueno [N] | memoria probar | memoria servidor [arrancar|parar|estado] | "
-                         "memoria config [activa|ingesta|hechos|episodios|emb_url|emb_modelo VALOR] | memoria importar [RUTA.smem [sin-vectores]] (sin ruta: el arbol antiguo /mem; con ruta: el cartucho de memorIA exportado con tools/exporta_memoria.py) | memoria guardar");
+                         "memoria config [activa|ingesta|hechos|episodios|emb_url|emb_modelo|emb_motor VALOR] | memoria importar [RUTA.smem [sin-vectores]] (sin ruta: el arbol antiguo /mem; con ruta: el cartucho de memorIA exportado con tools/exporta_memoria.py) | memoria guardar");
         return 1;
     }
     if (eq(sub, "cartucho") || eq(sub, "cartuchos")) return cmd_cartucho(args, out, max);     /* SOMA_283_MEMORIA_APP */
@@ -1616,20 +1705,26 @@ int memoria_cmd(const char *args, char *out, uint32_t max)
         if (!g_c.srv) { op(out, max, &p, "No hay servidor de embeddings configurado: memoria config emb_url http://IP:8089"); return 1; }
         g_emb_cae_hasta = 0;
         uint64_t t0 = timer_get_uptime_ms();
-        if (emb_texto("prueba de embeddings", v, &d)) { op(out, max, &p, "Servidor de embeddings OK: "); opd(out, max, &p, d); op(out, max, &p, " dimensiones, "); opd(out, max, &p, (uint32_t)(timer_get_uptime_ms() - t0)); op(out, max, &p, " ms"); }
+        if (emb_texto("prueba de embeddings", v, &d)) { op(out, max, &p, g_c.local ? "Motor local de embeddings OK: " : "Servidor de embeddings OK: "); opd(out, max, &p, d); op(out, max, &p, " dimensiones, "); opd(out, max, &p, (uint32_t)(timer_get_uptime_ms() - t0)); op(out, max, &p, " ms"); }
+        else if (g_c.local) { op(out, max, &p, "El motor local no pudo calcular el embedding con "); op(out, max, &p, g_c.ruta_local[0] ? g_c.ruta_local : g_c.modelo); op(out, max, &p, " (ia instalar "); op(out, max, &p, g_c.modelo); op(out, max, &p, " lo copia del pendrive). Mientras, la memoria busca por palabras."); }
         else { op(out, max, &p, "El servidor "); op(out, max, &p, g_c.url); op(out, max, &p, " no contesta a /v1/embeddings (arrancalo con: memoria servidor arrancar). Mientras, la memoria busca por palabras."); }
         return 1;
     }
     if (eq(sub, "config")) {
         char k[24]; const char *v = sig(args, k, sizeof k);
         if (!k[0]) { op(out, max, &p, "activa="); opd(out, max, &p, (uint32_t)g_c.activa); op(out, max, &p, " ingesta="); opd(out, max, &p, (uint32_t)g_c.ingesta); op(out, max, &p, " sueno="); opd(out, max, &p, (uint32_t)g_c.sueno); op(out, max, &p, " sueno_s="); opd(out, max, &p, (uint32_t)g_c.sueno_s); op(out, max, &p, " hechos="); opd(out, max, &p, (uint32_t)g_c.n_hechos);
-            op(out, max, &p, " episodios="); opd(out, max, &p, (uint32_t)g_c.n_epis); op(out, max, &p, " emb_url="); op(out, max, &p, g_c.url); op(out, max, &p, " emb_modelo="); op(out, max, &p, g_c.modelo); return 1; }
+            op(out, max, &p, " episodios="); opd(out, max, &p, (uint32_t)g_c.n_epis); op(out, max, &p, " emb_url="); op(out, max, &p, g_c.url); op(out, max, &p, " emb_modelo="); op(out, max, &p, g_c.modelo);
+            op(out, max, &p, " emb_motor="); op(out, max, &p, g_c.motor == 1 ? "local" : g_c.motor == 2 ? "servidor" : "auto"); return 1; }
         int x = 0; for (const char *d = v; *d >= '0' && *d <= '9'; d++) x = x * 10 + (*d - '0');
         if (eq(k, "activa")) g_c.activa = x != 0; else if (eq(k, "ingesta")) g_c.ingesta = x != 0;
         else if (eq(k, "sueno")) g_c.sueno = x != 0; else if (eq(k, "sueno_s")) g_c.sueno_s = x < 10 ? 10 : x > 3600 ? 3600 : x;
         else if (eq(k, "hechos")) g_c.n_hechos = x < 1 ? 1 : x > 40 ? 40 : x; else if (eq(k, "episodios")) g_c.n_epis = x < 0 ? 0 : x > 60 ? 60 : x;
         else if (eq(k, "emb_url")) { uint32_t i = 0; while (v[i] && i < sizeof g_c.url - 1) { g_c.url[i] = v[i]; i++; } g_c.url[i] = 0; conf_srv(&g_c); g_emb_cae_hasta = 0; if (g_c.url[0] && !g_c.srv) { op(out, max, &p, "URL no valida (formato http://A.B.C.D:puerto). "); } }
-        else if (eq(k, "emb_modelo")) { uint32_t i = 0; while (v[i] && i < sizeof g_c.modelo - 1) { g_c.modelo[i] = v[i]; i++; } g_c.modelo[i] = 0; }
+        else if (eq(k, "emb_modelo")) { uint32_t i = 0; while (v[i] && i < sizeof g_c.modelo - 1) { g_c.modelo[i] = v[i]; i++; } g_c.modelo[i] = 0; conf_srv(&g_c); g_emb_cae_hasta = 0; }
+        else if (eq(k, "emb_motor")) {                                  /* SOMA_329_IA_LOCAL */
+            if (!eq(v, "local") && !eq(v, "servidor") && !eq(v, "auto")) { op(out, max, &p, "emb_motor: local, servidor o auto"); return 1; }
+            g_c.motor = eq(v, "local") ? 1 : eq(v, "servidor") ? 2 : 0; conf_srv(&g_c); g_emb_cae_hasta = 0;
+        }
         else { op(out, max, &p, "memoria config: clave desconocida"); return 1; }
         conf_guarda(); op(out, max, &p, "Guardado en /etc/memoria.conf");
         return 1;

@@ -5,7 +5,7 @@
 /* SOMA ASYNC MATERIALIZE PATCH v4 */
 /* SOMA ORBITAL CALM PATCH v3 */
 /* SOMA ORBITAL ICONS PATCH v2: iconos como cuerpos en orbita estable. */
-#define HER_DOCK_ITEM_COUNT 21     /* SOMA_272_AGENDA: +1 (la agenda va al final para no mover las posiciones guardadas); SOMA_295_CORREO: +1 (el correo, tambien al final) */
+#define HER_DOCK_ITEM_COUNT 23     /* SOMA_272_AGENDA: +1 (la agenda va al final para no mover las posiciones guardadas); SOMA_295_CORREO: +1 (el correo, tambien al final) */
 #define HER_ICON_ANIM_MAX   256u
 #define HER_ICON_BOX_SIZE   44
 
@@ -38,6 +38,8 @@ static const struct her_dock_item her_dock_items[HER_DOCK_ITEM_COUNT] = {
     { ICON_YOUTUBE,  0x00FF4444,  "YOUTUBE", APP_YOUTUBE },         /* SOMA_250_YOUTUBE: videos de YouTube */
     { ICON_AGENDA,   0x0034D399,  "AGENDA",  APP_AGENDA },          /* SOMA_272_AGENDA: calendario */
     { ICON_CORREO,   0x0022D3EE,  "CORREO",  APP_CORREO },          /* SOMA_295_CORREO: correo electronico */
+    { ICON_DISCOS,   0x00F59E0B,  "DISCOS",  APP_DISCOS },          /* SOMA_331_DISCOS: discos y particiones (al final: no mueve las posiciones guardadas) */
+    { ICON_NOTICIAS, 0x00E2E8F0,  "NOTICIAS", APP_NOTICIAS },       /* SOMA_337_NOTICIAS: noticias (al final) */
 };
 
 /* La aparicion se escalona ligeramente para que los iconos escapen uno tras
@@ -111,10 +113,10 @@ static void her_place_window_corner(uint32_t cur_w, uint32_t cur_h, int corner)
  * 0: asistentes, 1: sistema/desarrollo, 2: trabajo,
  * 3: multimedia, 4: captura/red. Posiciones estaticas en el escritorio. */
 static const uint8_t her_group_col[HER_DOCK_ITEM_COUNT] = {
-    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4,0,2   /* SOMA_295_CORREO: el correo, con el trabajo */
+    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4,0,2,1,4   /* SOMA_295_CORREO: el correo, con el trabajo; SOMA_331_DISCOS: discos, con el sistema; SOMA_337_NOTICIAS: con la red */
 };
 static const uint8_t her_group_row[HER_DOCK_ITEM_COUNT] = {
-    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3,3,4
+    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3,3,4,4,4
 };
 /* SOMA_208_ESCRITORIO: disposicion del usuario. Cada icono guarda su posicion en milesimas de pantalla (+1; 0 = la del grupo) para
  * que sirva a cualquier resolucion. Se guarda en /etc/escritorio.conf. */
@@ -416,6 +418,17 @@ static void her_icon_dist(int icon, int32_t X, int32_t Y, int32_t *dm, int32_t *
         IC_M(ic_seg(X, Y, 14, 18, 50, 18, 20)); IC_M(ic_seg(X, Y, 50, 18, 50, 52, 20)); IC_M(ic_seg(X, Y, 50, 52, 14, 52, 20)); IC_M(ic_seg(X, Y, 14, 52, 14, 18, 20));
         IC_M(ic_seg(X, Y, 14, 28, 50, 28, 18)); IC_M(ic_seg(X, Y, 23, 12, 23, 22, 20)); IC_M(ic_seg(X, Y, 41, 12, 41, 22, 20));
         IC_A(ic_circ(X, Y, 24, 40, 4)); IC_A(ic_circ(X, Y, 38, 40, 4));
+        break;
+    case ICON_NOTICIAS:                                  /* SOMA_337_NOTICIAS: hoja de periodico: titular, foto y columnas */
+        IC_M(ic_seg(X, Y, 12, 14, 52, 14, 20)); IC_M(ic_seg(X, Y, 52, 14, 52, 50, 20)); IC_M(ic_seg(X, Y, 52, 50, 12, 50, 20)); IC_M(ic_seg(X, Y, 12, 50, 12, 14, 20));
+        IC_A(ic_seg(X, Y, 18, 22, 46, 22, 22));
+        IC_M(ic_seg(X, Y, 18, 31, 30, 31, 14)); IC_M(ic_seg(X, Y, 18, 37, 30, 37, 14)); IC_M(ic_seg(X, Y, 18, 43, 30, 43, 14));
+        IC_A(ic_seg(X, Y, 36, 31, 46, 31, 14)); IC_A(ic_seg(X, Y, 46, 31, 46, 43, 14)); IC_A(ic_seg(X, Y, 46, 43, 36, 43, 14)); IC_A(ic_seg(X, Y, 36, 43, 36, 31, 14));
+        break;
+    case ICON_DISCOS:                                    /* SOMA_331_DISCOS: disco con su sector marcado y la luz */
+        IC_M(ic_seg(X, Y, 12, 20, 52, 20, 20)); IC_M(ic_seg(X, Y, 52, 20, 52, 46, 20)); IC_M(ic_seg(X, Y, 52, 46, 12, 46, 20)); IC_M(ic_seg(X, Y, 12, 46, 12, 20, 20));
+        IC_M(ic_seg(X, Y, 12, 36, 52, 36, 16));
+        IC_A(ic_seg(X, Y, 18, 28, 34, 28, 18)); IC_A(ic_circ(X, Y, 45, 41, 3));
         break;
     case ICON_MONITOR:                                   /* PARCHE 089: pantalla con una grafica */
         IC_M(ic_seg(X, Y, 12, 16, 52, 16, 20)); IC_M(ic_seg(X, Y, 52, 16, 52, 44, 20)); IC_M(ic_seg(X, Y, 52, 44, 12, 44, 20)); IC_M(ic_seg(X, Y, 12, 44, 12, 16, 20));
@@ -755,7 +768,7 @@ static void hst_leer(void)
 
     {
         struct rtc_time t;
-        rtc_get_datetime(&t);
+        hora_local(&t);                                  /* SOMA_332_HORA: antes UTC (una hora menos en invierno en Espana) */
         if (t.hour < 24u && t.min < 60u && t.sec < 60u) {
             hst_dos(hst.hora, t.hour); hst.hora[2] = ':';
             hst_dos(hst.hora + 3, t.min); hst.hora[5] = ':';

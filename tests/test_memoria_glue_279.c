@@ -81,6 +81,21 @@ int http_post_json(const uint8_t *ip, uint16_t port, const char *path, const cha
     return 200;
 }
 
+/* SOMA_329_IA_LOCAL: sin motor de IA local en el anfitrion (la memoria usa el servidor falso) */
+int ia_disponible(const char **why) { if (why) *why = "anfitrion"; return 0; }
+int ia_modelo_ruta(const char *n, char *r, uint32_t cap) { (void)n; if (cap) r[0] = 0; return -1; }
+int ia_instala(const char *n, char *m, uint32_t cap) { (void)n; if (cap) m[0] = 0; return -1; }
+int ia_orden(int cmd, const char *modelo, const char *in, uint32_t in_len, char *out, uint32_t cap, uint32_t plazo_ms,
+             const volatile int *cancel, char *err, uint32_t ecap) { (void)cmd; (void)modelo; (void)in; (void)in_len; (void)out; (void)cap; (void)plazo_ms; (void)cancel; if (ecap) err[0] = 0; return -1; }
+
+/* SOMA_327_RED_FUERA: la memoria pide los embeddings por llm_http_local (netsvc en el sistema): aqui, al servidor falso */
+int llm_http_local(const uint8_t ip[4], uint16_t port, const char *path, const char *body, char *resp_buf, uint32_t cap,
+                   struct http_response *r, uint32_t ms, const volatile int *cancel)
+{
+    (void)cancel;
+    return http_post_json(ip, port, path, body, resp_buf, cap, r, ms);
+}
+
 /* LLM falso: contesta segun el tipo de prompt */
 static int g_llm_vivo = 1, g_n_llm;
 static char g_lin[40][200];

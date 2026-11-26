@@ -22,6 +22,7 @@
 #include "net.h"
 #include "dns.h"
 #include "tcp.h"
+#include "tun_tls.h"        /* SOMA_327_RED_FUERA: la conexion con el servicio, en un proceso de ring 3 */
 #include "web_img.h"
 #include "media.h"
 #include "llm.h"            /* SOMA_251: buscador con IA, resumen y preguntas */
@@ -130,6 +131,24 @@ static void server_name(char *o, uint32_t max)
 }
 
 /* ================================================================== cliente HTTP minimo (peticiones al servicio) */
+/* SOMA_327_RED_FUERA: las conexiones con el servicio van por el tunel aislado (tlstun en ring 3, sin TLS: el servicio es de la
+ * red de casa). Los asas enteros de siempre son indices de esta tabla; recibir devuelve lo mismo que tcp_recv (>0, 0, TCP_EOF, TCP_ERR). */
+#define YT_CONN_MAX 6
+static struct tun *volatile yc_tab[YT_CONN_MAX];
+static int yc_nuevo(struct tun *t)
+{
+    for (int i = 0; i < YT_CONN_MAX; ++i) if (__sync_bool_compare_and_swap(&yc_tab[i], (struct tun *)0, t)) return i;
+    tun_cierra(t, 1); return -1;
+}
+static struct tun *yc_de(int h) { return h >= 0 && h < YT_CONN_MAX ? yc_tab[h] : 0; }
+static int yc_send(int h, const void *d, uint32_t n) { struct tun *t = yc_de(h); return t && tun_envia(t, d, n) == 0 ? (int)n : -1; }
+static int yc_recv(int h, void *b, uint32_t max, uint32_t ms_)
+{
+    struct tun *t = yc_de(h); if (!t) return TCP_ERR;
+    int r = tun_recibe(t, b, max, ms_);
+    return r == -1 ? TCP_EOF : r < 0 ? TCP_ERR : r;
+}
+static void yc_fin(int h, int prisa) { struct tun *t = yc_de(h); if (!t) return; yc_tab[h] = 0; tun_cierra(t, prisa); }
 static int y_connect(char *err, uint32_t emax)
 {
     uint8_t ip[4]; uint32_t p = 0;
@@ -139,7 +158,8 @@ static int y_connect(char *err, uint32_t emax)
         net_client_lock(); int ok = dns_resolve(conf.host, ip, 4000); net_client_unlock();
         if (!ok) { yt_put(err, emax, &p, "No se encuentra el equipo "); yt_put(err, emax, &p, conf.host); return -1; }
     }
-    net_client_lock(); int h = tcp_connect(ip, conf.port, 5000); net_client_unlock();
+    char te[96]; struct tun *t = tun_abre(ip, conf.port, 0, 0, 5000, te, sizeof te);
+    int h = t ? yc_nuevo(t) : -1;
     if (h < 0) {
         char sn[96]; server_name(sn, sizeof sn);
         yt_put(err, emax, &p, "No hay servicio YouTube en "); yt_put(err, emax, &p, sn);
@@ -151,7 +171,7 @@ static int y_send_get(int h, const char *path)
     char rq[1100]; uint32_t p = 0;
     yt_put(rq, sizeof rq, &p, "GET "); yt_put(rq, sizeof rq, &p, path);
     yt_put(rq, sizeof rq, &p, " HTTP/1.0\r\nHost: soma\r\nUser-Agent: SOMA-YouTube/1\r\nConnection: close\r\n\r\n");
-    return tcp_send(h, rq, p) == (int)p ? 0 : -1;
+    return yc_send(h, rq, p) == (int)p ? 0 : -1;
 }
 /* Mensaje de error del servicio (texto plano corto) -> una linea limpia */
 static void y_errtext(char *o, uint32_t max, const char *body, uint32_t n, int status)
@@ -167,17 +187,17 @@ static int y_get_buf(uint8_t *nb, uint32_t ncap, const char *path, char **body, 
     uint32_t ep = 0; err[0] = 0;
     int h = y_connect(err, emax);
     if (h < 0) return -1;
-    if (y_send_get(h, path) != 0) { tcp_close(h); yt_put(err, emax, &ep, "No se pudo enviar la peticion al servicio"); return -1; }
+    if (y_send_get(h, path) != 0) { yc_fin(h, 0); yt_put(err, emax, &ep, "No se pudo enviar la peticion al servicio"); return -1; }
     uint32_t total = 0; uint64_t t_start = ms(); int r = 0;
     while (total < ncap - 1) {
         if (*gen != my) { r = -2; break; }
         if (ms() - t_start > timeout_ms) { r = -3; break; }
         uint32_t room = ncap - 1 - total;
-        int n = tcp_recv(h, nb + total, (uint16_t)(room > 16384 ? 16384 : room), 60);
+        int n = yc_recv(h, nb + total, (uint16_t)(room > 16384 ? 16384 : room), 60);
         if (n > 0) total += (uint32_t)n;
         else if (n == TCP_EOF || n == TCP_ERR) break;
     }
-    if (r) tcp_abort(h); else tcp_close(h);
+    if (r) yc_fin(h, 1); else yc_fin(h, 0);
     if (r == -2) return -2;
     if (r == -3) { yt_put(err, emax, &ep, "El servicio YouTube no responde (tiempo agotado)"); return -1; }
     int status = 0; uint32_t off = 0;
@@ -190,6 +210,28 @@ static int y_get_buf(uint8_t *nb, uint32_t ncap, const char *path, char **body, 
 static int y_get(const char *path, char **body, uint32_t *len, uint32_t timeout_ms, const volatile uint32_t *gen, uint32_t my, char *err, uint32_t emax)
 {
     return y_get_buf(netbuf, NET_CAP_250, path, body, len, timeout_ms, gen, my, err, emax);
+}
+
+/* SOMA_327_RED_FUERA: prueba (tools/sbx_check.py): un GET al servicio por el camino real (tunel de ring 3). Estado HTTP o < 0 */
+int youtube_prueba_servicio(const char *host, uint16_t port, const char *path, char *out, uint32_t cap)
+{
+    conf_load();
+    struct yt_conf antes = conf;
+    uint32_t i = 0; while (host && host[i] && i + 1 < sizeof conf.host) { conf.host[i] = host[i]; i++; } conf.host[i] = 0;
+    conf.port = port;
+    uint8_t *nb = (uint8_t *)kmalloc(65536);
+    int st = -1; out[0] = 0;
+    if (nb) {
+        static volatile uint32_t gen; char *body = 0; uint32_t len = 0; char err[128];
+        st = y_get_buf(nb, 65536, path, &body, &len, 8000, &gen, gen, err, sizeof err);
+        const char *src = st >= 0 && body ? body : err; uint32_t n = st >= 0 && body ? len : 0; if (src == err) while (err[n]) n++;
+        if (n >= cap) n = cap - 1;
+        for (uint32_t k = 0; k < n; ++k) out[k] = src[k];
+        out[n] = 0;
+        kfree(nb);
+    }
+    conf = antes;
+    return st;
 }
 
 /* ================================================================== hilo ytnet: busquedas y miniaturas */
@@ -316,25 +358,25 @@ static void stream_job(uint32_t g)
     yt_path_video(path, sizeof path, &conf, id, t);
     int h = y_connect(err, sizeof err);
     if (h < 0) { ring_eof = 1; str_fail(g, err); return; }
-    if (y_send_get(h, path) != 0) { tcp_close(h); ring_eof = 1; str_fail(g, "No se pudo enviar la peticion al servicio"); return; }
+    if (y_send_get(h, path) != 0) { yc_fin(h, 0); ring_eof = 1; str_fail(g, "No se pudo enviar la peticion al servicio"); return; }
 
     /* cabeceras HTTP: el servicio no contesta hasta tener el video abierto (resolver la direccion tarda unos segundos) */
     char hd[2048]; uint32_t hn = 0; int status = 0; uint32_t off = 0, got_head = 0; uint64_t t_start = ms();
     while (!got_head) {
-        if (str_req != g || ui_gone()) { tcp_abort(h); ring_eof = 1; return; }
-        if (ms() - t_start > 120000u) { tcp_abort(h); ring_eof = 1; str_fail(g, "El servicio YouTube no responde (tiempo agotado)"); return; }
-        if (hn >= sizeof hd - 1) { tcp_abort(h); ring_eof = 1; str_fail(g, "Respuesta no valida del servicio YouTube"); return; }
-        int n = tcp_recv(h, hd + hn, (uint16_t)(sizeof hd - 1 - hn), 60);
+        if (str_req != g || ui_gone()) { yc_fin(h, 1); ring_eof = 1; return; }
+        if (ms() - t_start > 120000u) { yc_fin(h, 1); ring_eof = 1; str_fail(g, "El servicio YouTube no responde (tiempo agotado)"); return; }
+        if (hn >= sizeof hd - 1) { yc_fin(h, 1); ring_eof = 1; str_fail(g, "Respuesta no valida del servicio YouTube"); return; }
+        int n = yc_recv(h, hd + hn, (uint16_t)(sizeof hd - 1 - hn), 60);
         if (n > 0) {
             hn += (uint32_t)n;
             int r = yt_http_head(hd, hn, &status, &off);
-            if (r < 0) { tcp_abort(h); ring_eof = 1; str_fail(g, "Respuesta no valida del servicio YouTube"); return; }
+            if (r < 0) { yc_fin(h, 1); ring_eof = 1; str_fail(g, "Respuesta no valida del servicio YouTube"); return; }
             got_head = r == 1;
-        } else if (n == TCP_EOF || n == TCP_ERR) { tcp_close(h); ring_eof = 1; str_fail(g, "El servicio YouTube ha cortado la conexion"); return; }
+        } else if (n == TCP_EOF || n == TCP_ERR) { yc_fin(h, 0); ring_eof = 1; str_fail(g, "El servicio YouTube ha cortado la conexion"); return; }
     }
     if (status != 200) {
-        for (int k = 0; k < 20 && hn < sizeof hd - 1; ++k) { int n = tcp_recv(h, hd + hn, (uint16_t)(sizeof hd - 1 - hn), 50); if (n > 0) hn += (uint32_t)n; else if (n < 0) break; }
-        tcp_close(h); ring_eof = 1;
+        for (int k = 0; k < 20 && hn < sizeof hd - 1; ++k) { int n = yc_recv(h, hd + hn, (uint16_t)(sizeof hd - 1 - hn), 50); if (n > 0) hn += (uint32_t)n; else if (n < 0) break; }
+        yc_fin(h, 0); ring_eof = 1;
         y_errtext(err, sizeof err, hd + off, hn - off > 150 ? 150 : hn - off, status);
         str_fail(g, err);
         return;
@@ -351,7 +393,7 @@ static void stream_job(uint32_t g)
             sp = yt_ring_space(&ring);
             if (sp < 2048) { thread_sleep(10); last_data = ms(); continue; }     /* memoria llena: el reproductor aun no ha avanzado */
         }
-        int n = tcp_recv(h, rxtmp, (uint16_t)(sp > 16384 ? 16384 : sp), 30);
+        int n = yc_recv(h, rxtmp, (uint16_t)(sp > 16384 ? 16384 : sp), 30);
         if (n > 0) {
             yt_ring_put(&ring, rxtmp, (uint32_t)n); str_bytes = ring.end; last_data = ms();
             if (!started && ring.end >= 4096 && str_req == g) {
@@ -365,7 +407,7 @@ static void stream_job(uint32_t g)
         else if (ms() - last_data > 45000u) { if (!started) str_fail(g, "El video no llega (el servicio se ha quedado parado)"); why = "sin datos durante 45 s"; break; }
     }
     ring_eof = 1;                                                /* antes de cerrar: tcp_close cede la CPU y el reproductor debe saberlo ya */
-    if (cut) tcp_abort(h); else tcp_close(h);                    /* cancelado a medias: sin esperar al servicio, que sigue enviando */
+    if (cut) yc_fin(h, 1); else yc_fin(h, 0);                    /* cancelado a medias: sin esperar al servicio, que sigue enviando */
     {   /* una linea por video en la consola, como hace SOMA Media */
         char l[200]; uint32_t q = 0;
         yt_put(l, sizeof l, &q, "[youtube] "); yt_put(l, sizeof l, &q, id); yt_put(l, sizeof l, &q, " desde "); yt_put_dec(l, sizeof l, &q, t);
@@ -835,7 +877,7 @@ static void draw_banner(const struct ylay *L)
     si_text_c(L->gx + 10, L->ban_y + 8, 26, 18, "IA", 11, 0x00081018u, 1);
     char t[420]; uint32_t p = 0; uint32_t col = SI_DIM;
     if (ai_state == AI_THINK) { yt_put(t, sizeof t, &p, "Pensando que buscar"); yt_put(t, sizeof t, &p, dots()); }
-    else if (ai_state == AI_PLAIN) { yt_put(t, sizeof t, &p, "Sin IA ("); yt_put(t, sizeof t, &p, ai_why); yt_put(t, sizeof t, &p, "): se ha buscado el texto tal cual"); col = SI_AMBER; }
+    else if (ai_state == AI_PLAIN) { yt_put(t, sizeof t, &p, "Sin IA ("); yt_put(t, sizeof t, &p, ai_why); yt_put(t, sizeof t, &p, "): se ha buscado \""); yt_put(t, sizeof t, &p, last_query); yt_put(t, sizeof t, &p, "\""); col = SI_AMBER; }   /* SOMA_335_YT_BUSQUEDAS */
     else {
         yt_put(t, sizeof t, &p, ai_state == AI_SEARCH ? "Buscando: " : "Busquedas: ");
         for (int i = 0; i < ai_nq; ++i) { if (i) yt_put(t, sizeof t, &p, "  -  "); yt_put(t, sizeof t, &p, ai_q[i]); }
@@ -1681,6 +1723,7 @@ int youtube_command(const char *args, char *out, uint32_t max)
         yt_put(out, max, &p, ", trabajo: "); yt_put_dec(out, max, &p, (uint64_t)ia_run);
         if (ia_status[0]) { yt_put(out, max, &p, "\n  "); yt_put(out, max, &p, ia_status); }
         if (ai_state != AI_OFF) { yt_put(out, max, &p, "\n  busqueda IA ("); yt_put_dec(out, max, &p, (uint64_t)ai_state); yt_put(out, max, &p, "):"); for (int i = 0; i < ai_nq; ++i) { yt_put(out, max, &p, " ["); yt_put(out, max, &p, ai_q[i]); yt_put(out, max, &p, "]"); } }
+        if (last_query[0]) { yt_put(out, max, &p, "\n  ultima busqueda: \""); yt_put(out, max, &p, last_query); yt_put(out, max, &p, "\""); }   /* SOMA_335_YT_BUSQUEDAS */
     } else return 0;                                             /* abrir la ventana (y buscar, si hay texto) */
     if (uo && p < um) yt_scopy(uo, um, out);                     /* lo escribe quien ha llamado (el terminal o un agente) */
     else { if (uo && um) uo[0] = 0; kprint(out); kprint("\n"); }

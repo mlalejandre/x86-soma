@@ -11,7 +11,7 @@
 #define SOMA_LLM_PROTO_H
 #include <stdint.h>
 
-enum { LLM_LOCAL = 0, LLM_OPENAI, LLM_CLAUDE, LLM_GEMINI, LLM_NPROV };
+enum { LLM_LOCAL = 0, LLM_OPENAI, LLM_CLAUDE, LLM_GEMINI, LLM_SOMA, LLM_NPROV };   /* SOMA_329_IA_LOCAL: LLM_SOMA = motor local en ring 3 */
 #define LLM_BASE_MAX  128
 #define LLM_MODEL_MAX 80
 #define LLM_KEY_MAX   256

@@ -56,7 +56,8 @@ TEXT_EXT = {".c", ".h", ".s", ".S", ".inc", ".ld", ".py", ".cfg", ".md", ".txt",
 TEXT_NAMES = {"Makefile", "Dockerfile", "LICENSE", ".gitignore", "protected.txt"}
 SECRET_NAMES = {"llm.conf", ".env", "credentials.json", "secrets.json", "wifi.conf", "redes_wifi.conf",
                 "correo.conf", "search.conf", "token.json", ".netrc"}                 # SOMA_301_EXPORTAR: correo.conf guarda tu clave
-SECRET_GLOBS = ["*.key", "*_key", "*.p12", "*.pfx", "id_rsa*", "*.pem"]
+SECRET_GLOBS = ["*.key", "*_key", "*.p12", "*.pfx", "id_rsa*", "*.pem",
+                "*.conf", ".env*"]   # SOMA_339_GITHUB: ningun .conf (cualquiera puede llevar una clave), no solo los de la lista
 # datos generados: aparecen en el indice, sin contenido (salvo --con-datos)
 DATA_FILES = {"src/fonts/vfont_data.h", "src/ui/soma_fonts.c", "src/core/tls_roots.c", "src/arch/x86_64/sbx_testimg.h",
               "tests/x509_vectors_194.h"}
@@ -71,7 +72,7 @@ TEMAS = {
                    "src/user/unet.c", "src/net/*", "src/core/tls*", "src/core/x509.*"]),
     "consola":    ("consola, ordenes y agentes", ["src/agent/*", "src/ui/console.*"]),
     "lenguaje":   ("SOMA-LANG y el programador (SOMA Studio)", ["src/lang/*", "src/apps/coder_*", "src/apps/codeedit.*", "tests/test_lang.c",
-                   "tests/test_coder_*.c"]),
+                   "tests/test_coder_*.c", "tests/prueba_salida_333.py"]),
     "red":        ("TCP/IP, DHCP, DNS, HTTP, WiFi y Ethernet", ["src/net/*", "src/drivers/virtio_net.*", "src/drivers/e1000e.*",
                    "src/arch/x86_64/iwl*", "src/core/wpa.*", "src/core/ccmp.*"]),
     "archivos":   ("sistemas de archivos y disco", ["src/fs/*", "src/drivers/virtio_blk.*", "src/drivers/sysdisk.h", "src/arch/x86_64/usbdisk*",
@@ -105,14 +106,27 @@ TEMAS = {
                    ["src/ui/gui_orbe*", "src/ui/gui_voz.c", "src/ui/gui_ayuda.c", "src/ui/ayuda.h", "src/agent/prog_voz.*", "src/user/voz/*"]),
     "investiga":  ("investigar en internet: busquedas, lectura de paginas e informe con fuentes",
                    ["src/agent/shell_investiga.c", "src/agent/busca_web.*", "src/agent/web_lee.*", "tools/search_proxy.py",
-                    "tests/test_investiga_288.c"]),
+                    "tests/test_investiga_288.c", "src/agent/inv_tema.*", "tests/test_inv_tema_336.c"]),
     "youtube":    ("YouTube: buscar, ver y hablar con los videos",
-                   ["src/apps/youtube*", "src/apps/yt_*", "tools/yt_service.py", "tests/test_youtube*"]),
+                   ["src/apps/youtube*", "src/apps/yt_*", "tools/yt_service.py", "tests/test_youtube*", "tests/*yt_*335*"]),
     "paint":      ("Paint y el dibujo con IA", ["src/apps/paint*", "tests/test_paint_ia*_292.c"]),
     "agenda":     ("Agenda: citas, avisos, frases y .ics", ["src/apps/agenda*", "src/agent/shell_agenda.c", "tests/*agenda*"]),
     "video":      ("video y audio: reproductor, H.264/AAC en ring 3, grabadora y camara",
                    ["src/apps/media.*", "src/user/vplay/*", "src/user/vidplay.c", "src/core/avi*", "src/core/audio*", "src/core/wav.*",
                     "tests/test_vplay_252.py"]),
+    # SOMA_339_GITHUB: temas de los parches 311-338
+    "servicios":  ("servicios aislados de ring 3: netsvc, tlstun, leesvc, mimesvc, imgdec, pdfsvc, zdec y el sandbox del nucleo",
+                   ["src/user/*svc.c", "src/user/tlstun.c", "src/user/zdec.c", "src/user/imgdec.c", "src/user/sbxrt.h", "src/user/unet.c",
+                    "src/arch/x86_64/sandbox*", "src/arch/x86_64/usermode*", "src/agent/web_lee.*"]),
+    "iallocal":   ("motor de IA local (llama.cpp en ring 3): embeddings de la memoria y LLM pequenos",
+                   ["src/user/ia/*.c", "src/user/ia/*.cpp", "src/user/ia/*.ld", "src/arch/x86_64/ia_sys.*", "src/core/ia_abi.h",
+                    "tools/ia_modelos_prueba.py", "tests/prueba_ia_329.py"]),
+    "noticias":   ("Noticias: canales RSS/Atom, categorias, resumen con IA y memoria",
+                   ["src/apps/noticias*", "src/user/leesvc.c", "tests/*noticias_337*"]),
+    "agentes":    ("la aplicacion Agentes y el registro de misiones",
+                   ["src/agent/agentes_reg.*", "src/apps/agentes_gui.*", "tests/*agentes_338*"]),
+    "discos":     ("Discos: particiones, formato e imagenes", ["src/core/discos_core.*", "src/apps/discos*", "tests/*discos_331*"]),
+    "hora":       ("zona horaria y hora del sistema", ["src/core/hora.*", "src/core/zona.*", "tests/*zona_332*", "tests/*hora_332*"]),
     "ci":         ("CI de GitHub y comprobaciones: workflow, auditoria, arranque en QEMU y fallos",
                    [".github/*", "Makefile", "tools/audit.py", "tools/boot_smoke.py", "tools/fault_check.py", "tools/cpu_matrix.py",
                     "tools/sbx_check.py", "tools/idle_check.py", "protected.txt", "docs/PARCHE_29[89]_*", "docs/PARCHE_30*"]),

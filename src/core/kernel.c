@@ -98,6 +98,10 @@ static void selftest_thread(void *arg)
 {
     (void)arg;
     thread_sleep(500);                                   /* deja arrancar el escritorio: la prueba corre con el sistema vivo */
+    /* SOMA_317_DESCARGAS_AISLADAS: y espera a que termine de arrancar. Si no, lo que el escritorio reserva al terminar (unos pocos
+     * marcos) podia caer entre las dos medidas de una comprobacion de fugas y dar un FALLO falso. */
+    for (int w = 0; w < 1200 && bootdiag_in_boot(); ++w) thread_sleep(50);
+    thread_sleep(300);
     int bad = 0;
     int any = 0;
     for (const char *p = g_selftest; *p; ++p) {                         /* lista: sbx+user */
@@ -112,6 +116,13 @@ static void selftest_thread(void *arg)
                 if (p[0] == 'n') bad += sbx_nettest(base);
                 else { static char ru[220]; int j = 0; for (; base[j]; ++j) ru[j] = base[j]; const char *t = "/ref.html"; while (*t) ru[j++] = *t++; ru[j] = 0; bad += sbx_webref(ru); }
             } else { kprint("SELFTEST net/wref: falta opt/soma/url\n"); bad++; }
+            any = 1;
+        }
+        if (p[0] == 't' && p[1] == 'l' && p[2] == 's') {                 /* SOMA_316_RED_AISLADA: HTTPS verificado en netsvc */
+            static char tb[200], ca[8192];
+            uint32_t cn = fwcfg_read_file("opt/soma/tlsca", ca, sizeof ca);
+            if (fwcfg_read_file("opt/soma/tlsurl", tb, sizeof tb) && cn > 0 && cn < sizeof ca) bad += sbx_tlstest(tb, ca, cn);
+            else { kprint("SELFTEST tls: falta opt/soma/tlsurl u opt/soma/tlsca\n"); bad++; }
             any = 1;
         }
         if (p[0] == 'w' && p[1] == 'e' && p[2] == 'b') {

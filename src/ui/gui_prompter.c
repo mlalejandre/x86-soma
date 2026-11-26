@@ -618,6 +618,7 @@ static int pr_fase_de(const char *q)
 void gui_fase(const char *que);
 void gui_fase(const char *que)
 {
+    agentes_reg_fase(que);                                       /* SOMA_338_AGENTES: quien trabaja (la aplicacion Agentes) */
     chat_fase(que);                                              /* SOMA_285_CHAT: los pasos del agente tambien en el chat */
     int f = pr_fase_de(que);
     if (f < 0) return;
@@ -631,6 +632,7 @@ void gui_fase(const char *que)
 void gui_fase_orden(const char *linea);
 void gui_fase_orden(const char *linea)
 {
+    agentes_reg_orden(linea);                                    /* SOMA_338_AGENTES */
     chat_fase_orden(linea);                                      /* SOMA_285_CHAT */
     char nom[16]; int n = 0; while (linea && linea[n] && linea[n] != ' ' && n < 15) { nom[n] = linea[n]; ++n; } nom[n] = 0;
     if (pr_ig(nom, "search") || pr_ig(nom, "investiga") || pr_ig(nom, "leer") /* SOMA_288_INVESTIGA */ || pr_ig(nom, "descargar") || pr_ig(nom, "navegador") || pr_ig(nom, "fetch") || pr_ig(nom, "web")) gui_fase("buscar");
@@ -712,6 +714,165 @@ static void pr_dibuja_barra(uint32_t cur_w, int32_t cy)
     }
 }
 
+/* ---------------------------------------------------------------------------------------------- SOMA_334_ORBE_MD
+ * La respuesta del orbe con el mismo maquetador que el chat (chat_md.c): tablas, LaTeX de verdad (tex.c), bloques de codigo con
+ * resaltado, listas anidadas, citas, titulos... El revelado sigue siendo de maquina de escribir, de arriba abajo, y el
+ * razonamiento va detras, tenue. Sin fuente suavizada o sin memoria, el formateador de antes (mas arriba). */
+#ifndef PRM_SIN_MD                                        /* las pruebas de anfitrion del 259/266 prueban el formateador de antes */
+#include "chat_md.h"
+#define PRM_OPS  30000
+#define PRM_POOL (512u * 1024u)
+#define PRM_ZON  600
+static struct md_op *prm_ops; static char *prm_pool; static struct md_zone *prm_z; static void *prm_scr;
+static int prm_ok = -1;                                   /* -1 sin probar, 0 no (lo de antes), 1 si */
+static struct md_out prm_r, prm_t;                        /* la respuesta y el razonamiento (en dos tramos de los mismos buffers) */
+static int32_t prm_y_t, prm_alto, prm_rev;                /* donde empieza el razonamiento, alto total y lo revelado (px) */
+static uint32_t prm_gen_hecho, prm_ancho_hecho, prm_letra_hecha = 99; static uint64_t prm_t_hecho;
+static int prm_mem(void)
+{
+    if (prm_ok >= 0) return prm_ok;
+    prm_ok = 0;
+    if (!pr_vec()) return 0;
+    prm_ops = (struct md_op *)kmalloc(PRM_OPS * sizeof(struct md_op)); prm_pool = (char *)kmalloc(PRM_POOL);
+    prm_z = (struct md_zone *)kmalloc(PRM_ZON * sizeof(struct md_zone)); prm_scr = kmalloc(MD_SCRATCH);
+    if (prm_ops && prm_pool && prm_z && prm_scr) { prm_ok = 1; return 1; }
+    if (prm_ops) kfree(prm_ops);
+    if (prm_pool) kfree(prm_pool);
+    if (prm_z) kfree(prm_z);
+    if (prm_scr) kfree(prm_scr);
+    prm_ops = 0; prm_pool = 0; prm_z = 0; prm_scr = 0;
+    return 0;
+}
+static int prm_fl(int fl) { return fl | WF_RAW | ((fl & WF_MONO) ? 0 : WF_LIB); }
+static int prm_w(const char *s, int n, int px, int fl, void *u) { (void)u; return wf_width(s, (uint32_t)n, px, prm_fl(fl)); }
+static int prm_a(int px, void *u) { (void)u; return wf_ascent(px); }
+static int prm_d(int px, void *u) { (void)u; return wf_descent(px); }
+static int prm_img(const char *s, int n, int *w, int *h, void *u) { (void)s; (void)n; (void)w; (void)h; (void)u; return -1; }   /* el orbe no carga imagenes */
+static const struct md_metrics PRM_MET = { prm_w, prm_a, prm_d, prm_img, 0 };
+/* sobre el cosmos: los fondos (codigo, tablas, citas) semitransparentes */
+static const struct md_theme PRM_TEMA = {
+    0x00F1F5F9u, 0x0094A3B8u, 0x00FFFFFFu, 0x0093C5FDu, 0x00334155u,
+    0xB0050A12u, 0xC00B1220u, 0x00263150u, 0x00E6EDF3u, 0x90101826u, 0x00FCD34Du, 0x00475569u, 0x80574A12u,
+    0xB0111A2Eu, 0x600A1020u, 0x0038BDF8u,
+    0x00FF7B72u, 0x00A5D6FFu, 0x0079C0FFu, 0x006E7681u, 0x00D2A8FFu, 0x00FFA657u, 0x00F87171u };
+static const struct md_theme PRM_TEMA_T = {                /* el razonamiento: todo apagado */
+    0x0064748Bu, 0x00566479u, 0x0094A3B8u, 0x006B8AA8u, 0x00283448u,
+    0x80050A12u, 0x900B1220u, 0x001E293Bu, 0x0064748Bu, 0x600B1220u, 0x007C6F3Au, 0x00334155u, 0x60302A10u,
+    0x800B1220u, 0x40070C18u, 0x00475569u,
+    0x0064748Bu, 0x0064748Bu, 0x0064748Bu, 0x00475569u, 0x0064748Bu, 0x0064748Bu, 0x0064748Bu };
+static int prm_prepara(int32_t ancho)
+{
+    if (!prm_mem()) return 0;
+    int L = pr_letra();
+    if (pr_nuevo) { pr_nuevo = 0; prm_rev = 0; pr_scroll = pr_obj = 0; pr_auto = 1; }
+    uint32_t g = pr_gen; __sync_synchronize();
+    uint64_t t = timer_get_uptime_ms();
+    int cambia = g != prm_gen_hecho;
+    if (cambia && her_agent_busy && t - prm_t_hecho < 120u && prm_ancho_hecho == (uint32_t)ancho) return 1;   /* mientras llega, como mucho ~8 veces/s */
+    if (!cambia && (uint32_t)ancho == prm_ancho_hecho && (uint32_t)L == prm_letra_hecha) return 1;
+    prm_gen_hecho = g; prm_ancho_hecho = (uint32_t)ancho; prm_letra_hecha = (uint32_t)L; prm_t_hecho = t;
+    uint32_t ns = pr_src_n, nt = pr_thk_n;
+    if (ns > PR_SRC_MAX - 1) ns = PR_SRC_MAX - 1;
+    if (nt > PR_THK_MAX - 1) nt = PR_THK_MAX - 1;
+    prm_r.ops = prm_ops; prm_r.cap = PRM_OPS; prm_r.pool = prm_pool; prm_r.poolcap = PRM_POOL; prm_r.z = prm_z; prm_r.zcap = PRM_ZON;
+    md_layout(pr_src, ns, ancho, PR_EM[L], &PRM_MET, &PRM_TEMA, &prm_r, prm_scr);
+    int32_t gap = prm_r.height && nt ? PR_LH[L] : 0;
+    prm_y_t = prm_r.height + gap;
+    prm_t.ops = prm_ops + prm_r.nops; prm_t.cap = PRM_OPS - prm_r.nops; prm_t.pool = prm_pool + prm_r.npool; prm_t.poolcap = PRM_POOL - prm_r.npool;
+    prm_t.z = prm_z + prm_r.nz; prm_t.zcap = PRM_ZON - prm_r.nz;
+    if (nt && prm_t.cap > 100 && prm_t.poolcap > 4096) md_layout(pr_thk, nt, ancho, PR_EM[L] * 7 / 8, &PRM_MET, &PRM_TEMA_T, &prm_t, prm_scr);
+    else { prm_t.nops = 0; prm_t.height = 0; prm_t.npool = 0; }
+    prm_alto = prm_y_t + prm_t.height;
+    if (prm_rev > prm_alto) prm_rev = prm_alto;
+    pr_alto_total = (uint32_t)prm_alto;
+    return 1;
+}
+static void prm_avanza(void)
+{
+    if (prm_rev < prm_alto) {                                          /* se revela de arriba abajo, mas deprisa cuanto mas falta */
+        int32_t paso = 3 + (prm_alto - prm_rev) / 40; if (paso > 48) paso = 48;
+        prm_rev += paso; if (prm_rev > prm_alto) prm_rev = prm_alto;
+    }
+    int32_t max = prm_alto - pr_vista; if (max < 0) max = 0;
+    if (pr_auto && prm_rev <= prm_r.height + 1) {                      /* sigue a lo que se esta escribiendo de la respuesta */
+        int32_t obj = prm_rev - pr_vista; if (obj < 0) obj = 0; if (obj > max) obj = max;
+        pr_obj = obj;
+    } else if (pr_auto) {
+        if (pr_obj > max) pr_obj = max;
+    } else {
+        if (pr_obj < 0) pr_obj = 0;
+        if (pr_obj >= max) { pr_obj = max; if (prm_rev >= prm_alto) pr_auto = 1; }
+    }
+    int32_t d = pr_obj - pr_scroll;
+    if (d > 1 || d < -1) pr_scroll += d / 3 + (d > 0 ? 1 : -1); else pr_scroll = pr_obj;
+}
+static void prm_pinta(const struct md_out *o, int32_t ox, int32_t oy, int32_t y0, int32_t y1, int32_t rev_abs)
+{
+    uint32_t tip = her_col_cur;
+    for (int i = 0; i < o->nops; i++) {
+        const struct md_op *p = &o->ops[i];
+        switch (p->type) {
+        case MD_TEXT: {
+            int32_t y = oy + p->y; if (y + p->px < y0 || y - p->px > y1) break;
+            if (y - p->px > rev_abs) break;                               /* aun sin revelar */
+            uint32_t col = p->rgb;
+            int32_t falta = rev_abs - (y - p->px);
+            if (falta < 40 && prm_rev < prm_alto) col = her_mix256(tip, col, (uint32_t)falta * 256u / 40u);   /* la linea que se esta escribiendo */
+            wf_draw(ox + p->x, y, o->pool + p->s, p->n, p->px, col & 0x00FFFFFFu, prm_fl(p->fl), 255);
+            break; }
+        case MD_RECT: {
+            if (oy + p->y > y1 || oy + p->y + p->h < y0 || oy + p->y > rev_abs) break;
+            int32_t h = p->h; if (oy + p->y + h > rev_abs) h = rev_abs - (oy + p->y);   /* el fondo crece con lo revelado */
+            if (h <= 0) break;
+            uint32_t a = p->rgb >> 24; if (!a) a = 255;
+            fb_fill_rrect_aa(ox + p->x, oy + p->y, p->w, h, p->px, (a << 24) | (p->rgb & 0xFFFFFF));
+            break; }
+        case MD_STROKE:
+            if (oy + p->y > y1 || oy + p->y + p->h < y0 || oy + p->y + p->h > rev_abs) break;
+            fb_stroke_rrect_aa(ox + p->x, oy + p->y, p->w, p->h, p->px, 0xFF000000u | p->rgb);
+            break;
+        case MD_LINE: {
+            int32_t ya = oy + p->y / 16, yb = oy + (p->y + p->h) / 16;
+            if ((ya < y0 && yb < y0) || (ya > y1 && yb > y1) || (ya > rev_abs && yb > rev_abs)) break;
+            uint32_t a = p->rgb >> 24; if (!a) a = 255;
+            fb_line_aa(ox * 16 + p->x, oy * 16 + p->y, ox * 16 + p->x + p->w, oy * 16 + p->y + p->h, p->px, (a << 24) | (p->rgb & 0xFFFFFF));
+            break; }
+        case MD_IMG: {
+            int32_t x = ox + p->x, y = oy + p->y; if (y > y1 || y + p->h < y0 || y > rev_abs) break;
+            fb_stroke_rrect_aa(x, y, p->w, p->h, 10, 0xFF334155u);
+            break; }
+        }
+    }
+}
+static void prm_dibuja(int32_t x0, int32_t y0, int32_t ancho, int32_t alto)
+{
+    fb_set_clip(x0 - 8, y0, ancho + 24, alto);
+    int32_t oy = y0 - pr_scroll, ox = x0;
+    if (prm_r.height <= PR_LH[prm_letra_hecha] * 3 / 2 && !prm_t.nops && prm_r.width < ancho) ox = x0 + (ancho - prm_r.width) / 2;   /* una sola linea: centrada */
+    int32_t rev_abs = oy + prm_rev;
+    prm_pinta(&prm_r, ox, oy, y0, y0 + alto, rev_abs);
+    if (prm_t.nops && prm_rev > prm_y_t - PR_LH[prm_letra_hecha]) {
+        int32_t ly = oy + prm_y_t - PR_LH[prm_letra_hecha] / 2;
+        if (prm_r.height) fb_fill_rect((uint32_t)x0, (uint32_t)ly, (uint32_t)ancho, 1u, 0x00283448u);
+        prm_pinta(&prm_t, x0, oy + prm_y_t, y0, y0 + alto, rev_abs);
+    }
+    fb_reset_clip();
+    if (pr_scroll > 0) for (int k = 0; k < 18; ++k) fb_fill_rect_alpha(x0 - 8, y0 + k, ancho + 24, 1, ((uint32_t)(255 - k * 14) << 24) | 0x00030714u);
+    if (pr_scroll + alto < prm_alto) for (int k = 0; k < 18; ++k) fb_fill_rect_alpha(x0 - 8, y0 + alto - 1 - k, ancho + 24, 1, ((uint32_t)(255 - k * 14) << 24) | 0x00030714u);
+    if (prm_alto > alto) {
+        int32_t bh = alto * alto / prm_alto; if (bh < 24) bh = 24;
+        int32_t by = y0 + (alto - bh) * pr_scroll / (prm_alto - alto);
+        fb_fill_rrect_aa(x0 + ancho + 14, y0, 3, alto, 1, 0x40334155u);
+        fb_fill_rrect_aa(x0 + ancho + 13, by, 5, bh, 2, pr_auto ? 0x9064748Bu : 0xE07DD3FCu);
+    }
+}
+#else
+static int prm_prepara(int32_t ancho) { (void)ancho; return 0; }
+static void prm_avanza(void) { }
+static void prm_dibuja(int32_t x0, int32_t y0, int32_t ancho, int32_t alto) { (void)x0; (void)y0; (void)ancho; (void)alto; }
+#endif
+/* SOMA_334_ORBE_MD fin */
+
 /* ---------------------------------------------------------------------------------------------- todo junto */
 #define PR_BARRA_MS 12000u                                  /* la barra sigue a la vista 12 s despues de la ultima fase */
 static int pr_barra_visible(void)
@@ -736,6 +897,7 @@ static int her_pr_dibuja(uint32_t cur_w, uint32_t cur_h, uint32_t orb_cy)
     int32_t y0 = barra_y + 32, fondo = (int32_t)cur_h - 40;
     if (fondo - y0 < 60) return 0;
     pr_vista = fondo - y0;
+    if (prm_prepara(ancho)) { prm_avanza(); prm_dibuja(x0, y0, ancho, pr_vista); return 1; }   /* SOMA_334_ORBE_MD */
     pr_prepara((uint32_t)ancho);
     if (!pr_listo) return 0;                                             /* sin memoria: lo de antes */
     pr_avanza();

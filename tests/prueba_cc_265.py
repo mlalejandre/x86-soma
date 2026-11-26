@@ -103,14 +103,19 @@ int main(void)
 
 
 def a_python(nombre, c):
-    """script de Python que escribe el programa en C (sin ';', '%' ni barras invertidas en la orden)"""
-    t = c.replace(';', '@').replace('%', '$').replace('\\', '`')
-    assert '"""' not in t
-    py = 'T = """' + t + '"""\n' + f"open('/workspace/{nombre}', 'w').write(T.replace('@', chr(59)).replace('$', chr(37)).replace('`', chr(92)))\n"
-    return py.replace('\n', '\\n').replace('"', '\\"').replace(',', ',,')
+    """SOMA_324_PRUEBA_CC: ordenes que escriben el programa en C a traves de Python. El C va en HEXADECIMAL y por trozos de 400
+    bytes: asi la orden no lleva ';' (separa ordenes), '$' (la consola expande variables: antes se cambiaba '%' por '$' y "%d"
+    llegaba vacio), ni barras, y ninguna orden pasa de la linea de 1 KiB del lector de fw_cfg (antes win.c no llegaba a escribirse)."""
+    b = c.encode('ascii')
+    ordenes = []
+    for k in range(0, max(len(b), 1), 400):
+        h = b[k:k + 400].hex()
+        py = f"h = '{h}'\nopen('/workspace/{nombre}', '{'w' if k == 0 else 'a'}').write(''.join(chr(int(h[i:i + 2], 16)) for i in range(0, len(h), 2)))\n"
+        ordenes += [f'write /workspace/g.py "{py.replace(chr(10), chr(92) + "n").replace(",", ",,")}"', 'python g.py']
+    return ordenes
 
 
-ORDENES = ['@4000'] + [x for n, c in PROGRAMAS.items() for x in (f'write /workspace/g.py "{a_python(n, c)}"', 'python g.py')] + [
+ORDENES = ['@4000'] + [x for n, c in PROGRAMAS.items() for x in a_python(n, c)] + [
     'cc',
     'cc -run hola.c uno dos',
     'cc hola.c',

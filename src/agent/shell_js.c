@@ -6,7 +6,8 @@
 #if defined(__x86_64__)
 #include "vmm.h"
 #include "pmm.h"
-extern const uint8_t _binary_jsrun_elf_start[], _binary_jsrun_elf_end[];
+#include "progz.h"
+PROGZ_DECL(jsrun);                                          /* SOMA_314_PROGZ: jsrun.elf va comprimido en la imagen */
 #define JS_HEAP_MIB 160u           /* debe coincidir con JS_HEAP_MIB de src/user/jsrun.c */
 
 /* lanza jsrun con su region de memoria bajo demanda y espera. out != 0: salida y entrada propias (programador). < -1000000: no se pudo lanzar */
@@ -20,8 +21,8 @@ static int64_t js_proc(uint32_t ms, const char *args, char *out, uint32_t cap, c
     if (!r.frames) return -1000001;
     for (uint32_t k = 0; k < r.npages; ++k) r.frames[k] = 0;
     int err = 0;
-    int idx = usermode_exec_region("js", _binary_jsrun_elf_start, (size_t)(_binary_jsrun_elf_end - _binary_jsrun_elf_start), ms, args,
-                                   USER_SYS_PYTHON, &r, &err);
+    int idx = -2;                                                    /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */
+    { struct progz pz; if (progz_abre(PROGZ(jsrun), "js", &pz) == 0) { idx = usermode_exec_region("js", pz.elf, pz.len, ms, args, USER_SYS_PYTHON, &r, &err); progz_cierra(&pz); } }
     int64_t code = -1000002;
     if (idx >= 0) {
         int guest = 0;
@@ -29,7 +30,7 @@ static int64_t js_proc(uint32_t ms, const char *args, char *out, uint32_t cap, c
         else guest = console_capture_active() && console_capture_guest(usermode_proc_tid(idx));
         g_python_stopped = 0;
         g_python_idx = idx;                                    /* Esc en el terminal lo para, como a python */
-        code = usermode_wait(idx);
+        code = guest ? shell_espera_proc(idx) : usermode_wait(idx);   /* SOMA_333_SALIDA */
         g_python_idx = -1;
         if (guest) (void)console_capture_guest(0);
         if (usermode_python_window_take()) gui_soma_win_close();

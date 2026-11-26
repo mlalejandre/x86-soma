@@ -18,6 +18,11 @@
 #include "hwscan.h"   /* SOMA_156_T480S */
 #endif
 #include "image.h"
+#include "discos.h"  /* SOMA_331_DISCOS */
+#include "noticias.h"  /* SOMA_337_NOTICIAS */
+#include "agentes_reg.h"  /* SOMA_338_AGENTES */
+#include "hora.h"    /* SOMA_332_HORA */
+#include "zona.h"
 #include "fb.h"
 #include "usermode.h"
 #include "elf.h"
@@ -39,6 +44,7 @@
 #if defined(__x86_64__)
 #include "web_r3.h"
 #include "voz_sys.h"   /* SOMA_241_VOZ */
+#include "ia_sys.h"    /* SOMA_329_IA_LOCAL */
 int browser_r3_wanted(void); int browser_r3_active(void);
 #endif
 #ifdef __x86_64__
@@ -49,6 +55,7 @@ int browser_r3_wanted(void); int browser_r3_active(void);
 #include "console.h"
 #include "fs.h"
 #include "coder_app.h"
+#include "coder_run.h"   /* SOMA_333_SALIDA */
 #include "coder_core.h"            /* SOMA_275_HTML: cc_js_error */
 #include "docagent.h"   /* SOMA_248_DOC */
 #include "busca_web.h"  /* SOMA_251_RUTAS */
@@ -686,6 +693,19 @@ static int cmd_help(const char *args, char *out_buf, uint32_t max_out);
 #include "shell_seguridad.c"       /* IA, aislamiento y criptografia */
 #include "shell_dispositivos.c"    /* dispositivos */
 #include "shell_diagnostico.c"     /* diagnostico y pruebas */
+/* SOMA_333_SALIDA: un programa lanzado desde SOMA Studio (Python, C, JavaScript) puede durar mucho (un juego). Mientras su
+ * proceso de ring 3 corre, el hilo que lo espera suelta el cerrojo del shell: el agente y el resto de ordenes siguen
+ * funcionando (antes se quedaban esperando a que el programa terminara). Solo para el hilo que lo pide (shell_suelta_al_esperar);
+ * al terminar el proceso lo vuelve a tomar antes de seguir. */
+static int shell_espera_suelta(void);
+static void shell_espera_recupera(int s);
+static int64_t shell_espera_proc(int idx)
+{
+    int s = shell_espera_suelta();
+    int64_t c = usermode_wait(idx);
+    shell_espera_recupera(s);
+    return c;
+}
 #include "shell_procesos.c"        /* programas y procesos */
 #include "shell_archivos.c"        /* archivos */
 #include "shell_investiga.c"       /* SOMA_288_INVESTIGA: investigacion en internet (antes que shell_red.c) */
@@ -705,7 +725,8 @@ static const struct command_entry cmd_table[] = {
     { "vm",           cmd_lang_vm,      CMD_F_SAFE,   "Test y estado de la maquina virtual SOMA-VM" },
     { "programa",     cmd_programa,     CMD_F_SAFE,   "Crea o modifica un programa con IA (SOMA-LANG o Python): programa [archivo.soma|archivo.py] <mision>  (\"en Python\" elige Python)" },
     { "coderlog",     cmd_coderlog,     CMD_F_SAFE,   "Detalle del ultimo trabajo del programador (coderlog todo = con respuestas)" },
-    { "studio",       cmd_studio,       CMD_F_SAFE,   "Abre SOMA Studio (editor de codigo) [archivo]" },
+    { "studio",       cmd_studio,       CMD_F_SAFE,   "SOMA Studio: studio [archivo] | studio salida (lo que imprimio el programa)" },
+    { "ejecutar",     cmd_ejecutar,     CMD_F_NORMAL, "Ejecuta un programa como el boton de SOMA Studio: ejecutar <archivo> | ejecutar escribir <linea> | ejecutar parar" },   /* SOMA_333_SALIDA */
     { "coder",        cmd_lang_coder,   CMD_F_SAFE,   "Agente programador autonomo SOMA" },
     { "run",          cmd_lang_run,     CMD_F_SAFE,   "Ejecuta un script o tokeniza codigo .soma" },
     { "app",          cmd_lang_run,     CMD_F_SAFE,   "Lanza una aplicacion SOMA-LANG (.soma) en ventana" },
@@ -732,7 +753,8 @@ static const struct command_entry cmd_table[] = {
     { "fat",          cmd_fat,          CMD_F_SAFE,   "Lee discos FAT12/16/32 (solo lectura): fat | fat ls <dev> [ruta] | fat cat <dev> <ruta> | fat get <dev> <ruta> <destino>" },
     { "blk",          cmd_blk,          CMD_F_SAFE,   "Discos (virtio/AHCI/NVMe): blk | blk read <dev> <lba> | blk copy <o> <lba> <d> <lba> <n> | blk test" },
     { "ram",          cmd_ram,          CMD_F_SAFE,   "Memoria RAM: total/usada/libre, barra y heap (-s resumen, -v desglose; alias: free)" },
-    { "date",         cmd_date,         CMD_F_SAFE,   "Fecha y hora real UTC desde el reloj CMOS RTC" },
+    { "date",         cmd_date,         CMD_F_SAFE,   "Fecha y hora locales (la zona se elige con hora zona)" },
+    { "hora",         cmd_hora,         CMD_F_NORMAL, "Hora: hora | hora zona <ciudad o UTC+2> | hora zonas | hora reloj utc|local" },   /* SOMA_332_HORA */
     { "sysinfo",      cmd_sysinfo,      CMD_F_SAFE,   "Resumen del sistema: uptime, RAM, almacenamiento, hilos y red" },
     { "sys",          cmd_sysinfo,      CMD_F_ALIAS | CMD_F_SAFE, "Alias de sysinfo" },
     { "whoami",       cmd_whoami,       CMD_F_SAFE,   "Muestra el usuario actual" },
@@ -773,6 +795,7 @@ static const struct command_entry cmd_table[] = {
     { "big",          cmd_big,          CMD_F_NORMAL, "Almacen de archivos grandes: big info|format yes|ls|mkdir|rm|mv|stat|cat|put|get|write|truncate|fsck|bench" },
     { "exec",         cmd_exec,         CMD_F_NORMAL, "Ejecuta un programa ELF de usuario (ring 3): exec [-b] /bin/hello.elf [plazo_ms]" },
     { "habla",        cmd_habla,        CMD_F_NORMAL, "Texto a voz (voz de Piper): habla texto | habla instalar | habla parar | habla (estado)" },
+    { "ia",           cmd_ia,           CMD_F_NORMAL, "Motor de IA local (llama.cpp en ring 3): ia estado | modelos | instalar <nombre> | chat <modelo> <texto> | embed <modelo> <texto> | parar" },   /* SOMA_329_IA_LOCAL */
     { "voz",          cmd_voz,          CMD_F_NORMAL, "Voz a texto (whisper.cpp, espanol): voz archivo.wav | voz ultima | voz instalar | voz modelo. Opciones: -T marcas de tiempo, -l idioma, -v detalles" },
     { "python",       cmd_python,       CMD_F_NORMAL, "Python (MicroPython en ring 3; ventanas con from soma import win): python | python script.py [args] | python -c \"codigo\". Rutas relativas: /workspace" },
     { "cc",           cmd_cc,           CMD_F_NORMAL, "Compilador de C (TinyCC en ring 3; ventanas con #include <soma.h>): cc hola.c | cc -run hola.c [args] | cc -run hola.elf | cc a.c b.c -o x.elf. Rutas relativas: /workspace" },   /* SOMA_265_CC */
@@ -794,7 +817,7 @@ static const struct command_entry cmd_table[] = {
     { "dhcp",         cmd_dhcp,         CMD_F_SAFE,   "Pide IP, mascara, puerta de enlace y DNS al router por DHCP" },
     { "netif",        cmd_netif,        CMD_F_SAFE,   "Interfaces de red: netif | netif usar <eth0|wlan0|virtio0>" },
     { "wpa",          cmd_wpa,          CMD_F_SAFE,   "WPA2: wpa (autoprueba de la criptografia) | wpa psk <ssid> <clave>" },
-    { "llm-config",   cmd_llm_config,   CMD_F_NORMAL, "Modelo de lenguaje: llm-config | proveedor <local|openai|claude|gemini> | servidor | modelo | clave | modelos | probar" },
+    { "llm-config",   cmd_llm_config,   CMD_F_NORMAL, "Modelo de lenguaje: llm-config | proveedor <local|openai|claude|gemini|soma> | servidor | modelo | clave | modelos | probar" },
 #if defined(__x86_64__)
     { "navegador-aislado", cmd_nav_aislado, CMD_F_NORMAL, "Motor del navegador en un proceso de ring 3: navegador-aislado | on | off" },
     { "webr3",        cmd_webr3,        CMD_F_NORMAL, "DEPURACION: carga una URL con el motor del navegador en ring 3 (sin interfaz)" },
@@ -910,6 +933,9 @@ static const struct command_entry cmd_table[] = {
     { "terminal",     cmd_terminal,     CMD_F_SAFE,   "Abre la ventana del terminal de la GUI (barra de desplazamiento, seleccion, copiar/pegar, zoom)" },
     { "media",        cmd_media,        CMD_F_SAFE,   "Reproductor multimedia (video AVI y audio WAV del almacen BIGFS): media gui|list|play|pause|stop|seek|status" },
     { "youtube",      cmd_youtube,      CMD_F_NORMAL, "YouTube: youtube [busqueda] | servidor <ip[:puerto]>|auto | clave <texto> | calidad 240|360|480 | fps N | modo nativo|servicio | mp4 <direccion> | ia on|off | ver N | transcribir | subtitulos | resumen | pregunta <texto> | idioma X | minutos N | contexto N | estado" },
+    { "agentes",      cmd_agentes,      CMD_F_SAFE,   "Agentes: la mision en curso, los especialistas, las misiones recientes y la actividad" },   /* SOMA_338_AGENTES */
+    { "noticias",     cmd_noticias,     CMD_F_SAFE,   "Noticias: noticias (abre la aplicacion) | <categoria> | resumen <categoria> | guardar <categoria> | categorias a,b,c | lugar <ciudad> | fuente anadir <url>" },   /* SOMA_337_NOTICIAS */
+    { "discos",       cmd_discos,       CMD_F_NORMAL, "Discos: discos (abre la aplicacion) | lista | desbloquear | formatear | nueva | borrar | formatear-part | grabar" },   /* SOMA_331_DISCOS */
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
     { "agenda",       cmd_agenda,       CMD_F_SAFE,   "Calendario: agenda a\xC3\xB1" "adir el miercoles dia 6 a las 13 horas futbol | hoy | ma\xC3\xB1" "ana | semana | mes | borrar N | abrir | avisos | exportar | importar" },
     { "correo",       cmd_correo,       CMD_F_SAFE,   "Correo electr\xC3\xB3nico (IMAP/SMTP con IA): correo [abrir] | estado | sincroniza | busca <texto>" },   /* SOMA_295_CORREO */
@@ -926,7 +952,7 @@ static const struct command_entry cmd_table[] = {
     { "irq",          cmd_irq,          CMD_F_SAFE,   "Interrupciones: modo PIC/APIC, reloj, rutas del IOAPIC y contadores" },
     { "bateria",      cmd_bateria,      CMD_F_SAFE,   "Bateria (carga, autonomia, salud), cargador y tapa por ACPI" },
     { "escritorio",   cmd_escritorio,   CMD_F_SAFE,   "Escritorio: escritorio reiniciar devuelve iconos y gadget a su sitio | escritorio prueba [n] abre y cierra n veces cada aplicacion y mira la memoria" },
-    { "orbe",         cmd_orbe,         CMD_F_SAFE,   "Orbe del escritorio: coste de cada parte del fotograma y fps | orbe prueba (identico con 1 y con todos los nucleos)" },
+    { "orbe",         cmd_orbe,         CMD_F_SAFE,   "Orbe del escritorio: coste de cada parte del fotograma y fps | orbe prueba (identico con 1 y con todos los nucleos) | orbe <archivo.md> (lo pone en el orbe, con formato)" },
     { "energia",      cmd_energia,      CMD_F_SAFE,   "Procesador: perfil (rendimiento/equilibrado/ahorro), temperatura, frecuencia real y consumo" },
     { "brillo",       cmd_brillo,       CMD_F_SAFE,   "Brillo de la pantalla y teclas Fn del ThinkPad: brillo | brillo 0-100 | brillo + | brillo -" },
     { "trackpad",     cmd_trackpad,     CMD_F_SAFE,   "Trackpad del portatil: gestos (dos dedos), toque, desplazamiento natural, velocidad" },
@@ -1317,6 +1343,21 @@ static int dispatch_depth_fallback = 0;
 static int dispatch_command_inner(const char *cmd_line, char *out_buf, uint32_t max_out);
 
 static struct kmutex shell_mx; static int shell_mx_init; static volatile uint32_t shell_mx_owner;
+static volatile uint32_t shell_suelta_tid;                 /* SOMA_333_SALIDA: tid + 1 del hilo que suelta el cerrojo al esperar */
+void shell_suelta_al_esperar(int on) { struct tcb *t = thread_current(); shell_suelta_tid = on && t ? t->tid + 1u : 0; }
+static int shell_espera_suelta(void)
+{
+    struct tcb *t = thread_current(); uint32_t me = t ? t->tid + 1u : 1u;
+    if (!shell_mx_init || me != shell_suelta_tid || shell_mx_owner != me) return 0;
+    shell_mx_owner = 0; kmutex_unlock(&shell_mx);
+    return 1;
+}
+static void shell_espera_recupera(int s)
+{
+    if (!s) return;
+    struct tcb *t = thread_current(); uint32_t me = t ? t->tid + 1u : 1u;
+    kmutex_lock(&shell_mx); shell_mx_owner = me;
+}
 int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
     struct tcb *self = thread_current();

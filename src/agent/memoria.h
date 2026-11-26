@@ -12,9 +12,11 @@ void memoria_agente_entra(void);                                                
 void memoria_agente_sale(void);
 int  memoria_busca_agente(const char *consulta, char *out, uint32_t max);            /* mem_search del agente */
 int  memoria_recuerda_agente(const char *texto, const char *fuente, char *out, uint32_t max);   /* mem_write del agente */
+int  memoria_guarda_en_cartucho(const char *nombre, const char *desc, const char *texto, const char *fuente, char *msg, uint32_t cap);   /* SOMA_337_NOTICIAS */
 
 /* La orden `memoria` (y `memoria ayuda`) */
 int  memoria_cmd(const char *args, char *out_buf, uint32_t max_out);
+int  memoria_prueba_emb(const char *url, const char *txt, uint32_t *dim);            /* SOMA_327: prueba del servidor de embeddings */
 void memoria_guarda_todo(void);                                                      /* apagado / disco sync */
 /* SOMA_283_MEMORIA_APP: para la aplicacion de Memoria (src/apps/memview.c). Leer y editar es inmediato (memoria_gui_entra/sale, con el cerrojo
  * de la memoria tomado: poco rato). Lo que tarda (LLM, servidor de embeddings, disco, borrar de verdad, cartuchos) se pide y lo hace un hilo. */

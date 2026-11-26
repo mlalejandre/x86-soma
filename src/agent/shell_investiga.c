@@ -10,7 +10,9 @@
  * El agente la usa sola cuando la peticion es de investigar o informarse (ar_investiga), y el modelo la tiene como herramienta.
  * Los pasos se ven en la barra de fases del orbe y en el chat (gui_fase_orden). */
 #include "web_lee.h"
+#include "web_aislado.h"   /* SOMA_312_WEB_AISLADA: el HTML y el JSON de Internet se leen en ring 3 */
 #include "agent_ruta.h"
+#include "inv_tema.h"  /* SOMA_336_INVESTIGA_TEMAS: fuentes e informe segun el tema */
 
 void gui_fase(const char *que);
 void gui_fase_orden(const char *linea);
@@ -20,6 +22,8 @@ static int sw_pre(const char *s, const char *p) { while (*p) if (*s++ != *p++) r
 static uint32_t sw_len(const char *s) { uint32_t n = 0; while (s[n]) n++; return n; }
 
 /* texto limpio de una pagina (0 = no se pudo) */
+/* SOMA_316_RED_AISLADA: las paginas y las busquedas se descargan con netsvc (ring 3: HTTP y TLS fuera del nucleo, sin las cookies
+ * del navegador). */
 static uint32_t sw_lee(const char *url0, char *out, uint32_t cap, char *tit, uint32_t tcap, uint32_t timeout_ms)
 {
     static struct wn_resp rs; struct wn_req rq;
@@ -43,17 +47,17 @@ static uint32_t sw_lee(const char *url0, char *out, uint32_t cap, char *tit, uin
     url[u] = 0;
     rq.url = url; rq.accept = "text/html,application/xhtml+xml"; rq.timeout_ms = timeout_ms; rq.max_body = 1536u * 1024u; rq.direct = 1;
     uint32_t n = 0;
-    if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body && rs.len > 0) {
+    if (wn_fetch_isolated(&rq, &rs) == 0 && rs.status == 200 && rs.body && rs.len > 0) {
         int html = !rs.ctype[0];
         for (const char *c = rs.ctype; *c; c++) if ((c[0] == 'h' && c[1] == 't' && c[2] == 'm' && c[3] == 'l') || (c[0] == 't' && c[1] == 'e' && c[2] == 'x' && c[3] == 't')) html = 1;
-        if (html) { char t2[160]; n = wl_texto(rs.body, rs.len, out, cap, t2, sizeof t2); if (t2[0] && tit && tcap) { uint32_t z = 0; while (t2[z] && z + 1 < tcap) { tit[z] = t2[z]; z++; } tit[z] = 0; } }
+        if (html) { char t2[160]; n = wl_texto_aislado(rs.body, rs.len, out, cap, t2, sizeof t2); if (t2[0] && tit && tcap) { uint32_t z = 0; while (t2[z] && z + 1 < tcap) { tit[z] = t2[z]; z++; } tit[z] = 0; } }
     }
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     return n;
 }
 
 /* Wikipedia + DuckDuckGo de una consulta: "- Titulo: resumen (url)" por resultado. Devuelve cuantos. */
-static int sw_busca(const char *consulta, char *res, uint32_t cap)
+static int sw_busca(const char *consulta, char *res, uint32_t cap, int tema, int reciente)
 {
     char enc[256]; bw_urlenc(consulta, enc, sizeof enc);
     static struct wn_resp rs; struct wn_req rq; char url[400]; uint32_t u, q = 0; int hits = 0;
@@ -62,27 +66,42 @@ static int sw_busca(const char *consulta, char *res, uint32_t cap)
     soma_str_put(url, sizeof url, &u, "https://es.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=3&srsearch=");
     soma_str_put(url, sizeof url, &u, enc);
     rq.url = url; rq.accept = "application/json"; rq.timeout_ms = 8000; rq.max_body = 65536; rq.direct = 1;
-    if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
-        static char w[2048]; int k = bw_parse_wikipedia(rs.body, "es", w, sizeof w, 3);
+    if (wn_fetch_isolated(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+        static char w[2048]; int k = bw_wikipedia_aislado(rs.body, "es", w, sizeof w, 3);
         if (k > 0) { soma_str_put(res, cap, &q, w); hits += k; }
     }
-    wn_free(&rs);
+    wn_free_isolated(&rs);
+    if (it_wiki_en(tema)) {                                       /* SOMA_336: ciencia, salud y tecnologia: tambien la Wikipedia en ingles */
+        memset(&rq, 0, sizeof rq); u = 0; url[0] = 0;
+        soma_str_put(url, sizeof url, &u, "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=2&srsearch=");
+        soma_str_put(url, sizeof url, &u, enc);
+        rq.url = url; rq.accept = "application/json"; rq.timeout_ms = 8000; rq.max_body = 65536; rq.direct = 1;
+        if (wn_fetch_isolated(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+            static char w[2048]; int k = bw_wikipedia_aislado(rs.body, "en", w, sizeof w, 2);
+            if (k > 0) { soma_str_put(res, cap, &q, w); hits += k; }
+        }
+        wn_free_isolated(&rs);
+    }
     memset(&rq, 0, sizeof rq); u = 0; url[0] = 0;
     soma_str_put(url, sizeof url, &u, "https://lite.duckduckgo.com/lite/?kl=es-es&q=");
     soma_str_put(url, sizeof url, &u, enc);
+    if (reciente == IT_RECIENTE_DIA) soma_str_put(url, sizeof url, &u, "&df=d");          /* SOMA_336: lo de hoy */
+    else if (reciente == IT_RECIENTE_SEMANA) soma_str_put(url, sizeof url, &u, "&df=w");  /* o de esta semana */
     rq.url = url; rq.accept = "text/html"; rq.timeout_ms = 8000; rq.max_body = 262144; rq.direct = 1;
-    if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
-        static char d[3072]; int k = bw_parse_ddg_lite(rs.body, d, sizeof d, 6);
+    if (wn_fetch_isolated(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+        static char d[3072]; int k = bw_ddg_aislado(rs.body, d, sizeof d, 6);
         if (k > 0) { soma_str_put(res, cap, &q, d); hits += k; }
     }
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     return hits;
 }
 
 static const char SYS_INV_Q[] =
     "Eres el investigador de SOMA. Te doy una pregunta o un tema. Devuelve de 2 a 4 busquedas web que, juntas, encuentren la informacion "
     "para responder bien: cortas (de 2 a 8 palabras), distintas entre si, en el idioma mas util (espanol o ingles). Una por linea, sin "
-    "numeros, sin comillas y sin ninguna explicacion.";
+    "numeros, sin comillas y sin ninguna explicacion. Segun el tema que se indica: en salud, una de las busquedas debe llevar el nombre de "
+    "una fuente sanitaria fiable (MedlinePlus, OMS, Ministerio de Sanidad); en deportes o actualidad, si se pregunta por algo reciente, "
+    "pon el mes y el ano o 'ultima jornada'; en ciencia o tecnologia, una de las busquedas en ingles.";
 static const char SYS_INV_R[] =
     "Eres el investigador de SOMA. Con las fuentes que te doy (texto de paginas web y resultados de busqueda, numerados [1], [2]...), "
     "responde a la pregunta del usuario en espanol con un informe claro en Markdown: empieza con un parrafo que conteste directamente; "
@@ -106,7 +125,7 @@ int soma_investiga(const char *pregunta, int profundo, char *out, uint32_t cap)
     uint64_t t0 = sw_ms();
     char *res = (char *)kmalloc(16384), *pag = (char *)kmalloc(SW_NPAG * (SW_PAG_TXT + 400)), *tmp = (char *)kmalloc(65536), *rep = (char *)kmalloc(24000);
     static char consultas[4][96]; int nc = 0;
-    static char urls[10][300]; static char tits[SW_NPAG][160]; static char purl[SW_NPAG][300]; int np = 0;
+    static char urls[16][300]; static char tits[SW_NPAG][160]; static char purl[SW_NPAG][300]; int np = 0;
     if (!res || !pag || !tmp || !rep) { soma_str_put(out, cap, &p, "Sin memoria para investigar."); goto fin; }
     res[0] = 0;
     gui_fase("buscar");
@@ -114,7 +133,12 @@ int soma_investiga(const char *pregunta, int profundo, char *out, uint32_t cap)
     llm_trace_tag("investiga");
     rep[0] = 0;
     char limpia[200]; ar_consulta(pregunta, limpia, sizeof limpia);
-    if (profundo && llm_chat_ex(SYS_INV_Q, pregunta, 0, 0, 200, rep, 1500, 120000u) == 1) {
+    /* SOMA_336_INVESTIGA_TEMAS: el tema decide las fuentes, el filtro de fecha y las instrucciones del informe */
+    int tema = it_tema(pregunta), reciente = it_reciente(pregunta, tema);
+    {   char l[96] = "tema "; uint32_t lp = 5; soma_str_put(l, sizeof l, &lp, it_nombre(tema)); if (reciente) soma_str_put(l, sizeof l, &lp, reciente == IT_RECIENTE_DIA ? " (de hoy)" : " (reciente)"); gui_fase_orden(l); }
+    char qp[640]; { uint32_t z = 0; qp[0] = 0; soma_str_put(qp, sizeof qp, &z, pregunta); soma_str_put(qp, sizeof qp, &z, "\n\nTema: "); soma_str_put(qp, sizeof qp, &z, it_nombre(tema)); if (reciente) soma_str_put(qp, sizeof qp, &z, reciente == IT_RECIENTE_DIA ? " (de hoy)" : " (reciente)"); }
+    /* 1200 fichas (antes 200: un modelo que razona las gastaba pensando y no proponia nada) y sin el razonamiento */
+    if (profundo && llm_chat_ex(SYS_INV_Q, qp, 0, 0, 1200, rep, 8000, 120000u) == 1 && it_sin_razonamiento(rep) > 0) {
         const char *c = rep;
         while (*c && nc < 3) {
             while (*c == ' ' || *c == '\n' || *c == '-' || *c == '*' || *c == '"' || (*c >= '0' && *c <= '9' && (c[1] == '.' || c[1] == ')'))) { if (*c >= '0' && *c <= '9') c++; c++; }
@@ -134,12 +158,13 @@ int soma_investiga(const char *pregunta, int profundo, char *out, uint32_t cap)
     for (int i = 0; i < nc; i++) {
         char l[140] = "search "; uint32_t lp = 7; soma_str_put(l, sizeof l, &lp, consultas[i]); gui_fase_orden(l);
         static char r1[6144];
-        if (sw_busca(consultas[i], r1, sizeof r1) > 0) soma_str_put(res, 16384, &rq_, r1);
+        if (sw_busca(consultas[i], r1, sizeof r1, tema, reciente) > 0) soma_str_put(res, 16384, &rq_, r1);
         if (sw_ms() - tb > 45000) break;                              /* tiempos de cada fase, no desde el principio (el modelo puede tardar) */
     }
     if (!res[0]) { soma_str_put(out, cap, &p, "No he encontrado nada en internet sobre eso (o no hay acceso a Wikipedia ni a DuckDuckGo)."); goto fin; }
     /* 3. leer las paginas */
-    int nu = wl_urls(res, urls, 10);
+    int nu = wl_urls(res, urls, 16);
+    nu = it_ordena(tema, urls, nu);                                   /* SOMA_336: primero las mejores fuentes para el tema */
     int maxp = profundo ? SW_NPAG : 3;
     uint64_t tp = sw_ms();
     for (int i = 0; i < nu && np < maxp && sw_ms() - tp < 50000; i++) {
@@ -178,8 +203,10 @@ int soma_investiga(const char *pregunta, int profundo, char *out, uint32_t cap)
             soma_str_put(pr, pc, &q, res);
             gui_fase("escribir");
             llm_trace_tag("investiga");
-            int ok = llm_chat_ex(SYS_INV_R, pr, 0, 0, 0, out, cap, 300000u);
+            static char sysr[2400]; { uint32_t z = 0; sysr[0] = 0; soma_str_put(sysr, sizeof sysr, &z, SYS_INV_R); soma_str_put(sysr, sizeof sysr, &z, it_instrucciones(tema, reciente)); }
+            int ok = llm_chat_ex(sysr, pr, 0, 0, 0, out, cap, 300000u);
             kfree(pr);
+            if (ok == 1 && it_sin_razonamiento(out) == 0) ok = 0;         /* SOMA_336: solo el informe (sin el razonamiento) */
             if (ok == 1) {
                 char seg[48]; uint32_t z = 0; seg[0] = 0; soma_str_put(seg, sizeof seg, &z, "\n\n_Investigado en ");
                 uint32_t s = (uint32_t)((sw_ms() - t0) / 1000); char num[12]; int k = 0; do { num[k++] = (char)('0' + s % 10); s /= 10; } while (s && k < 10);

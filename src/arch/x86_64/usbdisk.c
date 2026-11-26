@@ -23,6 +23,7 @@
 #include "exfat.h"
 #include "mem.h"
 #include "rtc.h"
+#include "hora.h"     /* SOMA_332_HORA */
 
 
 static struct kmutex g_lock __attribute__((aligned(16)));
@@ -423,7 +424,7 @@ static void *u_alloc(uint32_t n) { return kmalloc(n); }
 static void u_free(void *p) { kfree(p); }
 static uint32_t u_now(void)
 {
-    struct rtc_time t; rtc_get_datetime(&t);
+    struct rtc_time t; hora_local(&t);           /* SOMA_332_HORA: FAT y exFAT guardan la hora local (como Windows) */
     uint32_t y = t.year >= 1980 ? (uint32_t)t.year - 1980 : 0;
     return (y << 25) | ((uint32_t)t.month << 21) | ((uint32_t)t.day << 16) | ((uint32_t)t.hour << 11) | ((uint32_t)t.min << 5) | ((uint32_t)t.sec / 2);
 }

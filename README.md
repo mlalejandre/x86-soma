@@ -6,6 +6,11 @@ SOMA (Sistema Operativo Multi-Agente) es un sistema operativo experimental de 64
 
 Diseñado desde el hardware como entorno nativo para agentes de Inteligencia Artificial, SOMA integra un escritorio gráfico TrueColor acelerado en Ring 0, multitarea multiventana, pila de red TCP/IP y almacenamiento persistente.
 
+<!-- SOMA_339_GITHUB -->
+**Lo que llega de fuera no se analiza en el núcleo.** Las descargas, el TLS, las páginas web, el correo, YouTube, los canales de
+noticias, el navegador, Python, C, JavaScript, el vídeo y el motor de IA local corren en **ring 3**, cada uno en su proceso y con
+lo justo para trabajar (ver *Red: el núcleo no habla con Internet*).
+
 > **🧪 Fase pre-beta (v0.3.0-prebeta).** El sistema se usa a diario en QEMU y en un ThinkPad T480s real, pero sigue siendo
 > experimental: guarda copia de tus datos y no lo instales como único sistema. Los cambios de esta fase están en
 > [CHANGELOG.md](CHANGELOG.md). Para informar de un fallo, abre una *issue* con lo que hiciste, el equipo y, si puedes, la
@@ -183,13 +188,17 @@ SOMA incorpora un servidor visual con doble búfer, recorte por tijera (clipping
 - Memoria: consola de la memoria de SOMA (monitor del ciclo de sueño, explorador de temas y recuerdos, búsqueda por significado, cartuchos y ajustes; ver *Memoria de SOMA*).
 - Maquetador: documentos HTML y LaTeX paginados como en papel (A4, A5, carta, 16:9, email), exportación a PDF/HTML/PNG y revisión con IA (ver *Documentos con acabado profesional*).
 - Terminal Gráfica: Consola interactiva con emulación ANSI, historial persistente, autocompletado y tuberías (| , > , && , ||).
-- SOMA Studio: editor de código para SOMA-LANG y Python con explorador, verificación, ejecución y peticiones a la IA; pestañas *Crear con IA*, *Proyectos* y *Registro*.
+- SOMA Studio: editor de código para SOMA-LANG y Python con explorador, verificación, ejecución y peticiones a la IA; pestañas *Crear con IA*, *Proyectos* y *Registro*. Lo que se ejecuta (Python, C, JavaScript) muestra su salida en el panel **Salida** del propio Studio, donde también se le escribe; Esc lo para.  <!-- SOMA_339_GITHUB -->
 - SOMA Media: reproductor de vídeo AVI (MJPG + PCM) y audio WAV del almacén BIGFS, con biblioteca, visualización del sonido y controles con nombre.
 - SOMA (chat): conversaciones con el agente al estilo de Open WebUI, con historial, Markdown, adjuntos y voz.  <!-- SOMA_297_GITHUB -->
 - Correo: correo electrónico IMAP/SMTP con TLS 1.3 y la IA dentro (búsqueda en lenguaje natural, resúmenes y respuestas redactadas; ver *Correo con IA*).
 - YouTube: buscar, ver y hablar con los vídeos (pestaña IA con resúmenes y minutos que se pulsan).
 - Paint con IA: el botón **IA** dibuja lo que le pidas, paso a paso, y el resultado se retoca a mano.
 - Navegador con visor de documentos: PDF, LaTeX (`.tex`) e imágenes dentro de la pestaña.
+- Noticias: categorías, noticias de tu ciudad y canales RSS propios, con un resumen con IA que cita sus fuentes (ver *Noticias*).  <!-- SOMA_339_GITHUB -->
+- Agentes: panel en vivo de la misión en curso, los ocho especialistas, las misiones recientes y la actividad; «Detener» y «Probar».
+- Discos: discos y particiones, tablas GPT/MBR, formato exFAT/FAT32 y grabar imágenes `.img`/`.iso` (ver *Discos*).
+- Ajustes → Fecha y hora: zona horaria con su horario de verano (ver *Fecha y hora*).
 
 Todas usan los **iconos vectoriales del sistema** (`src/ui/sysicon.h`): se dibujan con antialiasing a cualquier tamaño y se
 pueden ver todos en *Ajustes → Iconos*. Para añadir uno: una entrada nueva en `enum si_icon` (antes de `SI_COUNT`), su dibujo en
@@ -208,17 +217,75 @@ SOMA elige el camino más corto para cada petición (ver *Cómo decide SOMA el c
 - LCM: traductor de frases a órdenes dentro del núcleo, sin el modelo de lenguaje (ver *LCM*); también la charla corta.
 - mayordomo: agente operativo determinista y sin modelo: RAM, disco, archivos, carpetas y órdenes del sistema.
 - programador: crea y modifica programas SOMA-LANG y Python (compila, comprueba y, con modelos multimodales, revisa la ventana).
-- buscador: investigación web (Wikipedia y DuckDuckGo por HTTPS) y búsqueda en la memoria interna (BM25).
+- buscador: investigación web (Wikipedia y DuckDuckGo por HTTPS) y búsqueda en la memoria interna (BM25). `investiga` detecta
+  el tema (deportes, salud, ciencia, tecnología, actualidad), lee primero las fuentes fiables de ese tema y adapta el informe.  <!-- SOMA_339_GITHUB -->
 - maquetador: documentos con acabado profesional y PDF.
 - Pizarra (/agent/blackboard.txt): contexto compartido solo entre los agentes de una misma delegación.
 
+La aplicación **Agentes** (orden `agentes`) enseña qué especialista está trabajando ahora, por cuáles ha pasado la misión y cómo
+terminaron las últimas.  <!-- SOMA_339_GITHUB -->
+
 ---
 
-## 🌐 Red y Servicios Web en Ring 0
+## 🌐 Red: el núcleo no habla con Internet  <!-- SOMA_339_GITHUB -->
 
-- VirtIO-NET: Controlador de red virtualizado para entornos QEMU (PCI legacy en x86_64, MMIO en AArch64).
-- Pila TCP/IP Nativa: Ethernet, ARP dinámico, IPv4, ICMP (Ping), UDP y TCP de flujo confiable con retransmisión por temporizadores.
-- Servidor HTTPD: Servidor web integrado en Ring 0 sirviendo un Dashboard interactivo y API REST en el puerto 80 (mapeado a http://localhost:8090/).
+- VirtIO-NET, e1000e y WiFi Intel: controladores de red (PCI legacy en x86_64, MMIO en AArch64).
+- Pila TCP/IP nativa en el núcleo: Ethernet, ARP, IPv4, ICMP, UDP, TCP con retransmisión, DHCP y DNS.
+- Servidor HTTPD: Dashboard y API REST en el puerto 80 (mapeado a http://localhost:8090/).
+
+El núcleo mueve paquetes, pero **no interpreta nada que venga de Internet**. Eso lo hacen servicios de ring 3, un proceso por
+petición o por conexión, que mueren al terminar (una respuesta hostil no se queda para espiar la siguiente):
+
+| Servicio | Qué hace | Lo usan |
+|---|---|---|
+| `netsvc` | HTTP y HTTPS con su propio TLS 1.3 y verificación de certificados | `investiga`, `search`, `curl`, `descargar`, el LLM, los embeddings, las noticias, las imágenes del chat |
+| `tlstun` | Túnel TLS 1.3: el núcleo solo ve el texto en claro | Correo (IMAP/SMTP), YouTube nativo |
+| `leesvc` | Lee HTML, resultados de búsqueda, el JSON de YouTube y los canales RSS/Atom; solo puede llamar a `exit` | `investiga`, `search`, YouTube, Noticias |
+| `mimesvc` | Lee los correos (MIME, base64, juegos de caracteres, HTML); solo puede llamar a `exit` | Correo |
+| `imgdec` | Decodifica imágenes (PNG, GIF, JPEG, BMP); solo puede llamar a `exit` | Navegador, chat, visor de imágenes |
+| `pdfsvc` | Analiza los PDF y devuelve una lista de dibujo que el núcleo valida | Visor de documentos |
+| `websvc` | El motor web y el JavaScript del navegador | Navegador |
+| `zdec` | Descomprime los programas grandes de la imagen y comprueba su huella | Navegador, `python`, `cc`, `js`, `voz`, reproductor |
+
+Si un servicio no arranca o se cae, la petición falla y se dice; nunca se vuelve a hacer en el núcleo.
+
+---
+
+## 🧠 IA local: modelos pequeños sin servidor  <!-- SOMA_339_GITHUB -->
+
+SOMA trae un motor de IA (llama.cpp en ring 3, con AVX2 y varios hilos) para usar modelos GGUF sin ningún servidor:
+
+- **Embeddings de la memoria** con el mismo modelo que el servidor (`bge-m3`): `memoria config emb_motor local|servidor|auto`.
+- **LLM pequeños** como LFM2.5-350M: proveedor «En SOMA» en *Ajustes → Inteligencia artificial*.
+- Copia los `.gguf` en la partición **MODELOS** del pendrive y, en SOMA, `ia instalar <nombre>`. Para usarlos basta parte del
+  nombre: `lfm2` encuentra `LFM2.5-350M-Q4_K_M.gguf`.
+- `ia` enseña el estado; también `ia modelos`, `ia chat <modelo> <texto>`, `ia embed <modelo> <texto>` e `ia parar`. El modelo se
+  queda en memoria mientras se usa y se descarga solo tras 10 minutos sin uso.
+
+El núcleo sigue sin coma flotante: toda la aritmética del modelo está en el proceso de ring 3.
+
+## 📰 Noticias  <!-- SOMA_339_GITHUB -->
+
+La aplicación **Noticias** reúne titulares por categorías (portada, España, local, mundo, economía, tecnología, ciencia, salud,
+deportes, cultura) y de los canales RSS o Atom que añadas. Un clic abre la noticia en el Navegador; **Resumen** escribe con IA lo
+más importante de una categoría citando cada dato, y **Guardar en memoria** lo lleva al cartucho *Noticias*.
+
+```
+noticias tecnologia            noticias resumen deportes        noticias lugar Valencia
+noticias categorias portada,local,ciencia                       noticias fuente anadir <url>
+```
+
+## 💽 Discos  <!-- SOMA_339_GITHUB -->
+
+La aplicación **Discos** (y la orden `discos`) enseña los discos y sus particiones, crea tablas GPT o MBR, crea, borra y formatea
+particiones (exFAT o FAT32) y graba imágenes `.img`/`.iso` comprobando lo escrito. Para escribir en un disco hay que
+desbloquearlo tecleando su nombre dos veces; el disco del sistema no se desbloquea nunca.
+
+## 🕐 Fecha y hora  <!-- SOMA_339_GITHUB -->
+
+SOMA guarda la hora del equipo en UTC y la enseña en tu zona, con su horario de verano (55 zonas). Se elige en *Ajustes → Fecha y
+hora* o con `hora zona Madrid` (`hora zonas` las lista). Si el equipo también arranca Windows, que guarda la hora local:
+`hora reloj local`.
 
 ---
 
@@ -252,6 +319,7 @@ Detalles técnicos y la historia de cada corrección en [`docs/ESTABILIDAD.md`](
 ## 🚀 Puesta en Marcha
 
 Requisitos en el equipo anfitrión: Python 3, Docker y QEMU (`qemu-system-x86_64` y/o `qemu-system-aarch64`). La compilación se hace en contenedores Docker (`soma-toolchain`), no hace falta instalar compiladores.
+Para compilar sin Docker hacen falta `gcc`, `g++` (con su `libstdc++` estática), `make`, `grub-pc-bin`, `xorriso` y `mtools`; la CI comprueba las dos formas.  <!-- SOMA_339_GITHUB -->
 
 1. Clonar el repositorio:
 
@@ -337,7 +405,8 @@ La pantalla se abre en el navegador (http://localhost:6080/) y la consola serie 
     │   ├── fs/             # SOMAFS02, VFS virtual, BM25 y SRCFS
     │   ├── net/            # Pila IP, TCP, UDP, ARP, DNS, cliente HTTP y HTTPD
     │   ├── ui/             # Escritorio Her-Aura, compositor 2D y consola
-    │   ├── apps/           # Browser, Paint, Notepad, File Manager, MemView, Layout
+    │   ├── apps/           # Browser, Paint, Notepad, File Manager, MemView, Layout, Noticias, Discos, Agentes
+    │   ├── user/           # Programas de ring 3: servicios aislados (netsvc, leesvc, mimesvc...), python, cc, js, ia
     │   ├── fonts/          # Rasterizador vectorial TrueType e iconos
     │   └── agent/          # Agentes ReAct, integración LLM, shell y LCM (lcm_*.inc)
     ├── tools/pi5/          # Pi 5 emulada (QEMU raspi5b + RP1 simulado) y generador de la SD

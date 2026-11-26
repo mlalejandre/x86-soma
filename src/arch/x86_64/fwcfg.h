@@ -7,4 +7,6 @@
 uint32_t fwcfg_read_file(const char *name, char *out, uint32_t max);
 uint32_t fwcfg_open(const char *name);              /* SOMA_241_VOZ: tamano (0 = no esta) y deja el archivo seleccionado */
 void     fwcfg_read_seq(void *buf, uint32_t n);      /* SOMA_241_VOZ: siguientes n bytes del archivo seleccionado */
+void     fwcfg_reserva(void);                        /* SOMA_329: para leer un archivo por partes cediendo la CPU entre ellas */
+void     fwcfg_libera(void);
 #endif

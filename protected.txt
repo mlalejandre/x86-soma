@@ -80,3 +80,45 @@ src/core/pila_canario.h
 # SOMA_308_EFICIENCIA: memcpy/memset/memmove/memcmp del nucleo (las de mem.c, que ya estaba protegido)
 src/core/memfn.h
 src/core/memfn_gen.h
+# SOMA_311_CORREO_AISLADO: el lector de correo aislado y lo que el nucleo comprueba de su respuesta
+src/user/mimesvc.c
+src/apps/correo_sbx.h
+src/apps/correo_sbx.c
+# SOMA_312_WEB_AISLADA: el lector web aislado y lo que el nucleo comprueba de su respuesta
+src/user/leesvc.c
+src/agent/web_aislado.h
+src/agent/web_aislado.c
+# SOMA_314_PROGZ: los programas comprimidos de la imagen (lo que decide que ELF se ejecuta)
+src/arch/x86_64/progz.c
+src/arch/x86_64/progz.h
+src/core/progz_fmt.h
+# SOMA_315_YOUTUBE_AISLADO: lo que el nucleo comprueba de las respuestas de YouTube leidas en leesvc
+src/apps/yt_aislado.h
+src/apps/yt_aislado.c
+# SOMA_316_RED_AISLADA: el cliente HTTP y TLS aislado y lo que el nucleo le manda y acepta de el
+src/user/netsvc.c
+src/apps/web_net_sbx.c
+# SOMA_326_TUNEL_TLS: el tunel TLS de ring 3 y lo que el nucleo comparte con el
+src/user/tlstun.c
+src/apps/tun_tls.c
+src/apps/tun_tls.h
+src/core/tun_abi.h
+# SOMA_329_IA_LOCAL: el motor de IA local de ring 3 y lo que el nucleo comparte con el
+src/user/ia/ia.cpp
+src/user/ia/ia_rt.cpp
+src/user/ia/ia_extra.c
+src/user/ia/ia_libc2.c
+src/user/ia/ia.ld
+src/core/ia_abi.h
+src/arch/x86_64/ia_sys.c
+src/arch/x86_64/ia_sys.h
+# SOMA_331_DISCOS: lo que escribe tablas de particiones y formatea discos
+src/core/discos_core.c
+src/core/discos_core.h
+src/apps/discos.c
+src/apps/discos.h
+# SOMA_332_HORA: la hora del sistema (de ella dependen la validez de los certificados y las fechas de los archivos)
+src/core/hora.c
+src/core/hora.h
+src/core/zona.c
+src/core/zona.h

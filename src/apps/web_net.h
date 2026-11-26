@@ -37,6 +37,9 @@ int  wn_fetch(const struct wn_req *rq, struct wn_resp *rs);                  /* 
 /* PARCHE 142: lo mismo pero en el servicio aislado netsvc (x86_64; src/apps/web_net_sbx.c). Lo usa el kernel. */
 int  wn_fetch_isolated(const struct wn_req *rq, struct wn_resp *rs);
 void wn_free_isolated(struct wn_resp *rs);
+/* SOMA_327_RED_FUERA (solo x86_64): GET (body = 0) o POST JSON por netsvc, con el contrato de http_get / http_post_json */
+struct http_response;
+int  wn_http_simple(const char *url, const char *body, char *buf, uint32_t cap, struct http_response *r, uint32_t ms, const volatile int *cancel);
 void wn_free(struct wn_resp *rs);
 
 /* cookies */
@@ -54,4 +57,5 @@ int  wn_cookie_import(const void *in, uint32_t len);
 int  wn_gateway_caps(void);
 int  wn_https_unverified(void);                                              /* SOMA_176A: https directo (TLS propio) sin verificar certificados */
 const char *wn_tls_last_error(void);
+int wn_https_directo(void);   /* SOMA_316_RED_AISLADA: 1 si la red es real (https con TLS propio; en QEMU va por la pasarela) */
 #endif

@@ -75,3 +75,7 @@ correo.conf
 *.key
 *.p12
 *.pfx
+
+# SOMA_339_GITHUB: ningun .conf ni .env se sube (cualquiera puede llevar una clave: llm.conf, correo.conf, wifi...)
+*.conf
+.env*

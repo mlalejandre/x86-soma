@@ -82,6 +82,9 @@
 #define USER_SYS_PYTHON  (USER_SYS_DEFAULT | (1u << SYS_SOMA_CON) | (1u << SYS_SOMA_VFS))
 /* SOMA_244_HILOS: hilos de calculo en los nucleos secundarios (solo el proceso de voz; fuera del filtro de 32 bits) */
 #define SYS_SOMA_THR     32
+/* SOMA_329_IA_LOCAL: base de FS del proceso (como arch_prctl(ARCH_SET_FS) de Linux): fs(direccion) -> 0. Solo para los procesos con
+ * hilos de calculo (voz, motor de IA): libstdc++ compilada con protector de pila lee su canario en %fs:0x28. El nucleo no usa FS. */
+#define SYS_SOMA_FS      33
 #define USER_MAX_SOCKETS  4
 #define USER_MAX_FDS 8
 #define USER_ARGS_MAX 128
@@ -110,6 +113,7 @@ struct uexec_spec {          /* PARCHE 138: opciones de usermode_exec_ex */
     struct uregion *regions[USER_MAX_REGIONS];
     int             nregions;
     uint32_t        reserve_frames;    /* las regiones bajo demanda no crecen si el PMM bajaria de esto */
+    int             may_thr;           /* SOMA_329_IA_LOCAL: puede lanzar hilos de calculo y fijar su base de FS (como la voz) */
 };
 int usermode_exec_ex(const char *name, const void *img, size_t len, uint32_t max_ms, const struct uexec_spec *sp, int *err);
 int usermode_demand_fault(uint64_t cr2, uint64_t error_code);   /* 1 = pagina servida (reintentar la instruccion) */
@@ -121,7 +125,7 @@ int      usermode_proc_alive(int idx);                /* 1 si sigue vivo (no ter
 uint64_t usermode_proc_as(int idx);                   /* su espacio de direcciones (0 si no hay) */
 uint32_t usermode_proc_tid(int idx);                  /* tid de su hilo (0 si no hay) */
 
-#define USER_MAX_PROCS 8
+#define USER_MAX_PROCS 16   /* SOMA_326_TUNEL_TLS: antes 8; cada conexion TLS del correo y de YouTube es un proceso */
 /* SOMA_241_VOZ: AVX en ring 3 y region grande para el reconocimiento de voz (ver src/arch/x86_64/voz.c) */
 #define USER_FPU_BYTES 1024                       /* area FXSAVE (512) o XSAVE con AVX (832) */
 #define USER_HEAP_VA   (USER_BASE + 0x40000000ULL)  /* 1 GiB por encima de la base: fuera de la ventana de codigo y pila */
@@ -138,6 +142,7 @@ int  usermode_exec_region(const char *name, const void *img, size_t len, uint32_
  * El reloj puede quitar la CPU a un proceso SOLO mientras esta en ring 3 (el kernel sigue siendo cooperativo). */
 int     usermode_spawn(const char *name, const void *code, size_t len, uint32_t max_ms);   /* >=0: indice; <0 error */
 int64_t usermode_wait(int idx);
+int64_t usermode_wait_cancel(int idx, const volatile int *cancel);   /* SOMA_317_DESCARGAS_AISLADAS: *cancel = 1 lo para */
 
 /* SOMA_PARCHE_016_EXEC: carga un ejecutable ELF64 estatico (validado por elf_parse) como proceso nuevo.
  * Devuelve el indice o <0; *err recibe el codigo ELF_E_* si el archivo no es valido. */

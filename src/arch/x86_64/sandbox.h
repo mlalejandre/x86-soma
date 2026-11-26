@@ -37,6 +37,9 @@ struct sbx_call {
 void sbx_prepare(struct sbx_call *c, uint32_t op, const void *data, uint32_t len, uint32_t heap_bytes);
 int  sbx_run(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms);
 int  sbx_run_caps(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms, uint32_t extra_sysmask);   /* PARCHE 142 */
+int  sbx_lanza(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms, uint32_t extra_sysmask, struct uregion *sh, uint64_t sh_va, uint32_t sh_pages);   /* SOMA_326 */
+void sbx_termina(struct sbx_call *c, int idx, struct uregion *sh);                                                                                 /* SOMA_326 */
+int  sbx_run_caps_cancel(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_ms, uint32_t extra_sysmask, const volatile int *cancel);   /* SOMA_317 */
 int  sbx_copy_data(const struct sbx_call *c, void *dst, uint64_t n);   /* copia out.data (ya validado) */
 void sbx_release(struct sbx_call *c);
 
@@ -51,7 +54,9 @@ void sbx_release(struct sbx_call *c);
 #define SBX_SVC_TEST  2     /* sbxevil.elf (solo pruebas) */
 #define SBX_SVC_PDF   3     /* PARCHE 141: pdfsvc.elf: analizador PDF */
 #define SBX_SVC_NET   4     /* PARCHE 142: netsvc.elf: cliente HTTP (con la capacidad de red) */
-#define SBX_SVC_N     5
+#define SBX_SVC_MIME  5     /* SOMA_311_CORREO_AISLADO: mimesvc.elf: lee el correo (MIME, codificaciones, HTML) */
+#define SBX_SVC_LEE   6     /* SOMA_312_WEB_AISLADA: leesvc.elf: paginas web y resultados de busqueda para el agente */
+#define SBX_SVC_N     7
 #define SBX_SVC_POOL  2
 #define SBX_SVC_RECYCLE 256
 #define SBX_SVC_KEEP_HEAP_PAGES 2048   /* 8 MiB de monton se conservan (a cero) entre peticiones; el resto se devuelve */
@@ -70,10 +75,13 @@ extern const uint8_t _binary_sbxevil_elf_start[], _binary_sbxevil_elf_end[];
 extern const uint8_t _binary_zdec_elf_start[], _binary_zdec_elf_end[];
 extern const uint8_t _binary_pdfsvc_elf_start[], _binary_pdfsvc_elf_end[];
 extern const uint8_t _binary_netsvc_elf_start[], _binary_netsvc_elf_end[];
+extern const uint8_t _binary_mimesvc_elf_start[], _binary_mimesvc_elf_end[];   /* SOMA_311_CORREO_AISLADO */
+extern const uint8_t _binary_leesvc_elf_start[], _binary_leesvc_elf_end[];     /* SOMA_312_WEB_AISLADA */
 
 int sbx_selftest(void);   /* 0 = todo bien */
 int sbx_webtest(const char *url);
 int sbx_srcfstest(void);
 int sbx_nettest(const char *base);   /* PARCHE 142: netsvc + capacidad de red (tools/sbx_check.py --web) */
+int sbx_tlstest(const char *base, const char *pem, uint32_t pn);   /* SOMA_316_RED_AISLADA: HTTPS verificado en netsvc (tools/sbx_check.py --web) */
 int sbx_webref(const char *url);     /* PARCHE 142: huella del navegador */           /* PARCHE 140: SRCFS v02 (necesita el disco empaquetado: tools/sbx_check.py --srcfs) */   /* navegador real + red + servicio (QEMU, tools/sbx_check.py --web) */
 #endif

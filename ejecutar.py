@@ -519,11 +519,12 @@ def t480s_build(uid: str, gid: str) -> int:
         if run(["docker", "build", "--platform", "linux/amd64", "-t", DOCKER_IMAGE, "."],
                "CONSTRUYENDO TOOLCHAIN (con GRUB para UEFI)") != 0:
             return 1
-    if BUILD_DIR.exists():
+    # SOMA_328_COMPILA_RAPIDO: carpeta propia (build/t480s, con sus opciones) en vez de borrar build/ entero cada vez
+    if os.environ.get("SOMA_LIMPIO") == "1" and BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
     cflags = os.environ.get("SOMA_EXTRA_CFLAGS", "-DSOMA_WEB_ASYNC_IMAGES=1")
     cmd = ["docker", "run", "--rm", "--platform", "linux/amd64", "-u", f"{uid}:{gid}", "-v", f"{ROOT}:/soma", "-w", "/soma",
-           DOCKER_IMAGE, "make", "ARCH=x86_64", "PLATFORM=qemu_virt", f"EXTRA_CFLAGS={cflags}", "t480s-usb"]
+           DOCKER_IMAGE, "make", "ARCH=x86_64", "PLATFORM=qemu_virt", "BUILD=build/t480s", f"EXTRA_CFLAGS={cflags}", "t480s-usb"]
     print(f"\n{'=' * 72}\nCOMPILANDO SOMA PARA EL THINKPAD T480s\n{'=' * 72}\n\n$ {' '.join(cmd)}\n")
     p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     out = (p.stdout or "") + (p.stderr or "")
@@ -1083,7 +1084,9 @@ def main() -> int:
             print(f"Limite de {args.max_ciclos} ciclos alcanzado. Fin.")
             break
 
-        if BUILD_DIR.exists():
+        # SOMA_328_COMPILA_RAPIDO: ya no se borra build/ en cada ciclo (era una compilacion entera cada vez, en serie). El
+        # Makefile sabe que recompilar (cabeceras de verdad y opciones). SOMA_LIMPIO=1 fuerza empezar de cero.
+        if os.environ.get("SOMA_LIMPIO") == "1" and cycles == 1 and BUILD_DIR.exists():
             shutil.rmtree(BUILD_DIR)
         BUILD_DIR.mkdir(exist_ok=True)
 

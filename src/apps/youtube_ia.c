@@ -169,24 +169,26 @@ static void llm_why(char *o, uint32_t max)
 
 static void job_nl(const char *text)
 {
-    static char reply[1600];
+    static char reply[8192];                                     /* SOMA_335_YT_BUSQUEDAS: cabe el razonamiento y, detras, la respuesta */
     char q[YT_AI_QMAX][YT_AI_QLEN]; int n = 0;
     yt_scopy(ai_ask, sizeof ai_ask, text); ai_nq = 0; ai_sum[0] = 0; ai_why[0] = 0; ai_ver++;
     ai_state = AI_THINK; ia_seq++;
     reply[0] = 0;
-    int ok = llm_chat_ex(SYS_NL, text, 0, 0, 200, reply, sizeof reply, 120000u);   /* SOMA_286_YOUTUBE: 120 s (un modelo local tarda en cargar) */
+    /* SOMA_335_YT_BUSQUEDAS: 1200 fichas (antes 200: un modelo que razona las gastaba pensando y no llegaba a contestar) y solo
+     * la respuesta, sin el razonamiento */
+    int ok = llm_chat_ex(SYS_NL, text, 0, 0, 1200, reply, sizeof reply, 120000u);   /* SOMA_286_YOUTUBE: 120 s (un modelo local tarda en cargar) */
     if (nl_cancel) return;
-    if (ok == 1) { yt_plain(reply); n = yt_ai_queries(reply, q); }
-    if (!n) {                                                    /* sin LLM (o respuesta inservible): el texto, tal cual */
+    if (ok == 1) { yt_ai_respuesta(reply); yt_plain(reply); n = yt_ai_queries(reply, q); }
+    if (!n) {                                                    /* sin LLM (o respuesta inservible): lo que se busca, sacado de la peticion */
         if (ok == 1) yt_scopy(ai_why, sizeof ai_why, "el modelo no ha propuesto busquedas"); else llm_why(ai_why, sizeof ai_why);
-        yt_scopy(q[0], YT_AI_QLEN, text); n = 1;
+        yt_consulta_local(text, q[0], YT_AI_QLEN); n = 1;
         ai_state = AI_PLAIN;
     } else {
         for (int i = 0; i < n; ++i) yt_scopy(ai_q[i], YT_AI_QLEN, q[i]);
         ai_nq = n; ai_state = AI_SEARCH;
     }
     ia_seq++;
-    search_launch((const char (*)[YT_AI_QLEN])q, n, text);
+    search_launch((const char (*)[YT_AI_QLEN])q, n, ai_state == AI_PLAIN ? q[0] : text);   /* SOMA_335: sin IA se ve lo que se busco */
     uint32_t g = net_req;
     for (int w = 0; w < 2400 && items_gen != g && net_done != g && net_req == g && !nl_cancel; ++w) thread_sleep(50);   /* a que la ventana adopte la lista */
     for (int w = 0; w < 40 && net_req == g && items_gen != g && net_state != NS_ERROR && !nl_cancel; ++w) thread_sleep(50);
@@ -419,13 +421,13 @@ static int audio_fetch(const char *id, uint32_t secs, struct bigfs *fs)
     yt_path_audio(path, sizeof path, &conf, id, secs);
     int h = y_connect(err, sizeof err);
     if (h < 0) { ia_set(err, 1); return 0; }
-    if (y_send_get(h, path) != 0) { tcp_close(h); ia_set("No se pudo enviar la peticion al servicio", 1); return 0; }
+    if (y_send_get(h, path) != 0) { yc_fin(h, 0); ia_set("No se pudo enviar la peticion al servicio", 1); return 0; }
     uint32_t have = 0, body_off = 0; int status = 0, head = 0; uint64_t clen = 0, wrote = 0, last = ms(), shown = 0;
     uint32_t ino = 0; int fail = 0;
     const uint32_t CH = 65536u;
     for (;;) {
-        if (!ia_mine(id)) { tcp_abort(h); return 0; }
-        int n = tcp_recv(h, iabuf + have, (uint16_t)(CH + 16384u - have > 16384u ? 16384u : CH + 16384u - have), 80);
+        if (!ia_mine(id)) { yc_fin(h, 1); return 0; }
+        int n = yc_recv(h, iabuf + have, (uint16_t)(CH + 16384u - have > 16384u ? 16384u : CH + 16384u - have), 80);
         if (n > 0) { have += (uint32_t)n; last = ms(); }
         else if (n == TCP_EOF || n == TCP_ERR) {
             if (head && have) { if (bigfs_write(fs, ino, wrote, iabuf, have) != (int64_t)have) fail = 1; wrote += have; }
@@ -437,14 +439,14 @@ static int audio_fetch(const char *id, uint32_t secs, struct bigfs *fs)
             if (r < 0 || (r == 0 && have >= 8000)) { fail = 3; break; }
             if (r == 1) {
                 if (status != 200) {                             /* el cuerpo es el mensaje de error */
-                    for (int w = 0; w < 20 && have < 600; ++w) { n = tcp_recv(h, iabuf + have, 512, 60); if (n > 0) have += (uint32_t)n; else if (n == TCP_EOF || n == TCP_ERR) break; }
+                    for (int w = 0; w < 20 && have < 600; ++w) { n = yc_recv(h, iabuf + have, 512, 60); if (n > 0) have += (uint32_t)n; else if (n == TCP_EOF || n == TCP_ERR) break; }
                     y_errtext(err, sizeof err, (const char *)iabuf + body_off, have - body_off > 150 ? 150 : have - body_off, status);
-                    tcp_close(h); ia_set(err, 1); return 0;
+                    yc_fin(h, 0); ia_set(err, 1); return 0;
                 }
                 clen = yt_http_clen((const char *)iabuf, body_off);
                 uint32_t x;
                 if (bigfs_lookup(fs, WAV_PATH, &x) >= 0) bigfs_unlink(fs, WAV_PATH);
-                if (bigfs_create(fs, WAV_PATH, &ino) < 0) { tcp_abort(h); ia_set("No se pudo crear el archivo de audio en el almacen", 1); return 0; }
+                if (bigfs_create(fs, WAV_PATH, &ino) < 0) { yc_fin(h, 1); ia_set("No se pudo crear el archivo de audio en el almacen", 1); return 0; }
                 for (uint32_t i = body_off; i < have; ++i) iabuf[i - body_off] = iabuf[i];
                 have -= body_off; head = 1;
             }
@@ -463,7 +465,7 @@ static int audio_fetch(const char *id, uint32_t secs, struct bigfs *fs)
             thread_yield();
         }
     }
-    if (fail) tcp_abort(h); else tcp_close(h);
+    if (fail) yc_fin(h, 1); else yc_fin(h, 0);
     if (!fail && (wrote < 4000 || (clen && wrote < clen))) fail = 4;
     if (fail) {
         yt_put(err, sizeof err, &ep, fail == 1 ? "No se pudo escribir el audio en el almacen (sin sitio?)" : fail == 2 ? "El servicio YouTube no responde (tiempo agotado con el audio)"

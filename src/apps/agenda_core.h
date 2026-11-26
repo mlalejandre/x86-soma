@@ -39,7 +39,8 @@ int     ag_dias_mes(int y, int m);
 int64_t ag_min(int y, int mo, int d, int h, int mi);
 void    ag_desde_min(int64_t min, int *y, int *mo, int *d, int *h, int *mi);
 int64_t ag_dia_de(int64_t min);                        /* dia (desde 1970) de un instante */
-int64_t ag_utc_a_local(int64_t min_utc);               /* Europa/Madrid */
+int64_t ag_utc_a_local(int64_t min_utc);               /* con ag_desfase_fn; si no hay, Europa/Madrid */
+extern int (*ag_desfase_fn)(int64_t min_utc);         /* SOMA_332_HORA: minutos a sumar a UTC en ese instante (la zona elegida) */
 const char *ag_nombre_mes(int m);                      /* 1..12 */
 const char *ag_nombre_dia(int dsem);                   /* 0 lunes .. 6 domingo */
 const char *ag_nombre_cat(int c);

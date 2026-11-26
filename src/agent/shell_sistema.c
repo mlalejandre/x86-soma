@@ -493,12 +493,18 @@ static int cmd_tls(const char *args, char *out_buf, uint32_t max_out)
     memset(&rq, 0, sizeof rq); memset(&rs, 0, sizeof rs);
     rq.url = args; rq.timeout_ms = 20000; rq.max_body = 300000;
     kprint("tls: pidiendo "); kprint(args); kprint(wn_https_unverified() ? " (HTTPS directo, certificado SIN verificar: soma.tlsverificar=off)\n" : " (HTTPS directo con certificado verificado, o por la pasarela del anfitrion en QEMU)\n");
-    int r = wn_fetch(&rq, &rs);
-    if (r != 0) { kprint("tls: fallo: "); kprint(rs.err); const char *e = wn_tls_last_error(); if (e[0]) { kprint(" | "); kprint(e); } kprint("\n"); wn_free(&rs); return 1; }
+    int r = wn_fetch_isolated(&rq, &rs);           /* SOMA_317_DESCARGAS_AISLADAS: el mismo TLS que el agente y "descargar" (netsvc, ring 3) */
+    if (r != 0) {
+        kprint("tls: fallo: "); kprint(rs.err);
+#ifndef __x86_64__
+        { const char *e = wn_tls_last_error(); if (e[0]) { kprint(" | "); kprint(e); } }      /* aarch64: el cliente del nucleo */
+#endif
+        kprint("\n"); wn_free_isolated(&rs); return 1;
+    }
     kprint("tls: HTTP "); kprint_dec((uint32_t)rs.status); kprint(" | "); kprint(rs.ctype); kprint(" | "); kprint_dec(rs.len); kprint(" bytes | redirecciones "); kprint_dec((uint32_t)rs.redirects); kprint(rs.via_gateway ? " | por la pasarela\n" : " | directo\n");
     char t[161]; uint32_t k = 0; for (uint32_t i = 0; i < rs.len && k < 160; i++) { char c = rs.body[i]; t[k++] = (c >= 32 && c < 127) ? c : ' '; } t[k] = 0;
     kprint("tls: "); kprint(t); kprint("\n");
-    wn_free(&rs);
+    wn_free_isolated(&rs);
     return 1;
 }
 static int cmd_placa(const char *args, char *out_buf, uint32_t max_out)

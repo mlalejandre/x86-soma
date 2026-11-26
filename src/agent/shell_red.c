@@ -1,6 +1,29 @@
 /* shell_red.c: red: ping, dns, search y curl.
  * SOMA_233_SHELL_PARTIDO: NO se compila por separado. Lo incluye src/agent/shell.c en su sitio (una sola unidad de
  * compilacion: usa las funciones auxiliares y la tabla de ordenes de shell.c, y el nucleo compilado sale identico). */
+/* SOMA_327_RED_FUERA: las peticiones HTTP de search y curl van por netsvc (ring 3) en x86_64; en aarch64 (sin EL0), el cliente
+ * minimo de siempre. host = nombre para la URL (y la cabecera Host); 0 = la IP. */
+static int sr_get(const uint8_t ip[4], const char *host, uint16_t port, const char *path, char *buf, uint32_t cap, struct http_response *r, uint32_t ms)
+{
+#if defined(__x86_64__)
+    static char url[1200]; uint32_t k = 0;
+    static struct kmutex mx; static int mx_ok;
+    if (!mx_ok) { kmutex_init(&mx, "shell_red"); mx_ok = 1; }
+    kmutex_lock(&mx);
+    const char *pre = "http://"; while (*pre) url[k++] = *pre++;
+    if (host && *host) { for (const char *q = host; *q && k < 200; ++q) url[k++] = *q; }
+    else for (int i = 0; i < 4; ++i) { char d[4]; int n = 0; uint32_t v = ip[i]; do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) url[k++] = d[--n]; if (i < 3) url[k++] = '.'; }
+    url[k++] = ':'; { char d[6]; int n = 0; uint32_t v = port; do { d[n++] = (char)('0' + v % 10); v /= 10; } while (v); while (n) url[k++] = d[--n]; }
+    if (path[0] != '/') url[k++] = '/';
+    for (const char *q = path; *q && k + 1 < sizeof url; ++q) url[k++] = *q;
+    url[k] = 0;
+    int code = wn_http_simple(url, 0, buf, cap, r, ms, 0);
+    kmutex_unlock(&mx);
+    return code;
+#else
+    return http_get_host(ip, port, host, path, buf, cap, r, ms);
+#endif
+}
 static int cmd_ping(const char *args, char *out_buf, uint32_t max_out)
 {
     while (*args == ' ') args++;
@@ -94,7 +117,7 @@ static int cmd_search(const char *args, char *out_buf, uint32_t max_out)
     if (net_gateway[0] == 10 && net_gateway[1] == 0 && net_gateway[2] == 2 && net_gateway[3] == 2) {
         static char http_buf[8192];
         struct http_response resp;
-        int code = http_get_host(net_gateway, 8095, "10.0.2.2", path, http_buf, sizeof(http_buf), &resp, 3000);
+        int code = sr_get(net_gateway, 0, 8095, path, http_buf, sizeof(http_buf), &resp, 3000);
         if (code >= 200 && code < 400) {
             const char *body = (resp.body && resp.body[0]) ? resp.body : http_buf;
             if (body[0]) { soma_str_put(res, sizeof res, &rq_, body); hits = 1; }
@@ -102,26 +125,27 @@ static int cmd_search(const char *args, char *out_buf, uint32_t max_out)
     }
     if (!hits) {
         static struct wn_resp rs; struct wn_req rq; char url[400]; uint32_t u;
+        /* SOMA_316_RED_AISLADA: las dos descargas con netsvc (ring 3: HTTP y TLS fuera del nucleo, sin las cookies del navegador) */
         /* Wikipedia */
         memset(&rq, 0, sizeof rq); u = 0; url[0] = 0;
         soma_str_put(url, sizeof url, &u, "https://es.wikipedia.org/w/api.php?action=query&list=search&format=json&utf8=1&srlimit=5&srsearch=");
         soma_str_put(url, sizeof url, &u, enc);
         rq.url = url; rq.accept = "application/json"; rq.timeout_ms = 8000; rq.max_body = 65536; rq.direct = 1;
-        if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
-            static char w[3072]; int k = bw_parse_wikipedia(rs.body, "es", w, sizeof w, 5);
+        if (wn_fetch_isolated(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+            static char w[3072]; int k = bw_wikipedia_aislado(rs.body, "es", w, sizeof w, 5);   /* SOMA_312_WEB_AISLADA */
             if (k > 0) { soma_str_put(res, sizeof res, &rq_, "Wikipedia:\n"); soma_str_put(res, sizeof res, &rq_, w); hits += k; }
         }
-        wn_free(&rs);
+        wn_free_isolated(&rs);
         /* DuckDuckGo (version ligera, sin JavaScript) */
         memset(&rq, 0, sizeof rq); u = 0; url[0] = 0;
         soma_str_put(url, sizeof url, &u, "https://lite.duckduckgo.com/lite/?kl=es-es&q=");
         soma_str_put(url, sizeof url, &u, enc);
         rq.url = url; rq.accept = "text/html"; rq.timeout_ms = 8000; rq.max_body = 262144; rq.direct = 1;
-        if (wn_fetch(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
-            static char d[3072]; int k = bw_parse_ddg_lite(rs.body, d, sizeof d, 6);
+        if (wn_fetch_isolated(&rq, &rs) == 0 && rs.status == 200 && rs.body) {
+            static char d[3072]; int k = bw_ddg_aislado(rs.body, d, sizeof d, 6);              /* SOMA_312_WEB_AISLADA */
             if (k > 0) { soma_str_put(res, sizeof res, &rq_, "Web:\n"); soma_str_put(res, sizeof res, &rq_, d); hits += k; }
         }
-        wn_free(&rs);
+        wn_free_isolated(&rs);
     }
     if (!hits) {
         kprint("search: sin resultados (o sin acceso a internet)\n");
@@ -203,7 +227,7 @@ static int cmd_curl(const char *args, char *out_buf, uint32_t max_out)
 
         static char proxy_buf[4096];
         struct http_response proxy_resp;
-        int proxy_code = http_get_host(net_gateway, 8095, "10.0.2.2", proxy_path,
+        int proxy_code = sr_get(net_gateway, 0, 8095, proxy_path,
                                        proxy_buf, sizeof(proxy_buf), &proxy_resp, 40000);
         uint32_t out_pos = 0;
         if (out_buf && max_out) out_buf[0] = '\0';
@@ -232,7 +256,7 @@ static int cmd_curl(const char *args, char *out_buf, uint32_t max_out)
     if (is_ip) parse_ip(target, tip);
     else { if (!dns_resolve(target, tip, 3000)) { kprint("DNS error\n"); return 1; } hhdr = target; }
     static char http_buf[4096]; struct http_response resp;
-    int code = http_get_host(tip, port, hhdr, path, http_buf, sizeof(http_buf), &resp, 40000);
+    int code = sr_get(tip, hhdr, port, path, http_buf, sizeof(http_buf), &resp, 40000);
     if (code >= 0) {
         const char *disp = (resp.body && resp.body[0]) ? resp.body : http_buf;
         kprint("\n--- RESPUESTA HTTP ["); kprint_dec((uint32_t)code); kprint("] ---\n"); kprint(disp); kprint("\n");

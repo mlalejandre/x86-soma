@@ -185,39 +185,30 @@ static int cmd_ram(const char *args, char *out_buf, uint32_t max_out)
 }
 
 
-/* PARCHE_HORA_LS_V1: date en CEST (UTC+2) */
+/* SOMA_332_HORA: "hora" - zona horaria y reloj del equipo */
+static int cmd_hora(const char *args, char *out_buf, uint32_t max_out) { return hora_cmd(args, out_buf, max_out); }
+
+/* SOMA_332_HORA: date en la zona elegida (antes UTC+2 fijo todo el ano); "hora" cambia la zona */
 static int cmd_date(const char *args, char *out_buf, uint32_t max_out)
 {
     (void)args;
-    struct rtc_time t; rtc_get_datetime(&t);
-
-    /* Convertir UTC → CEST (UTC+2). Ajuste simple de hora/día. */
-    uint32_t y = t.year, mo = t.month, d = t.day;
-    uint32_t h = t.hour + 2, mi = t.min, s = t.sec;
-    if (h >= 24) {
-        h -= 24;
-        d += 1;
-        uint32_t dim = 31;
-        if (mo == 4 || mo == 6 || mo == 9 || mo == 11) dim = 30;
-        else if (mo == 2) dim = 28;
-        if (d > dim) { d = 1; mo += 1; }
-        if (mo > 12) { mo = 1; y += 1; }
-    }
-
-    char date_str[80]; uint32_t dp = 0;
-    soma_str_put(date_str, sizeof(date_str), &dp, "CEST: ");
-    soma_str_put_dec(date_str, sizeof(date_str), &dp, y); soma_str_putc(date_str, sizeof(date_str), &dp, '-');
-    if (mo < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
-    soma_str_put_dec(date_str, sizeof(date_str), &dp, mo); soma_str_putc(date_str, sizeof(date_str), &dp, '-');
-    if (d < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
-    soma_str_put_dec(date_str, sizeof(date_str), &dp, d); soma_str_putc(date_str, sizeof(date_str), &dp, ' ');
-    if (h < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
-    soma_str_put_dec(date_str, sizeof(date_str), &dp, h); soma_str_putc(date_str, sizeof(date_str), &dp, ':');
-    if (mi < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
-    soma_str_put_dec(date_str, sizeof(date_str), &dp, mi); soma_str_putc(date_str, sizeof(date_str), &dp, ':');
-    if (s < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
-    soma_str_put_dec(date_str, sizeof(date_str), &dp, s);
-    soma_str_put(date_str, sizeof(date_str), &dp, " CEST");
+    struct rtc_time t; hora_local(&t);
+    char z[16], n[64]; zona_texto_desfase(hora_desfase(), z, sizeof z); hora_nombre_zona(n, sizeof n);
+    char date_str[160]; uint32_t dp = 0;
+    soma_str_put_dec(date_str, sizeof(date_str), &dp, t.year); soma_str_putc(date_str, sizeof(date_str), &dp, '-');
+    if (t.month < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
+    soma_str_put_dec(date_str, sizeof(date_str), &dp, t.month); soma_str_putc(date_str, sizeof(date_str), &dp, '-');
+    if (t.day < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
+    soma_str_put_dec(date_str, sizeof(date_str), &dp, t.day); soma_str_putc(date_str, sizeof(date_str), &dp, ' ');
+    if (t.hour < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
+    soma_str_put_dec(date_str, sizeof(date_str), &dp, t.hour); soma_str_putc(date_str, sizeof(date_str), &dp, ':');
+    if (t.min < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
+    soma_str_put_dec(date_str, sizeof(date_str), &dp, t.min); soma_str_putc(date_str, sizeof(date_str), &dp, ':');
+    if (t.sec < 10) soma_str_putc(date_str, sizeof(date_str), &dp, '0');
+    soma_str_put_dec(date_str, sizeof(date_str), &dp, t.sec);
+    soma_str_put(date_str, sizeof(date_str), &dp, " "); soma_str_put(date_str, sizeof(date_str), &dp, z);
+    soma_str_put(date_str, sizeof(date_str), &dp, " ("); soma_str_put(date_str, sizeof(date_str), &dp, n);
+    soma_str_put(date_str, sizeof(date_str), &dp, hora_verano() ? ", horario de verano)" : ")");
 
     kprint(date_str); kprint("\n");
     uint32_t pos = 0;

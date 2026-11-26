@@ -41,7 +41,7 @@ TEMAS = {
     "voz": (["src/ui/gui_voz.c", "src/arch/x86_64/voz_sys.[ch]", "src/core/audio_sys.[ch]", "src/core/micrec.[ch]", "src/core/habla_texto.h",
              "src/user/voz/*.h", "src/user/voz/*.c", "src/user/voz/*.cpp", "src/user/voz/*.ld", "tests/test_tts_*.c", "tests/test_mic*.c"],
             "voz: dictado (whisper), lectura en voz alta (Piper), microfono y sonido"),
-    "orbe": (["src/ui/gui_prompter.c", "src/ui/gui_vortice.c", "src/ui/gui_cosmos.c", "src/ui/gui_agente.c", "src/ui/gui_fotograma.c",
+    "orbe": (["src/apps/chat_md.[ch]", "src/ui/gui_prompter.c", "src/ui/gui_vortice.c", "src/ui/gui_cosmos.c", "src/ui/gui_agente.c", "src/ui/gui_fotograma.c",
               "src/ui/gui.c", "src/ui/sysicon.[ch]", "tests/test_orbe_*.c"],
              "el orbe: texto de las respuestas, barra de fases, turnos del agente"),
     "llm": (["src/agent/llm.[ch]", "src/agent/llm_proto.[ch]", "src/agent/llm_limites*.inc", "src/agent/agent.[ch]", "src/net/http.[ch]",
@@ -51,7 +51,7 @@ TEMAS = {
                "el orquestador, las rutas de una peticion y el terminal"),
     "maquetador": (["src/agent/docagent.[ch]", "src/apps/docgen.[ch]", "src/apps/layout.[ch]", "tests/test_docgen_*.c"],
                    "documentos: redaccion, paginacion, revision y PDF"),
-    "programador": (["src/apps/coder_core.[ch]", "src/apps/coder_app.[ch]", "src/apps/coder_demo.h", "tests/test_coder_*.c", "tests/stubs_lang.c"],
+    "programador": (["src/apps/coder_core.[ch]", "src/apps/coder_app.[ch]", "src/apps/coder_run.[ch]", "src/apps/coder_demo.h", "tests/test_coder_*.c", "tests/stubs_lang.c"],
                     "el programador y SOMA Studio"),
     "lang": (["src/lang/*.[ch]", "src/ui/gui_lang.c", "src/user/python.c", "src/user/python/mpconfigport.h"],
              "SOMA-LANG (compilador y maquina virtual) y Python"),
@@ -63,6 +63,29 @@ TEMAS = {
                "el correo: IMAP/SMTP, la IA del correo y el orbe"),   # SOMA_297_GITHUB
     "ayuda": (["src/ui/ayuda.h", "src/ui/gui_ayuda.c", "tests/test_ayuda*_294.c", "docs/PARCHE_294_AYUDA.md"],
               "la bienvenida del orbe y la ayuda rapida (F1)"),   # SOMA_297_GITHUB
+    "ia": (["src/user/ia/*.cpp", "src/user/ia/*.c", "src/user/ia/*.ld", "src/core/ia_abi.h", "src/arch/x86_64/ia_sys.[ch]",
+            "tools/ia_modelos_prueba.py", "tests/prueba_ia_329.py", "docs/PARCHE_329_IA_LOCAL.md"],
+           "el motor de IA local (llama.cpp en ring 3): embeddings de la memoria y LLM pequenos"),   # SOMA_329_IA_LOCAL
+    "discos": (["src/core/discos_core.[ch]", "src/apps/discos.[ch]", "src/apps/discos_gui.[ch]", "src/core/blk.[ch]",
+                "tests/test_discos_331.c", "tests/prueba_discos_331.py", "docs/PARCHE_331_DISCOS.md"],
+               "la aplicacion Discos: particiones, formato e imagenes"),   # SOMA_331_DISCOS
+    "hora": (["src/core/hora.[ch]", "src/core/zona.[ch]", "src/arch/*/rtc.[ch]", "tests/test_zona_332.c", "tests/prueba_hora_332.py",
+              "docs/PARCHE_332_HORA.md"],
+             "la zona horaria y la hora del sistema"),   # SOMA_332_HORA
+    "noticias": (["src/apps/noticias*.[ch]", "src/user/leesvc.c", "tests/test_noticias_337.c", "tests/prueba_noticias_337.py",
+                  "docs/PARCHE_337_NOTICIAS.md"],
+                 "la aplicacion Noticias: RSS/Atom, categorias y resumen con IA"),   # SOMA_339_GITHUB
+    "agentes": (["src/agent/agentes_reg.[ch]", "src/apps/agentes_gui.[ch]", "src/agent/agent.c", "tests/test_agentes_338.c",
+                 "tests/prueba_agentes_338.py", "docs/PARCHE_338_AGENTES.md"],
+                "la aplicacion Agentes y el registro de misiones"),   # SOMA_339_GITHUB
+    "investiga": (["src/agent/shell_investiga.c", "src/agent/inv_tema.[ch]", "src/agent/busca_web.[ch]", "src/agent/web_lee.[ch]",
+                   "tests/test_inv_tema_336.c", "tests/test_investiga_288.c", "docs/PARCHE_336_INVESTIGA_TEMAS.md"],
+                  "investigar en internet: tema, fuentes e informe"),   # SOMA_339_GITHUB
+    "servicios": (["src/user/*svc.c", "src/user/tlstun.c", "src/user/zdec.c", "src/user/imgdec.c", "src/user/sbxrt.h",
+                   "src/arch/x86_64/sandbox.[ch]", "src/arch/x86_64/usermode.[ch]"],
+                  "servicios aislados de ring 3 y el sandbox"),   # SOMA_339_GITHUB
+    "youtube": (["src/apps/youtube*.[ch]", "src/apps/yt_*.h", "src/apps/yt_*.c", "tests/test_yt_busquedas_335.c", "tests/prueba_yt_335.py"],
+                "YouTube: busqueda con IA, ficha y reproduccion"),   # SOMA_339_GITHUB
     "compilar": (["Makefile", "ejecutar.py", "construyeimagen.py", "Dockerfile", "linker_*.ld", "protected.txt"],
                  "compilacion y arranque"),
 }
