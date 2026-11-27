@@ -151,7 +151,7 @@ const char *gui_app_title(int app)
     case APP_FILE_MANAGER: return "Archivos"; case APP_IMAGE_VIEWER: return "Imagenes"; case APP_NOTEPAD: return "Bloc de notas";
     case APP_AGENT_MEMORY: return "Memoria de agentes"; case APP_LAYOUT: return "Maquetador"; case APP_AGENTS: return "Agentes";
     case APP_PAINT: return "Paint"; case APP_CODER_APP: return "Coder"; case APP_MEDIA: return "Media"; case APP_SETTINGS: return "Ajustes";
-    case APP_PDF: return "Lector PDF"; case APP_SYSMON: return "Monitor del sistema"; case APP_DISCOS: return "Discos"; case APP_NOTICIAS: return "Noticias"; case APP_AGENDA: return "Calendario"; case APP_CORREO: return "Correo"; case APP_RECORDER: return "Grabadora"; case APP_CAMERA: return "Camara"; case APP_CAPTURE: return "Captura"; case APP_YOUTUBE: return "YouTube"; case APP_SOMA_APP: return "Programa SOMA"; case APP_DESKTOP: return "Escritorio";
+    case APP_PDF: return "Lector PDF"; case APP_SYSMON: return "Monitor del sistema"; case APP_DISCOS: return "Discos"; case APP_NOTICIAS: return "Noticias"; case APP_CONTACTOS: return "Contactos"; case APP_HOJA: return "Hoja de c\303\241lculo"; case APP_AGENDA: return "Calendario"; case APP_CORREO: return "Correo"; case APP_RECORDER: return "Grabadora"; case APP_CAMERA: return "Camara"; case APP_CAPTURE: return "Captura"; case APP_YOUTUBE: return "YouTube"; case APP_SOMA_APP: return "Programa SOMA"; case APP_DESKTOP: return "Escritorio";
     default: return "Aplicacion";
     }
 }
@@ -192,6 +192,40 @@ static void gui_open_correo__impl(void)
     g_pending_app = APP_CORREO;
     cmd_vsoma("", 0, 0);
     g_pending_app = APP_DESKTOP;
+}
+static void gui_open_contactos__impl(void)   /* SOMA_357_CONTACTOS */
+{
+    if (gui_win_open(APP_CONTACTOS)) return;
+    ensure_window_geom();
+    g_pending_app = APP_CONTACTOS;
+    cmd_vsoma("", 0, 0);
+    g_pending_app = APP_DESKTOP;
+}
+const int gui_app_contactos = APP_CONTACTOS;
+static void gui_open_hoja__impl(void)   /* SOMA_359_HOJA_VENTANA */
+{
+    if (gui_win_open(APP_HOJA)) return;
+    ensure_window_geom();
+    g_pending_app = APP_HOJA;
+    cmd_vsoma("", 0, 0);
+    g_pending_app = APP_DESKTOP;
+}
+void gui_open_hoja(const char *ruta)
+{
+    if (ruta && ruta[0]) {
+        char m[200]; int k = hoja_abre(ruta, m, sizeof m);
+        if (k < 0) { clip_toast(m); return; }
+        hoja_pon_actual(k);
+    }
+    int tok = gui_enter();
+    gui_open_hoja__impl();
+    gui_leave(tok);
+}
+void gui_open_contactos(void)
+{
+    int tok = gui_enter();
+    gui_open_contactos__impl();
+    gui_leave(tok);
 }
 void gui_open_correo(void)   /* SOMA_295_CORREO: desde el orbe y la orden `correo` */
 {

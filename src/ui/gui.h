@@ -23,6 +23,9 @@ extern const int gui_app_agenda;                /* SOMA_272_AGENDA */
 void gui_open_agenda(void);                     /* SOMA_272_AGENDA */
 extern const int gui_app_correo;                /* SOMA_295_CORREO */
 void gui_open_correo(void);                     /* SOMA_295_CORREO */
+void gui_open_contactos(void);                  /* SOMA_357_CONTACTOS */
+void gui_open_hoja(const char *ruta);           /* SOMA_359_HOJA_VENTANA: la ventana de la hoja (ruta 0 = el libro actual) */
+extern const int gui_app_contactos;             /* SOMA_357_CONTACTOS */
 /* PARCHE 091: el agente corre en su hilo; para tocar la pantalla pide turno (0 = no hacia falta) */
 int  gui_enter(void);
 void gui_leave(int tok);

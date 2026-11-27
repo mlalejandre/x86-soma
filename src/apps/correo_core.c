@@ -1129,6 +1129,20 @@ static void dirs_cab(const char *lista, char *out, uint32_t cap, uint32_t col0)
     co_free(d);
 }
 static void hexn(char *d, uint32_t cap, uint32_t v) { static const char H[] = "0123456789abcdef"; char t[9]; for (int i = 7; i >= 0; i--) { t[i] = H[v & 15]; v >>= 4; } t[8] = 0; co_cat(d, t, cap); }
+static int co_termina_ci(const char *s, const char *suf) { uint32_t a = co_len(s), b = co_len(suf); if (b > a) return 0; for (uint32_t i = 0; i < b; i++) { char x = s[a - b + i]; if (x >= 'A' && x <= 'Z') x = (char)(x + 32); if (x != suf[i]) return 0; } return 1; }
+const char *co_tipo_mime(const char *n)
+{
+    if (co_termina_ci(n, ".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (co_termina_ci(n, ".ods")) return "application/vnd.oasis.opendocument.spreadsheet";
+    if (co_termina_ci(n, ".csv")) return "text/csv";
+    if (co_termina_ci(n, ".pdf")) return "application/pdf";
+    if (co_termina_ci(n, ".png")) return "image/png";
+    if (co_termina_ci(n, ".jpg") || co_termina_ci(n, ".jpeg")) return "image/jpeg";
+    if (co_termina_ci(n, ".txt")) return "text/plain";
+    return "application/octet-stream";
+}
+/* anade s en out[p] (sin recorrer el mensaje: los adjuntos son grandes). Devuelve la nueva p o 0 si no cabe */
+static uint32_t co_pon(char *out, uint32_t cap, uint32_t p, const char *s) { if (!p) return 0; while (*s) { if (p + 2 >= cap) return 0; out[p++] = *s++; } out[p] = 0; return p; }
 uint32_t co_compone(struct co_envio *e, char *out, uint32_t cap)
 {
     uint32_t bl = co_len(e->cuerpo);
@@ -1157,9 +1171,19 @@ uint32_t co_compone(struct co_envio *e, char *out, uint32_t cap)
     for (uint32_t i = 0; i < bl; i++) { if ((uint8_t)e->cuerpo[i] >= 0x80) ascii = 0; if (e->cuerpo[i] == '\n') { if (col > maxl) maxl = col; col = 0; } else col++; }
     if (col > maxl) maxl = col;
     int qp = !ascii || maxl > 900;
+    int adj = e->adj && e->adj_n && e->adj_nombre && e->adj_nombre[0];
+    char frontera[40]; frontera[0] = 0;
+    if (adj) {
+        co_cpy(frontera, "=_soma_", sizeof frontera); hexn(frontera, sizeof frontera, e->azar ^ 0x5A5A1234u); hexn(frontera, sizeof frontera, e->azar * 2654435761u);
+        co_cat(out, "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"", cap); co_cat(out, frontera, cap);
+        co_cat(out, "\"\r\nX-Mailer: SOMA Correo\r\n\r\nEste mensaje tiene varias partes (MIME).\r\n--", cap); co_cat(out, frontera, cap);
+        co_cat(out, "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: ", cap);
+        co_cat(out, qp ? "quoted-printable" : "7bit", cap); co_cat(out, "\r\n\r\n", cap);
+    } else {
     co_cat(out, "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: ", cap);
     co_cat(out, qp ? "quoted-printable" : "7bit", cap);
     co_cat(out, "\r\nX-Mailer: SOMA Correo\r\n\r\n", cap);
+    }
     co_free(v);
     uint32_t p = co_len(out);
     if (p + 4 >= cap) return 0;
@@ -1167,6 +1191,21 @@ uint32_t co_compone(struct co_envio *e, char *out, uint32_t cap)
     else for (uint32_t i = 0; i < bl; i++) { if (e->cuerpo[i] == '\r') continue; if (e->cuerpo[i] == '\n') { if (p + 3 >= cap) return 0; out[p++] = '\r'; out[p++] = '\n'; } else { if (p + 2 >= cap) return 0; out[p++] = e->cuerpo[i]; } }
     if (p < 2 || out[p - 1] != '\n') { if (p + 3 >= cap) return 0; out[p++] = '\r'; out[p++] = '\n'; }
     out[p] = 0;
+    if (adj) {                                                          /* SOMA_360_HOJA_GRAFICOS: el adjunto */
+        char *n = (char *)co_alloc(1024); if (!n) return 0;
+        co_cab_enc(e->adj_nombre, n, 1024);
+        p = co_pon(out, cap, p, "--"); p = co_pon(out, cap, p, frontera);
+        p = co_pon(out, cap, p, "\r\nContent-Type: "); p = co_pon(out, cap, p, co_tipo_mime(e->adj_nombre)); p = co_pon(out, cap, p, "; name=\""); p = co_pon(out, cap, p, n);
+        p = co_pon(out, cap, p, "\"\r\nContent-Disposition: attachment; filename=\""); p = co_pon(out, cap, p, n); p = co_pon(out, cap, p, "\"\r\nContent-Transfer-Encoding: base64\r\n\r\n");
+        co_free(n);
+        for (uint32_t i = 0; p && i < e->adj_n; i += 57) {
+            uint32_t k = e->adj_n - i < 57 ? e->adj_n - i : 57;
+            if (p + 84 >= cap) { p = 0; break; }
+            uint32_t w = co_b64_enc(e->adj + i, k, out + p, cap - p); if (!w) { p = 0; break; }
+            p += w; out[p++] = '\r'; out[p++] = '\n'; out[p] = 0;
+        }
+        p = co_pon(out, cap, p, "--"); p = co_pon(out, cap, p, frontera); p = co_pon(out, cap, p, "--\r\n");
+    }
     return p;
 }
 int co_destinatarios(const struct co_envio *e, struct co_dir *out, int max)

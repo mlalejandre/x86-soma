@@ -1801,6 +1801,9 @@ static int fm_open_item(struct fm_item *it, char *out_path, uint32_t max_out) {
     default:
         break;
     }
+    if (fm_has_ext(it->name, "xlsx") || fm_has_ext(it->name, "xlsm") || fm_has_ext(it->name, "ods") || fm_has_ext(it->name, "csv") || fm_has_ext(it->name, "tsv") || fm_has_ext(it->name, "hoja")) {
+        gui_open_hoja(it->full_path); return FM_ACT_EXT;                                                             /* SOMA_359_HOJA_VENTANA */
+    }
     char p[FM_PATH];
     if (fm_stage(it, p, sizeof(p)) < 0) return 0;
     if (it->cat == FC_IMG) {

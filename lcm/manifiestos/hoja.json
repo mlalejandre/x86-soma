@@ -1,0 +1,223 @@
+{
+ "manifiesto": 1,
+ "origen": "hoja (parches 358-360: hoja de cálculo con gráficos, IA e integración con Contactos, Calendario y Correo)",
+ "ordenes": [
+  {
+   "id": "hoja_abrir",
+   "orden": "hoja ventana",
+   "peligrosa": false,
+   "frases": [
+    "(abre|ábreme|abreme|lanza|inicia) la hoja de cálculo",
+    "(abre|lanza|inicia) (el excel|excel|la app de hojas|la aplicación de hojas de cálculo)",
+    "hoja ventana",
+    "(quiero|necesito) (una hoja de cálculo|hacer una hoja de cálculo|usar la hoja de cálculo)",
+    "(saca|pon) la hoja de cálculo en pantalla",
+    "(abre|enséñame|muestra) la hoja"
+   ],
+   "pruebas": [
+    [
+     "abre la hoja de cálculo",
+     "hoja ventana"
+    ],
+    [
+     "lanza excel",
+     "hoja ventana"
+    ],
+    [
+     "quiero usar la hoja de cálculo",
+     "hoja ventana"
+    ],
+    [
+     "pon la hoja de cálculo en pantalla",
+     "hoja ventana"
+    ],
+    [
+     "ábreme la hoja de cálculo",
+     "hoja ventana"
+    ],
+    [
+     "inicia la aplicación de hojas de cálculo",
+     "hoja ventana"
+    ]
+   ]
+  },
+  {
+   "id": "hoja_contactos",
+   "orden": "hoja contactos",
+   "peligrosa": false,
+   "frases": [
+    "(pasa|pon|mete|exporta|lleva) (mis contactos|los contactos|la libreta) (a|en) (una hoja|una hoja de cálculo|un excel|excel)",
+    "(haz|hazme|crea|genera) (una hoja|una tabla|un excel) (con|de) (mis contactos|los contactos)",
+    "hoja contactos",
+    "(quiero|necesito) (mis contactos|los contactos) en (una hoja|un excel|una tabla)",
+    "(lista|tabla) de (mis contactos|los contactos) en (una hoja|excel)",
+    "(abre|saca) (mis contactos|los contactos) en la hoja de cálculo"
+   ],
+   "pruebas": [
+    [
+     "pasa mis contactos a una hoja de cálculo",
+     "hoja contactos"
+    ],
+    [
+     "hazme un excel con los contactos",
+     "hoja contactos"
+    ],
+    [
+     "quiero mis contactos en una tabla",
+     "hoja contactos"
+    ],
+    [
+     "crea una hoja con mis contactos",
+     "hoja contactos"
+    ],
+    [
+     "exporta los contactos a excel",
+     "hoja contactos"
+    ],
+    [
+     "saca los contactos en la hoja de cálculo",
+     "hoja contactos"
+    ]
+   ]
+  },
+  {
+   "id": "hoja_agenda",
+   "orden": "hoja agenda",
+   "peligrosa": false,
+   "frases": [
+    "(pasa|pon|mete|exporta|lleva) (mi agenda|el calendario|mis citas|las citas) (a|en) (una hoja|una hoja de cálculo|un excel|excel)",
+    "(haz|hazme|crea|genera) (una hoja|una tabla|un excel) (con|de) (mis citas|la agenda|el calendario)",
+    "hoja agenda",
+    "(quiero|necesito) (mis citas|la agenda|el calendario) en (una hoja|un excel|una tabla)",
+    "(lista|tabla) de (mis citas|los eventos) en (una hoja|excel)",
+    "(abre|saca) (mis citas|el calendario) en la hoja de cálculo"
+   ],
+   "pruebas": [
+    [
+     "pasa mi agenda a una hoja de cálculo",
+     "hoja agenda"
+    ],
+    [
+     "hazme un excel con mis citas",
+     "hoja agenda"
+    ],
+    [
+     "quiero el calendario en una tabla",
+     "hoja agenda"
+    ],
+    [
+     "crea una hoja con la agenda",
+     "hoja agenda"
+    ],
+    [
+     "exporta las citas a excel",
+     "hoja agenda"
+    ],
+    [
+     "saca el calendario en la hoja de cálculo",
+     "hoja agenda"
+    ]
+   ]
+  },
+  {
+   "id": "hoja_enviar",
+   "orden": "hoja enviar {T}",
+   "peligrosa": false,
+   "frases": [
+    "(envía|envia|manda|mándale|mandale) (la hoja|el excel|la hoja de cálculo|el libro) a {T}",
+    "(envía|manda) por correo (la hoja|el excel) a {T}",
+    "hoja enviar {T}",
+    "(prepara|escribe) un correo (a|para) {T} con (la hoja|el excel) adjunt[ao]",
+    "(adjunta|adjúntale) (la hoja|el excel) en un correo (a|para) {T}",
+    "(pásale|pasale) (la hoja|el excel) a {T} por correo"
+   ],
+   "valores_propios": {
+    "T": [
+     "ana@x.es",
+     "Luis",
+     "mi jefe",
+     "luis@empresa.com",
+     "Marta",
+     "contabilidad@empresa.es",
+     "Carlos García",
+     "mamá"
+    ]
+   },
+   "pruebas": [
+    [
+     "envía la hoja a ana@x.es",
+     "hoja enviar ana@x.es"
+    ],
+    [
+     "manda el excel a Luis",
+     "hoja enviar Luis"
+    ],
+    [
+     "mándale la hoja de cálculo a Marta",
+     "hoja enviar Marta"
+    ],
+    [
+     "prepara un correo a contabilidad@empresa.es con la hoja adjunta",
+     "hoja enviar contabilidad@empresa.es"
+    ],
+    [
+     "pásale el excel a Carlos García por correo",
+     "hoja enviar Carlos García"
+    ],
+    [
+     "envía por correo la hoja a mi jefe",
+     "hoja enviar mi jefe"
+    ]
+   ]
+  },
+  {
+   "id": "hoja_grafico",
+   "orden": "hoja grafico {T}",
+   "peligrosa": false,
+   "frases": [
+    "(haz|hazme|crea|pon|dibuja) un gráfico de {T}",
+    "(haz|hazme|crea|pon) un grafico de {T}",
+    "hoja grafico {T}",
+    "(quiero|necesito) un gráfico de {T}",
+    "(añade|mete|inserta) un gráfico de {T} (en la hoja|a la hoja)",
+    "(dibuja|representa) los datos (en|con) un gráfico de {T}"
+   ],
+   "valores_propios": {
+    "T": [
+     "columnas",
+     "barras",
+     "lineas",
+     "tarta",
+     "area",
+     "dispersion"
+    ]
+   },
+   "pruebas": [
+    [
+     "hazme un gráfico de columnas",
+     "hoja grafico columnas"
+    ],
+    [
+     "crea un gráfico de tarta",
+     "hoja grafico tarta"
+    ],
+    [
+     "quiero un gráfico de lineas",
+     "hoja grafico lineas"
+    ],
+    [
+     "inserta un gráfico de barras en la hoja",
+     "hoja grafico barras"
+    ],
+    [
+     "dibuja los datos en un gráfico de dispersion",
+     "hoja grafico dispersion"
+    ],
+    [
+     "pon un grafico de area",
+     "hoja grafico area"
+    ]
+   ]
+  }
+ ]
+}

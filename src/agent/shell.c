@@ -277,6 +277,19 @@ static void env_expand(const char *src, char *dst, uint32_t max_dst)
                 src++;
             }
             k_buf[kp] = '\0';
+            /* SOMA_359_HOJA_VENTANA: $A$1, $B5, D$5 son referencias absolutas de una formula, no variables: si no hay una variable
+             * con ese nombre, el texto se deja tal cual (antes "=D2/D$5" llegaba como "=D2/D") */
+            int defin = 0;
+            for (int i = 0; i < MAX_ENV_VARS && !defin; ++i) if (env_table[i].used && str_eq(env_table[i].key, k_buf)) defin = 1;
+            if (!defin) {
+                uint32_t q = 0; while (q < kp && q < 3 && ((k_buf[q] >= 'A' && k_buf[q] <= 'Z') || (k_buf[q] >= 'a' && k_buf[q] <= 'z'))) q++;
+                uint32_t d0 = q; while (q < kp && k_buf[q] >= '0' && k_buf[q] <= '9') q++;
+                if (q == kp && kp > 0 && (d0 > 0 || kp > d0) && (d0 == 0 || d0 <= 3)) {
+                    if (dp < max_dst - 1) dst[dp++] = '$';
+                    for (uint32_t z = 0; z < kp && dp < max_dst - 1; ++z) dst[dp++] = k_buf[z];
+                    continue;
+                }
+            }
             const char *val = env_get(k_buf);
             while (*val && dp < max_dst - 1) dst[dp++] = *val++;
         } else {
@@ -713,6 +726,8 @@ static int64_t shell_espera_proc(int idx)
 #include "shell_agente.c"          /* agentes y modelo */
 #include "shell_apps.c"            /* aplicaciones y portatil */
 #include "shell_agenda.c"          /* SOMA_272_AGENDA: calendario */
+#include "shell_contactos.c"       /* SOMA_357_CONTACTOS: libreta de contactos */
+#include "shell_hoja.c"            /* SOMA_358_HOJA: hoja de calculo */
 #include "shell_correo.c"          /* SOMA_295_CORREO: correo electronico */
 #include "shell_js.c"              /* SOMA_274_JS: JavaScript (orden js) */
 #include "shell_html.c"            /* SOMA_275_HTML: webs (orden html) */
@@ -939,6 +954,8 @@ static const struct command_entry cmd_table[] = {
     { "discos",       cmd_discos,       CMD_F_NORMAL, "Discos: discos (abre la aplicacion) | lista | desbloquear | formatear | nueva | borrar | formatear-part | grabar" },   /* SOMA_331_DISCOS */
     { "monitor",      cmd_monitor,      CMD_F_SAFE,   "Monitor del sistema: CPU, memoria, procesos, graficos, discos, red y hardware" },
     { "agenda",       cmd_agenda,       CMD_F_SAFE,   "Calendario: agenda a\xC3\xB1" "adir el miercoles dia 6 a las 13 horas futbol | hoy | ma\xC3\xB1" "ana | semana | mes | borrar N | abrir | avisos | exportar | importar" },
+    { "hoja",         cmd_hoja,         CMD_F_SAFE,   "Hoja de c\xC3\xA1lculo (XLSX, ODS, CSV): hoja ventana [archivo] | hoja contactos | hoja agenda [mes] | hoja enviar [email] | hoja grafico columnas A1:D5 | hoja nueva | abrir <archivo> | ver [rango] | pon B5 =SUMA(B1:B4) | calcula <f\xC3\xB3rmula> | guardar [archivo] | ordenar | filtrar | buscar" },   /* SOMA_358_HOJA */
+    { "contactos",    cmd_contactos,    CMD_F_SAFE,   "Contactos: contactos <nombre> | ver N | a\xC3\xB1" "adir Ana L\xC3\xB3" "pez, m\xC3\xB3" "vil 600.., email .. | editar N campo valor | telefono|email|cumplea\xC3\xB1" "os <nombre> | grupos | cumplea\xC3\xB1" "os | importar|exportar .vcf | abrir" },   /* SOMA_357_CONTACTOS */
     { "correo",       cmd_correo,       CMD_F_SAFE,   "Correo electr\xC3\xB3nico (IMAP/SMTP con IA): correo [abrir] | estado | sincroniza | busca <texto>" },   /* SOMA_295_CORREO */
     { "imagen",       cmd_imagen,       CMD_F_SAFE,   "Visor de imagenes: imagen [archivo] (PNG, JPEG, GIF, BMP de cualquier tamano)" },
     { "pdf",          cmd_pdf,          CMD_F_SAFE,   "Lector de PDF: pdf [archivo.pdf]" },
@@ -1494,13 +1511,16 @@ static int dispatch_command_inner(const char *cmd_line, char *out_buf, uint32_t 
     /* 1. Interceptor de Comandos Encadenados (';') */
     int semi_idx = -1;
     char s_quote = 0;
+    int s_par = 0;   /* SOMA_358_HOJA: el ; entre parentesis separa argumentos de una formula (=SI(A1>0;1;2)), no ordenes */
     for (int i = 0; cmd_line[i]; ++i) {
         char c = cmd_line[i];
         if (i > 0 && cmd_line[i - 1] == '\\') continue;
+        if (!s_quote && c == '(') { ++s_par; continue; }
+        if (!s_quote && c == ')') { if (s_par > 0) --s_par; continue; }
         if (c == '"' || c == '\'') {
             if (s_quote == 0) s_quote = c;
             else if (s_quote == c) s_quote = 0;
-        } else if (!s_quote && c == ';') {
+        } else if (!s_quote && !s_par && c == ';') {
             semi_idx = i;
             break;
         }

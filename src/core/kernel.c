@@ -148,7 +148,7 @@ static void cmds_thread(void *arg)
     const char *p = g_cmds;
     while (*p) {
         int n = 0;
-        while (*p && *p != ';' && *p != '\n' && n < (int)sizeof line - 1) line[n++] = *p++;
+        while (*p && *p != ';' && *p != '\n' && n < (int)sizeof line - 1) { if (p[0] == '\\' && p[1] == ';') ++p; line[n++] = *p++; }   /* SOMA_358_HOJA: \; = un ; dentro de la orden */
         line[n] = 0;
         if (*p) p++;
         if (!n) continue;

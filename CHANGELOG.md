@@ -7,6 +7,71 @@ todavía es software experimental. Esta fase sirve para encontrar fallos con má
 Desde el parche 311, lo que llega de Internet (páginas, correo, YouTube, noticias, TLS) y el motor de IA se procesan en
 servicios aislados de ring 3; el escritorio y las aplicaciones siguen en ring 0.  <!-- SOMA_339_GITHUB -->
 
+<!-- SOMA_360_HOJA_GRAFICOS -->
+### Hoja de cálculo: gráficos, IA y el resto de SOMA (360)
+- **Gráficos** de columnas, barras, líneas, tarta, área y dispersión: botón de gráficos de la barra (con la selección o la tabla
+  donde está el cursor), arrastrar para mover, la esquina para cambiar el tamaño, doble clic para el tipo, el título, la leyenda,
+  los datos o borrarlo; Supr también lo borra. Se pintan en SOMA y **se guardan en el XLSX**: Excel, LibreOffice y openpyxl los
+  abren con sus series, y SOMA lee los gráficos de los XLSX de fuera. En ODS no van (se avisa en el documento del parche).
+  Orden: `hoja grafico columnas A1:D5 titulo Ventas`, `hoja grafico` (lista), `hoja grafico borrar N`.
+- **IA dentro de la hoja** (botón IA): se le pregunta sobre la hoja («suma los gastos por concepto», «fórmula del IVA para
+  B2», «haz una tabla de amortización»); el modelo lee la hoja y contesta, y si propone una fórmula o una tabla, un botón la
+  pone en la celda o la pega. Va en un hilo aparte: la ventana no espera.
+- **El agente lee las hojas**: si la misión habla de hojas, tablas, celdas o de un libro abierto, recibe el libro (hojas, celdas
+  y fórmulas) y las órdenes `hoja` para trabajar con él.
+- **Contactos y Calendario a una hoja**: `hoja contactos`, `hoja agenda [este mes]`, Archivo > «Contactos a una hoja» /
+  «Calendario a una hoja» y el botón «A hoja» de Contactos.
+- **Enviar por correo**: Archivo > «Enviar por correo…» o `hoja enviar [email]` abre un correo nuevo con el libro en XLSX
+  adjunto. **Correo ya envía adjuntos** (multipart/mixed, hasta 20 MB; solo de /usuario y /tmp y nunca configuración ni claves);
+  el adjunto se ve en la redacción y se puede quitar.
+- Manifiesto del LCM `lcm/manifiestos/hoja.json` (abrir la hoja, contactos y agenda a una hoja, enviar, gráficos). Ver
+  `docs/PARCHE_360_HOJA_GRAFICOS.md`.
+
+<!-- SOMA_359_HOJA_VENTANA -->
+### Hoja de cálculo: la ventana (359)
+- Aplicación nueva **Hoja de cálculo** (icono verde en el escritorio, `hoja ventana [archivo]`, o doble clic en un .xlsx, .ods
+  o .csv en Archivos). Cuadrícula con el formato de cada celda (negrita, cursiva, subrayado, tachado, colores, rellenos,
+  bordes, alineación, ajustar texto, formatos de número), barra de fórmulas, pestañas de hojas y suma, promedio y recuento de
+  lo seleccionado.
+- Al escribir una fórmula, un clic o un arrastre en la hoja (o las flechas) pone la referencia, también de otra hoja; se
+  proponen las funciones que empiezan por lo escrito. Autosuma (Σ), Ctrl+Intro escribe en toda la selección.
+- Seleccionar con ratón y teclado (Mayús, Ctrl+flechas, filas y columnas enteras), rellenar arrastrando la esquina
+  (series 1, 2, 3, meses, días), ancho de columnas y alto de filas arrastrando (doble clic: ancho automático), inmovilizar
+  paneles, ordenar, filtro con lista de valores, buscar y reemplazar, ir a una celda, insertar y borrar filas y columnas,
+  menú del botón derecho, zoom (Ctrl+rueda).
+- **Deshacer y rehacer** (Ctrl+Z, Ctrl+Mayús+Z) de todo, también de ordenar, filtrar, borrar hojas o pegar.
+- Copiar y pegar dentro de la hoja con fórmulas y formato; **pegar tablas** que llegan de la web, del correo o de otras apps
+  (tabuladores, tablas con `|`, `;` o columnas alineadas con espacios). «Pegar solo valores».
+- Abrir, guardar y exportar a XLSX, ODS y CSV desde el menú Archivo; varios libros abiertos a la vez.
+- Arreglado: en Calendario, Contactos, Discos, Noticias, Agentes, Monitor, Grabadora, Cámara y Captura, Esc sacaba del
+  escritorio al modo texto en vez de cerrar la ventana.
+- Arreglado: en el terminal, `$A$1` o `D$5` dentro de una orden ya no se tratan como variables (se borraban de las fórmulas).
+  La orden `hoja` usa el turno de la pantalla para no chocar con la ventana. Ver `docs/PARCHE_359_HOJA_VENTANA.md`.
+
+<!-- SOMA_358_HOJA -->
+### Hoja de cálculo: motor de fórmulas y formatos XLSX, ODS y CSV (358)
+- Motor nuevo de hoja de cálculo: hasta 32 hojas por libro, 1.048.576 filas × 16.384 columnas, unas 130 funciones (SUMA, SI,
+  BUSCARV, BUSCARX, CONTAR.SI.CONJUNTO, fechas, texto, finanzas…) en castellano con `;` y coma decimal; en inglés al guardar.
+  Formatos de número (moneda, porcentaje, fechas, códigos propios), recálculo sin recursión con detección de referencias circulares.
+- **Abre y guarda XLSX** (Excel), **ODS** (LibreOffice) y **CSV**, con estilos, anchos, inmovilizar y autofiltro. Probado en los
+  dos sentidos con LibreOffice y openpyxl. Los archivos que llegan de fuera se leen en el servicio aislado mimesvc (ring 3);
+  el núcleo vuelve a validar lo que devuelve. Del CSV nunca se importan fórmulas, y al exportarlo se neutralizan las que empiezan
+  por `=`, `+` o `@`.
+- Orden `hoja`: `nueva`, `abrir`, `ver A1:F20`, `pon B5 =SUMA(B1:B4)`, `calcula`, `guardar archivo.xlsx|.ods|.csv` (en /usuario o /tmp), `ordenar`,
+  `filtrar`, `buscar`, `reemplazar`, `inmovilizar`, `funciones`. El `;` dentro de paréntesis ya no parte la orden en dos.
+  La ventana de la hoja llega en el 359. Ver `docs/PARCHE_358_HOJA.md`.
+
+<!-- SOMA_357_CONTACTOS -->
+### Contactos: libreta con fotos, voz y sincronización por vCard (357)
+- Aplicación nueva **Contactos** y orden `contactos`: ficha completa (nombre, apellidos, apodo, 3 emails y 3 teléfonos con su tipo,
+  dirección, nacimiento, grupos, empresa, cargo, web, nota, favorito), hasta 6 **fotos** por contacto y una **muestra de voz**.
+- Alta en una frase («Ana López, móvil 600 11 22 33, email ana@x.es, nació el 3 de mayo de 1990, grupo familia»); si ya existía, se
+  completa su ficha en vez de duplicarla.
+- Importar y exportar `.vcf` (Google Contactos, iCloud, Outlook, el móvil) en los dos sentidos, sin duplicados y sin perder lo
+  cambiado en SOMA. El `.vcf` que llega de fuera se lee en el servicio aislado mimesvc (ring 3); las fotos, en imgdec.
+- Los cumpleaños aparecen solos en el **Calendario** (con su aviso) y el agente recibe la ficha de quien se habla.
+- Correo: «Escribir correo» desde la ficha. Ver `docs/PARCHE_357_CONTACTOS.md`.
+
 <!-- SOMA_356_STRATA_UNO -->
 ### Solo tu perfil de Strata en la lista (356)
 - La lista de modelos ofrece solo el perfil de Strata que usas (`iq3s-latin-vision-120k.json`), no todos los de pruebas de

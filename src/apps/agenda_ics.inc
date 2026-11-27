@@ -20,6 +20,7 @@ uint32_t ag_ics_exporta(const struct ag_cal *c, char *o, uint32_t cap)
     put(o, cap, &p, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//SOMA//Agenda//ES\r\nCALSCALE:GREGORIAN\r\nX-WR-CALNAME:SOMA\r\n");
     for (int i = 0; i < AG_MAX_EV; ++i) {
         const struct ag_ev *e = &c->ev[i]; if (!e->activo) continue;
+        if (empieza(e->nota, "contacto:")) continue;      /* SOMA_357_CONTACTOS: los cumpleanos salen de los contactos (van en el .vcf, no aqui) */
         put(o, cap, &p, "BEGIN:VEVENT\r\nUID:"); putn(o, cap, &p, e->id, 0); put(o, cap, &p, "@soma\r\nDTSTAMP:"); ics_fecha(o, cap, &p, e->ini, 1); put(o, cap, &p, "Z\r\n");
         if (e->todo_dia) { put(o, cap, &p, "DTSTART;VALUE=DATE:"); ics_fecha(o, cap, &p, e->ini, 0); put(o, cap, &p, "\r\nDTEND;VALUE=DATE:"); ics_fecha(o, cap, &p, e->ini + (e->dur >= 1440 ? (int64_t)e->dur : 1440), 0); put(o, cap, &p, "\r\n"); }
         else { put(o, cap, &p, "DTSTART:"); ics_fecha(o, cap, &p, e->ini, 1); put(o, cap, &p, "\r\n"); if (e->dur) { put(o, cap, &p, "DTEND:"); ics_fecha(o, cap, &p, e->ini + e->dur, 1); put(o, cap, &p, "\r\n"); } }

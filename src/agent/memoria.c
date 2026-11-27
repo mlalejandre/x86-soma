@@ -14,6 +14,8 @@
 #include "idt.h"
 #include "rtc.h"
 #include "agenda.h"                /* SOMA_280_IMPORTAR: la agenda entra en el contexto */
+#include "hoja_integra.h"   /* SOMA_360_HOJA_GRAFICOS */
+#include "contactos.h"             /* SOMA_357_CONTACTOS: y las fichas de los contactos */
 #if defined(__x86_64__)
 #include "ia_sys.h"                /* SOMA_329_IA_LOCAL: embeddings con el motor local (ring 3) */
 #include "ia_abi.h"
@@ -803,12 +805,14 @@ int memoria_contexto(const char *mision, char *dst, uint32_t max, uint32_t *pos)
         n1 = p2 + mc_contexto(g_mont[c], cc, (uint32_t)n2, 0, 0, txt + p2, tope - p2);
     }
     kmutex_unlock(&g_mx);
-    if (!txt[0]) { mc_free(txt); uint32_t p0 = *pos; agenda_bloque(mision, dst, max, pos); return *pos > p0; }
+    if (!txt[0]) { mc_free(txt); uint32_t p0 = *pos; agenda_bloque(mision, dst, max, pos); contactos_contexto(mision, dst, max, pos); hoja_contexto(mision, dst, max, pos); return *pos > p0; }
     op(dst, max, pos, "\n[MEMORIA: lo que SOMA recuerda de ti y de lo hablado. Regla de atribucion: cada recuerdo dice de quien es; antes de usarlo comprueba que "
                       "pertenece a la persona o cosa por la que se pregunta, y si no consta di que no consta en vez de deducirlo.]");
     op(dst, max, pos, txt);
     mc_free(txt);
     agenda_bloque(mision, dst, max, pos);
+    contactos_contexto(mision, dst, max, pos);          /* SOMA_357_CONTACTOS: las fichas de las personas de las que se habla */
+    hoja_contexto(mision, dst, max, pos);               /* SOMA_360_HOJA_GRAFICOS: el libro abierto si se habla de hojas o tablas */
     return 1;
 }
 

@@ -5,14 +5,14 @@ Si prefieres compilarlo tú mismo, sigue las instrucciones del [README principal
 
 | Archivo | Qué es |
 |---|---|
-| `soma-0.3-prebeta-x86_64-usb.img.xz` | La imagen comprimida (17.0 MB; ocupa 5 GiB al grabarla) |
+| `soma-0.3-prebeta-x86_64-usb.img.xz` | La imagen comprimida (17.4 MB; ocupa 5 GiB al grabarla) |
 
 El pendrive queda con cuatro particiones: **SOMA** (el sistema, 1 GiB), **DATOS** (configuración y memoria de SOMA, 2 GiB; Windows y
 macOS no la abren, es normal), **MODELOS** (modelos de IA) y **USUARIO** (tus archivos: Documentos, Imágenes, Audio...). MODELOS y
 USUARIO se ven desde cualquier ordenador (exFAT). En un pendrive de más de 8 GB, SOMA las agranda solo en el primer arranque.
 | `soma-0.3-prebeta-x86_64-usb.img.xz.sha256` | Su huella SHA-256, para comprobar que se descargó bien |
 
-Generada el 27/11/2026 14:53 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
+Generada el 27/11/2026 22:10 a partir del código de este repositorio con `python3 construyeimagen.py --carpeta`.
 
 **Qué necesitas:** un pendrive de **8 GB o más** (se borra entero; con 32 GB o más, MODELOS tiene sus 16 GiB) y un PC x86_64 con **UEFI**. Probado en un Lenovo ThinkPad T480s.
 

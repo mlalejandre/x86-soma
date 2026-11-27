@@ -25,4 +25,8 @@ enum { CORREO_ORBE_REDACTA = 1, CORREO_ORBE_ENVIA, CORREO_ORBE_LEE, CORREO_ORBE_
 int  correo_orbe(int que, const char *mision, char *out, uint32_t cap);
 int  correo_orbe_hay_borrador(void);    /* hay un correo preparado por el orbe esperando el "envialo" */
 int  correo_cmd(const char *args, char *out, uint32_t cap);   /* la orden `correo` */
+void correo_redactar_a(const char *email);   /* SOMA_357_CONTACTOS: un correo nuevo para ese email ("Escribir correo" desde Contactos) */
+/* SOMA_360_HOJA_GRAFICOS: un correo nuevo con ese archivo adjunto (solo /usuario o /tmp, nunca configuracion ni claves; 20 MB) */
+#define CORREO_ADJ_MAX (20u << 20)
+int  correo_redactar_adjunto(const char *ruta, const char *para, const char *asunto, char *msg, uint32_t cap);
 #endif

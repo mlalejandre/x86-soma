@@ -1,0 +1,616 @@
+{
+ "manifiesto": 1,
+ "origen": "contactos (parche 357: libreta de contactos con fotos, voz, vCard y cumpleaños)",
+ "ordenes": [
+  {
+   "id": "contactos_telefono",
+   "orden": "contactos telefono {T}",
+   "peligrosa": false,
+   "frases": [
+    "(cuál|cual) es el (teléfono|telefono|móvil|movil|número|numero) de {T}",
+    "(dame|dime|pásame|pasame) el (teléfono|telefono|móvil|movil|número|numero) de {T}",
+    "(qué|que) (teléfono|telefono|móvil|movil|número) tiene {T}",
+    "(tienes|tengo) el (teléfono|telefono|móvil|movil|número) de {T}",
+    "(busca|mira) el (teléfono|telefono|móvil|movil) de {T}",
+    "contactos telefono {T}",
+    "(a qué|a que) número llamo a {T}"
+   ],
+   "infinitivos": [
+    "saber el teléfono de {T}"
+   ],
+   "preguntas": [
+    "el teléfono de {T}"
+   ],
+   "pruebas": [
+    [
+     "¿cuál es el móvil de Ana?",
+     "contactos telefono Ana"
+    ],
+    [
+     "pásame el teléfono de Luis Pérez",
+     "contactos telefono Luis Pérez"
+    ],
+    [
+     "qué número tiene Marta",
+     "contactos telefono Marta"
+    ],
+    [
+     "tengo el teléfono de Carlos García?",
+     "contactos telefono Carlos García"
+    ],
+    [
+     "mira el móvil de Lucía",
+     "contactos telefono Lucía"
+    ],
+    [
+     "dime el número de Pablo",
+     "contactos telefono Pablo"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana",
+     "Luis Pérez",
+     "mamá",
+     "Marta",
+     "el Pepe",
+     "Carlos García",
+     "Lucía",
+     "mi hermano Juan",
+     "Elena Ruiz",
+     "Pablo",
+     "la doctora Sanz",
+     "Javi"
+    ]
+   }
+  },
+  {
+   "id": "contactos_email",
+   "orden": "contactos email {T}",
+   "peligrosa": false,
+   "frases": [
+    "(cuál|cual) es el (email|correo|e-mail|mail|correo electrónico) de {T}",
+    "(dame|dime|pásame|pasame) el (email|correo|e-mail|mail) de {T}",
+    "(qué|que) (email|correo|e-mail|mail) tiene {T}",
+    "(tienes|tengo) el (email|correo|e-mail|mail) de {T}",
+    "(busca|mira) el (email|correo|e-mail) de {T}",
+    "contactos email {T}"
+   ],
+   "pruebas": [
+    [
+     "¿cuál es el correo de Ana?",
+     "contactos email Ana"
+    ],
+    [
+     "pásame el email de Luis Pérez",
+     "contactos email Luis Pérez"
+    ],
+    [
+     "qué mail tiene Marta",
+     "contactos email Marta"
+    ],
+    [
+     "tengo el correo de Elena Ruiz?",
+     "contactos email Elena Ruiz"
+    ],
+    [
+     "mira el email de Javi",
+     "contactos email Javi"
+    ],
+    [
+     "dime el correo electrónico de Pablo",
+     "contactos email Pablo"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana",
+     "Luis Pérez",
+     "mamá",
+     "Marta",
+     "el Pepe",
+     "Carlos García",
+     "Lucía",
+     "mi hermano Juan",
+     "Elena Ruiz",
+     "Pablo",
+     "la doctora Sanz",
+     "Javi"
+    ]
+   }
+  },
+  {
+   "id": "contactos_direccion",
+   "orden": "contactos direccion {T}",
+   "peligrosa": false,
+   "frases": [
+    "(cuál|cual) es la (dirección|direccion|casa) de {T}",
+    "(dónde|donde) vive {T}",
+    "(dame|dime|pásame|pasame) la (dirección|direccion) de {T}",
+    "(tienes|tengo) la (dirección|direccion) de {T}",
+    "(busca|mira) la (dirección|direccion) de {T}",
+    "contactos direccion {T}"
+   ],
+   "pruebas": [
+    [
+     "¿dónde vive Ana?",
+     "contactos direccion Ana"
+    ],
+    [
+     "pásame la dirección de Luis Pérez",
+     "contactos direccion Luis Pérez"
+    ],
+    [
+     "cuál es la dirección de Marta",
+     "contactos direccion Marta"
+    ],
+    [
+     "tengo la dirección de Carlos García?",
+     "contactos direccion Carlos García"
+    ],
+    [
+     "mira la dirección de Lucía",
+     "contactos direccion Lucía"
+    ],
+    [
+     "dime dónde vive Pablo",
+     "contactos direccion Pablo"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana",
+     "Luis Pérez",
+     "mamá",
+     "Marta",
+     "el Pepe",
+     "Carlos García",
+     "Lucía",
+     "mi hermano Juan",
+     "Elena Ruiz",
+     "Pablo",
+     "la doctora Sanz",
+     "Javi"
+    ]
+   }
+  },
+  {
+   "id": "contactos_cumple_de",
+   "orden": "contactos cumpleaños {T}",
+   "peligrosa": false,
+   "frases": [
+    "(cuándo|cuando) es el (cumpleaños|cumple) de {T}",
+    "(cuándo|cuando) cumple (años|anos) {T}",
+    "(cuántos|cuantos) (años|anos) (tiene|cumple) {T}",
+    "(qué|que) día (nació|nacio) {T}",
+    "(dime|dame) el (cumpleaños|cumple) de {T}",
+    "contactos cumpleaños {T}"
+   ],
+   "pruebas": [
+    [
+     "¿cuándo es el cumpleaños de Ana?",
+     "contactos cumpleaños Ana"
+    ],
+    [
+     "cuándo cumple años Luis Pérez",
+     "contactos cumpleaños Luis Pérez"
+    ],
+    [
+     "cuántos años tiene Marta",
+     "contactos cumpleaños Marta"
+    ],
+    [
+     "qué día nació Lucía",
+     "contactos cumpleaños Lucía"
+    ],
+    [
+     "dime el cumple de Javi",
+     "contactos cumpleaños Javi"
+    ],
+    [
+     "cuándo es el cumple de mi hermano Juan",
+     "contactos cumpleaños mi hermano Juan"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana",
+     "Luis Pérez",
+     "mamá",
+     "Marta",
+     "el Pepe",
+     "Carlos García",
+     "Lucía",
+     "mi hermano Juan",
+     "Elena Ruiz",
+     "Pablo",
+     "la doctora Sanz",
+     "Javi"
+    ]
+   }
+  },
+  {
+   "id": "contactos_cumples",
+   "orden": "contactos cumpleaños",
+   "peligrosa": false,
+   "frases": [
+    "(qué|que|quién|quien) (cumpleaños|cumples) (hay|tengo) (este mes|pronto|esta semana|próximamente|proximamente)",
+    "(quién|quien) cumple (años|anos) (pronto|esta semana|este mes|hoy|mañana)",
+    "(próximos|proximos) cumpleaños",
+    "(dime|enséñame|ensename|muéstrame) los (próximos|proximos) cumpleaños",
+    "(tengo que|hay que) felicitar a alguien",
+    "contactos cumpleaños",
+    "(a quién|a quien) tengo que felicitar"
+   ],
+   "pruebas": [
+    [
+     "¿quién cumple años esta semana?",
+     "contactos cumpleaños"
+    ],
+    [
+     "dime los próximos cumpleaños",
+     "contactos cumpleaños"
+    ],
+    [
+     "qué cumpleaños hay este mes",
+     "contactos cumpleaños"
+    ],
+    [
+     "tengo que felicitar a alguien?",
+     "contactos cumpleaños"
+    ],
+    [
+     "a quién tengo que felicitar",
+     "contactos cumpleaños"
+    ],
+    [
+     "quién cumple años pronto",
+     "contactos cumpleaños"
+    ]
+   ]
+  },
+  {
+   "id": "contactos_ver",
+   "orden": "contactos ver {T}",
+   "peligrosa": false,
+   "frases": [
+    "(enséñame|ensename|muéstrame|muestrame|dame|dime) (la ficha|los datos|el contacto) de {T}",
+    "(qué|que) (datos|información|informacion) tengo de {T}",
+    "(busca|buscar) a {T} en (mis contactos|la agenda|los contactos)",
+    "(mira|consulta) el contacto de {T}",
+    "(todo lo que|lo que) (tengo|sé|se) de {T} en (mis contactos|la agenda)",
+    "contactos ver {T}"
+   ],
+   "pruebas": [
+    [
+     "enséñame la ficha de Ana",
+     "contactos ver Ana"
+    ],
+    [
+     "qué datos tengo de Luis Pérez",
+     "contactos ver Luis Pérez"
+    ],
+    [
+     "busca a Marta en mis contactos",
+     "contactos ver Marta"
+    ],
+    [
+     "muéstrame el contacto de Elena Ruiz",
+     "contactos ver Elena Ruiz"
+    ],
+    [
+     "consulta el contacto de Pablo",
+     "contactos ver Pablo"
+    ],
+    [
+     "dame los datos de la doctora Sanz",
+     "contactos ver la doctora Sanz"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana",
+     "Luis Pérez",
+     "mamá",
+     "Marta",
+     "el Pepe",
+     "Carlos García",
+     "Lucía",
+     "mi hermano Juan",
+     "Elena Ruiz",
+     "Pablo",
+     "la doctora Sanz",
+     "Javi"
+    ]
+   }
+  },
+  {
+   "id": "contactos_anadir",
+   "orden": "contactos añadir {T}",
+   "peligrosa": false,
+   "frases": [
+    "(añade|añádeme|anade|guarda|guárdame|apunta|apúntame|mete|agrega) (a mis contactos|en mis contactos|en la agenda|a la agenda|como contacto) {T}",
+    "(añade|anade|guarda|apunta|agrega) (el|un) (contacto|teléfono|telefono) {T}",
+    "(nuevo|crea un|crea el) contacto {T}",
+    "(añade|anade|guarda|agrega) a {T} (a|en) (mis contactos|la agenda|los contactos)",
+    "(guarda|apunta) (este|el) contacto: {T}",
+    "contactos añadir {T}"
+   ],
+   "pruebas": [
+    [
+     "añade a mis contactos Ana López, móvil 600 11 22 33",
+     "contactos añadir Ana López, móvil 600 11 22 33"
+    ],
+    [
+     "nuevo contacto Luis Pérez, email luis@ejemplo.es",
+     "contactos añadir Luis Pérez, email luis@ejemplo.es"
+    ],
+    [
+     "guarda en la agenda Marta Gil, teléfono 622 000 111, grupo amigos",
+     "contactos añadir Marta Gil, teléfono 622 000 111, grupo amigos"
+    ],
+    [
+     "crea un contacto Pablo Sanz 699 887 766",
+     "contactos añadir Pablo Sanz 699 887 766"
+    ],
+    [
+     "apunta como contacto Javi, email javi@x.com, grupo trabajo",
+     "contactos añadir Javi, email javi@x.com, grupo trabajo"
+    ],
+    [
+     "guarda este contacto: Pedro Gil pedro@gil.es",
+     "contactos añadir Pedro Gil pedro@gil.es"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana López, móvil 600 11 22 33",
+     "Luis Pérez, email luis@ejemplo.es",
+     "Marta Gil, teléfono 622 000 111, grupo amigos",
+     "Carlos García, email carlos@empresa.com, trabaja en Acme",
+     "Lucía, móvil 655 44 33 22, nació el 3 de mayo de 1990",
+     "Elena Ruiz, email elena@correo.es, vive en Calle Mayor 3, Madrid",
+     "Pablo Sanz 699 887 766",
+     "Javi, email javi@x.com, grupo trabajo",
+     "la doctora Sanz, teléfono 91 555 44 33, nota dentista",
+     "Pedro Gil pedro@gil.es"
+    ]
+   }
+  },
+  {
+   "id": "contactos_borrar",
+   "orden": "contactos borrar {T}",
+   "peligrosa": true,
+   "frases": [
+    "(borra|elimina|quita|saca) (a|el contacto de|el contacto) {T} (de mis contactos|de la agenda|de los contactos)",
+    "(borra|elimina|quita) el contacto {T}",
+    "(borra|elimina) a {T} de (mis contactos|la agenda)",
+    "(ya no quiero|no quiero) (tener|guardar) a {T} en (mis contactos|la agenda)",
+    "(saca|quita) a {T} de la agenda",
+    "contactos borrar {T}"
+   ],
+   "pruebas": [
+    [
+     "borra a Ana de mis contactos",
+     "contactos borrar Ana"
+    ],
+    [
+     "elimina el contacto Luis Pérez",
+     "contactos borrar Luis Pérez"
+    ],
+    [
+     "quita a Marta de la agenda",
+     "contactos borrar Marta"
+    ],
+    [
+     "ya no quiero tener a Pablo en mis contactos",
+     "contactos borrar Pablo"
+    ],
+    [
+     "elimina a Javi de mis contactos",
+     "contactos borrar Javi"
+    ],
+    [
+     "saca a Lucía de la agenda",
+     "contactos borrar Lucía"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "Ana",
+     "Luis Pérez",
+     "mamá",
+     "Marta",
+     "el Pepe",
+     "Carlos García",
+     "Lucía",
+     "mi hermano Juan",
+     "Elena Ruiz",
+     "Pablo",
+     "la doctora Sanz",
+     "Javi"
+    ]
+   }
+  },
+  {
+   "id": "contactos_grupo",
+   "orden": "contactos grupo {T}",
+   "peligrosa": false,
+   "frases": [
+    "(quién|quien|quiénes|quienes) (está|esta|están|estan) en el grupo {T}",
+    "(enséñame|muéstrame|dime) (los contactos|la gente) del grupo {T}",
+    "(contactos|gente) del grupo {T}",
+    "(lista|listado) del grupo {T}",
+    "(quién|quien) es de {T} en mis contactos",
+    "contactos grupo {T}"
+   ],
+   "pruebas": [
+    [
+     "quién está en el grupo familia",
+     "contactos grupo familia"
+    ],
+    [
+     "enséñame los contactos del grupo trabajo",
+     "contactos grupo trabajo"
+    ],
+    [
+     "contactos del grupo amigos",
+     "contactos grupo amigos"
+    ],
+    [
+     "quiénes están en el grupo fútbol",
+     "contactos grupo fútbol"
+    ],
+    [
+     "dime la gente del grupo vecinos",
+     "contactos grupo vecinos"
+    ],
+    [
+     "lista del grupo clientes",
+     "contactos grupo clientes"
+    ]
+   ],
+   "valores_propios": {
+    "T": [
+     "familia",
+     "trabajo",
+     "amigos",
+     "fútbol",
+     "vecinos",
+     "clientes",
+     "colegio",
+     "universidad"
+    ]
+   }
+  },
+  {
+   "id": "contactos_abrir",
+   "orden": "contactos abrir",
+   "peligrosa": false,
+   "frases": [
+    "(abre|ábreme|abreme|muestra|enséñame|lanza) (mis contactos|los contactos|la libreta de contactos|la agenda de contactos)",
+    "(abre|lanza|inicia) la (aplicación|app) de contactos",
+    "contactos abrir",
+    "(quiero|necesito) (ver|abrir) (mis contactos|los contactos)",
+    "(contactos|mis contactos) por favor",
+    "(saca|pon) los contactos en pantalla"
+   ],
+   "pruebas": [
+    [
+     "abre mis contactos",
+     "contactos abrir"
+    ],
+    [
+     "ábreme la agenda de contactos",
+     "contactos abrir"
+    ],
+    [
+     "quiero ver mis contactos",
+     "contactos abrir"
+    ],
+    [
+     "lanza la app de contactos",
+     "contactos abrir"
+    ],
+    [
+     "mis contactos por favor",
+     "contactos abrir"
+    ],
+    [
+     "pon los contactos en pantalla",
+     "contactos abrir"
+    ]
+   ]
+  },
+  {
+   "id": "contactos_exportar",
+   "orden": "contactos exportar",
+   "peligrosa": false,
+   "frases": [
+    "(exporta|guarda|saca|genera) (mis contactos|los contactos|la agenda de contactos) (a|en|como) [un archivo |un fichero ](vcf|vcard|google|contactos de google)",
+    "(exporta|pasa) (mis contactos|los contactos) (para|a) (google|el móvil|el movil|icloud|outlook)",
+    "contactos exportar",
+    "(quiero|necesito) (exportar|sacar) (mis contactos|los contactos)",
+    "(haz|hazme|genera) (una copia|un archivo vcf|una exportación) de (mis contactos|los contactos)",
+    "(sincroniza|sube) (mis contactos|los contactos) (con|a) google"
+   ],
+   "pruebas": [
+    [
+     "exporta mis contactos a vcf",
+     "contactos exportar"
+    ],
+    [
+     "pasa los contactos a google",
+     "contactos exportar"
+    ],
+    [
+     "quiero sacar mis contactos",
+     "contactos exportar"
+    ],
+    [
+     "haz una copia de mis contactos",
+     "contactos exportar"
+    ],
+    [
+     "exporta los contactos para el móvil",
+     "contactos exportar"
+    ],
+    [
+     "sube mis contactos a google",
+     "contactos exportar"
+    ]
+   ]
+  },
+  {
+   "id": "contactos_importar",
+   "orden": "contactos importar {A}",
+   "peligrosa": false,
+   "frases": [
+    "(importa|carga|mete|trae) (los contactos de|mis contactos de|los contactos del archivo) {A}",
+    "(importa|carga) {A} (en|a) (mis contactos|los contactos|la agenda)",
+    "contactos importar {A}",
+    "(añade|anade|mete) a (mis contactos|la agenda) (los de|el archivo) {A}",
+    "(importa|carga) el (archivo|fichero) de contactos {A}",
+    "(lee|abre) los contactos de {A}"
+   ],
+   "pruebas": [
+    [
+     "importa los contactos de google.vcf",
+     "contactos importar google.vcf"
+    ],
+    [
+     "carga contactos.vcf en mis contactos",
+     "contactos importar contactos.vcf"
+    ],
+    [
+     "mete a mis contactos los de movil.vcf",
+     "contactos importar movil.vcf"
+    ],
+    [
+     "importa el archivo de contactos icloud.vcf",
+     "contactos importar icloud.vcf"
+    ],
+    [
+     "lee los contactos de agenda.vcf",
+     "contactos importar agenda.vcf"
+    ],
+    [
+     "trae los contactos de outlook.vcf",
+     "contactos importar outlook.vcf"
+    ]
+   ],
+   "valores_propios": {
+    "A": [
+     "google.vcf",
+     "contactos.vcf",
+     "movil.vcf",
+     "icloud.vcf",
+     "agenda.vcf",
+     "outlook.vcf",
+     "/usuario/contactos.vcf",
+     "amigos.vcf"
+    ]
+   }
+  }
+ ]
+}

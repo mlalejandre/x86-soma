@@ -109,7 +109,10 @@ struct co_envio {
     const char *en_respuesta_a, *referencias;   /* Message-ID del que se responde y su cadena (pueden ser 0) */
     int64_t utc_min; int off_min; uint32_t azar;
     char msgid[160];                            /* sale: el Message-ID puesto */
+    /* SOMA_360_HOJA_GRAFICOS: un adjunto (0 = sin adjunto): multipart/mixed con el archivo en base64 */
+    const char *adj_nombre; const uint8_t *adj; uint32_t adj_n;
 };
+const char *co_tipo_mime(const char *nombre);   /* SOMA_360: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" por la extension */
 uint32_t co_compone(struct co_envio *e, char *out, uint32_t cap);       /* mensaje RFC 5322 entero con CRLF; 0 si no cabe */
 int  co_destinatarios(const struct co_envio *e, struct co_dir *out, int max);   /* Para + Cc + Cco, sin repetir */
 uint32_t co_puntea(const char *msg, uint32_t n, char *out, uint32_t cap);      /* DATA: ".." al principio de linea y "\r\n.\r\n" */

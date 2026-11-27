@@ -104,6 +104,8 @@ struct sbx_net_req {          /* al principio de los datos; detras: url, metodo,
 #define SBX_MIME_LEE    1     /* datos = mensaje entero; arg = {cap_texto} -> val = {1 si lo entiende}; data = struct co_mime + texto (texto_n bytes) */
 #define SBX_MIME_ADJ    2     /* datos = struct co_adj + mensaje; arg = {cap} -> val = {bytes}; data = el adjunto decodificado (<= cap) */
 #define SBX_MIME_FICHA  3     /* datos = cabeceras (arg0 bytes) + principio del cuerpo (arg1 bytes); arg2 = hay cuerpo -> inline = struct co_msg */
+#define SBX_MIME_HOJA   5     /* SOMA_358_HOJA: datos = XLSX/ODS/CSV; arg = {tipo HJF_*, 0 adivinar} -> val = {0 bien, <0 error}; data = el libro en "SOMA-HOJA 1"; inline = por que no */
+#define SBX_MIME_VCARD  4     /* SOMA_357_CONTACTOS: datos = .vcf; arg = {max fichas, cap fotos, max por foto} -> val = {fichas (-1 no es vCard), bytes de fotos}; data = struct ct_contacto[n] + fotos */
 
 /* ---- SOMA_312_WEB_AISLADA: servicio leesvc: lee lo que el agente trae de Internet (web_lee.c, busca_web.c) ---- */
 #define SBX_LEE_TEXTO   1     /* datos = HTML; arg = {cap, cap_titulo} -> val = {bytes}; data = texto; inline = titulo */

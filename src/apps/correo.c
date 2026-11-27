@@ -428,18 +428,25 @@ static int campo(const char *t, int k, char *o, int cap)
 static volatile int g_envio_res; static char g_envio_err[300];
 static void j_envia(struct trabajo *j)
 {
-    static char para[600], cc[400], cco[300], asunto[300], irt[200], refs[600];
+    static char para[600], cc[400], cco[300], asunto[300], irt[200], refs[600], adj[200];
     char *cuerpo = (char *)co_alloc(CUERPO_CAP);
     char *msg = 0;
     g_envio_err[0] = 0;
     if (!cuerpo || !j->texto) { scpy(g_envio_err, "Sin memoria para enviar", sizeof g_envio_err); g_envio_res = -1; co_free(cuerpo); return; }
     campo(j->texto, 0, para, sizeof para); campo(j->texto, 1, cc, sizeof cc); campo(j->texto, 2, cco, sizeof cco);
-    campo(j->texto, 3, asunto, sizeof asunto); campo(j->texto, 4, cuerpo, CUERPO_CAP); campo(j->texto, 5, irt, sizeof irt); campo(j->texto, 6, refs, sizeof refs);
+    campo(j->texto, 3, asunto, sizeof asunto); campo(j->texto, 4, cuerpo, CUERPO_CAP); campo(j->texto, 5, irt, sizeof irt); campo(j->texto, 6, refs, sizeof refs); campo(j->texto, 7, adj, sizeof adj);
     struct co_envio en; for (uint32_t z = 0; z < sizeof en; z++) ((uint8_t *)&en)[z] = 0;
     en.de_nombre = g_c.nombre; en.de_email = g_c.email; en.para = para; en.cc = cc; en.cco = cco; en.asunto = asunto; en.cuerpo = cuerpo;
     en.en_respuesta_a = irt[0] ? irt : 0; en.referencias = refs[0] ? refs : 0;
     en.utc_min = ahora_utc(); en.off_min = co_desfase(en.utc_min); en.azar = azar();
-    uint32_t cap = (uint32_t)co_len(cuerpo) * 4u + 16384u; msg = (char *)co_alloc(cap);
+    char *adj_d = 0; uint32_t adj_n = 0;                                /* SOMA_360_HOJA_GRAFICOS: el adjunto */
+    if (adj[0]) {
+        adj_d = vfs_read_alloc(adj, &adj_n);
+        if (!adj_d || !adj_n || adj_n > CORREO_ADJ_MAX) { if (adj_d) kfree(adj_d); scpy(g_envio_err, "No se pudo leer el adjunto (o pasa de 20 MB)", sizeof g_envio_err); g_envio_res = -1; co_free(cuerpo); return; }
+        const char *b = adj; for (const char *z = adj; *z; ++z) if (*z == '/') b = z + 1;
+        en.adj_nombre = b; en.adj = (const uint8_t *)adj_d; en.adj_n = adj_n;
+    }
+    uint32_t cap = (uint32_t)co_len(cuerpo) * 4u + 16384u + (adj_n ? adj_n / 57u * 80u + 8192u : 0u); msg = (char *)co_alloc(cap);
     static struct co_dir rc[40]; int nr = co_destinatarios(&en, rc, 40);
     uint32_t mn = msg ? co_compone(&en, msg, cap) : 0;
     if (!mn) { scpy(g_envio_err, "No se pudo componer el mensaje", sizeof g_envio_err); g_envio_res = -1; goto fin; }
@@ -456,6 +463,7 @@ static void j_envia(struct trabajo *j)
     estado("");
 fin:
     co_free(cuerpo); co_free(msg);
+    if (adj_d) kfree(adj_d);
     cambia();
 }
 
@@ -957,7 +965,7 @@ static void icono(int k, int cx, int cy, uint32_t c, int s)
 /* ---------------------------------------------------------------- zonas de clic */
 enum { A_NADA, A_FOCO, A_REDACTAR, A_CARPETA, A_VISTA, A_MSG, A_ESTRELLA, A_SINC, A_IA_TOGGLE, A_BUSCAR, A_LIMPIA, A_RESPONDER, A_RESP_TODOS, A_REENVIAR,
        A_DESTACAR, A_NOLEIDO, A_BORRAR, A_ARCHIVAR, A_RESUMEN, A_RESP_IA, A_CALENDARIO, A_ADJ, A_ENVIAR, A_DESCARTAR, A_CC, A_IA_ESCRIBE, A_IA_GENERA,
-       A_MEJORA, A_CUENTA, A_CFG_PROBAR, A_CFG_CANCELA, A_CFG_AVANZADO, A_CFG_SEG, A_CLASIFICA, A_VOLVER, A_CFG_CLAVE, A_CFG_VER };
+       A_MEJORA, A_CUENTA, A_CFG_PROBAR, A_CFG_CANCELA, A_CFG_AVANZADO, A_CFG_SEG, A_CLASIFICA, A_VOLVER, A_CFG_CLAVE, A_CFG_VER, A_QUITA_ADJ };
 struct hit { int x, y, w, h, act; int32_t a, b; struct tfield *f; };
 #define NHIT 500
 static struct hit H[NHIT]; static int nH;
@@ -1006,6 +1014,7 @@ static int g_comp, g_comp_modo, g_cc_vis, g_ia_fila, g_enviando, g_comp_ia;   /*
 static char g_comp_irt[200], g_comp_refs[600], g_comp_estado[300]; static int g_comp_err;
 static int g_comp_c = -1; static uint32_t g_comp_uid;
 static int g_comp_orbe;                                   /* el borrador lo preparo el orbe */
+static char g_comp_adj[200]; static uint32_t g_comp_adj_tam;   /* SOMA_360_HOJA_GRAFICOS: archivo adjunto (ruta en SOMA) */
 static int g_tono;
 static int g_borrador_vivo;                              /* hay un borrador escondido (se abrio un correo mientras se escribia) */
 
@@ -1427,6 +1436,16 @@ static void pinta_redaccion(void)
     if (g_cc_vis) { campo_ui(cx, yy, cw, "Cc", &f_cc, ""); yy += 38; campo_ui(cx, yy, cw, "Cco", &f_cco, "copia oculta"); yy += 38; }
     campo_ui(cx, yy, cw, "Asunto", &f_asunto, "");
     yy += 46;
+    if (g_comp_adj[0]) {                                                /* SOMA_360_HOJA_GRAFICOS: el adjunto */
+        const char *b = g_comp_adj; for (const char *z = g_comp_adj; *z; ++z) if (*z == '/') b = z + 1;
+        char t[260]; scpy(t, b, sizeof t); scat(t, "   \302\267   ", sizeof t);
+        { char n[24] = ""; uint32_t kb = (g_comp_adj_tam + 1023u) / 1024u; co_num(n, sizeof n, kb > 1024 ? (kb + 1023u) / 1024u : kb); scat(t, n, sizeof t); scat(t, kb > 1024 ? " MB" : " KB", sizeof t); }
+        int aw = tw(t, 13, 0) + 74; if (aw > cw) aw = cw;
+        rr(cx, yy, aw, 34, 10, C_CARD); rs(cx, yy, aw, 34, 10, C_BD, 255);
+        icono(I_CLIP, cx + 18, yy + 17, C_CYAN, 14); txe(cx + 34, yy, 34, t, 13, C_TX, 0, aw - 70);
+        { int ov = sobre(cx + aw - 30, yy + 5, 24, 24); icono(I_X, cx + aw - 18, yy + 17, ov ? C_TX : C_MU, 12); hit(cx + aw - 30, yy + 5, 24, 24, A_QUITA_ADJ, 0, 0); }
+        yy += 44;
+    }
     /* la fila de la IA */
     if (g_ia_fila) {
         rra(cx, yy, cw, 44, 12, C_IA, 0x1A); rs(cx, yy, cw, 44, 12, C_IA, 110);
@@ -1596,6 +1615,7 @@ static void abre_redaccion(int modo)
 {
     tf_set(&f_para, ""); tf_set(&f_cc, ""); tf_set(&f_cco, ""); tf_set(&f_asunto, ""); tf_set(&f_cuerpo, ""); tf_set(&f_ia, "");
     g_comp_irt[0] = g_comp_refs[0] = 0; g_comp_estado[0] = 0; g_comp_err = 0; g_comp_orbe = 0; g_ia_fila = 0; g_cc_vis = 0; g_borrador_vivo = 0;
+    g_comp_adj[0] = 0; g_comp_adj_tam = 0;
     g_comp_modo = modo; g_comp_c = -1; g_comp_uid = 0;
     if (modo != R_NUEVO) {
         if (!g_mime || g_abierto_uid != g_sel_uid) { toast("Espera a que se abra el correo", 1); return; }
@@ -1637,9 +1657,9 @@ static void abre_redaccion(int modo)
 }
 static uint32_t junta_envio(char *o, uint32_t cap)
 {
-    const char *F[7] = { b_para, b_cc, b_cco, b_asunto, b_cuerpo, g_comp_irt, g_comp_refs };
+    const char *F[8] = { b_para, b_cc, b_cco, b_asunto, b_cuerpo, g_comp_irt, g_comp_refs, g_comp_adj };
     o[0] = 0;
-    for (int i = 0; i < 7; i++) { if (i) { uint32_t n = co_len(o); if (n + 1 < cap) { o[n] = 1; o[n + 1] = 0; } } co_cat(o, F[i], cap); }
+    for (int i = 0; i < 8; i++) { if (i) { uint32_t n = co_len(o); if (n + 1 < cap) { o[n] = 1; o[n + 1] = 0; } } co_cat(o, F[i], cap); }
     return co_len(o);
 }
 static int envia_redaccion(char *motivo, uint32_t mcap)
@@ -1783,6 +1803,7 @@ static int accion(struct hit *z)
     case A_ENVIAR: { char m[200]; envia_redaccion(m, sizeof m); return 1; }
     case A_DESCARTAR: if (g_enviando) return 1; g_comp = 0; g_comp_orbe = 0; g_foco = 0; g_borrador_vivo = 0; return 1;
     case A_CC: g_cc_vis = 1; g_foco = &f_cc; return 1;
+    case A_QUITA_ADJ: if (g_enviando) return 1; g_comp_adj[0] = 0; g_comp_adj_tam = 0; return 1;
     case A_IA_ESCRIBE: g_ia_fila = !g_ia_fila; g_foco = g_ia_fila ? &f_ia : &f_cuerpo; return 1;
     case A_IA_GENERA: ia_redaccion(); return 1;
     case A_MEJORA: {
@@ -2255,3 +2276,35 @@ void correo_transporte_libera(struct co_tr *t)
     t->ctx = 0;
 }
 #endif
+
+/* SOMA_357_CONTACTOS: "Escribir correo" desde la ficha de un contacto: redaccion nueva con el destinatario puesto y el foco en el asunto */
+/* SOMA_360_HOJA_GRAFICOS: un correo nuevo con un archivo adjunto (la hoja de calculo, por ejemplo). Solo archivos de /tmp y /usuario
+ * y nunca configuracion ni claves; se envia cuando el usuario pulsa Enviar. 0 = abierto; -1 = no (msg dice por que) */
+int correo_redactar_adjunto(const char *ruta, const char *para, const char *asunto, char *msg, uint32_t cap)
+{
+    if (msg && cap) msg[0] = 0;
+    if (!g_ini) correo_init();
+    if (!ruta || !(co_iempieza(ruta, "/tmp/") || co_iempieza(ruta, "/usuario/"))) { co_cpy(msg, "Solo se adjuntan archivos de /usuario o /tmp", cap); return -1; }
+    for (const char *z = ruta; *z; ++z) if (z[0] == '/' && z[1] == '.') { co_cpy(msg, "Ruta no valida", cap); return -1; }
+    { static const char *const NO[] = { ".conf", ".key", ".pem", ".p12", ".pfx", ".cfg", ".ini", ".env", ".age", 0 };
+      uint32_t L = co_len(ruta); for (int i = 0; NO[i]; ++i) { uint32_t k = co_len(NO[i]); if (L >= k && co_iempieza(ruta + L - k, NO[i])) { co_cpy(msg, "Ese tipo de archivo no se adjunta (configuracion o claves)", cap); return -1; } } }
+    int t = vfs_size(ruta);
+    if (t <= 0) { co_cpy(msg, "No encuentro el archivo", cap); return -1; }
+    if ((uint32_t)t > CORREO_ADJ_MAX) { co_cpy(msg, "El archivo pasa de 20 MB", cap); return -1; }
+    if (!g_hay_cuenta) { abre_ventana_cuenta(); cambia(); co_cpy(msg, "Configura antes una cuenta de correo", cap); return -1; }
+    abre_redaccion(R_NUEVO);
+    scpy(g_comp_adj, ruta, sizeof g_comp_adj); g_comp_adj_tam = (uint32_t)t;
+    if (para && para[0]) tf_set(&f_para, para);
+    if (asunto && asunto[0]) tf_set(&f_asunto, asunto);
+    g_foco = para && para[0] ? &f_cuerpo : &f_para;
+    cambia();
+    return 0;
+}
+void correo_redactar_a(const char *email)
+{
+    if (!g_ini) correo_init();
+    if (!g_hay_cuenta) { abre_ventana_cuenta(); cambia(); return; }
+    abre_redaccion(R_NUEVO);
+    if (email && email[0]) { tf_set(&f_para, email); g_foco = &f_asunto; }
+    cambia();
+}

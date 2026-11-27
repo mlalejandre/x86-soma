@@ -40,6 +40,7 @@ int vfs_write(const char *name, const char *data, uint32_t len)
 }
 int vfs_read(const char *name, char *buf, uint32_t max) { struct vf *f = vbusca(name); if (!f) return -1; uint32_t n = f->n < max ? f->n : max; memcpy(buf, f->d, n); return (int)n; }
 char *vfs_read_alloc(const char *name, uint32_t *len) { struct vf *f = vbusca(name); if (!f) return 0; char *d = malloc(f->n + 1); memcpy(d, f->d, f->n); d[f->n] = 0; *len = f->n; return d; }
+int vfs_size(const char *name) { struct vf *f = vbusca(name); return f ? (int)f->n : -1; }   /* SOMA_360_HOJA_GRAFICOS: correo_redactar_adjunto */
 #include "thread.h"
 static struct tcb g_tcb;
 struct tcb *thread_create(const char *name, thread_func_t entry, void *arg) { (void)name; (void)entry; (void)arg; return &g_tcb; }

@@ -64,6 +64,10 @@
 #include "agentes_reg.h"
 #include "hora.h"                                  /* SOMA_332_HORA */
 #include "agenda_gui.h"                            /* SOMA_272_AGENDA */
+#include "contactos_gui.h"                         /* SOMA_357_CONTACTOS */
+#include "hoja_gui.h"                              /* SOMA_359_HOJA_VENTANA */
+#include "hoja.h"
+#include "contactos.h"
 #include "correo.h"                                /* SOMA_295_CORREO */
 #include "recorder.h"                               /* SOMA_177_T480S */
 #include "camapp.h"                                /* SOMA_178_T480S */
@@ -112,10 +116,19 @@ enum app_mode {
     APP_AGENDA,    /* SOMA_272_AGENDA: calendario */
     APP_CORREO,    /* SOMA_295_CORREO: correo electronico (IMAP/SMTP) con IA */
     APP_DISCOS,    /* SOMA_331_DISCOS: discos, particiones, formato e imagenes */
-    APP_NOTICIAS   /* SOMA_337_NOTICIAS: noticias por categorias, con resumen de la IA */
+    APP_NOTICIAS,  /* SOMA_337_NOTICIAS: noticias por categorias, con resumen de la IA */
+    APP_CONTACTOS, /* SOMA_357_CONTACTOS: libreta de contactos (fotos y voz) */
+    APP_HOJA       /* SOMA_359_HOJA_VENTANA: hoja de calculo */
 };
 
 static enum app_mode current_app = APP_DESKTOP;
+/* SOMA_359_HOJA_VENTANA: aplicaciones que atienden Esc con su propia tecla (cerrar un dialogo, cancelar una edicion y, sin nada abierto,
+ * cerrar la ventana). Antes Esc pasaba por el bloque general y sacaba del escritorio al modo texto. */
+static int her_esc_propio(enum app_mode a)
+{
+    return a == APP_AGENTS || a == APP_CAPTURE || a == APP_CAMERA || a == APP_RECORDER || a == APP_AGENDA || a == APP_SYSMON ||
+           a == APP_DISCOS || a == APP_CONTACTOS || a == APP_NOTICIAS || a == APP_HOJA;
+}
 static enum app_mode g_pending_app = APP_DESKTOP;   /* SOMA_PARCHE_023_MEDIA: app que debe abrirse al arrancar la GUI (orden de shell previa a ella) */
 
 /* SOMA MULTI-WINDOW STACKING ARCHITECTURE */
@@ -324,6 +337,8 @@ static uint32_t her_app_min_w(enum app_mode app)
     case APP_DISCOS:         return 920u;   /* SOMA_331_DISCOS */
     case APP_NOTICIAS:       return 760u;   /* SOMA_337_NOTICIAS */
     case APP_AGENDA:         return 860u;   /* SOMA_272_AGENDA */
+    case APP_CONTACTOS:      return 900u;   /* SOMA_357_CONTACTOS: lista + ficha */
+    case APP_HOJA:           return 1000u;  /* SOMA_359_HOJA_VENTANA: barra de herramientas entera */
     case APP_CORREO:         return 960u;   /* SOMA_295_CORREO: carpetas + lista + lectura */
     case APP_RECORDER:       return 800u;   /* SOMA_177_T480S; SOMA_210: con la lista de grabaciones a la vista */
     case APP_CAMERA:         return 760u;   /* SOMA_178_T480S; SOMA_210 */
@@ -433,6 +448,7 @@ static int soma_clip_apply(int op)
     case APP_AGENT_MEMORY: if (memview_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_283_MEMORIA_APP: los campos de la memoria */
     case APP_AGENT_CHAT:   if (chat_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_285_CHAT */
     case APP_CORREO:       if (correo_clip_op(op)) { her_refresh_all(); fb_present(); return 1; } return 0;   /* SOMA_295_CORREO */
+    case APP_HOJA:         if (hoja_gui_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_359_HOJA_VENTANA */
     case APP_YOUTUBE:      if (youtube_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;   /* SOMA_250_YOUTUBE: la caja de busqueda */
     case APP_LAYOUT:       if (layout_clip_op(op)) { her_refresh_all(); fb_present(); } return 1;     /* SOMA_254: ruta y descripcion del Maquetador */
     case APP_WEB_BROWSER:
@@ -651,6 +667,12 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         if (current_app == APP_AGENTS && !her_dragging && !her_resizing && agentes_gui_tick()) {   /* SOMA_338_AGENTES: la mision en curso, al momento */
             HER_SYNC_WIN(); agentes_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
         }
+        if (current_app == APP_CONTACTOS && !her_dragging && !her_resizing && contactos_gui_tick()) {   /* SOMA_357_CONTACTOS: voz, fotos que llegan, miniaturas */
+            HER_SYNC_WIN(); contactos_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
+        } else if (current_app != APP_CONTACTOS) (void)contactos_tick();
+        if (current_app == APP_HOJA && !her_dragging && !her_resizing && hoja_gui_tick()) {   /* SOMA_359_HOJA_VENTANA: avisos y cambios hechos con la orden `hoja` */
+            HER_SYNC_WIN(); hoja_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
+        }   /* la voz se guarda y las fotos de la nube llegan aunque la ventana no este delante */
         if (current_app == APP_NOTICIAS && !her_dragging && !her_resizing && noticias_gui_tick()) {   /* SOMA_337_NOTICIAS: titulares y resumen al llegar */
             HER_SYNC_WIN(); noticias_gui_render(win_x, win_y, win_w, win_h, 1); fb_present();
         }
@@ -1099,6 +1121,12 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                 if (current_app == APP_AGENTS && !her_dragging && !her_resizing) {     /* SOMA_338_AGENTES: rueda y resaltado */
                     if (agentes_gui_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel)) { agentes_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
+                if (current_app == APP_CONTACTOS && !her_dragging && !her_resizing) {   /* SOMA_357_CONTACTOS: rueda y arrastre en los campos */
+                    if (contactos_gui_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held())) { contactos_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
+                if (current_app == APP_HOJA && !her_dragging && !her_resizing) {   /* SOMA_359_HOJA_VENTANA: rueda, arrastres y menu del boton derecho */
+                    if (hoja_gui_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel, mouse_left_held(), rclick)) { hoja_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); }
+                }
                 if (current_app == APP_NOTICIAS && !her_dragging && !her_resizing) {   /* SOMA_337_NOTICIAS: rueda y resaltado */
                     if (noticias_gui_mouse(mouse_x, mouse_y, win_x, win_y, win_w, win_h, wheel)) { noticias_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); }
                 }
@@ -1304,6 +1332,18 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
                         agentes_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
                         agentes_gui_render(win_x, win_y, win_w, win_h, 1);
                     } else
+                    if (current_app == APP_HOJA) {                   /* SOMA_359_HOJA_VENTANA */
+                        int rc = hoja_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        if (rc == 5) { her_open_app(APP_CORREO, cur_w, cur_h); HER_SYNC_WIN(); her_refresh_all(); }   /* SOMA_360: la hoja adjunta en un correo */
+                        else hoja_gui_render(win_x, win_y, win_w, win_h, 1);
+                    } else
+                    if (current_app == APP_CONTACTOS) {              /* SOMA_357_CONTACTOS: la Camara (foto del contacto) o el Correo */
+                        int rc = contactos_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h);
+                        if (rc == 2) { her_open_app(APP_CAMERA, cur_w, cur_h); HER_SYNC_WIN(); her_refresh_all(); }
+                        else if (rc == 3) { her_open_app(APP_CORREO, cur_w, cur_h); HER_SYNC_WIN(); correo_redactar_a(contactos_gui_email()); her_refresh_all(); }
+                        else if (rc == 4) { her_open_app(APP_HOJA, cur_w, cur_h); HER_SYNC_WIN(); her_refresh_all(); }   /* SOMA_360: la libreta en una hoja */
+                        else contactos_gui_render(win_x, win_y, win_w, win_h, 1);
+                    } else
                     if (current_app == APP_NOTICIAS) {               /* SOMA_337_NOTICIAS: un titular se abre en el Navegador */
                         if (noticias_gui_click(mouse_x, mouse_y, win_x, win_y, win_w, win_h) == 3) {
                             char url[NT_URL]; const char *u = noticias_gui_url(); uint32_t k = 0; while (u[k] && k + 1 < sizeof url) { url[k] = u[k]; k++; } url[k] = 0;
@@ -1398,7 +1438,7 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             if (c == 27 && current_app != APP_NOTEPAD && her_stop_escape(agent_global_focus || current_app == APP_DESKTOP)) continue;   /* SOMA_256: Esc detiene la lectura o la mision */
             if (c == 27 && current_app == APP_CORREO) { if (correo_escape()) { correo_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); } else her_close_current_app_vortex(); continue; }   /* SOMA_295_CORREO */
             if (c == 27 && current_app == APP_AGENT_CHAT) { (void)chat_escape(); chat_render_window(win_x, win_y, win_w, win_h, 1); fb_present(); continue; }   /* SOMA_285_CHAT: Esc no sale del escritorio */
-            if (c == 27) {
+            if (c == 27 && !her_esc_propio(current_app)) {   /* SOMA_359_HOJA_VENTANA: las apps con Esc propio lo atienden mas abajo (antes Esc salia del escritorio) */
                 if (current_app == APP_TERMINAL_SHELL && term_popup_open()) {      /* SOMA_PARCHE_024_TERM: Esc cierra el menu */
                     term_popup_close();
                     render_real_terminal(win_x, win_y, win_w, win_h, cur_cmd, cur_cmd_len, cur_cursor_pos, 1);
@@ -1613,6 +1653,14 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
             if (current_app == APP_DISCOS) {                     /* SOMA_331_DISCOS: Esc cierra el dialogo; sin dialogo, la ventana */
                 if (!discos_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }
                 discos_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
+            if (current_app == APP_HOJA) {                       /* SOMA_359_HOJA_VENTANA: Esc cancela la edicion, cierra menus y barras; sin nada, la ventana */
+                if (!hoja_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }
+                hoja_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
+            }
+            if (current_app == APP_CONTACTOS) {                  /* SOMA_357_CONTACTOS: Esc cierra la edicion o la barra; sin nada abierto, la ventana */
+                if (!contactos_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }
+                contactos_gui_render(win_x, win_y, win_w, win_h, 1); fb_present(); continue;
             }
             if (current_app == APP_NOTICIAS) {                   /* SOMA_337_NOTICIAS: Esc cierra los ajustes; sin ajustes, la ventana */
                 if (!noticias_gui_key(c) && c == 27) { her_close_current_app_vortex(); continue; }

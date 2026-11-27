@@ -212,6 +212,8 @@ static void her_draw_one_window_chrome(struct her_win_node *win, int is_active)
         case APP_SYSMON:         title = "Monitor del sistema"; break;
         case APP_DISCOS:         title = "Discos"; break;          /* SOMA_331_DISCOS */
         case APP_NOTICIAS:       title = "Noticias"; break;        /* SOMA_337_NOTICIAS */
+        case APP_CONTACTOS:      title = "Contactos"; break;       /* SOMA_357_CONTACTOS */
+        case APP_HOJA:           title = "Hoja de c\303\241lculo"; break;   /* SOMA_359_HOJA_VENTANA */
         case APP_AGENDA:         title = "Calendario"; break;                /* SOMA_272_AGENDA */
         case APP_CORREO:         title = "Correo"; break;                    /* SOMA_295_CORREO */
         case APP_RECORDER:       title = "Grabadora"; break;

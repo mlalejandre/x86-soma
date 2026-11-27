@@ -40,7 +40,9 @@ enum soma_icon_id {
     ICON_CORREO = 20,      /* SOMA_295_CORREO: sobre (vectorial) */
     ICON_DISCOS = 21,      /* SOMA_331_DISCOS: disco (vectorial) */
     ICON_NOTICIAS = 22,    /* SOMA_337_NOTICIAS: periodico (vectorial) */
-    ICON_COUNT = 23
+    ICON_CONTACTOS = 23,   /* SOMA_357_CONTACTOS: ficha con una persona (vectorial) */
+    ICON_HOJA = 24,        /* SOMA_359_HOJA_VENTANA: hoja de calculo (vectorial) */
+    ICON_COUNT = 25
 };
 
 static inline const uint8_t (*icon_get_data(int id))[16]

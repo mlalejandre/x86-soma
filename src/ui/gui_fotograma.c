@@ -549,6 +549,8 @@ static void her_render_app_body(enum app_mode app, uint32_t wx, uint32_t wy, uin
     case APP_DISCOS:        discos_gui_render(wx, wy, ww, wh, is_focused);     break;   /* SOMA_331_DISCOS */
     case APP_NOTICIAS:      noticias_gui_render(wx, wy, ww, wh, is_focused);   break;   /* SOMA_337_NOTICIAS */
     case APP_AGENDA:        agenda_gui_render_window(wx, wy, ww, wh, is_focused); break;   /* SOMA_272_AGENDA */
+    case APP_CONTACTOS:     contactos_gui_render(wx, wy, ww, wh, is_focused); break;       /* SOMA_357_CONTACTOS */
+    case APP_HOJA:          hoja_gui_render(wx, wy, ww, wh, is_focused); break;            /* SOMA_359_HOJA_VENTANA */
     case APP_CORREO:        correo_render_window(wx, wy, ww, wh, is_focused); break;       /* SOMA_295_CORREO */
     case APP_RECORDER:      recorder_render_window(wx, wy, ww, wh, is_focused); break;  /* SOMA_177_T480S */
     case APP_CAMERA:        camapp_render_window(wx, wy, ww, wh, is_focused); break;     /* SOMA_178_T480S */
@@ -680,7 +682,7 @@ struct her_bc { int used; enum app_mode app; int slot; uint32_t x, y, w, h; int 
  * sin limite de tiempo, haya o no actividad del raton, y sin sumas de comprobacion. */
 static int her_app_version(enum app_mode a, uint32_t *v)
 {
-    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_DISCOS: *v = discos_gui_version(); return 1; case APP_NOTICIAS: *v = noticias_gui_version(); return 1; case APP_AGENTS: *v = agentes_gui_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; case APP_AGENT_CHAT: *v = chat_version(); return 1; case APP_CORREO: *v = correo_version(); return 1; default: return 0; }   /* SOMA_295_CORREO */   /* SOMA_283_MEMORIA_APP; SOMA_285_CHAT */
+    switch (a) { case APP_SYSMON: *v = sysmon_version(); return 1; case APP_DISCOS: *v = discos_gui_version(); return 1; case APP_NOTICIAS: *v = noticias_gui_version(); return 1; case APP_AGENTS: *v = agentes_gui_version(); return 1; case APP_AGENDA: *v = agenda_gui_version(); return 1; case APP_CONTACTOS: *v = contactos_gui_version(); return 1; case APP_HOJA: *v = hoja_gui_version(); return 1; case APP_AGENT_MEMORY: *v = memview_version(); return 1; case APP_AGENT_CHAT: *v = chat_version(); return 1; case APP_CORREO: *v = correo_version(); return 1; default: return 0; }   /* SOMA_295_CORREO */   /* SOMA_283_MEMORIA_APP; SOMA_285_CHAT */
 }
 static uint32_t her_bc_gen(void) { return wf_ui_gen() ^ ((uint32_t)settings_opacity() << 20) ^ ((uint32_t)settings_active_opaque() << 28); }
 static struct her_bc her_bcs[HER_MAX_WINDOWS];
@@ -688,7 +690,7 @@ static int her_bc_base_ok; static uint64_t her_bc_input_ms;
 static int her_bc_app_ok(enum app_mode a)
 {
     return a == APP_TERMINAL_SHELL || a == APP_NOTEPAD || a == APP_FILE_MANAGER || a == APP_IMAGE_VIEWER || a == APP_AGENT_CHAT ||
-           a == APP_AGENT_MEMORY || a == APP_AGENTS || a == APP_SETTINGS || a == APP_PDF || a == APP_LAYOUT || a == APP_SYSMON || a == APP_AGENDA || a == APP_CORREO;   /* SOMA_295_CORREO */
+           a == APP_AGENT_MEMORY || a == APP_AGENTS || a == APP_SETTINGS || a == APP_PDF || a == APP_LAYOUT || a == APP_SYSMON || a == APP_AGENDA || a == APP_CORREO || a == APP_CONTACTOS || a == APP_HOJA;   /* SOMA_295_CORREO; SOMA_357_CONTACTOS; SOMA_359_HOJA_VENTANA */
 }
 static struct her_bc *her_bc_find(enum app_mode app, int slot, int create)
 {
@@ -884,12 +886,12 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     her_windows[idx].w = her_win_w;
     her_windows[idx].h = her_win_h;
     {   /* SOMA_PARCHE_V2_GUI: tamano minimo por aplicacion al abrir */
-        uint32_t mw = her_app_min_w(app), mh = (app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) ? 600u : HER_MIN_H + 60u;
+        uint32_t mw = her_app_min_w(app), mh = (app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CONTACTOS || app == APP_HOJA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) ? 600u : HER_MIN_H + 60u;
         if (cur_w > 64u && mw > cur_w - 32u) mw = cur_w - 32u;
-        if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
+        if ((app == APP_PAINT || app == APP_LAYOUT || app == APP_SETTINGS || app == APP_PDF || app == APP_SYSMON || app == APP_AGENDA || app == APP_CONTACTOS || app == APP_HOJA || app == APP_CODER_APP || app == APP_RECORDER || app == APP_CAMERA || app == APP_CAPTURE || app == APP_MEDIA || app == APP_YOUTUBE) && cur_h > 96u && mh > cur_h - 60u) mh = cur_h - 60u;
         if (her_windows[idx].w < mw) her_windows[idx].w = mw;
         if (cur_h > 96u && mh <= cur_h - 48u && her_windows[idx].h < mh) her_windows[idx].h = mh;
-        if ((app == APP_WEB_BROWSER || app == APP_PDF || app == APP_IMAGE_VIEWER || app == APP_SYSMON || app == APP_CODER_APP || app == APP_YOUTUBE || app == APP_AGENT_CHAT || app == APP_CORREO) && cur_w > 400u && cur_h > 300u) {   /* SOMA_285_CHAT: el chat tambien abre grande */   /* PARCHE 088: tambien PDF e imagenes */   /* PARCHE 086: el navegador abre grande (2/3 de ancho, 85 % de alto) */
+        if ((app == APP_WEB_BROWSER || app == APP_PDF || app == APP_IMAGE_VIEWER || app == APP_SYSMON || app == APP_CODER_APP || app == APP_YOUTUBE || app == APP_AGENT_CHAT || app == APP_CORREO || app == APP_HOJA) && cur_w > 400u && cur_h > 300u) {   /* SOMA_285_CHAT: el chat tambien abre grande */   /* PARCHE 088: tambien PDF e imagenes */   /* PARCHE 086: el navegador abre grande (2/3 de ancho, 85 % de alto) */
             uint32_t bw = cur_w * 2u / 3u, bh = cur_h * 85u / 100u;
             if (bw > 1400u) bw = 1400u;
             if (bw < mw) bw = mw;
@@ -939,6 +941,8 @@ static void her_open_app(enum app_mode app, uint32_t cur_w, uint32_t cur_h)
     case APP_NOTICIAS:     noticias_gui_init(); break;      /* SOMA_337_NOTICIAS */
     case APP_AGENTS:       agentes_gui_init(); break;       /* SOMA_338_AGENTES */
     case APP_AGENDA:       agenda_gui_init(); break;        /* SOMA_272_AGENDA */
+    case APP_CONTACTOS:    contactos_gui_init(); break;     /* SOMA_357_CONTACTOS */
+    case APP_HOJA:         hoja_gui_init(); break;          /* SOMA_359_HOJA_VENTANA */
     case APP_CORREO:       correo_init(); break;            /* SOMA_295_CORREO */
     case APP_RECORDER:     recorder_init(); break;          /* SOMA_177_T480S */
     case APP_CAMERA:       camapp_init(); break;            /* SOMA_178_T480S */

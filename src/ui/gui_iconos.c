@@ -5,7 +5,7 @@
 /* SOMA ASYNC MATERIALIZE PATCH v4 */
 /* SOMA ORBITAL CALM PATCH v3 */
 /* SOMA ORBITAL ICONS PATCH v2: iconos como cuerpos en orbita estable. */
-#define HER_DOCK_ITEM_COUNT 23     /* SOMA_272_AGENDA: +1 (la agenda va al final para no mover las posiciones guardadas); SOMA_295_CORREO: +1 (el correo, tambien al final) */
+#define HER_DOCK_ITEM_COUNT 25     /* SOMA_272_AGENDA: +1 (la agenda va al final para no mover las posiciones guardadas); SOMA_295_CORREO: +1 (el correo, tambien al final) */
 #define HER_ICON_ANIM_MAX   256u
 #define HER_ICON_BOX_SIZE   44
 
@@ -40,6 +40,8 @@ static const struct her_dock_item her_dock_items[HER_DOCK_ITEM_COUNT] = {
     { ICON_CORREO,   0x0022D3EE,  "CORREO",  APP_CORREO },          /* SOMA_295_CORREO: correo electronico */
     { ICON_DISCOS,   0x00F59E0B,  "DISCOS",  APP_DISCOS },          /* SOMA_331_DISCOS: discos y particiones (al final: no mueve las posiciones guardadas) */
     { ICON_NOTICIAS, 0x00E2E8F0,  "NOTICIAS", APP_NOTICIAS },       /* SOMA_337_NOTICIAS: noticias (al final) */
+    { ICON_CONTACTOS, 0x00F472B6, "CONTACTOS", APP_CONTACTOS },     /* SOMA_357_CONTACTOS: libreta de contactos (al final, junto al calendario) */
+    { ICON_HOJA,     0x0022C55E,  "HOJA",    APP_HOJA },            /* SOMA_359_HOJA_VENTANA: hoja de calculo (al final) */
 };
 
 /* La aparicion se escalona ligeramente para que los iconos escapen uno tras
@@ -113,10 +115,10 @@ static void her_place_window_corner(uint32_t cur_w, uint32_t cur_h, int corner)
  * 0: asistentes, 1: sistema/desarrollo, 2: trabajo,
  * 3: multimedia, 4: captura/red. Posiciones estaticas en el escritorio. */
 static const uint8_t her_group_col[HER_DOCK_ITEM_COUNT] = {
-    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4,0,2,1,4   /* SOMA_295_CORREO: el correo, con el trabajo; SOMA_331_DISCOS: discos, con el sistema; SOMA_337_NOTICIAS: con la red */
+    0,1,4,2,3,2,0,2,1,3,0,3,2,1,3,4,4,1,4,0,2,1,4,0,3   /* SOMA_359_HOJA_VENTANA: en el unico hueco libre (columna 3, abajo); SOMA_357_CONTACTOS: con los asistentes, bajo el calendario; SOMA_295_CORREO: el correo, con el trabajo; SOMA_331_DISCOS: discos, con el sistema; SOMA_337_NOTICIAS: con la red */
 };
 static const uint8_t her_group_row[HER_DOCK_ITEM_COUNT] = {
-    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3,3,4,4,4
+    0,0,2,0,0,1,2,2,1,1,1,2,3,2,3,1,0,3,3,3,4,4,4,4,4
 };
 /* SOMA_208_ESCRITORIO: disposicion del usuario. Cada icono guarda su posicion en milesimas de pantalla (+1; 0 = la del grupo) para
  * que sirva a cualquier resolucion. Se guarda en /etc/escritorio.conf. */
@@ -418,6 +420,17 @@ static void her_icon_dist(int icon, int32_t X, int32_t Y, int32_t *dm, int32_t *
         IC_M(ic_seg(X, Y, 14, 18, 50, 18, 20)); IC_M(ic_seg(X, Y, 50, 18, 50, 52, 20)); IC_M(ic_seg(X, Y, 50, 52, 14, 52, 20)); IC_M(ic_seg(X, Y, 14, 52, 14, 18, 20));
         IC_M(ic_seg(X, Y, 14, 28, 50, 28, 18)); IC_M(ic_seg(X, Y, 23, 12, 23, 22, 20)); IC_M(ic_seg(X, Y, 41, 12, 41, 22, 20));
         IC_A(ic_circ(X, Y, 24, 40, 4)); IC_A(ic_circ(X, Y, 38, 40, 4));
+        break;
+    case ICON_CONTACTOS:                                 /* SOMA_357_CONTACTOS: ficha con una persona (cabeza y hombros) y renglones */
+        IC_M(ic_seg(X, Y, 12, 14, 52, 14, 20)); IC_M(ic_seg(X, Y, 52, 14, 52, 50, 20)); IC_M(ic_seg(X, Y, 52, 50, 12, 50, 20)); IC_M(ic_seg(X, Y, 12, 50, 12, 14, 20));
+        IC_A(ic_circ(X, Y, 26, 27, 5)); IC_A(ic_seg(X, Y, 19, 42, 33, 42, 24));
+        IC_M(ic_seg(X, Y, 38, 26, 46, 26, 14)); IC_M(ic_seg(X, Y, 38, 33, 46, 33, 14)); IC_M(ic_seg(X, Y, 38, 40, 44, 40, 14));
+        break;
+    case ICON_HOJA:                                      /* SOMA_359_HOJA_VENTANA: hoja con la fila de titulos y la rejilla */
+        IC_M(ic_seg(X, Y, 12, 14, 52, 14, 20)); IC_M(ic_seg(X, Y, 52, 14, 52, 50, 20)); IC_M(ic_seg(X, Y, 52, 50, 12, 50, 20)); IC_M(ic_seg(X, Y, 12, 50, 12, 14, 20));
+        IC_A(ic_seg(X, Y, 13, 21, 51, 21, 22));
+        IC_M(ic_seg(X, Y, 25, 22, 25, 49, 14)); IC_M(ic_seg(X, Y, 38, 22, 38, 49, 14)); IC_M(ic_seg(X, Y, 13, 31, 51, 31, 14)); IC_M(ic_seg(X, Y, 13, 40, 51, 40, 14));
+        IC_A(ic_circ(X, Y, 45, 44, 3));
         break;
     case ICON_NOTICIAS:                                  /* SOMA_337_NOTICIAS: hoja de periodico: titular, foto y columnas */
         IC_M(ic_seg(X, Y, 12, 14, 52, 14, 20)); IC_M(ic_seg(X, Y, 52, 14, 52, 50, 20)); IC_M(ic_seg(X, Y, 52, 50, 12, 50, 20)); IC_M(ic_seg(X, Y, 12, 50, 12, 14, 20));

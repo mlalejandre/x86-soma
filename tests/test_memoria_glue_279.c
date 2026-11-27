@@ -46,6 +46,9 @@ int vfs_size(const char *n) { int i = fs_find(n); return i < 0 ? -1 : (int)fsx[i
 int vfs_delete(const char *n) { int i = fs_find(n); if (i < 0) return -1; free(fsx[i].d); fsx[i] = fsx[nfs - 1]; nfs--; return 0; }
 char *vfs_read_alloc(const char *n, uint32_t *len) { int i = fs_find(n); if (i < 0) return 0; char *p = malloc(fsx[i].n + 1); memcpy(p, fsx[i].d, fsx[i].n); p[fsx[i].n] = 0; *len = fsx[i].n; return p; }
 
+/* SOMA_357_CONTACTOS: memoria.c tambien mete las fichas de los contactos; aqui no hay libreta */
+void contactos_contexto(const char *m, char *d, uint32_t max, uint32_t *pos) { (void)m; (void)d; (void)max; (void)pos; }
+void hoja_contexto(const char *m, char *d, uint32_t max, uint32_t *pos) { (void)m; (void)d; (void)max; (void)pos; }   /* SOMA_360_HOJA_GRAFICOS */
 /* SOMA_280_IMPORTAR: la agenda (agenda_core.c es logica pura y se enlaza de verdad; solo el reloj y el almacen son falsos) */
 static struct ag_cal g_cal; static int g_cal_ini;
 int64_t agenda_ahora(void) { return ag_min(2026, 11, 23, 17, 0); }
