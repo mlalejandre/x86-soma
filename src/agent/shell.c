@@ -854,6 +854,7 @@ static const struct command_entry cmd_table[] = {
     /* Sistema de Archivos y Coreutils */
     { "ls",           cmd_ls,           CMD_F_SAFE,   "Lista archivos persistentes del RamFS" },
     { "cat",          cmd_cat,          CMD_F_SAFE,   "Muestra el contenido de un archivo" },
+    { "mirar",        cmd_mirar,        CMD_F_SAFE,   "Mira una imagen con el modelo de IA (si tiene vision): mirar <ruta|pantalla> [pregunta]" },   /* SOMA_355_STRATA */
     { "write",        cmd_write,        CMD_F_SAFE,   "Crea o sobrescribe un archivo en RamFS" },
     { "rm",           cmd_rm,           CMD_F_SAFE,   "Elimina un archivo del RamFS" },
     { "cp",           cmd_cp,           CMD_F_SAFE,   "Copia un archivo a una nueva ruta" },

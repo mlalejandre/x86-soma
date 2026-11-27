@@ -122,6 +122,8 @@ struct w3_state {          /* al principio de W3_OUT_VA */
     char     log_msg[200];
     char     fs_path[512];             /* ruta pedida con SYS_WEB_FS */
     char     dd_opt[W3_DD_MAX][64];    /* textos del <select> desplegado */
+    uint32_t media_seq;                /* SOMA_350_NAVEGADOR_VIDEO: sube con cada clic en un <video> (0 = ninguno) */
+    char     media_url[1024];          /* su MP4 (http/https) */
     uint8_t  reply[W3_REPLY_MAX];
 };
 struct w3_img_reply { int32_t ok, w, h, pad; char abs[2048]; };          /* SOMA_203 */

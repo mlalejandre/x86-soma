@@ -37,6 +37,10 @@ class Origen(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
             return
+        if p.path == "/icono.svg":                 # SOMA_347
+            body = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M0 0h512v512H0z"/></svg>'
+            self.send_response(200); self.send_header("Content-Type", "image/svg+xml"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
         body = ("recurso %s" % p.path).encode() * 20
         self.send_response(200); self.send_header("Content-Type", "text/plain"); self.send_header("Content-Length", str(len(body)))
         if cerrar_la_proxima[0]:
@@ -107,6 +111,13 @@ def main():
     with gw._pool_lock:
         n = sum(len(v) for v in gw._pool.values())
     ck(n <= gw.POOL_PER_HOST, "como mucho %d conexiones guardadas por servidor (hay %d)" % (gw.POOL_PER_HOST, n))
+    # SOMA_347: el SVG llega tal cual a quien lo sabe dibujar (SOMA desde el 180) y en PNG a quien no
+    st, ct, extra, data, _ = gw.get_resource(base + "/icono.svg", "GET", None, {}, True)
+    ck(st == 200 and ct == "image/svg+xml" and data.startswith(b"<svg"), "SVG: se guarda el original (no se convierte al descargar)")
+    ct2, d2 = gw.adapt_for_client(ct, data, "image/webp,image/svg+xml,image/png,image/jpeg,image/gif,image/*;q=0.8")
+    ck(ct2 == "image/svg+xml" and d2 == data, "SVG: a un cliente que anuncia image/svg+xml se le da el SVG")
+    ct3, d3 = gw.adapt_for_client(ct, data, "image/png,image/jpeg,image/gif")
+    ck(ct3 == "image/png" and d3[:8] == b"\x89PNG\r\n\x1a\n", "SVG: a un cliente que no lo anuncia se le da PNG")
     srv.shutdown()
     print("test_pasarela_342:", "todo bien" if not fallos else "%d fallos" % fallos)
     return 1 if fallos else 0

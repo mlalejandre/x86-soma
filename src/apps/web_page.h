@@ -16,7 +16,8 @@ struct wp_hist { char url[2048]; int scroll_y; char title[64]; };   /* SOMA 188B
 struct wp_img { char *url; int w, h; uint32_t *px; int state; int has_alpha; int tries; uint32_t hash; int pw, ph; uint32_t serial; /* SOMA_152 */ int frames, cur; uint16_t *delay; uint32_t total_ms; /* SOMA_180: animacion (px tiene `frames` fotogramas de pw*ph) */ int size_dep; /* SOMA_152B */
                 int dist, dw, dh; uint8_t ratio_only, is_svg, redraws, painted;
                 uint8_t aplazada;
-                int fw, fh; uint8_t sin_fijo; };   /* SOMA_342_NAVEGADOR_AGIL: el mayor ancho/alto fijo con que se muestra (CSS o atributos;
+                int fw, fh; uint8_t sin_fijo;
+                uint32_t retry_at; uint8_t js_want; };   /* SOMA_346: js_want = la pidio el JS (new Image()): se carga aunque no se dibuje */   /* SOMA_345_NAVEGADOR_REAL: tras un fallo de red no se repite antes de este instante (ms, 32 bits bajos) */   /* SOMA_342_NAVEGADOR_AGIL: el mayor ancho/alto fijo con que se muestra (CSS o atributos;
                                                     * 0 = no se sabe); sin_fijo = en algun sitio se muestra a su tamano natural */   /* SOMA_341_NAVEGADOR_MEMORIA: no cupo lejos de la vista: se carga al acercarse (no antes de maquetar) */   /* SOMA_188: painted = pedida al pintar (fondo CSS a la vista) */             /* SOMA_PARCHE_028_UI: distancia a la zona visible y tamano mostrado (0 = desconocido) */
 struct wp_store;
 struct wp_svg;
@@ -44,6 +45,10 @@ struct wpage {
     volatile int scroll_req;                      /* SOMA_152: desplazamiento pedido por teclado (lo anima el hilo de la GUI) */
     int script_phase, script_guard, script_status; /* SOMA_152B: scripts repartidos en turnos (la pagina se usa mientras) */
     int img_relayout_due;                         /* SOMA_152B: una imagen de la que dependia la maquetacion ya llego */
+    uint32_t media_seq; char media_url[1024];      /* SOMA_350_NAVEGADOR_VIDEO: video pedido con un clic (lo abre la ventana) */
+    int defer_ph347;                              /* SOMA_347_NAVEGADOR_DEFER: 1 = ya se analizo el documento: tocan los scripts diferidos */
+    struct wnode *jsimg[64]; int njsimg;          /* SOMA_346_NAVEGADOR_RENDER: <img> cuyo src cambio el JS (se les dispara load/error) */
+    int img_ev_done; uint32_t img_ev_gen; uint64_t img_ev_t;   /* SOMA_346: cuando se repasaron por ultima vez las <img> del documento */
     struct wnode *dynq[64]; int dynq_h, dynq_n;   /* SOMA_152C: <script src> insertados por JS, pendientes (async) */
     struct wnode *script_wait;                    /* SOMA_152D: script del HTML cuya descarga esta en el hilo de E/S */
     int img_ok, img_fail, img_logged; char img_why[72];

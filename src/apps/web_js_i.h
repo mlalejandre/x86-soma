@@ -160,6 +160,8 @@ jstr *js_str_new(struct jrt *rt, const char *s, uint32_t n);
 void     js_module_init(struct jrt *rt);
 int      js_module_transform(const char *src, uint32_t len, struct wb *out, int async_wrap);
 jobj    *js_own_keys(struct jrt *rt, jv v, int all);
+int      js_user_sym(const jstr *k);
+void     js_fn_proto_ensure(struct jrt *rt, jv v);   /* SOMA_345_NAVEGADOR_REAL: crea el "prototype" de una funcion si aun no se habia leido */   /* SOMA_345_NAVEGADOR_REAL: clave "@@..." que es un simbolo de verdad (no una ranura interna) */
 int      js_proxy_on(void);
 void     js_proxy_init(struct jrt *rt);
 /* SOMA 188B: BigInt (web_js_big.c) */
@@ -312,6 +314,7 @@ void  js_run_big(struct jrt *rt, void (*fn)(void *), void *arg);
 /* puente DOM (web_js_dom.c) */
 int   js_dom_dispatch(struct jrt *rt, struct wnode *target, const char *type, int x, int y, int key, const char *keystr, int mods);
 void  js_dom_fire_load(struct jrt *rt);
+void  js_dom_set_ready(struct jrt *rt, const char *st);   /* SOMA_347_NAVEGADOR_DEFER */
 void  js_dom_set_script(struct jrt *rt, struct wnode *n);
 void  js_dom_set_url(struct jrt *rt, const char *url);
 int   js_pump_timers(struct jrt *rt, int *ran);

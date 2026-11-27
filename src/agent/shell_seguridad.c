@@ -56,12 +56,12 @@ static int cmd_llm_config(const char *args, char *out_buf, uint32_t max_out)
         kprint("Lanzador del servidor local: "); kprint(lb); kprint(c.launcher[0] ? "" : " (por defecto)"); kprint(" | clave: "); kprint(c.launcher_key[0] ? "puesta" : "FALTA"); kprint("\n");
         if (c.launcher_key[0]) {
             char mo[LLM_MODEL_MAX]; int st = llm_launcher_status(mo, sizeof mo);
-            kprint("estado de llama-server: "); kprint(st == 1 ? "LISTO" : st == 2 ? "cargando un modelo" : st == 0 ? "parado" : "ERROR");
+            kprint("estado del servidor del modelo: "); kprint(st == 1 ? "LISTO" : st == 2 ? "cargando un modelo" : st == 0 ? "parado" : "ERROR");
             if (st > 0 && mo[0]) { kprint(", modelo "); kprint(mo); }
             kprint("\n"); if (st < 0) { kprint(llm_last_error); kprint("\n"); }
         }
         kprint("uso: llm-config lanzador clave <clave que muestra soma_lanzador.py> | lanzador servidor <ip:puerto> | lanzador modelos\n"
-               "     llm-config lanzar <numero o nombre> (arranca llama-server con ese modelo) | llm-config parar\n");
+               "     llm-config lanzar <numero o nombre> (arranca ese modelo: llama-server o un perfil de Strata) | llm-config parar\n");
         return 1;
     }
     if (shell_starts_with(args, "lanzar")) {
@@ -77,13 +77,13 @@ static int cmd_llm_config(const char *args, char *out_buf, uint32_t max_out)
             }
         }
         if (!*v) { kprint("uso: llm-config lanzar <numero de `llm-config lanzador modelos` o nombre>\n"); return 1; }
-        kprint("llm-config: arrancando llama-server con "); kprint(v); kprint(" (cargar el modelo puede tardar un par de minutos) ...\n");
+        kprint("llm-config: arrancando el servidor con "); kprint(v); kprint(" (cargar el modelo puede tardar un par de minutos) ...\n");
         if (llm_launcher_start(v, 240000, 0)) { llmcfg_nmodels = 0; kprint("llm-config: servidor LISTO con "); kprint(v); kprint(". Queda elegido como modelo local.\n"); }
         else { kprint("llm-config: no arranco. "); kprint(llm_last_error); kprint("\n"); }
         return 1;
     }
     if (shell_starts_with(args, "parar")) {
-        if (llm_launcher_stop() == 0) kprint("llm-config: llama-server parado (VRAM libre)\n"); else { kprint(llm_last_error); kprint("\n"); }
+        if (llm_launcher_stop() == 0) kprint("llm-config: servidor del modelo parado (VRAM libre)\n"); else { kprint(llm_last_error); kprint("\n"); }
         return 1;
     }
     if (shell_starts_with(args, "proveedor")) {

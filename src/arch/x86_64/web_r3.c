@@ -141,6 +141,7 @@ int web_r3_start(int vw, int vh)
     sp.sysmask = (1u << SYS_EXIT) | (1u << SYS_YIELD) | (1u << SYS_SLEEP) | (1u << SYS_UPTIME_MS) | USER_SYS_NET_MASK | USER_SYS_WEB_MASK;
     sp.regions[0] = &r_in; sp.regions[1] = &r_out; sp.regions[2] = &r_heap; sp.regions[3] = &r_surf; sp.nregions = 4;
     sp.reserve_frames = SBX_RESERVE_FRAMES;
+    sp.max_sockets = USER_MAX_SOCKETS_WEB;          /* SOMA_345_NAVEGADOR_REAL: con 4, en las webs que sirven desde varios servidores las imagenes fallaban con "no se pudo conectar" */
     int idx = -2, err = 0;
     struct progz pz;                                         /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */
     if (progz_abre(PROGZ(websvc), "navegador", &pz) != 0) idx = -1;

@@ -116,6 +116,51 @@ int main(void)
     CHECK(col("light-dark(#123456, #abcdef)") == 0x123456, "light-dark %06x", col("light-dark(#123456, #abcdef)"));
     CHECK(col("rgb(10 20 30 / 50%)") != 0xFFFFFFFFu, "rgb moderno");
 
+    /* SOMA_346_NAVEGADOR_RENDER: max-content con flotantes (se suman) y con el ancho fijo de flotantes e inline-block. El menu de El
+     * Bierzo Digital (<li> flotantes dentro de un elemento flex) media 0 y los puntos caian uno debajo de otro. Valores de Chrome. */
+    L = build("<!doctype html><style>body{margin:0}*{box-sizing:border-box}#m{display:flex;justify-content:center;width:1200px}ul{margin:0;padding:0;list-style:none}"
+              "li{float:left;width:100px;height:20px}</style><div id='m'><div id='c'><ul><li id='a'></li><li></li><li></li><li></li><li id='e'></li></ul></div>"
+              "<div id='s' style='width:30px;height:20px'></div></div>", 1266, 900, &d);
+    rect("flex+floats", L, d, "c", 335, 0, 500, 20); rect("flex+floats", L, d, "a", 335, 0, 100, 20); rect("flex+floats", L, d, "e", 735, 0, 100, 20); rect("flex+floats", L, d, "s", 835, 0, 30, 20);
+    L = build("<!doctype html><style>body{margin:0}#m{float:left}i{float:left;width:50px;height:10px}.c{clear:left}</style><div id='m'><i id='a'></i><i id='b'></i>"
+              "<i id='c' class='c'></i><i id='d'></i></div>", 1266, 900, &d);
+    rect("float clear", L, d, "m", 0, 0, 100, 20); rect("float clear", L, d, "b", 50, 0, 50, 10); rect("float clear", L, d, "c", 0, 10, 50, 10); rect("float clear", L, d, "d", 50, 10, 50, 10);
+    L = build("<!doctype html><style>body{margin:0}#m{position:absolute;top:0;left:0}i{float:left;width:60px;height:10px;margin-right:5px}</style><div id='m'><i id='a'></i><i></i><i id='c'></i></div>", 1266, 900, &d);
+    rect("abs floats", L, d, "m", 0, 0, 195, 10); rect("abs floats", L, d, "c", 130, 0, 60, 10);
+    L = build("<!doctype html><style>body{margin:0}#g{display:grid;grid-template-columns:auto 1fr;width:600px}i{float:left;width:30px;height:10px}</style>"
+              "<div id='g'><div id='x'><i></i><i></i><i id='c'></i></div><div id='y' style='height:5px'></div></div>", 1266, 900, &d);
+    rect("grid auto floats", L, d, "x", 0, 0, 90, 10); rect("grid auto floats", L, d, "y", 90, 0, 510, 5);
+
+    /* SOMA_347_NAVEGADOR_GRID: plantilla de 20minutos: lineas con nombre, repeat(auto-fill, minmax(60px, 1fr)) y una pista fija de 300px.
+     * Un elemento colocado solo en la primera columna con min-content de 148px no la ensancha (su minimo son los 60px). Valores = Chrome. */
+    L = build("<style>body{margin:0}#g{display:grid;width:990px;grid-template-columns:[main-start content-start] repeat(auto-fill,minmax(60px,1fr)) [content-end sidebar-start] 300px [sidebar-end main-end];column-gap:20px}"
+              "#t{grid-column:main-start/main-end;grid-row:1;height:10px}#c{grid-column:content-start/content-end;grid-row:2;height:10px}#s{grid-column:sidebar-start/sidebar-end;grid-row:2/span 2;height:10px}"
+              "#w{height:10px}#w i{display:inline-block;width:148px;height:5px}</style><div id=g><div id=t></div><div id=c></div><div id=s></div><div id=w><i></i></div></div>", 1200, 600, &d);
+    rect("grid 347 nombres", L, d, "t", 0, 0, 990, 10); rect("grid 347 nombres", L, d, "c", 0, 10, 670, 10);
+    rect("grid 347 nombres", L, d, "s", 690, 10, 300, 10); rect("grid 347 minimo fijo", L, d, "w", 0, 20, 67, 10);
+    /* SOMA_347_NAVEGADOR_INHERIT: *,*::before,*::after{box-sizing:inherit} con html{box-sizing:border-box} (Bootstrap, WordPress):
+     * el relleno va dentro del ancho. Y width:unset es auto (no el ancho del padre). Valores = Chrome. */
+    L = build("<style>html{box-sizing:border-box}*,*::before,*::after{box-sizing:inherit}body{margin:0}#a{width:100px;padding:10px 20px;height:30px}"
+              "#p{width:300px}#u{float:left;width:unset;height:5px}#f{position:fixed;top:0;left:0;width:100vw;height:100vh;padding:5% 10%}</style>"
+              "<div id=a></div><div id=p><div id=u></div></div><div id=f></div>", 1000, 600, &d);
+    rect("box-sizing:inherit", L, d, "a", 0, 0, 100, 30); rect("width:unset", L, d, "u", 0, 30, 0, 5);
+    rect("fixed 100vw con relleno", L, d, "f", 0, 0, 1000, 600);
+    /* SOMA_347_NAVEGADOR_FLEXMIN: base flex acotada por min/max antes de repartir (min-width:30% con poco contenido; max-width con
+     * flex-basis mayor). Valores = Chrome. */
+    L = build("<!doctype html><style>body{margin:0}#m{display:flex;width:1000px}#l{min-width:30%;height:10px}#l i{display:block;width:66px;height:5px}"
+              "#c{flex:1;height:10px}#r{max-width:50px;flex:0 0 200px;height:10px}</style><div id=m><div id=l><i></i></div><div id=c></div><div id=r></div></div>", 1200, 600, &d);
+    rect("flex min-width %", L, d, "l", 0, 0, 300, 10); rect("flex min-width %", L, d, "c", 300, 0, 650, 10); rect("flex max-width", L, d, "r", 950, 0, 50, 10);
+    /* SOMA_349: imagen "comprimible" (width fijo y max-width:100%) en una celda de tabla automatica: aporta 0 al minimo y la columna
+     * de texto se lleva el sitio, como en Chrome (PyPI: 138/802 px; antes 270/670). Sin texto: la columna ancha la fija un bloque. */
+    L = build("<!doctype html><style>*{box-sizing:border-box}body{margin:0}#t{display:table;width:1000px;padding:0 30px}#l{display:table-cell;padding-right:50px}"
+              "#l img{display:block;width:220px;max-width:100%;height:20px}#x{display:table-cell}#x i{display:inline-block;width:40px;height:10px}</style>"
+              "<div id=t><div id=l><img></div><div id=x><i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i> <i></i></div></div>", 1200, 600, &d);
+    { struct wnode *nl = wd_by_id(d->root, "l"); int a, b2, w, h; CHECK(nl && wl_node_rect(L, nl, &a, &b2, &w, &h) && w < 200, "imagen comprimible en celda: columna %d px (Chrome < 200; antes 270)", w); }
+    /* SOMA_349: min-content con un tramo nowrap al final (icono de enlace externo de PyPI): solo cuenta el tramo desde el ultimo corte,
+     * no toda la linea. Chrome: 89 px (antes 335: el parrafo entero sin cortes). */
+    L = build("<!doctype html><style>body{margin:0;font:16px Arial}#c{display:inline-block;width:min-content}#c b:after{content:\"zz\";white-space:nowrap;font-weight:400}</style>"
+              "<div id=c>aaa bbbbbbbbbb cc dd ee ff gg hh ii jj kk <b id=b>mm</b>.</div>", 1200, 600, &d);
+    { struct wnode *nc = wd_by_id(d->root, "c"); int a, b2, w, h; CHECK(nc && wl_node_rect(L, nc, &a, &b2, &w, &h) && w >= 80 && w <= 120, "min-content con nowrap al final: %d px (Chrome 89 con Liberation; aqui DejaVu; antes 335+)", w); }
     printf("%d comprobaciones, %d fallos\n", checks, fails);
     if (fails) return 1;
     printf("SOMA 181: maquetacion OK\n");

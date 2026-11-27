@@ -57,6 +57,7 @@ void fb_draw_box_shadow(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, i
 int fb_corners_save(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, uint32_t *buf) { (void)x; (void)y; (void)w; (void)h; (void)r; (void)buf; return 0; }
 void fb_corners_restore(int32_t x, int32_t y, int32_t w, int32_t h, int32_t r, const uint32_t *buf) { (void)x; (void)y; (void)w; (void)h; (void)r; (void)buf; }
 void fb_blit(int32_t dx, int32_t dy, const uint32_t *src, int32_t sw, int32_t sh, int32_t stride) { for (int j = 0; j < sh; j++) for (int i = 0; i < sw; i++) put(dx + i, dy + j, src[j * stride + i], 255); }
+int fb_read_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t *out) { if (!g_fb || x < 0 || y < 0 || x + w > g_fbw || y + h > g_fbh) return 0; for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) out[j * w + i] = g_fb[(y + j) * g_fbw + x + i]; return 1; }   /* SOMA_347 */
 void fb_blit_alpha(int32_t dx, int32_t dy, const uint32_t *src, int32_t sw, int32_t sh, int32_t stride) { for (int j = 0; j < sh; j++) for (int i = 0; i < sw; i++) { uint32_t p = src[j * stride + i]; put(dx + i, dy + j, p, (int)(p >> 24)); } }
 void fb_draw_mask8(int32_t x, int32_t y, const uint8_t *mask, int32_t w, int32_t h, uint32_t rgb, uint32_t alpha) { for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) put(x + i, y + j, rgb, (int)(mask[j * w + i] * alpha / 255)); }
 int font_vec_available(void) { return 0; }

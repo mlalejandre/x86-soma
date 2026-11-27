@@ -376,6 +376,17 @@ int js_to_index(struct jrt *rt, jv v, int64_t *out)
     }
     return 0;
 }
+/* SOMA_345_NAVEGADOR_REAL: el "prototype" de una funcion se crea la primera vez que se lee (js_get). Object.defineProperty,
+ * getOwnPropertyDescriptor, hasOwnProperty y la lista de claves propias no lo leen: no lo encontraban, y Babel, que hace
+ * Object.defineProperty(Clase, "prototype", {writable: false}) en cada clase, la dejaba sin prototipo ("Cannot call a class as a
+ * function" en 20minutos.es). Antes de mirar las propiedades propias de una funcion se crea el que falte. */
+void js_fn_proto_ensure(struct jrt *rt, jv v)
+{
+    if (v.t != JT_OBJ) return;
+    jobj *o = v.u.o;
+    if (o->cls != JC_FUNC || !o->u.fn.node || (o->u.fn.node->fl & (NF_ARROW | NF_METHOD | NF_GETTER | NF_SETTER))) return;
+    if (!js_find_own(o, rt->s_prototype)) (void)js_get(rt, v, rt->s_prototype);
+}
 
 /* ------------------------------ acceso a propiedades ------------------------------ */
 static jv proto_of_prim(struct jrt *rt, jv v) { return jobjv(v.t == JT_STR ? rt->p_string : v.t == JT_NUM ? rt->p_number : rt->p_boolean); }
@@ -914,7 +925,7 @@ static jv eval_object(struct jrt *rt, struct jn *n, struct scope *sc)
             if (s.t == JT_OBJ) {
                 jobj *so = s.u.o;
                 if (so->cls == JC_ARRAY) for (uint32_t i = 0; i < so->alen; i++) { char t[16]; int l = wu_itoa(i, t); js_def(rt, o, js_intern_n(rt, t, (uint32_t)l), so->el[i], JP_ENUM); }
-                for (uint32_t i = 0; i < so->np; i++) { struct jprop *pp = &so->props[i]; if (!(pp->flags & JP_ENUM) || (pp->key->d[0] == '@' && pp->key->d[1] == '@')) continue; js_def(rt, o, pp->key, (pp->flags & JP_ACC) ? js_get(rt, s, pp->key) : pp->val, JP_ENUM); }
+                for (uint32_t i = 0; i < so->np; i++) { struct jprop *pp = &so->props[i]; if (!(pp->flags & JP_ENUM) || (pp->key->d[0] == '@' && pp->key->d[1] == '@' && !js_user_sym(pp->key))) continue;   /* SOMA_345: {...o} copia tambien los simbolos */ js_def(rt, o, pp->key, (pp->flags & JP_ACC) ? js_get(rt, s, pp->key) : pp->val, JP_ENUM); }
             } else if (s.t == JT_STR) { uint32_t n16 = js_u16len(s.u.s); for (uint32_t i = 0; i < n16; i++) { char t[16]; int l = wu_itoa(i, t); js_def(rt, o, js_intern_n(rt, t, (uint32_t)l), jstrv(js_u16_char(rt, s.u.s, i)), JP_ENUM); } }
             continue;
         }

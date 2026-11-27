@@ -75,6 +75,78 @@ var s = ""; for (var i = 0; i < 20000; i++) s += '<li class="item-' + (i % 7) + 
 FINJS
 t0=$(date +%s%N); caso "+= de 20000"  0 "568890" 'html344.js'
 dt=$(( ($(date +%s%N) - t0) / 1000000 )); echo "   (+= de 20000 vueltas: $dt ms)"
+# SOMA_345_NAVEGADOR_REAL: lo que faltaba de JavaScript moderno (yarnpkg.com, hecho con esbuild, se rompia con
+# "__getOwnPropDescs no es una funcion") y los simbolos en Reflect.ownKeys / getOwnPropertySymbols / Object.assign / {...o}
+cat > "$WS/es345.js" <<'FINJS'
+var o = { a: 1, get b() { return 2; } }, s = Symbol("s"); o[s] = 3;
+var d = Object.getOwnPropertyDescriptors(o), sp = Object.defineProperties({}, Object.getOwnPropertyDescriptors({ x: 1, y: 2 }));
+var gb = Object.groupBy([1, 2, 3, 4, 5], function (n) { return n % 2 ? "impar" : "par"; }), mg = Map.groupBy([1, 2, 3], function (n) { return n > 1; });
+var a = [1, 2, 3, 4], ts = a.toSpliced(1, 2, 9);
+var u = new Set([1, 2, 3]).union(new Set([3, 4])), it = new Set([1, 2, 3]).intersection(new Set([2, 3, 9])), df = new Set([1, 2, 3]).difference(new Set([2]));
+var w = {}; w.__defineGetter__("k", function () { return 7; });
+print(typeof d.b.get, d.a.value, d[s].value, sp.x + sp.y, gb.impar.join(), gb.par.join(), Object.getPrototypeOf(gb) === null, mg.get(true).join(),
+      ts.join(), a.join(), [...u].join(), [...it].join(), [...df].join(), new Set([1]).isSubsetOf(new Set([1, 2])), new Set([1]).isDisjointFrom(new Set([2])),
+      "ab".isWellFormed(), "\u{1F600}x".toWellFormed() === "\u{1F600}x", w.k, typeof w.__lookupGetter__("k"));
+Array.fromAsync([Promise.resolve(1), 2]).then(function (r) { print("fromAsync", r.join()); });
+var c1 = new AbortController(), c2 = new AbortController(), any = AbortSignal.any([c1.signal, c2.signal]); c2.abort("x"); print("any", any.aborted, any.reason);
+var k = Symbol("k"), src = { x: 1 }; src[k] = 2; Object.defineProperty(src, "oculta", { value: 3, enumerable: false });
+var cp = { ...src }, as = Object.assign({}, src), el = document.createElement("div"); el.style.color = "red"; el.classList.add("c");
+print(Reflect.ownKeys(src).length, Object.getOwnPropertySymbols(src).length, cp[k], as[k], Object.keys(cp).join(), Object.getOwnPropertySymbols(el).length,
+      Reflect.ownKeys(el).indexOf("@@st"), Object.getOwnPropertySymbols(Array.prototype).length > 0);
+FINJS
+caso "es2024 345"      0 'function 1 3 3 1,3,5 2,4 true 2,3 1,9,4 1,2,3,4 1,2,3,4 2,3 1,3 true true true true 7 function
+any true x
+3 1 2 2 x 0 -1 true
+fromAsync 1,2' 'es345.js'
+# SOMA_346_NAVEGADOR_RENDER: el "prototype" de una funcion se creaba al leerlo por primera vez; Object.defineProperty(F, "prototype",
+# {writable: false}) sin haberlo leido (lo hace Babel en cada clase) lo dejaba en undefined: "Cannot call a class as a function" (20minutos)
+cat > "$WS/proto346.js" <<'FINJS'
+function rt(t) { Object.defineProperty(t, "prototype", { writable: false }); return t; }
+var A = rt((function t() { if (!(this instanceof t)) throw new TypeError("Cannot call a class as a function"); this.v = 1; }));
+var a = new A(); function f() {} function g() {} function h() {}
+var d = Object.getOwnPropertyDescriptor(f, "prototype");
+print(a.v, a instanceof A, typeof d.value, d.writable, g.hasOwnProperty("prototype"), Object.getOwnPropertyNames(h).indexOf("prototype") >= 0,
+      Reflect.defineProperty(function k() {}, "prototype", { enumerable: false }), Object.getOwnPropertyDescriptor(() => 1, "prototype") === undefined);
+FINJS
+caso "prototype 346"   0 '1 true object true true true true true' 'proto346.js'
+# SOMA_346: window hereda de Window.prototype y document de HTMLDocument.prototype (la biblioteca Arrive anade metodos ahi)
+cat > "$WS/win346.js" <<'FINJS'
+HTMLDocument.prototype.zz346 = function () { return 1; }; Window.prototype.ww346 = function () { return 2; };
+print(document instanceof HTMLDocument, document instanceof Document, window instanceof Window, window instanceof EventTarget,
+      document.zz346(), window.ww346(), typeof window.addEventListener);
+FINJS
+caso "window 346"      0 'true true true true 1 2 function' 'win346.js'
+# SOMA_347_NAVEGADOR_INTL: Intl sin new, metodos en el prototipo, resolvedOptions().timeZone (20minutos), formatos es/en
+cat > "$WS/intl347.js" <<'FINJS'
+var d = new Date(Date.UTC(2026, 10, 26, 21, 5, 9));
+print(typeof Intl.DateTimeFormat().resolvedOptions().timeZone, new Intl.DateTimeFormat('es-ES').format(d), [d].map(new Intl.DateTimeFormat('en-US').format).join(),
+      typeof Intl.DateTimeFormat.prototype.resolvedOptions, Object.prototype.toString.call(Intl.NumberFormat()));
+var rtf = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
+print(rtf.format(-1, 'day'), '/', rtf.format(-3, 'minutes'), '/', new Intl.RelativeTimeFormat('en').format(2, 'hour'), '/', new Intl.ListFormat('es').format(['a', 'b', 'c']),
+      '/', Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(12.5).replace(/\u00a0/g, '_'), '/', new Intl.PluralRules('en', { type: 'ordinal' }).select(22));
+FINJS
+caso "intl 347"        0 'string 26/11/2026 11/26/2026 function [object Intl.NumberFormat]
+ayer / hace 3 minutos / in 2 hours / a, b y c / 12,50_€ / two' 'intl347.js'
+cat > "$WS/san347.js" <<'FINJS'
+var d = document.createElement('div'); d.innerHTML = '<p><span>x</span></p>';
+var f = document.createDocumentFragment(); f.appendChild(document.createElement('b')).appendChild(document.createElement('i'));
+d.setHTML('<b onclick="x()">hola</b><script>bad()</scr' + 'ipt><a href="javascript:alert(1)">l</a><img src=x onerror=y>');
+var st = document.createElement('style'); st.setHTML('p{color:red}');
+var u = document.createElement('div'); u.setHTMLUnsafe('<i onclick="z">u</i>');
+print(f.querySelectorAll('*').length, f.querySelector('i').tagName, document.querySelectorAll('*').length, '|', d.innerHTML, '|', st.textContent, '|', u.innerHTML, '|', Document.parseHTML('<p onclick=1>x</p>').body.innerHTML, typeof Sanitizer);
+FINJS
+caso "sanitizer 347"   0 '2 I 3 | <b>hola</b><a>l</a><img src="x"> | p{color:red} | <i onclick="z">u</i> | <p>x</p> function' 'san347.js'
+cat > "$WS/ff348.js" <<'FINJS'
+var f = new FontFace("X", "url(a.woff2)", { weight: "700" }), e;
+try { FontFace("Y", "u"); } catch (x) { e = x.name; }
+f.load().then(function (r) { print(r === f, r.status, r.weight, typeof document.fonts.ready.then, e); });
+FINJS
+caso "fontface 348"    0 'true loaded 700 function TypeError' 'ff348.js'
+cat > "$WS/fechas349.js" <<'FINJS'
+var d = new Date(2026, 10, 26, 22, 15, 7), C = [["toLocaleDateString", "es-ES", {"day": "numeric", "month": "long"}], ["toLocaleDateString", "es-ES", {"month": "long", "year": "numeric"}], ["toLocaleDateString", "es-ES", {"day": "numeric", "month": "short", "year": "numeric"}], ["toLocaleDateString", "es-ES", {"weekday": "long"}], ["toLocaleDateString", "es-ES", {"weekday": "short", "day": "numeric", "month": "short"}], ["toLocaleDateString", "es-ES", {"day": "2-digit", "month": "2-digit", "year": "numeric"}], ["toLocaleDateString", "es-ES", {"day": "numeric", "month": "numeric"}], ["toLocaleDateString", "es-ES", {"year": "numeric"}], ["toLocaleDateString", "es-ES", {"month": "long"}], ["toLocaleDateString", "es-ES", {"year": "2-digit", "month": "2-digit", "day": "2-digit"}], ["toLocaleTimeString", "es-ES", {"hour": "2-digit", "minute": "2-digit"}], ["toLocaleTimeString", "es-ES", {"hour": "numeric", "minute": "2-digit"}], ["toLocaleTimeString", "es-ES", {}], ["toLocaleTimeString", "es-ES", {"hour": "2-digit", "minute": "2-digit", "hour12": true}], ["toLocaleString", "es-ES", {"day": "numeric", "month": "long", "hour": "2-digit", "minute": "2-digit"}], ["toLocaleString", "es-ES", {}], ["toLocaleDateString", "en-US", {"month": "short", "day": "numeric"}], ["toLocaleDateString", "en-US", {"month": "long", "day": "numeric", "year": "numeric"}], ["toLocaleDateString", "en-US", {"weekday": "long", "month": "long", "day": "numeric"}], ["toLocaleDateString", "en-US", {}], ["toLocaleTimeString", "en-US", {"hour": "2-digit", "minute": "2-digit"}], ["toLocaleTimeString", "en-US", {"hour": "numeric", "minute": "2-digit"}], ["toLocaleTimeString", "en-US", {}], ["toLocaleString", "en-US", {}], ["toLocaleDateString", "en-GB", {"day": "numeric", "month": "long", "year": "numeric"}], ["toLocaleDateString", "en-US", {"month": "long", "year": "numeric"}]];
+print(C.map(function (c) { return d[c[0]](c[1], c[2]); }).join(" | "));
+FINJS
+caso "fechas 349"      0 '26 de noviembre | noviembre de 2026 | 26 nov 2026 | jueves | jue, 26 nov | 26/11/2026 | 26/11 | 2026 | noviembre | 26/11/26 | 22:15 | 22:15 | 22:15:07 | 10:15 p. m. | 26 de noviembre a las 22:15 | 26/11/2026, 22:15:07 | Nov 26 | November 26, 2026 | Thursday, November 26 | 11/26/2026 | 10:15 PM | 10:15 PM | 10:15:07 PM | 11/26/2026, 10:15:07 PM | 26 November 2026 | November 2026' 'fechas349.js'
 if [ "$1" = "todo" ]; then   # tambien el nucleo con ASan/UBSan (lo pide parche_274 --comprobar; make pruebas-js lo hace aparte)
   if ${CC:-gcc} -std=gnu11 -O1 -g -w -fsanitize=address,undefined -fno-sanitize-recover=undefined -DWEB_HOST_TEST $INC -Itests tests/test_jsrun_274.c src/apps/jsrun_core.c src/apps/web_js_*.c src/apps/web_f64.c src/apps/web_regex.c src/apps/web_html.c src/apps/web_css.c src/apps/web_net.c -Wl,--unresolved-symbols=ignore-all -o "$O/uj" 2>/dev/null; then
     ASAN_OPTIONS=detect_leaks=0:detect_stack_use_after_return=0 "$O/uj" || bad=$((bad+1))

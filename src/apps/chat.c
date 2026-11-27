@@ -624,7 +624,7 @@ static void turno_empieza(struct cc_conv *c)
     if (c->modo == CC_MODO_AGENTE) {
         if (gui_agent_busy()) { falla(c, "El agente est\303\241 ocupado con otra misi\303\263n (desde el orbe o una aplicaci\303\263n). Espera a que termine y pulsa Reintentar."); return; }
         (void)cc_contexto(c, hasta - 1, g_ag_hist, sizeof g_ag_hist);
-        uint32_t cap = q->n + 1200; char *mis = (char *)kmalloc(cap);
+        uint32_t cap = q->n + 1400; char *mis = (char *)kmalloc(cap);   /* SOMA_355: + la nota de mirar */
         if (!mis) { falla(c, "Sin memoria para preparar la misi\303\263n."); return; }
         mcpy(mis, q->txt, q->n); mis[q->n] = 0;
         if (q->adj && q->adj[0]) {
@@ -632,6 +632,8 @@ static void turno_empieza(struct cc_conv *c)
             const char *a = q->adj; char r[160]; int first = 1;
             while (*a) { int k = 0; while (a[k] && a[k] != '\n') k++; int m = k < 159 ? k : 159; mcpy(r, a, (uint32_t)m); r[m] = 0; if (!first) scat(mis, ", ", (int)cap); scat(mis, r, (int)cap); first = 0; a += k; if (*a) a++; }
             scat(mis, "]", (int)cap);
+            /* SOMA_355_STRATA: las imagenes adjuntas se ven con la orden mirar (el modelo, si tiene vision) */
+            scat(mis, "\n[Para ver una imagen adjunta usa la orden: mirar <ruta> <lo que quieras saber de ella>]", (int)cap);
         }
         agent_chat_contexto(g_ag_hist[0] ? g_ag_hist : 0, !c->mem);
         int rc = gui_agent_submit_chat(mis);

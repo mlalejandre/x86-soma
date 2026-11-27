@@ -212,6 +212,7 @@ static void r3_sync(struct wpage *p)
     /* aviso (alert): la interfaz lo cierra poniendo alert_pending a 0 */
     if (r3_alert_shown && !p->alert_pending) { (void)web_r3_send(W3C_ALERT_ACK, 0, 0, 0, 0); r3_alert_shown = 2; }
     if (st->alert_pending) { if (r3_alert_shown == 0) { p->alert_pending = 1; wu_copy(p->alert_msg, st->alert_msg, sizeof p->alert_msg); r3_alert_shown = 1; } } else { r3_alert_shown = 0; p->alert_pending = 0; }
+    if (st->media_seq != p->media_seq) { wu_copy(p->media_url, st->media_url, sizeof p->media_url); p->media_seq = st->media_seq; }   /* SOMA_350 */
     /* <select> desplegado: la interfaz lo cierra poniendo dd_sel a 0 */
     if (r3_dd_shown == 1 && !p->dd_sel) { int32_t a[1] = { -1 }; (void)web_r3_send(W3C_SELECT, a, 1, 0, 0); r3_dd_shown = 2; }
     if (st->dd_open) { if (r3_dd_shown == 0) { p->dd_sel = &r3_n_dd; r3_dd_shown = 1; } } else { r3_dd_shown = 0; p->dd_sel = 0; }
@@ -219,6 +220,25 @@ static void r3_sync(struct wpage *p)
     /* desplazamiento: manda la interfaz; si lo movio el motor (ancla, historial, script), se adopta */
     if (st->sy != r3_sy_seen) { r3_sy_seen = st->sy; if (st->sy != r3_sy_sent && !web_r3_pending()) { p->sy = st->sy; p->sx = st->sx; r3_sy_sent = st->sy; r3_sx_sent = st->sx; } }
     if (p->sy != r3_sy_sent || p->sx != r3_sx_sent) { int32_t a[2] = { p->sx, p->sy }; if (web_r3_send(W3C_SCROLL, a, 2, 0, 0)) { r3_sy_sent = p->sy; r3_sx_sent = p->sx; } }
+}
+/* SOMA_350_NAVEGADOR_VIDEO: un clic en un <video> de la pagina lo abre en el reproductor nativo (el de "youtube mp4"). La URL viene del
+ * motor de ring 3: aqui solo se acepta http(s) sin espacios ni controles, y solo si la pagina la acaba de pedir (sube media_seq). */
+int youtube_command(const char *args, char *out, uint32_t max);
+void gui_open_youtube(const char *q);
+static uint32_t media_seen350;
+static void media_check350(struct wpage *p)
+{
+    if (!p || p->media_seq == media_seen350) return;
+    media_seen350 = p->media_seq;
+    if (!p->media_seq) return;
+    const char *u = p->media_url; uint32_t n = wu_strlen(u);
+    if (n < 10 || n > 1000 || (!wu_startsi(u, "http://") && !wu_startsi(u, "https://"))) return;
+    for (uint32_t i = 0; i < n; i++) if ((unsigned char)u[i] <= ' ' || u[i] == 0x7F) return;
+    char args[1040]; wu_copy(args, "mp4 ", sizeof args); wu_copy(args + 4, u, sizeof args - 4);
+    char out[200]; out[0] = 0;
+    int r = youtube_command(args, out, sizeof out);
+    if (r == 2) gui_open_youtube("");
+    else if (out[0]) { char m[220]; wu_copy(m, "Video: ", sizeof m); wu_copy(m + 7, out, sizeof m - 7); kprint("[WEB] "); kprint(m); kprint("\n"); }
 }
 static void r3_recover(struct wpage *p)
 {
@@ -436,6 +456,7 @@ static void bx_set_text(struct wdoc *d, struct wnode *n, const char *text)
 static struct wnode *r3_right_hit(struct wpage *p, int x, int y, struct wnode **link) { (void)p; (void)x; (void)y; *link = 0; return 0; }
 static void web_r3_image_free(void) { }
 static void r3_sync(struct wpage *p) { (void)p; }
+static void media_check350(struct wpage *p) { (void)p; }
 static void r3_pull_hist(struct wpage *p) { (void)p; }
 #endif
 
@@ -1094,6 +1115,7 @@ void browser_render_window(uint32_t win_x, uint32_t win_y, uint32_t win_w, uint3
     ensure_init(); if (!s_pg) return;
     struct wpage *p = s_pg; int wx = (int)win_x, wy = (int)win_y, ww = (int)win_w, wh = (int)win_h;
     r3_sync(p);                                                             /* SOMA_202 */
+    media_check350(p);                                                      /* SOMA_350: clic en un <video> */
     if (wv_sync(p->title, p->url)) q_push(J_VISOR, 0, 0, 0, 0);            /* SOMA_289_VISOR: la pagina es un PDF o un .tex */
     s_win_x = win_x; s_win_y = win_y; s_win_w = win_w; s_win_h = win_h;
     s_last_render = web_now_ms();

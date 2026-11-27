@@ -30,6 +30,10 @@ struct wjs_host {
     int  (*computed)(void *ud, struct wnode *n, const char *prop, char *out, uint32_t max); /* estilo calculado */
     const char *url;      /* URL del documento */
     const char *ua;
+    /* SOMA_346_NAVEGADOR_RENDER: imagenes. img_src: el JS cambio src/srcset de una <img> (este o no en el documento: new Image()).
+     * img_info: estado de su imagen (0 sin src o desconocida, 1 cargando, 2 cargada, 3 error) y tamano natural. */
+    void (*img_src)(void *ud, struct wnode *img);
+    int  (*img_info)(void *ud, struct wnode *img, int *w, int *h);
 };
 
 struct wjs *wjs_new(struct wdoc *doc, const struct wjs_host *host);
@@ -43,6 +47,7 @@ int  wjs_pump(struct wjs *js, uint64_t now_ms, int *ran);
 int  wjs_has_timers(struct wjs *js);
 /* Eventos del DOM disparados desde el navegador. Devuelve 1 si preventDefault. */
 int  wjs_dispatch(struct wjs *js, struct wnode *target, const char *type, int x, int y, int key, const char *keystr, int mods);
+void wjs_set_ready(struct wjs *js, const char *st);    /* SOMA_347: readyState ("interactive") + readystatechange */
 void wjs_fire_load(struct wjs *js);                    /* DOMContentLoaded + load */
 int  wjs_heap_used(struct wjs *js);
 int  wjs_halted(struct wjs *js);

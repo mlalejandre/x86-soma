@@ -352,3 +352,70 @@ static int cmd_source(const char *args, char *out_buf, uint32_t max_out)
     return 1;
 }
 
+
+
+/* SOMA_355_STRATA: mirar <ruta|pantalla> [pregunta]: manda la imagen al modelo en uso (si tiene vision, p. ej. un perfil de Strata con
+ * vision o un .gguf lanzado con su mmproj) y escribe lo que contesta. La usa el agente cuando el usuario adjunta una imagen o pregunta
+ * por la pantalla. La imagen puede estar en el sistema de archivos o en el almacen grande (/big/..., o las capturas de /capturas). */
+static char *mirar_lee(const char *ruta, uint32_t *n)
+{
+    *n = 0;
+    const char *b = ruta;
+    if (b[0] == '/' && b[1] == 'b' && b[2] == 'i' && b[3] == 'g' && b[4] == '/') b += 4;
+    else { char *d = vfs_read_alloc(ruta, n); if (d) return d; }
+    int e; struct bigfs *fs = bigfs_sys(&e);
+    uint32_t ino; struct bigfs_stat st;
+    if (!fs || bigfs_lookup(fs, b, &ino) != (int)BIGFS_T_FILE || bigfs_stat(fs, ino, &st) < 0 || st.size == 0 || st.size > (8u << 20)) return 0;
+    char *d = (char *)kmalloc((size_t)st.size + 1);
+    if (!d) return 0;
+    if (bigfs_read(fs, ino, 0, d, st.size) != (int64_t)st.size) { kfree(d); return 0; }
+    d[st.size] = 0; *n = (uint32_t)st.size;
+    return d;
+}
+static const char *mirar_mime(const uint8_t *d, uint32_t n)
+{
+    if (n >= 8 && d[0] == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') return "image/png";
+    if (n >= 3 && d[0] == 0xFF && d[1] == 0xD8 && d[2] == 0xFF) return "image/jpeg";
+    if (n >= 6 && d[0] == 'G' && d[1] == 'I' && d[2] == 'F' && d[3] == '8') return "image/gif";
+    if (n >= 12 && d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F' && d[8] == 'W' && d[9] == 'E' && d[10] == 'B' && d[11] == 'P') return "image/webp";
+    return 0;
+}
+static int cmd_mirar(const char *args, char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0; out_buf[0] = 0;
+    const char *a = args ? args : ""; while (*a == ' ') a++;
+    char ruta[160]; uint32_t k = 0;
+    char q = (*a == '"' || *a == '\'') ? *a++ : 0;
+    while (*a && (q ? *a != q : *a != ' ') && k < sizeof ruta - 1) ruta[k++] = *a++;
+    ruta[k] = 0; if (q && *a == q) a++;
+    while (*a == ' ') a++;
+    if (!k) { soma_str_put(out_buf, max_out, &pos, "uso: mirar <ruta de la imagen | pantalla> [pregunta]   (PNG, JPEG, GIF o WebP; el modelo en uso debe tener vision)"); return 1; }
+    if (k == 8 && !memcmp(ruta, "pantalla", 8)) {             /* captura de la pantalla ahora mismo */
+        char used[96]; used[0] = 0;
+        int r = scrcap_shot(0, used, sizeof used);
+        if (r != 0 || !used[0]) { soma_str_put(out_buf, max_out, &pos, "mirar: no se pudo capturar la pantalla"); return 1; }
+        k = 0; while (used[k] && k < sizeof ruta - 1) { ruta[k] = used[k]; k++; } ruta[k] = 0;
+    }
+    uint32_t n = 0; char *d = mirar_lee(ruta, &n);
+    if (!d) { soma_str_put(out_buf, max_out, &pos, "mirar: no se puede leer "); soma_str_put(out_buf, max_out, &pos, ruta); return 1; }
+    const char *mime = mirar_mime((const uint8_t *)d, n);
+    if (!mime) { kfree(d); soma_str_put(out_buf, max_out, &pos, "mirar: no es una imagen PNG, JPEG, GIF ni WebP: "); soma_str_put(out_buf, max_out, &pos, ruta); return 1; }
+    if (n > (6u << 20)) { kfree(d); soma_str_put(out_buf, max_out, &pos, "mirar: la imagen pasa de 6 MiB"); return 1; }
+    if (llm_vision_unsupported()) {
+        kfree(d);
+        soma_str_put(out_buf, max_out, &pos, "mirar: el modelo en uso no admite imagenes. Elige uno con vision (Ajustes > Inteligencia artificial; en el servidor, un perfil de Strata con vision o un .gguf con su mmproj).");
+        return 1;
+    }
+    const uint32_t cap = 8192; char *reply = (char *)kmalloc(cap);
+    if (!reply) { kfree(d); soma_str_put(out_buf, max_out, &pos, "mirar: sin memoria"); return 1; }
+    struct llm_img im = { (const uint8_t *)d, n, mime };
+    llm_trace_tag("mirar");
+    int ok = llm_chat_ex("Eres SOMA. Mira la imagen con atencion y responde en espanol a lo que se pide; si no se pide nada concreto, "
+                         "describe lo que se ve (texto legible incluido).", *a ? a : "Describe la imagen.", &im, 1, 1500, reply, cap, 180000);
+    kfree(d);
+    if (ok == 1) soma_str_put(out_buf, max_out, &pos, reply);
+    else if (ok == -2) soma_str_put(out_buf, max_out, &pos, "mirar: el modelo en uso no admite imagenes. Elige uno con vision (Ajustes > Inteligencia artificial; en el servidor, un perfil de Strata con vision o un .gguf con su mmproj).");
+    else { soma_str_put(out_buf, max_out, &pos, "mirar: el modelo no contesto: "); soma_str_put(out_buf, max_out, &pos, llm_last_error[0] ? llm_last_error : "sin respuesta"); }
+    kfree(reply);
+    return 1;
+}

@@ -96,7 +96,12 @@ static void rep_fn(struct jrt *rt, void *u)
     struct rep *r = (struct rep *)u; jv e = r->exc; char tmp[300]; tmp[0] = 0;
     if (e.t == JT_OBJ && e.u.o->cls == JC_ERROR) {
         jstr *n = js_tostr(rt, js_get_c(rt, e, "name")), *m = js_tostr(rt, js_get(rt, e, rt->s_message));
-        uint32_t k = wu_copy(tmp, n->d, sizeof tmp); if (k + 2 < sizeof tmp) { tmp[k++] = ':'; tmp[k++] = ' '; wu_copy(tmp + k, m->d, sizeof tmp - k); }
+        uint32_t k = wu_copy(tmp, n->d, sizeof tmp); if (k + 2 < sizeof tmp) { tmp[k++] = ':'; tmp[k++] = ' '; k += wu_copy(tmp + k, m->d, sizeof tmp - k); }
+        jv st = js_get_c(rt, e, "stack");   /* SOMA_347: y donde (las 2 primeras llamadas de la pila) */
+        if (st.t == JT_STR) { const char *p = st.u.s->d; int lines = 0, named = 0; uint32_t k0 = k; while (*p && *p != '\n') p++;
+            while (*p && k + 1 < sizeof tmp) { if (*p == '\n' && ++lines > 2) break; if (p[0] == ' ' && p[1] == '(') named = 1; tmp[k++] = *p == '\n' ? ' ' : *p; p++; }
+            if (!named) k = k0;   /* solo si dice en que funcion: un unico "at script:1" no aporta nada a (l:N) */
+            tmp[k] = 0; }
     } else if (IS_UNDEF(e) && rt->errbuf[0]) wu_copy(tmp, rt->errbuf, sizeof tmp);
     else { jstr *s = e.t == JT_OBJ ? js_inspect(rt, e, 1) : js_tostr(rt, e); wu_copy(tmp, s->d, sizeof tmp); }
     uint32_t k = wu_copy(r->out, "Uncaught ", r->max); k += wu_copy(r->out + k, tmp, r->max - k);
@@ -235,6 +240,8 @@ int wjs_dispatch(struct wjs *js, struct wnode *target, const char *type, int x, 
 }
 static void do_load(struct jrt *rt, void *u) { (void)u; js_dom_fire_load(rt); js_run_micro(rt); }
 void wjs_fire_load(struct wjs *js) { pcall(js, do_load, 0); }
+static void do_ready(struct jrt *rt, void *u) { js_dom_set_ready(rt, (const char *)u); js_run_micro(rt); }
+void wjs_set_ready(struct wjs *js, const char *st) { pcall(js, do_ready, (void *)st); }   /* SOMA_347_NAVEGADOR_DEFER */
 int wjs_heap_used(struct wjs *js) { uint32_t t = js_heap_total(&js->rt); return t > 0x7FFFFFFFu ? 0x7FFFFFFF : (int)t; }
 int wjs_halted(struct wjs *js) { return js->rt.halted; }
 void wjs_gc_stats(struct wjs *js, uint32_t *collections, uint32_t *live_bytes) { if (collections) *collections = js_gc_count(&js->rt); if (live_bytes) *live_bytes = js_gc_live(&js->rt); }   /* SOMA 189 */

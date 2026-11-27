@@ -78,6 +78,7 @@ struct uproc {
     const char *rd_in;                      /* SOMA_239: entrada fija (lineas con \n); agotada = fin de entrada */
     int      may_thr;                       /* SOMA_244_HILOS: puede lanzar hilos en los nucleos secundarios */
     uint64_t fs_base;                       /* SOMA_329_IA_LOCAL: base de FS (SYS_SOMA_FS); 0 = ninguna */
+    int      max_sockets;                   /* SOMA_345_NAVEGADOR_REAL: limite de sockets TCP de este proceso */
 };
 
 static struct uproc procs[USER_MAX_PROCS];
@@ -326,7 +327,7 @@ static int64_t sys_dns(uint64_t uname, uint64_t len, uint64_t uip)
 static int64_t sys_tcp_open(uint64_t ip_be, uint64_t port)
 {
     if (port == 0 || port > 65535) return E_INVAL;
-    if (tcp_count_owned(usermode_cur->tid) >= USER_MAX_SOCKETS) return SOMA_EBUSY;
+    if (tcp_count_owned(usermode_cur->tid) >= usermode_cur->max_sockets) return SOMA_EBUSY;   /* SOMA_345: 4, u 8 el navegador */
     uint8_t ip[4] = { (uint8_t)(ip_be >> 24), (uint8_t)(ip_be >> 16), (uint8_t)(ip_be >> 8), (uint8_t)ip_be };
     arch_interrupts_enable();
     net_client_lock();
@@ -1029,6 +1030,7 @@ static struct uproc *slot_begin(void)
             up->rd_out = 0; up->rd_cap = up->rd_len = 0; up->rd_in = 0;                 /* SOMA_239 */
             up->may_thr = 0;                                                            /* SOMA_244 */
             up->fs_base = 0;                                                            /* SOMA_329 */
+            up->max_sockets = USER_MAX_SOCKETS;                                         /* SOMA_345 */
             for (int k = 0; k < USER_MAX_REGIONS; ++k) up->regions[k] = 0;
             /* estado inicial de la FPU: FCW=0x037F (todas las excepciones enmascaradas, doble extendida), MXCSR=0x1F80
              * (idem SSE, redondeo al mas cercano), registros vacios: igual que tras FNINIT */
@@ -1200,6 +1202,7 @@ static int exec_common(const char *name, const void *img, size_t len, uint32_t m
         up->reserve_frames = sp->reserve_frames;
         up->nregions = sp->nregions;
         up->may_thr = sp->may_thr ? 1 : 0;                       /* SOMA_244_HILOS / SOMA_329: aun no ha corrido (planificador cooperativo) */
+        if (sp->max_sockets > 0) up->max_sockets = sp->max_sockets < USER_MAX_SOCKETS_WEB ? sp->max_sockets : USER_MAX_SOCKETS_WEB;   /* SOMA_345 */
         for (int i = 0; i < sp->nregions; ++i) up->regions[i] = sp->regions[i];
     }
     return slot_launch(up, name, im.entry, max_ms, args);

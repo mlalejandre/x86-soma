@@ -15,6 +15,7 @@ const char *wc_get_inline(struct wnode *n, const char *prop, char *out, uint32_t
 enum { HK_NODE = 1, HK_STYLE, HK_CSTYLE, HK_DATASET, HK_STORAGE, HK_CLASSLIST };
 
 struct dom {
+    jobj *p_hdoc;   /* SOMA_346: HTMLDocument.prototype (el de los documentos) */
     jobj *p_node, *p_elem, *p_html, *p_doc, *p_text, *p_comment, *p_frag, *p_style, *p_cstyle, *p_dataset, *p_storage, *p_classlist, *p_nodelist;
     jobj *p_tag[WT_COUNT];
     jobj *local, *session;
@@ -28,6 +29,10 @@ struct dom {
 static jv S(struct jrt *rt, const char *c) { return jstrv(js_str_cstr(rt, c ? c : "")); }
 static jv Sn(struct jrt *rt, const char *c, uint32_t n) { return jstrv(js_str_new(rt, c, n)); }
 static void touch(struct jrt *rt) { if (HOST(rt) && HOST(rt)->dirty) HOST(rt)->dirty(HOST(rt)->ud, 1); }
+/* SOMA_352_MENOS_MAQUETAR: un cambio en un nodo que no esta en el documento (new Image().src de un contador de visitas, un <div>
+ * suelto usado de plantilla con innerHTML) no cambia nada de lo que se ve: no hace falta recalcular estilos ni maquetar. Al meterlo
+ * en el documento, appendChild/insertBefore avisan como siempre. */
+static void touch_on(struct jrt *rt, const struct wnode *n) { if (n && !(n->flags & WNF_INDOC)) return; touch(rt); }
 static jv hostobj(struct jrt *rt, jobj *proto, int kind, void *p, int dynamic)
 {
     jobj *o = js_obj_new(rt, proto); o->cls = JC_HOST; o->u.host.kind = kind; o->u.host.p = p; if (dynamic) o->flag |= 1; return jobjv(o);
@@ -43,7 +48,7 @@ static jobj *wrap(struct jrt *rt, struct wnode *n)
 {
     if (n->js) return (jobj *)n->js;
     struct dom *d = DOM(rt); jobj *proto;
-    if (n->type == WN_DOC) proto = d->p_doc;
+    if (n->type == WN_DOC) proto = d->p_hdoc ? d->p_hdoc : d->p_doc;   /* SOMA_346: document instanceof HTMLDocument */
     else if (n->type == WN_TEXT) proto = d->p_text;
     else if (n->type == WN_COMMENT) proto = d->p_comment;
     else if (n->name && n->name[0] == '#') proto = d->p_frag;
@@ -58,6 +63,8 @@ static jv W(struct jrt *rt, struct wnode *n) { return n ? jobjv(wrap(rt, n)) : j
  * ejecutar los callbacks del usuario hasta la cola de microtareas. */
 static void mo148_emit(struct jrt *rt, struct wnode *n, const char *type, const char *name, const char *old)
 {
+    if (n && n->tag == WT_IMG && name && (wu_streq(name, "src") || wu_streq(name, "srcset")) && HOST(rt) && HOST(rt)->img_src)
+        HOST(rt)->img_src(HOST(rt)->ud, n);   /* SOMA_346_NAVEGADOR_RENDER: que la cargue y le dispare load/error */
     struct dom *state = DOM(rt);
     if (!state || !state->mo148_cb) return;
     jv cb = jobjv(state->mo148_cb);
@@ -159,13 +166,15 @@ static void dyn_put(struct jrt *rt, jobj *o, jstr *key, jv val)
         if (!css_key_ok(key->d)) return;
         hyphenate(key->d, prop, sizeof prop); const char *old_style = wd_attr(n, "style");
         wc_set_inline(DOC(rt), n, prop, vs->len ? vs->d : "");
-        if (mo148_diff(old_style, wd_attr(n, "style"))) mo148_emit(rt, n, "attributes", "style", old_style);
-        touch(rt); return;
+        if (!mo148_diff(old_style, wd_attr(n, "style"))) return;        /* SOMA_352: el mismo valor que ya tenia: nada que maquetar */
+        mo148_emit(rt, n, "attributes", "style", old_style);
+        touch_on(rt, n); return;
     case HK_DATASET:
         wu_copy(buf, "data-", sizeof buf); hyphenate(key->d, buf + 5, sizeof buf - 5);
         const char *old_data = wd_attr(n, buf);
         wd_set_attr(DOC(rt), n, buf, dupn(rt, vs->d, vs->len));
-        mo148_emit(rt, n, "attributes", buf, old_data); touch(rt); return;
+        mo148_emit(rt, n, "attributes", buf, old_data); if (mo148_diff(old_data, wd_attr(n, buf))) touch_on(rt, n);
+        return;
     case HK_STORAGE: storage_op(rt, is_local(o), key->d, vs->d, 1); return;
     default: return;
     }
@@ -176,12 +185,12 @@ static int dyn_del(struct jrt *rt, jobj *o, jstr *key)
     switch (o->u.host.kind) {
     case HK_STYLE: { hyphenate(key->d, prop, sizeof prop); const char *old = wd_attr(n, "style");
         wc_set_inline(DOC(rt), n, prop, "");
-        if (mo148_diff(old, wd_attr(n, "style"))) mo148_emit(rt, n, "attributes", "style", old);
-        touch(rt); return 1; }
+        if (mo148_diff(old, wd_attr(n, "style"))) { mo148_emit(rt, n, "attributes", "style", old); touch_on(rt, n); }
+        return 1; }
     case HK_DATASET: { wu_copy(buf, "data-", sizeof buf); hyphenate(key->d, buf + 5, sizeof buf - 5);
         const char *old = wd_attr(n, buf); wd_del_attr(n, buf);
-        if (old) mo148_emit(rt, n, "attributes", buf, old);
-        touch(rt); return 1; }
+        if (old) { mo148_emit(rt, n, "attributes", buf, old); touch_on(rt, n); }
+        return 1; }
     case HK_STORAGE: storage_op(rt, is_local(o), key->d, 0, 2); return 1;
     default: return 1;
     }
@@ -422,7 +431,7 @@ static void cl_edit(struct jrt *rt, struct wnode *n, const char *tok, uint32_t t
     if (add && !has) { if (b.len) wb_addc(&b, ' '); wb_addn(&b, tok, tl); }
     if (cur ? mo148_diff(cur, b.p ? b.p : "") : (b.len != 0)) {
         wd_set_attr(DOC(rt), n, "class", dupn(rt, b.p ? b.p : "", b.len));
-        mo148_emit(rt, n, "attributes", "class", cur); touch(rt);
+        mo148_emit(rt, n, "attributes", "class", cur); touch_on(rt, n);
     }
     wb_free(&b);
 }
@@ -505,9 +514,15 @@ static jv attr_prop(struct jrt *rt, struct wnode *n, const struct attrdef *a, in
         if (a->kind == AK_BOOL) { if (js_truthy(args[0])) wd_set_attr(DOC(rt), n, a->attr, ""); else wd_del_attr(n, a->attr); }
         else { jstr *s = js_tostr(rt, args[0]); wd_set_attr(DOC(rt), n, a->attr, dupn(rt, s->d, s->len)); }
         if (old || wd_attr(n, a->attr)) mo148_emit(rt, n, "attributes", a->attr, old);
-        touch(rt); return jundef();
+        if (mo148_diff(old, wd_attr(n, a->attr))) touch_on(rt, n);
+        return jundef();   /* SOMA_352 */
     }
     const char *v = wd_attr(n, a->attr);
+    if (n->tag == WT_IMG && a->kind == AK_INT && (wu_streq(a->attr, "width") || wu_streq(a->attr, "height"))) {
+        /* SOMA_346_NAVEGADOR_RENDER: img.width/height = la caja si se dibuja; si no (new Image()), el tamano natural; si no, el atributo */
+        int x, y, w, h; if (n->box) { node_rect(rt, n, &x, &y, &w, &h); if (w > 0 || h > 0) return jint(wu_streq(a->attr, "width") ? w : h); }
+        int iw = 0, ih = 0; if (HOST(rt) && HOST(rt)->img_info && HOST(rt)->img_info(HOST(rt)->ud, n, &iw, &ih) == 2) return jint(wu_streq(a->attr, "width") ? iw : ih);
+    }
     switch (a->kind) {
     case AK_BOOL: return jbool(v != 0);
     case AK_URL: return v ? abs_url(rt, v) : S(rt, "");
@@ -594,9 +609,12 @@ static jv inner_text(struct jrt *rt, struct wnode *n)
 }
 static void set_text(struct jrt *rt, struct wnode *n, jstr *s)
 {
-    if (n->type == WN_TEXT || n->type == WN_COMMENT) { n->name = dupn(rt, s->d, s->len); n->tlen = s->len; }
+    if (n->type == WN_TEXT || n->type == WN_COMMENT) {
+        if (n->tlen == s->len && n->name && !memcmp(n->name, s->d, s->len)) return;   /* SOMA_352: el mismo texto (un reloj que no ha cambiado) */
+        n->name = dupn(rt, s->d, s->len); n->tlen = s->len;
+    }
     else { while (n->first) wd_remove(n->first); if (s->len) wd_append(n, wd_new_text(DOC(rt), dupn(rt, s->d, s->len), s->len)); }
-    touch(rt);
+    touch_on(rt, n);
 }
 static void set_inner_html(struct jrt *rt, struct wnode *n, jstr *s)
 {
@@ -605,7 +623,7 @@ static void set_inner_html(struct jrt *rt, struct wnode *n, jstr *s)
         wd_parse_fragment(DOC(rt), n, s->d, s->len);
         for (struct wnode *k = n->first; k; k = k->next) mark_fragment_scripts_inert(k);
     }
-    touch(rt);
+    touch_on(rt, n);
 }
 static jv doc_collect(struct jrt *rt, int kind)
 {
@@ -668,10 +686,12 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         return text_of(rt, n);
     case P_ID: if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "id");
         wd_set_attr(DOC(rt), n, "id", dupn(rt, s->d, s->len));
-        mo148_emit(rt, n, "attributes", "id", old); touch(rt); return jundef(); } { const char *v = wd_attr(n, "id"); return S(rt, v ? v : ""); }
+        mo148_emit(rt, n, "attributes", "id", old); if (mo148_diff(old, wd_attr(n, "id"))) touch_on(rt, n);
+        return jundef(); } { const char *v = wd_attr(n, "id"); return S(rt, v ? v : ""); }
     case P_CLASSNAME: if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "class");
         wd_set_attr(DOC(rt), n, "class", dupn(rt, s->d, s->len));
-        mo148_emit(rt, n, "attributes", "class", old); touch(rt); return jundef(); } return class_get(rt, n);
+        mo148_emit(rt, n, "attributes", "class", old); if (mo148_diff(old, wd_attr(n, "class"))) touch_on(rt, n);
+        return jundef(); } return class_get(rt, n);
     case P_INNERHTML:
         if (set) { set_inner_html(rt, n, js_tostr(rt, a0)); return jundef(); }
         { struct wb b = {0}; wd_outer_html(n, &b, 1); jv r = Sn(rt, b.p ? b.p : "", b.len); wb_free(&b); return r; }
@@ -690,7 +710,8 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         jobj *w = n->js;
         if (set) { jstr *s = js_tostr(rt, a0); const char *old = wd_attr(n, "style");
             wd_set_attr(DOC(rt), n, "style", dupn(rt, s->d, s->len));
-            mo148_emit(rt, n, "attributes", "style", old); touch(rt); return jundef(); }
+            mo148_emit(rt, n, "attributes", "style", old); if (mo148_diff(old, wd_attr(n, "style"))) touch_on(rt, n);
+            return jundef(); }
         jv c = js_get(rt, jobjv(w), Kc(rt, "@@st")); if (c.t == JT_OBJ) return c; c = hostobj(rt, dm->p_style, HK_STYLE, n, 1); js_def(rt, w, Kc(rt, "@@st"), c, 0); return c;
     }
     case P_DATASET: { jobj *w = n->js; jv c = js_get(rt, jobjv(w), Kc(rt, "@@ds")); if (c.t == JT_OBJ) return c; c = hostobj(rt, dm->p_dataset, HK_DATASET, n, 1); js_def(rt, w, Kc(rt, "@@ds"), c, 0); return c; }
@@ -716,7 +737,8 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case P_HIDDEN: if (set) { const char *old = wd_attr(n, "hidden");
         if (js_truthy(a0)) wd_set_attr(DOC(rt), n, "hidden", ""); else wd_del_attr(n, "hidden");
         if (old || wd_attr(n, "hidden")) mo148_emit(rt, n, "attributes", "hidden", old);
-        touch(rt); return jundef(); } return jbool(wd_attr(n, "hidden") != 0);
+        if (!old != !wd_attr(n, "hidden")) touch_on(rt, n);
+        return jundef(); } return jbool(wd_attr(n, "hidden") != 0);
     case P_CONTENTEDITABLE: if (set) { const char *old = wd_attr(n, "contenteditable");
         jstr *s = js_tostr(rt, a0); wd_set_attr(DOC(rt), n, "contenteditable", dupn(rt, s->d, s->len));
         mo148_emit(rt, n, "attributes", "contenteditable", old); return jundef(); } { const char *v = wd_attr(n, "contenteditable"); return S(rt, v ? (*v ? v : "true") : "inherit"); }
@@ -773,7 +795,10 @@ static jv node_prop(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case P_LABELS: return jobjv(js_arr_new(rt, 0));
     case P_NATW: case P_NATH: case P_COMPLETE: case P_CURRENTSRC: {
         if (magic == P_CURRENTSRC) return abs_url(rt, wd_attr(n, "src"));
-        if (magic == P_COMPLETE) return jbool(1);
+        /* SOMA_346_NAVEGADOR_RENDER: estado y tamano natural de verdad (antes complete siempre era true y naturalWidth era la caja) */
+        int iw = 0, ih = 0, ist = HOST(rt) && HOST(rt)->img_info ? HOST(rt)->img_info(HOST(rt)->ud, n, &iw, &ih) : -1;
+        if (magic == P_COMPLETE) return jbool(ist != 1);
+        if (ist >= 0) return jint(ist == 2 ? (magic == P_NATW ? iw : ih) : 0);
         int x, y, w, h; node_rect(rt, n, &x, &y, &w, &h); return jint(magic == P_NATW ? w : h);
     }
     case P_CONTENTWINDOW: case P_CONTENTDOC: return jnull();
@@ -849,7 +874,7 @@ static void node_changed_attr(struct jrt *rt, struct wnode *n, const char *name,
     if (wu_streq(name, "checked") && !(n->flags & WNF_EDITED)) { if (on) n->flags |= WNF_CHECKED; else n->flags &= (uint16_t)~WNF_CHECKED; }
     else if (wu_streq(name, "disabled")) { if (on) n->flags |= WNF_DISABLED; else n->flags &= (uint16_t)~WNF_DISABLED; }
     else if (wu_streq(name, "value") && !(n->flags & WNF_EDITED)) n->value = 0;
-    touch(rt);
+    touch_on(rt, n);
 }
 static void clear_js(struct wnode *n) { n->js = 0; for (struct wnode *c = n->first; c; c = c->next) clear_js(c); }
 static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
@@ -867,8 +892,12 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case M_GETROOT: { struct wnode *r = n; while (r->parent) r = r->parent; return W(rt, r); }
     case M_ISSAME: return jbool(node_or_null(ARG(0)) == n);
     case M_GETATTR: { jstr *k = js_tostr(rt, ARG(0)); lower_copy(k->d, k->len, low, sizeof low); const char *v = wd_attr(n, low); return v ? S(rt, v) : jnull(); }
-    case M_SETATTR: { jstr *k = js_tostr(rt, ARG(0)), *v = js_tostr(rt, ARG(1)); lower_copy(k->d, k->len, low, sizeof low); wd_set_attr(DOC(rt), n, low, dupn(rt, v->d, v->len)); node_changed_attr(rt, n, low, 1); return jundef(); }
-    case M_REMOVEATTR: { jstr *k = js_tostr(rt, ARG(0)); lower_copy(k->d, k->len, low, sizeof low); wd_del_attr(n, low); node_changed_attr(rt, n, low, 0); return jundef(); }
+    case M_SETATTR: { jstr *k = js_tostr(rt, ARG(0)), *v = js_tostr(rt, ARG(1)); lower_copy(k->d, k->len, low, sizeof low);
+        const char *old = wd_attr(n, low); int same = old && wu_strlen(old) == v->len && !memcmp(old, v->d, v->len);   /* SOMA_352 */
+        wd_set_attr(DOC(rt), n, low, dupn(rt, v->d, v->len));
+        if (!same || wu_streq(low, "value") || wu_streq(low, "checked") || wu_streq(low, "disabled")) node_changed_attr(rt, n, low, 1);
+        return jundef(); }
+    case M_REMOVEATTR: { jstr *k = js_tostr(rt, ARG(0)); lower_copy(k->d, k->len, low, sizeof low); int had = wd_attr(n, low) != 0; wd_del_attr(n, low); if (had) node_changed_attr(rt, n, low, 0); return jundef(); }
     case M_HASATTR: { jstr *k = js_tostr(rt, ARG(0)); lower_copy(k->d, k->len, low, sizeof low); return jbool(wd_attr(n, low) != 0); }
     case M_HASATTRS: return jbool(n->attrs != 0);
     case M_ATTRNAMES: { jobj *a = js_arr_new(rt, 8); for (struct wattr *t = n->attrs; t; t = t->next) js_arr_push(rt, a, S(rt, t->name)); return jobjv(a); }
@@ -912,18 +941,19 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         if (thisv.u.o->u.host.kind == HK_CSTYLE) return jundef();
         if (magic == M_STYLE_SET) { jstr *v = js_tostr(rt, ARG(1)); const char *old = wd_attr(sn, "style");
             wc_set_inline(DOC(rt), sn, prop, v->len ? v->d : "");
-            if (mo148_diff(old, wd_attr(sn, "style"))) mo148_emit(rt, sn, "attributes", "style", old);
-            touch(rt); return jundef(); }
+            if (mo148_diff(old, wd_attr(sn, "style"))) { mo148_emit(rt, sn, "attributes", "style", old); touch_on(rt, sn); }   /* SOMA_352: sin cambio, sin maquetar */
+            return jundef(); }
         wc_get_inline(sn, prop, buf, sizeof buf); const char *old = wd_attr(sn, "style");
         wc_set_inline(DOC(rt), sn, prop, "");
-        if (mo148_diff(old, wd_attr(sn, "style"))) mo148_emit(rt, sn, "attributes", "style", old);
-        touch(rt); return S(rt, buf);
+        if (mo148_diff(old, wd_attr(sn, "style"))) { mo148_emit(rt, sn, "attributes", "style", old); touch_on(rt, sn); }
+        return S(rt, buf);
     }
     if (magic == M_CSSTEXT || magic == M_STYLE_LENGTH || magic == M_STYLE_ITEM) {
         struct wnode *sn = (struct wnode *)thisv.u.o->u.host.p; const char *cur = wd_attr(sn, "style");
         if (magic == M_CSSTEXT) { if (argc > 0) { jstr *s = js_tostr(rt, args[0]); const char *old = wd_attr(sn, "style");
             wd_set_attr(DOC(rt), sn, "style", dupn(rt, s->d, s->len));
-            mo148_emit(rt, sn, "attributes", "style", old); touch(rt); return jundef(); } return S(rt, cur ? cur : ""); }
+            mo148_emit(rt, sn, "attributes", "style", old); if (mo148_diff(old, wd_attr(sn, "style"))) touch_on(rt, sn);
+            return jundef(); } return S(rt, cur ? cur : ""); }
         int c = 0; char names[64][64]; const char *p = cur ? cur : "";
         while (*p && c < 64) { while (*p == ';' || wu_isspace(*p)) p++; const char *s = p; while (*p && *p != ':' && *p != ';') p++; uint32_t l = (uint32_t)(p - s); while (l && wu_isspace(s[l - 1])) l--; if (l && *p == ':') { if (l > 63) l = 63; memcpy(names[c], s, l); names[c][l] = 0; c++; } while (*p && *p != ';') p++; }
         if (magic == M_STYLE_LENGTH) return jint(c);
@@ -951,7 +981,8 @@ static jv node_method(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
         struct wnode *cn = (struct wnode *)thisv.u.o->u.host.p; const char *cur = wd_attr(cn, "class");
         if (magic == M_CL_VALUE) { if (argc > 0) { jstr *s = js_tostr(rt, args[0]); const char *old = wd_attr(cn, "class");
             wd_set_attr(DOC(rt), cn, "class", dupn(rt, s->d, s->len));
-            mo148_emit(rt, cn, "attributes", "class", old); touch(rt); return jundef(); } return S(rt, cur ? cur : ""); }
+            mo148_emit(rt, cn, "attributes", "class", old); if (mo148_diff(old, wd_attr(cn, "class"))) touch_on(rt, cn);
+            return jundef(); } return S(rt, cur ? cur : ""); }
         int c = 0; const char *p = cur ? cur : ""; while (*p) { while (wu_isspace(*p)) p++; const char *s = p; while (*p && !wu_isspace(*p)) p++; if (p > s) c++; } return jint(c);
     }
     /* almacenamiento */
@@ -1163,7 +1194,7 @@ void js_dom_init(struct jrt *rt)
     d->p_elem = mkclass(rt, "Element", d->p_node);
     d->p_html = mkclass(rt, "HTMLElement", d->p_elem);
     d->p_doc = mkclass(rt, "Document", d->p_node);
-    { jobj *hd = mkclass(rt, "HTMLDocument", d->p_doc); (void)hd; }
+    d->p_hdoc = mkclass(rt, "HTMLDocument", d->p_doc);
     jobj *cd = mkclass(rt, "CharacterData", d->p_node);
     d->p_text = mkclass(rt, "Text", cd); d->p_comment = mkclass(rt, "Comment", cd);
     (void)mkclass(rt, "CDATASection", d->p_text); (void)mkclass(rt, "ProcessingInstruction", cd);   /* SOMA 188B: los parchea el polyfill ShadyDOM de YouTube */
@@ -1307,10 +1338,18 @@ static void fire_simple(struct jrt *rt, jv target, const char *type, int bubbles
 void js_dom_fire_load(struct jrt *rt)
 {
     jv doc = jobjv(DOC(rt)->root->js), win = jobjv(rt->global); jv a = S(rt, "interactive");
-    g_setready(rt, jundef(), &a, 1, 0); fire_simple(rt, doc, "readystatechange", 0); fire_simple(rt, doc, "DOMContentLoaded", 1);
+    jv cur = js_get(rt, doc, Kc(rt, "@@rs"));   /* SOMA_347: si ya es "interactive" (scripts diferidos), no se repite */
+    if (!(IS_STR(cur) && cur.u.s->len == 11 && !memcmp(cur.u.s->d, "interactive", 11))) { g_setready(rt, jundef(), &a, 1, 0); fire_simple(rt, doc, "readystatechange", 0); }
+    fire_simple(rt, doc, "DOMContentLoaded", 1);
     a = S(rt, "complete"); g_setready(rt, jundef(), &a, 1, 0); fire_simple(rt, doc, "readystatechange", 0);
     fire_simple(rt, win, "load", 0);
 }
 
+/* SOMA_347_NAVEGADOR_DEFER: fin del analisis del documento: readyState "interactive" y su readystatechange */
+void js_dom_set_ready(struct jrt *rt, const char *st)
+{
+    if (!rt->dom || !DOC(rt)->root || !DOC(rt)->root->js) return;
+    jv a = S(rt, st); g_setready(rt, jundef(), &a, 1, 0); fire_simple(rt, jobjv(DOC(rt)->root->js), "readystatechange", 0);
+}
 void js_dom_set_script(struct jrt *rt, struct wnode *n) { if (rt->dom) DOM(rt)->cur_script = n; }
 void js_dom_set_url(struct jrt *rt, const char *url) { if (rt->dom) wu_copy(DOM(rt)->url, url, sizeof DOM(rt)->url); }

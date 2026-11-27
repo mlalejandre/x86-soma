@@ -33,4 +33,23 @@ extern const uint8_t web_ttf_sans[], web_ttf_sans_end[], web_ttf_sansb[], web_tt
 #define WEB_TTF_SANS_LEN ((uint32_t)(web_ttf_sans_end - web_ttf_sans))
 #define WEB_TTF_SANSB_PTR web_ttf_sansb
 #define WEB_TTF_SANSB_LEN ((uint32_t)(web_ttf_sansb_end - web_ttf_sansb))
+/* SOMA_347_NAVEGADOR_SERIF: Liberation Serif regular y negrita (SIL OFL 1.1, docs/LICENSE_LIBERATION_SERIF.txt; anchos de Times), mismo subconjunto
+ * que la Sans y sin hinting: titulares y textos con font-family serif (Georgia, Times, Source Serif...) como en Chrome. */
+__asm__(".section .rodata\n"
+        ".balign 4\n"
+        ".globl web_ttf_serif\n.globl web_ttf_serif_end\n.globl web_ttf_serifb\n.globl web_ttf_serifb_end\n"
+        "web_ttf_serif:\n"
+        ".incbin \"src/apps/web_libserif.ttf\"\n"
+        "web_ttf_serif_end:\n"
+        ".balign 4\n"
+        "web_ttf_serifb:\n"
+        ".incbin \"src/apps/web_libserifb.ttf\"\n"
+        "web_ttf_serifb_end:\n"
+        ".byte 0\n"
+        ".previous\n");
+extern const uint8_t web_ttf_serif[], web_ttf_serif_end[], web_ttf_serifb[], web_ttf_serifb_end[];
+#define WEB_TTF_SERIF_PTR web_ttf_serif
+#define WEB_TTF_SERIF_LEN ((uint32_t)(web_ttf_serif_end - web_ttf_serif))
+#define WEB_TTF_SERIFB_PTR web_ttf_serifb
+#define WEB_TTF_SERIFB_LEN ((uint32_t)(web_ttf_serifb_end - web_ttf_serifb))
 #endif

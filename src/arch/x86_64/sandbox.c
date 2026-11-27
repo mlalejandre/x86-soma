@@ -113,7 +113,7 @@ int sbx_run_caps_cancel(struct sbx_call *c, const void *elf, size_t elf_len, uin
     region_write(&c->r_in, 0, &c->in, sizeof c->in);
     if (c->len) region_write(&c->r_in, 64, c->data, c->len);
 
-    struct uexec_spec sp; sp.may_thr = 0;   /* SOMA_329 */
+    struct uexec_spec sp = {0}; sp.may_thr = 0;   /* SOMA_329; SOMA_352: entera a cero (max_sockets quedaba con basura de la pila) */
     sp.sysmask = (1u << SYS_EXIT) | extra_sysmask;
     sp.regions[0] = &c->r_in; sp.regions[1] = &c->r_out; sp.regions[2] = &c->r_heap; sp.regions[3] = 0;
     sp.nregions = 3;
@@ -151,7 +151,7 @@ int sbx_lanza(struct sbx_call *c, const void *elf, size_t elf_len, uint32_t max_
     }
     region_write(&c->r_in, 0, &c->in, sizeof c->in);
     if (c->len) region_write(&c->r_in, 64, c->data, c->len);
-    struct uexec_spec sp; sp.may_thr = 0;   /* SOMA_329 */
+    struct uexec_spec sp = {0}; sp.may_thr = 0;   /* SOMA_329; SOMA_352: entera a cero (max_sockets quedaba con basura de la pila) */
     sp.sysmask = (1u << SYS_EXIT) | extra_sysmask;
     sp.regions[0] = &c->r_in; sp.regions[1] = &c->r_out; sp.regions[2] = &c->r_heap; sp.regions[3] = sh;
     sp.nregions = 4;
@@ -235,7 +235,7 @@ static int svc_start(struct sbx_svc *s)
         uint8_t *p = (uint8_t *)f; for (int b = 0; b < 4096; ++b) p[b] = 0;
         s->r_in.frames[0] = f; s->r_in.used = 1;
     }
-    struct uexec_spec sp; sp.may_thr = 0;   /* SOMA_329 */
+    struct uexec_spec sp = {0}; sp.may_thr = 0;   /* SOMA_329; SOMA_352: entera a cero (max_sockets quedaba con basura de la pila) */
     sp.sysmask = (1u << SYS_EXIT) | (1u << SYS_SVC_NEXT);
     if (s->id == SBX_SVC_NET) sp.sysmask |= USER_SYS_NET_MASK | (1u << SYS_SLEEP) | (1u << SYS_UPTIME_MS);   /* PARCHE 142: solo netsvc tiene red */
     sp.regions[0] = &s->r_in; sp.regions[1] = &s->r_out; sp.regions[2] = &s->r_heap; sp.regions[3] = 0;

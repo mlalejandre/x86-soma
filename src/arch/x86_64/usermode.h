@@ -86,6 +86,7 @@
  * hilos de calculo (voz, motor de IA): libstdc++ compilada con protector de pila lee su canario en %fs:0x28. El nucleo no usa FS. */
 #define SYS_SOMA_FS      33
 #define USER_MAX_SOCKETS  4
+#define USER_MAX_SOCKETS_WEB 8   /* SOMA_345_NAVEGADOR_REAL: el navegador (4 descargas + la principal + las guardadas abiertas); ver web_r3.c */
 #define USER_MAX_FDS 8
 #define USER_ARGS_MAX 128
 
@@ -114,6 +115,7 @@ struct uexec_spec {          /* PARCHE 138: opciones de usermode_exec_ex */
     int             nregions;
     uint32_t        reserve_frames;    /* las regiones bajo demanda no crecen si el PMM bajaria de esto */
     int             may_thr;           /* SOMA_329_IA_LOCAL: puede lanzar hilos de calculo y fijar su base de FS (como la voz) */
+    int             max_sockets;       /* SOMA_345_NAVEGADOR_REAL: sockets TCP a la vez (0 = USER_MAX_SOCKETS); como mucho USER_MAX_SOCKETS_WEB */
 };
 int usermode_exec_ex(const char *name, const void *img, size_t len, uint32_t max_ms, const struct uexec_spec *sp, int *err);
 int usermode_demand_fault(uint64_t cr2, uint64_t error_code);   /* 1 = pagina servida (reintentar la instruccion) */

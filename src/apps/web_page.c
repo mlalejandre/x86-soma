@@ -254,6 +254,31 @@ static int wp_state_url_ok(const struct wpage *p, const char *url)
 }
 static int load_res(struct wpage *p, const char *url, const char *method, const char *body, uint32_t blen, const char *ctype, int binary, uint32_t maxb, uint32_t tmo, struct wn_resp *rs);
 /* Subrecursos pedidos por el CONTENIDO de la pagina (scripts, estilos, imagenes, fetch/XHR). La navegacion principal usa load_res. */
+/* SOMA_347_NAVEGADOR_ICONOS: formatos de imagen que se piden. Desde el 180 SOMA dibuja WebP y SVG; las descargas seguian anunciando
+ * solo PNG/JPEG/GIF y la pasarela convertia los SVG a PNG a su tamano de viewBox (se perdia que no tenian tamano propio). */
+static int fmt180_off(void);
+static const char *img_accept347(void)
+{
+    return fmt180_off() ? "image/png,image/jpeg,image/gif" : "image/webp,image/svg+xml,image/png,image/jpeg,image/gif,image/*;q=0.8";
+}
+#if defined(SOMA_WEBSVC)
+#include "web_hcache.h"
+#endif
+/* la red, pasando por la cache de subrecursos (en el proceso del navegador) */
+static int hc_fetch(const struct wn_req *rq, struct wn_resp *rs)
+{
+#if defined(SOMA_WEBSVC)
+    /* SOMA_353_CACHE_HTTP: CSS, scripts, fuentes, imagenes y fetch/XHR GET que el servidor declara frescos (web_hcache.c) */
+    int get = (!rq->method || !*rq->method || wu_streq(rq->method, "GET")) && !rq->body_len && !rq->extra_headers && !rq->via_gateway && !rq->no_redirect;
+    if (get && whc_get(rq->url, rq->want_binary, rq->max_body, rs)) return 0;
+    int rc = wb_network_fetch(rq, rs);
+    if (get && rc == 0) whc_put(rq->url, rq->want_binary, rs);
+    return rc;
+#else
+    return wb_network_fetch(rq, rs);
+#endif
+}
+static int load_res_c(struct wpage *p, const char *url, const char *method, const char *body, uint32_t blen, const char *ctype, int binary, uint32_t maxb, uint32_t tmo, struct wn_resp *rs, int cached);
 static int load_sub(struct wpage *p, const char *url, const char *method, const char *body, uint32_t blen, const char *ctype, int binary, uint32_t maxb, uint32_t tmo, struct wn_resp *rs)
 {
     if (wp_url_is_local(url) && !wp_doc_is_local(p)) {
@@ -261,9 +286,13 @@ static int load_sub(struct wpage *p, const char *url, const char *method, const 
         wlog(1, "bloqueado: la pagina intento leer un archivo local");
         return -12;
     }
-    return load_res(p, url, method, body, blen, ctype, binary, maxb, tmo, rs);
+    return load_res_c(p, url, method, body, blen, ctype, binary, maxb, tmo, rs, 1);   /* SOMA_353: subrecurso: puede salir de la cache */
 }
 static int load_res(struct wpage *p, const char *url, const char *method, const char *body, uint32_t blen, const char *ctype, int binary, uint32_t maxb, uint32_t tmo, struct wn_resp *rs)
+{
+    return load_res_c(p, url, method, body, blen, ctype, binary, maxb, tmo, rs, 0);
+}
+static int load_res_c(struct wpage *p, const char *url, const char *method, const char *body, uint32_t blen, const char *ctype, int binary, uint32_t maxb, uint32_t tmo, struct wn_resp *rs, int cached)
 {
     memset(rs, 0, sizeof *rs);
     if (wu_startsi(url, "data:")) return load_data_url(url, rs);
@@ -271,8 +300,8 @@ static int load_res(struct wpage *p, const char *url, const char *method, const 
     if (!wu_startsi(url, "http://") && !wu_startsi(url, "https://")) { wu_copy(rs->err, "protocolo no soportado", sizeof rs->err); return -11; }
     struct wn_req rq; memset(&rq, 0, sizeof rq);
     rq.url = url; rq.method = method; rq.body = body; rq.body_len = blen; rq.ctype = ctype; rq.referer = p->url; rq.timeout_ms = tmo; rq.max_body = maxb; rq.want_binary = binary;
-    if (binary) rq.accept = "image/png,image/jpeg,image/gif";
-    return wb_network_fetch(&rq, rs);
+    if (binary) rq.accept = img_accept347();
+    return cached ? hc_fetch(&rq, rs) : wb_network_fetch(&rq, rs);
 }
 
 /* Convierte el cuerpo a UTF-8 segun el juego de caracteres declarado. Devuelve un bloque nuevo (kmalloc) y libera el original. */
@@ -382,7 +411,7 @@ static const char *img_kind(const uint8_t *d, uint32_t n)
 static void img_note_fail(struct wpage *p, const char *url, const char *why, int status, uint32_t len)
 {
     p->img_fail++;
-    if (!p->img_why[0]) { uint32_t k = 0; for (const char *s = why; *s && k < 30; s++) p->img_why[k++] = *s; p->img_why[k++] = ' '; k += (uint32_t)wu_itoa(status, p->img_why + k); p->img_why[k] = 0; }
+    if (!p->img_why[0]) { uint32_t k = 0; for (const char *s = why; *s && k < 30; s++) p->img_why[k++] = *s; if (status > 0) { p->img_why[k++] = ' '; k += (uint32_t)wu_itoa(status, p->img_why + k); } p->img_why[k] = 0; }   /* SOMA_345: sin el "0" de un fallo de conexion */
     if (p->img_logged >= 24) return;
     p->img_logged++;
     char m[200]; uint32_t k = 0; const char *a = "img KO: ";
@@ -827,7 +856,7 @@ static void img_scan(struct wpage *p)
     uint32_t key = p->gen * 2654435761u ^ (uint32_t)p->sy * 40503u ^ (uint32_t)p->vh * 97u ^ (uint32_t)p->nimg;
     if (key == p->img_scan_key && key) return;
     p->img_scan_key = key;
-    for (int i = 0; i < p->nimg; i++) { p->imgs[i].dist = p->imgs[i].painted ? 0 : WP_FAR; p->imgs[i].dw = p->imgs[i].dh = 0; }
+    for (int i = 0; i < p->nimg; i++) { p->imgs[i].dist = (p->imgs[i].painted || p->imgs[i].js_want) ? 0 : WP_FAR; p->imgs[i].dw = p->imgs[i].dh = 0; }   /* SOMA_346: js_want */
     char u[WN_URL_MAX];
     for (struct wnode *n = p->doc->root; n; ) {
         if (n->type == WN_ELEM && (n->tag == WT_IMG || n->tag == WT_SVG || n->tag == WT_INPUT) && n->box) {
@@ -901,14 +930,14 @@ static int img_load_index(struct wpage *p, int i)
 static int url_blocked(const char *u);                           /* SOMA_344_SCRIPTS: definidas mas abajo */
 static int under_template(const struct wnode *n);
 struct dlimg { int used, done, kind; struct wpage *p; uint64_t t0; int idx; uint32_t hash; struct wnode *node; char *url, *ref; struct wn_resp rs; int rc; };
-enum { DLK_IMG = 0, DLK_SCRIPT = 1 };                            /* SOMA_344_SCRIPTS: tambien scripts */
+enum { DLK_IMG = 0, DLK_SCRIPT = 1, DLK_FONT = 2 };              /* SOMA_344_SCRIPTS: tambien scripts; SOMA_348: y fuentes web */
 static struct dlimg dl_jobs[WDL_N];
 static void dl_img_job(void *arg)
 {
     struct dlimg *j = (struct dlimg *)arg;
     struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&j->rs, 0, sizeof j->rs);
-    rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 10000; rq.max_body = 8u << 20; rq.want_binary = 1; rq.accept = "image/png,image/jpeg,image/gif";
-    j->rc = wb_network_fetch(&rq, &j->rs);
+    rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 10000; rq.max_body = 8u << 20; rq.want_binary = 1; rq.accept = img_accept347();
+    j->rc = hc_fetch(&rq, &j->rs);   /* SOMA_353: puede salir de la cache */
     if (j->rc == 0 && j->rs.body && j->rs.status >= 200 && j->rs.status < 300 && !j->rs.via_gateway && wu_startsi(j->url, "http://") &&
         img_needs_gateway((const uint8_t *)j->rs.body, j->rs.len)) {                    /* como la carga en sincrono: WebP/AVIF por la pasarela */
         struct wn_resp r2; struct wn_req g = rq; g.via_gateway = 1;
@@ -916,6 +945,64 @@ static void dl_img_job(void *arg)
         else wn_free(&r2);
     }
     j->done = 1;
+}
+/* SOMA_348_FUENTES_WEB: descarga de una fuente de @font-face (en el hilo de descargas); se convierte al recogerla */
+#include "web_wfont.h"
+static void dl_font_job(void *arg)
+{
+    struct dlimg *j = (struct dlimg *)arg;
+    struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&j->rs, 0, sizeof j->rs);
+    rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 15000; rq.max_body = WFF_MAX_IN; rq.want_binary = 1;
+    rq.accept = "font/woff2,font/woff,font/ttf,application/font-woff;q=0.9,*/*;q=0.5";
+    j->rc = hc_fetch(&rq, &j->rs);   /* SOMA_353: puede salir de la cache */
+    j->done = 1;
+}
+static void font_done(struct wpage *p, struct dlimg *j)
+{
+    uint32_t key = wu_hash(j->url, wu_strlen(j->url)); int face = 0; const char *why = 0;
+    if (j->rc == 0 && j->rs.body && j->rs.status >= 200 && j->rs.status < 300) {
+        uint8_t *sf = 0; uint32_t sn = 0; int r = wff_to_sfnt((const uint8_t *)j->rs.body, j->rs.len, &sf, &sn);
+        if (r == 0) { face = wf_web_add(sf, sn, key, (int)j->hash); if (!face) { kfree(sf); why = "no cabe o no se puede leer"; } }
+        else why = wff_error(r);
+    } else why = j->rs.err[0] ? j->rs.err : "no se pudo descargar";
+    if (!face) { char m[200]; uint32_t k = wu_copy(m, "fuente web: ", sizeof m); k += wu_copy(m + k, why, sizeof m - k); k += wu_copy(m + k, " (", sizeof m - k); k += wu_copy(m + k, j->url, 120 < sizeof m - k ? 120 : sizeof m - k); wu_copy(m + k, ")", sizeof m - k); wlog(1, m); }
+    if (j->p != p || j->t0 != p->load_t0 || !p->css) return;           /* de otra pagina: queda en la cache de caras */
+    int n; struct wcfont *f = wc_fonts(p->css, &n);
+    for (int i = 0; i < n; i++) {
+        if (f[i].state != 1) continue;
+        char u[WN_URL_MAX]; abs_url(p, f[i].url, u, sizeof u);
+        if (!wu_streq(u, j->url)) continue;
+        f[i].state = face ? 2 : 3; f[i].face = (uint8_t)face;
+    }
+    p->need_style = 1;                                                   /* se vuelve a maquetar con la fuente (font-display: swap) */
+}
+static int dl_free_slots(void);
+static int dl_font_inflight(const struct wpage *p) { int k = 0; for (int i = 0; i < WDL_N; i++) if (dl_jobs[i].used && dl_jobs[i].kind == DLK_FONT && dl_jobs[i].p == p) k++; return k; }
+/* pide las fuentes de @font-face que usa algun elemento; las ya cargadas en otra pagina se toman de la cache */
+static void fonts_scan(struct wpage *p)
+{
+    if (!p->css) return;
+    int n, changed = 0, pedidas = 0; struct wcfont *f = wc_fonts(p->css, &n);
+    for (int i = 0; i < n; i++) if (f[i].state) pedidas++;
+    for (int i = 0; i < n; i++) {
+        if (!f[i].want || f[i].state) continue;
+        char u[WN_URL_MAX]; abs_url(p, f[i].url, u, sizeof u);
+        int face = wf_web_find(wu_hash(u, wu_strlen(u)));
+        if (face) { f[i].state = 2; f[i].face = (uint8_t)face; changed = 1; continue; }
+        if ((!wu_startsi(u, "http://") && !wu_startsi(u, "https://")) || url_blocked(u) || pedidas >= 16) { f[i].state = 3; continue; }
+        int dup = 0; for (int k = 0; k < n; k++) if (k != i && f[k].state == 1) { char u2[WN_URL_MAX]; abs_url(p, f[k].url, u2, sizeof u2); if (wu_streq(u, u2)) { dup = 1; break; } }
+        if (dup) { f[i].state = 1; continue; }                           /* la misma fuente (variable) para varios pesos: una descarga */
+        if (dl_font_inflight(p) >= 2 || dl_free_slots() <= 1) break;
+        struct dlimg *j = 0; for (int k = 0; k < WDL_N; k++) if (!dl_jobs[k].used) { j = &dl_jobs[k]; break; }
+        if (!j) break;
+        memset(j, 0, sizeof *j); j->kind = DLK_FONT;
+        j->url = sdup(u); j->ref = sdup(p->url);
+        if (!j->url || !j->ref) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; break; }
+        j->p = p; j->t0 = p->load_t0; j->hash = f[i].w0 >= 600; j->used = 1;
+        if (wdl_start(dl_font_job, j) != 0) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = 0; break; }
+        f[i].state = 1; pedidas++;
+    }
+    if (changed) p->need_style = 1;
 }
 static int dl_busy(const struct wpage *p) { for (int i = 0; i < WDL_N; i++) if (dl_jobs[i].used && !dl_jobs[i].done && dl_jobs[i].p == p && dl_jobs[i].kind == DLK_IMG) return 1; return 0; }
 static void dl_job_free(struct dlimg *j) { wn_free(&j->rs); kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = j->done = 0; }
@@ -926,13 +1013,17 @@ static int dl_collect(struct wpage *p)
         struct dlimg *j = &dl_jobs[i];
         if (!j->used || !j->done) continue;
         if (j->kind == DLK_SCRIPT) { if (j->p != p || j->t0 != p->load_t0) dl_job_free(j); continue; }   /* script de otra pagina: fuera; de esta, lo recoge su turno */
+        if (j->kind == DLK_FONT) { font_done(p, j); dl_job_free(j); did = 1; continue; }   /* SOMA_348 */
         int valid = j->p == p && p->load_t0 == j->t0 && j->idx >= 0 && j->idx < p->nimg && p->imgs[j->idx].state == 4 &&
                     p->imgs[j->idx].hash == j->hash && wu_streq(p->imgs[j->idx].url, j->url);
         if (valid) {
             struct wp_img *e = &p->imgs[j->idx];
             if (p->img_pending > 0) p->img_pending--;
             if (j->rc == 0 && j->rs.body && j->rs.status >= 200 && j->rs.status < 300) img_decode_into(p, e, (const uint8_t *)j->rs.body, j->rs.len);
-            else if (j->rc != -13 && j->rc != 0 && j->rs.status == 0 && e->tries < 2 && !p->stop) { e->state = 1; p->img_pending++; }   /* un fallo de red: otra vez */
+            else if (j->rc != -13 && j->rc != 0 && j->rs.status == 0 && e->tries < 3 && !p->stop) {   /* un fallo de red: otra vez */
+                e->state = 1; p->img_pending++;
+                e->retry_at = (uint32_t)web_now_ms() + (e->tries < 2 ? 400u : 1500u); if (!e->retry_at) e->retry_at = 1;   /* SOMA_345: con espera */
+            }
             else { e->state = 3; img_note_fail(p, e->url, j->rs.err[0] ? j->rs.err : (j->rc ? "error de red" : "estado HTTP"), j->rs.status, j->rs.len); }
             did = 1;
         }
@@ -964,7 +1055,7 @@ static void dl_script_job(void *arg)
     struct dlimg *j = (struct dlimg *)arg;
     struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&j->rs, 0, sizeof j->rs);
     rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 12000; rq.max_body = WP_MAX_RES;   /* como load_sub para un script */
-    j->rc = wb_network_fetch(&rq, &j->rs);
+    j->rc = hc_fetch(&rq, &j->rs);   /* SOMA_353: puede salir de la cache */
     j->done = 1;
 }
 static struct dlimg *dl_find_script(struct wpage *p, struct wnode *node)
@@ -1026,12 +1117,15 @@ static int img_load_dl(struct wpage *p)
 {
     wdl_pump();
     int got = dl_collect(p), started = 0, sync_best = -1;
+    fonts_scan(p);                                               /* SOMA_348_FUENTES_WEB */
     img_scan(p);
     int lim = p->vh > 0 ? p->vh + p->vh / 2 : 900, waiting = 0;
+    uint32_t now32 = (uint32_t)web_now_ms();
     for (int round = 0; round <= WDL_N; round++) {
         int best = -1;
         for (int i = 0; i < p->nimg; i++) {
             struct wp_img *x = &p->imgs[i]; if (x->state != 1) continue;
+            if (x->retry_at) { if ((int32_t)(now32 - x->retry_at) < 0) continue; x->retry_at = 0; }   /* SOMA_345: aun esperando para repetir */
             if (p->lay ? x->dist <= lim : !x->aplazada) { if (best < 0 || x->dist < p->imgs[best].dist) best = i; }
             else if (round == 0) waiting++;
         }
@@ -1085,6 +1179,8 @@ static void img_seed(struct wpage *p, const char *url, const char *data, uint32_
 }
 
 /* ------------------------------------------------------------ hojas de estilo */
+static int css_deferida348(struct wnode *n);              /* SOMA_348: definidas mas abajo */
+static const char *media_deferida348(struct wnode *n);
 static int is_abs_ref(const char *s) { return has_scheme(s) || (s[0] == '/' && s[1] == '/') || s[0] == '#'; }
 static void css_absolutize(const char *css, uint32_t n, const char *base, struct wb *o)
 {
@@ -1212,9 +1308,75 @@ static void scope_css(struct wb *o, const char *p, const char *e, const char *ta
     }
 }
 static struct wnode *shadow_host_of(struct wnode *n) { for (struct wnode *a = n->parent; a; a = a->parent) if (wd_is_shadow_root(a)) return a->parent; return 0; }
+#if defined(SOMA_DL)
+/* SOMA_352_MENOS_MAQUETAR: las hojas de estilo enlazadas se piden todas a la vez (hasta WDL_N, en las corrutinas de web_dl) y se
+ * anaden en el orden del documento, que es el de la cascada. Antes se bajaban una detras de otra: con 8 hojas a 300 ms, 2,4 s
+ * antes de ver nada. Un trabajo que no se recoge (la pagina se paro, o ya no hace falta) se libera cuando termina. */
+struct cssjob { int used, done, rc, orphan; struct wpage *p; uint64_t t0; struct wnode *node; char *url, *ref; struct wn_resp rs; };
+static struct cssjob css_jobs[WDL_N];
+static void css_job_fn(void *arg)
+{
+    struct cssjob *j = (struct cssjob *)arg;
+    struct wn_req rq; memset(&rq, 0, sizeof rq); memset(&j->rs, 0, sizeof j->rs);
+    rq.url = j->url; rq.referer = j->ref; rq.timeout_ms = 12000; rq.max_body = 1u << 20;   /* como fetch_sheet */
+    j->rc = hc_fetch(&rq, &j->rs);   /* SOMA_353: puede salir de la cache */
+    j->done = 1;
+}
+static void css_job_free(struct cssjob *j) { wn_free(&j->rs); kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = j->done = j->orphan = 0; j->node = 0; j->p = 0; }
+static int css_link_wanted(struct wnode *n)
+{
+    return n->type == WN_ELEM && n->sel != 7 && (n->flags & WNF_INDOC || n->parent) && n->tag == WT_LINK &&
+           (rel_has(wd_attr(n, "rel"), "stylesheet") || css_deferida348(n)) && !rel_has(wd_attr(n, "rel"), "alternate");
+}
+static struct cssjob *css_job_of(struct wpage *p, struct wnode *n)
+{
+    for (int i = 0; i < WDL_N; i++) { struct cssjob *j = &css_jobs[i]; if (j->used && !j->orphan && j->p == p && j->t0 == p->load_t0 && j->node == n) return j; }
+    return 0;
+}
+static void css_prefetch(struct wpage *p)
+{
+    for (int i = 0; i < WDL_N; i++) { struct cssjob *j = &css_jobs[i]; if (j->used && j->done && (j->orphan || j->p != p || j->t0 != p->load_t0)) css_job_free(j); }
+    int seen = 0;
+    for (struct wnode *n = p->doc->root; n && seen < 30 && !p->stop; n = wd_walk_next(n, 0)) {
+        if (!css_link_wanted(n)) continue;
+        const char *href = wd_attr(n, "href"); if (!href || !*href) continue;
+        seen++;
+        if (css_job_of(p, n)) continue;
+        char u[WN_URL_MAX]; abs_url(p, href, u, sizeof u);
+        if (!wu_startsi(u, "http://") && !wu_startsi(u, "https://")) continue;
+        struct cssjob *j = 0; for (int i = 0; i < WDL_N; i++) if (!css_jobs[i].used) { j = &css_jobs[i]; break; }
+        if (!j) return;
+        memset(j, 0, sizeof *j); j->url = sdup(u); j->ref = sdup(p->url);
+        if (!j->url || !j->ref) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; return; }
+        j->p = p; j->t0 = p->load_t0; j->node = n; j->used = 1;
+        if (wdl_start(css_job_fn, j) != 0) { kfree(j->url); kfree(j->ref); j->url = j->ref = 0; j->used = 0; return; }   /* sin hueco: el resto, como antes */
+    }
+}
+/* 1 = la hoja de n llego por un trabajo adelantado (y ya esta anadida); 0 = hay que pedirla en sincrono */
+static int css_take(struct wpage *p, struct wnode *n, const char *url, const char *media)
+{
+    struct cssjob *j = css_job_of(p, n);
+    if (!j) return 0;
+    if (!wu_streq(j->url, url)) { j->orphan = 1; return 0; }        /* el href cambio */
+    set_status(p, WPS_BUSY, "Descargando hojas de estilo...");
+    while (!j->done && !p->stop) unet_idle();                       /* mientras, avanzan las demas */
+    if (!j->done) { j->orphan = 1; return 1; }                      /* pagina parada: se libera al terminar */
+    if (j->rc == 0 && j->rs.body && j->rs.status >= 200 && j->rs.status < 300) {
+        to_utf8(&j->rs, 0);
+        add_sheet_text(p, j->rs.body, j->rs.len, media, j->rs.final_url[0] ? j->rs.final_url : url);
+    } else { char m[160] = "CSS no disponible: "; wu_copy(m + 19, url, sizeof m - 19); wlog(1, m); }
+    css_job_free(j);
+    css_prefetch(p);                                                /* hueco libre: la siguiente */
+    return 1;
+}
+static void css_jobs_release(struct wpage *p) { for (int i = 0; i < WDL_N; i++) { struct cssjob *j = &css_jobs[i]; if (j->used && j->p == p) { if (j->done) css_job_free(j); else j->orphan = 1; } } }
+#endif
 static void scan_styles(struct wpage *p, int allow_net)
 {
     if (!p->doc || !p->css) return;
+#if defined(SOMA_DL)
+    if (allow_net && !p->stop) css_prefetch(p);
+#endif
     struct wnode *n = p->doc->root; int nlinks = 0;
     while (n) {
         struct wnode *adn = n == p->doc->root ? n : (n->type == WN_ELEM && n->shadow && (n->flags & WNF_INDOC)) ? n->shadow : 0;
@@ -1240,11 +1402,15 @@ static void scan_styles(struct wpage *p, int allow_net)
                         if (!seen) { if (p->nshcss < 256) p->shcss[p->nshcss++] = h; struct wb sc = {0}; scope_css(&sc, t.p, t.p + t.len, host->name, 0); if (sc.p) add_sheet_text(p, sc.p, sc.len, wd_attr(n, "media"), 0); wb_free(&sc); }
                     } else if (t.len) add_sheet_text(p, t.p, t.len, wd_attr(n, "media"), 0);
                     wb_free(&t); }
-            } else if (n->tag == WT_LINK && rel_has(wd_attr(n, "rel"), "stylesheet") && !rel_has(wd_attr(n, "rel"), "alternate")) {
+            } else if (n->tag == WT_LINK && (rel_has(wd_attr(n, "rel"), "stylesheet") || css_deferida348(n)) && !rel_has(wd_attr(n, "rel"), "alternate")) {
                 const char *href = wd_attr(n, "href");
                 if (href && *href) {
                     if (!allow_net && !wu_startsi(href, "data:")) { p->styles_pending = 1; }
-                    else { n->sel = 7; if (nlinks++ < 30 && !p->stop) { char u[WN_URL_MAX]; abs_url(p, href, u, sizeof u); fetch_sheet(p, u, wd_attr(n, "media")); } }
+                    else { n->sel = 7; if (nlinks++ < 30 && !p->stop) { char u[WN_URL_MAX]; abs_url(p, href, u, sizeof u);
+#if defined(SOMA_DL)
+                        if (!css_take(p, n, u, media_deferida348(n)))
+#endif
+                        fetch_sheet(p, u, media_deferida348(n)); } }
                 } else n->sel = 7;
             }
         }
@@ -1252,8 +1418,27 @@ static void scan_styles(struct wpage *p, int allow_net)
     }
     const char *imp; int guard = 0;
     while (allow_net && guard++ < 24 && (imp = wc_next_import(p->css)) != 0 && !p->stop) { char u[WN_URL_MAX]; wu_copy(u, imp, sizeof u); fetch_sheet(p, u, 0); }
+#if defined(SOMA_DL)
+    if (allow_net) css_jobs_release(p);                             /* lo que no se recogio en esta pasada no se espera */
+#endif
 }
 
+/* SOMA_348_FUENTES_WEB: hojas de estilo "diferidas", el truco de carga asincrona de LiteSpeed, WP Rocket y loadCSS:
+ *   <link rel="preload" as="style" onload="this.onload=null;this.rel='stylesheet'">   (copia normal dentro de <noscript>)
+ *   <link rel="stylesheet" media="print" onload="this.media='all'">
+ * El onload de un <link> no se ejecuta aqui, y <noscript> no se dibuja: la hoja no llegaba nunca (las fuentes de iconos y el CSS
+ * no critico de El Bierzo Digital, 20minutos...). En Chrome acaba aplicada: se aplica desde el principio. */
+static int css_deferida348(struct wnode *n)
+{
+    const char *rel = wd_attr(n, "rel"), *as = wd_attr(n, "as"), *ol = wd_attr(n, "onload");
+    return rel_has(rel, "preload") && as && wu_strieq(as, "style") && ol && wu_findi(ol, "stylesheet");
+}
+static const char *media_deferida348(struct wnode *n)
+{
+    const char *m = wd_attr(n, "media"), *ol = wd_attr(n, "onload");
+    if (m && wu_strieq(m, "print") && ol && wu_findi(ol, "media") && wu_findi(ol, "all")) return "all";
+    return m;
+}
 /* ------------------------------------------------------------ preparacion del DOM */
 static const char *srcset_pick(const char *ss, char *out, uint32_t max)
 {
@@ -1261,11 +1446,15 @@ static const char *srcset_pick(const char *ss, char *out, uint32_t max)
     int best_score = -1; out[0] = 0;
     for (const char *s = ss; *s; ) {
         while (wu_isspace(*s) || *s == ',') s++;
-        const char *u = s; while (*s && !wu_isspace(*s) && *s != ',') s++;
-        uint32_t ul = (uint32_t)(s - u); if (!ul) break;
-        while (wu_isspace(*s)) s++;
+        /* SOMA_346: como en el estandar, la URL llega hasta el primer espacio y solo se le quitan las comas del final (separan
+         * candidatos). Antes se cortaba en la primera coma: "data:image/gif;base64,R0lG..." (El Bierzo Digital, WordPress) quedaba
+         * en "data:image/gif;base64" y la imagen fallaba con "error de red". */
+        const char *u = s; while (*s && !wu_isspace(*s)) s++;
+        uint32_t ul = (uint32_t)(s - u); int fin = 0; while (ul && u[ul - 1] == ',') { ul--; fin = 1; }
+        if (!ul) { if (!*s) break; continue; }
+        while (!fin && wu_isspace(*s)) s++;
         int score = 100;
-        if (*s && *s != ',') { int v = wu_atoi(s); const char *e = s; while (wu_isdigit(*e) || *e == '.') e++; score = *e == 'w' ? v : *e == 'x' ? v * 600 : 100; if (*e == 'w' && v > 1400) score = 1400 - (v - 1400) / 4; while (*s && *s != ',') s++; }
+        if (!fin && *s && *s != ',') { int v = wu_atoi(s); const char *e = s; while (wu_isdigit(*e) || *e == '.') e++; score = *e == 'w' ? v : *e == 'x' ? v * 600 : 100; if (*e == 'w' && v > 1400) score = 1400 - (v - 1400) / 4; while (*s && *s != ',') s++; }
         if (score > best_score) { best_score = score; wu_copyn(out, u, ul, max); }
     }
     return out[0] ? out : 0;
@@ -1320,6 +1509,13 @@ static void svg_color_attr(struct wb *b, const char *nm, uint32_t v, const struc
     else { uint32_t c = v == 2 ? (n->st->color & 0xFFFFFF) : (v & 0xFFFFFF); static const char hx[] = "0123456789abcdef"; t[0] = '#'; for (int i = 0; i < 6; i++) t[1 + i] = hx[(c >> (20 - 4 * i)) & 15]; t[7] = 0; wb_add(b, t); }
     wb_addc(b, '"');
 }
+/* valor de atributo escapado; SOMA_347: con var(--x) resueltas con las variables del elemento */
+static void svg_attr_val(struct wb *b, const struct wnode *n, const char *v)
+{
+    char t[256]; if (!v) v = "";
+    if (n && n->st && wc_subst_vars(n->st->vars, v, t, sizeof t)) v = t;
+    for (const char *s = v; *s; s++) { if (*s == '"') wb_add(b, "&quot;"); else if (*s == '&') wb_add(b, "&amp;"); else if (*s == '<') wb_add(b, "&lt;"); else wb_addc(b, *s); }
+}
 static void svg_paint_attrs(struct wb *b, const struct wnode *n, int root)
 {
     const struct wstyle *s = n->st; (void)root; if (!s) return;
@@ -1337,9 +1533,7 @@ static void svg_ser_kids(struct wb *b, const struct wnode *n, int depth)
         wb_addc(b, '<'); wb_add(b, c->name);
         for (const struct wattr *a = c->attrs; a; a = a->next) {
             if (svg_css_overrides(c, a->name) || wu_streq(a->name, "class")) continue;
-            wb_addc(b, ' '); wb_add(b, a->name); wb_add(b, "=\"");
-            for (const char *s = a->val ? a->val : ""; *s; s++) { if (*s == '"') wb_add(b, "&quot;"); else if (*s == '&') wb_add(b, "&amp;"); else if (*s == '<') wb_add(b, "&lt;"); else wb_addc(b, *s); }
-            wb_addc(b, '"');
+            wb_addc(b, ' '); wb_add(b, a->name); wb_add(b, "=\""); svg_attr_val(b, c, a->val); wb_addc(b, '"');
         }
         svg_paint_attrs(b, c, 0);
         wb_addc(b, '>'); svg_ser_kids(b, c, depth + 1); wb_add(b, "</"); wb_add(b, c->name); wb_addc(b, '>');
@@ -1360,9 +1554,7 @@ static void prep_svg(struct wpage *p)
                 for (struct wattr *a = n->attrs; a; a = a->next) {
                     if (wu_streq(a->name, "data-soma-svg") || wu_streq(a->name, "class") || wu_streq(a->name, "id") || wu_starts(a->name, "aria-") || wu_starts(a->name, "data-")) continue;
                     if (svg_css_overrides(n, a->name)) continue;   /* SOMA_188: el CSS manda sobre el atributo */
-                    wb_addc(&b, ' '); wb_add(&b, a->name); wb_add(&b, "=\"");
-                    for (const char *s = a->val ? a->val : ""; *s; s++) { if (*s == '"') wb_add(&b, "&quot;"); else if (*s == '&') wb_add(&b, "&amp;"); else if (*s == '<') wb_add(&b, "&lt;"); else wb_addc(&b, *s); }
-                    wb_addc(&b, '"');
+                    wb_addc(&b, ' '); wb_add(&b, a->name); wb_add(&b, "=\""); svg_attr_val(&b, n, a->val); wb_addc(&b, '"');
                 }
                 svg_paint_attrs(&b, n, 1); wb_addc(&b, '>'); svg_ser_kids(&b, n, 0);
                 {   /* SOMA_180: <use href="#id"> que apunta a un simbolo de OTRO <svg> de la pagina (hojas de iconos): se copia dentro */
@@ -1752,7 +1944,7 @@ static int host_computed(void *ud, struct wnode *n, const char *prop, char *out,
     else if (wu_streq(prop, "font-size")) fmt_px(s->font_px, out, max);
     else if (wu_streq(prop, "font-weight")) wu_copy(out, s->bold ? "700" : "400", max);
     else if (wu_streq(prop, "font-style")) wu_copy(out, s->italic ? "italic" : "normal", max);
-    else if (wu_streq(prop, "font-family")) wu_copy(out, s->mono ? "monospace" : "sans-serif", max);
+    else if (wu_streq(prop, "font-family")) wu_copy(out, s->mono ? "monospace" : s->serif ? "serif" : "sans-serif", max);
     else if (wu_streq(prop, "opacity")) { char t[16]; int v = s->opacity ? s->opacity : 255; int k = wu_itoa(v * 100 / 255, t); t[k] = 0; if (v == 255) wu_copy(out, "1", max); else { wu_copy(out, "0.", max); wu_copy(out + 2, t, max - 2); } }
     else if (wu_streq(prop, "overflow") || wu_streq(prop, "overflow-x")) wu_copy(out, s->overflow_x < 4 ? OVF[s->overflow_x] : "visible", max);
     else if (wu_streq(prop, "overflow-y")) wu_copy(out, s->overflow_y < 4 ? OVF[s->overflow_y] : "visible", max);
@@ -1889,6 +2081,62 @@ static void host_layout_rect(void *ud, struct wnode *n, int *x, int *y, int *w, 
     if (p->lay) wl_node_rect(p->lay, n, x, y, w, h);
 }
 static void host_viewport(void *ud, int *w, int *h, int *sx, int *sy) { struct wpage *p = (struct wpage *)ud; *w = p->vw; *h = p->vh; *sx = p->sx; *sy = p->sy; }
+/* SOMA_346_NAVEGADOR_RENDER: load/error de las imagenes. Antes no se disparaban nunca: ni en las de la pagina (las webs que las tienen
+ * transparentes hasta su onload, o que las marcan "cargada" ahi, no las mostraban) ni en las de new Image() (deteccion de WebP de EWWW
+ * en WordPress, precargas, galerias). */
+static struct wp_img *img_of_node(struct wpage *p, struct wnode *n, int add)
+{
+    const char *src = wl_img_src(n); if (!src || !*src) src = wd_attr(n, "src");
+    if (!src || !*src) return 0;
+    char u[WN_URL_MAX]; abs_url(p, src, u, sizeof u); uint32_t h = wu_hash(u, wu_strlen(u));
+    struct wp_img *e = img_find(p, u, h);
+    if (!e && add && !ext_unsupported(u)) { e = img_add(p, u, h); if (e) { e->state = 1; p->img_pending++; } }
+    return e;
+}
+static void host_img_src(void *ud, struct wnode *n)
+{
+    struct wpage *p = (struct wpage *)ud;
+    for (int i = 0; i < p->njsimg; i++) if (p->jsimg[i] == n) return;
+    if (p->njsimg == (int)(sizeof p->jsimg / sizeof p->jsimg[0])) { memmove(p->jsimg, p->jsimg + 1, sizeof p->jsimg - sizeof p->jsimg[0]); p->njsimg--; }   /* llena: sale la mas antigua */
+    p->jsimg[p->njsimg++] = n;
+}
+static int host_img_info(void *ud, struct wnode *n, int *w, int *h)
+{
+    struct wpage *p = (struct wpage *)ud; *w = *h = 0;
+    const char *src = wl_img_src(n); if (!src || !*src) src = wd_attr(n, "src");
+    if (!src || !*src) return 0;
+    struct wp_img *e = img_of_node(p, n, 0);
+    if (!e) return 1;                                            /* aun no se ha pedido: cargando */
+    if (e->state == 2) { *w = e->w; *h = e->h; return 2; }
+    return e->state == 3 ? 3 : 1;
+}
+/* dispara load/error en las <img> cuya imagen ya llego (o fallo); 1 si disparo alguno */
+static int img_events(struct wpage *p, uint64_t now)
+{
+    if (!p->js || !p->doc || p->in_script || p->lay_busy) return 0;
+    int fired = 0;
+    for (int i = 0; i < p->njsimg; ) {                            /* las del JS (tambien las que no estan en la pagina) */
+        struct wnode *n = p->jsimg[i];
+        struct wp_img *e = (n->flags & WNF_IMGEV) ? 0 : img_of_node(p, n, 1);
+        if (e && !(n->flags & WNF_INDOC)) e->js_want = 1;
+        if (!e || (n->flags & WNF_INDOC)) { if (!e || e->state == 2 || e->state == 3 || (n->flags & WNF_IMGEV)) { memmove(p->jsimg + i, p->jsimg + i + 1, (size_t)(p->njsimg - i - 1) * sizeof p->jsimg[0]); p->njsimg--; continue; } }
+        if (e->state == 2 || e->state == 3) {
+            n->flags |= WNF_IMGEV; wjs_dispatch(p->js, n, e->state == 2 ? "load" : "error", 0, 0, 0, 0, 0); fired = 1;
+            memmove(p->jsimg + i, p->jsimg + i + 1, (size_t)(p->njsimg - i - 1) * sizeof p->jsimg[0]); p->njsimg--; continue;
+        }
+        i++;
+    }
+    int done = 0; for (int i = 0; i < p->nimg; i++) if (p->imgs[i].state == 2 || p->imgs[i].state == 3) done++;
+    if ((done != p->img_ev_done || p->gen != p->img_ev_gen) && now - p->img_ev_t >= 100) {   /* las de la pagina, como mucho 10 veces por segundo */
+        p->img_ev_done = done; p->img_ev_gen = p->gen; p->img_ev_t = now;
+        for (struct wnode *n = p->doc->root; n; n = wd_walk_next(n, 0)) {
+            if (n->type != WN_ELEM || n->tag != WT_IMG || (n->flags & WNF_IMGEV)) continue;
+            struct wp_img *e = img_of_node(p, n, 0);
+            if (e && (e->state == 2 || e->state == 3)) { n->flags |= WNF_IMGEV; wjs_dispatch(p->js, n, e->state == 2 ? "load" : "error", 0, 0, 0, 0, 0); fired = 1; }
+        }
+    }
+    return fired;
+}
 static void host_scroll_to(void *ud, int x, int y) { struct wpage *p = (struct wpage *)ud; p->sx = x < 0 ? 0 : x; p->sy = y < 0 ? 0 : y; }
 
 static void host_init(struct wpage *p)
@@ -1897,6 +2145,7 @@ static void host_init(struct wpage *p)
     h->ud = p; h->log = host_log; h->dirty = host_dirty; h->navigate = host_navigate; h->fetch = host_fetch; h->submit = host_submit; h->activate = host_activate;
     h->focus = host_focus; h->load_script = host_load_script; h->history = host_history; h->alert = host_alert; h->get_cookie = host_get_cookie; h->set_cookie = host_set_cookie;
     h->storage = host_storage; h->layout_rect = host_layout_rect; h->viewport = host_viewport; h->scroll_to = host_scroll_to; h->computed = host_computed;
+    h->img_src = host_img_src; h->img_info = host_img_info;   /* SOMA_346 */
     h->url = p->url; h->ua = WP_UA;
 }
 
@@ -1911,6 +2160,8 @@ static void reset_doc(struct wpage *p)
     img_free_all(p); p->img_ok = p->img_fail = p->img_logged = 0; p->img_why[0] = 0;
     p->focus = p->hover = 0; p->dd_sel = 0; p->focus_orig = 0; p->hover_rules = 0; p->styles_pending = 0; p->need_style = 0; p->caret_on = 0; p->nav_at = 0; p->forced = 0; p->naq188 = 0;
     p->script_phase = 0; p->script_guard = 0; p->img_relayout_due = 0;   /* SOMA_152B */
+    p->defer_ph347 = 0;                                                 /* SOMA_347_NAVEGADOR_DEFER */
+    p->njsimg = 0; p->img_ev_done = 0; p->img_ev_gen = 0; p->img_ev_t = 0;   /* SOMA_346 */
     p->dynq_h = p->dynq_n = 0;                                          /* SOMA_152C */
     p->nshcss = 0;                                                      /* SOMA_188 */
     p->script_wait = 0; script_io_reset152();                           /* SOMA_152D */
@@ -1986,11 +2237,22 @@ static int url_blocked(const char *u)
     return 0;
 }
 static int under_template(const struct wnode *n) { for (n = n->parent; n; n = n->parent) if (n->type == WN_ELEM && n->tag == WT_TEMPLATE) return 1; return 0; }
-static struct wnode *next_script(struct wnode *root)
+/* SOMA_347_NAVEGADOR_DEFER: los <script defer src> y los modulos (sin async) se ejecutan tras analizar el documento,
+ * con document.readyState == "interactive" y antes de DOMContentLoaded, como en Chrome y Safari. Antes iban en orden
+ * de documento con readyState "loading": el patron "loading"!==document.readyState?r():addEventListener(...,r)
+ * (20minutos) llamaba a r(Event) y fallaba con "querySelectorAll no es una funcion". */
+static int script_deferred(const struct wnode *s, int mods)
+{
+    if (wd_attr(s, "async")) return 0;
+    const char *ty = wd_attr(s, "type"), *src = wd_attr(s, "src");
+    if (ty && wu_strieq(ty, "module")) return mods;
+    return src && *src && wd_attr(s, "defer") != 0;
+}
+static struct wnode *next_script(struct wnode *root, int skip_defer)
 {
     struct wnode *n = root;
     while (n) {
-        if (n->type == WN_ELEM && n->tag == WT_SCRIPT && !n->sel && !under_template(n)) return n;
+        if (n->type == WN_ELEM && n->tag == WT_SCRIPT && !n->sel && !under_template(n) && !(skip_defer && script_deferred(n, skip_defer == 1))) return n;
         if (n->first) { n = n->first; continue; }
         while (n && !n->next) n = n->parent;
         if (n) n = n->next;
@@ -2043,7 +2305,12 @@ static int run_scripts_budget(struct wpage *p, uint32_t budget_ms)
     p->in_script = 1;
     for (; p->script_guard < 400 && !p->stop; p->script_guard++) {
         if (budget_ms && now_ms() - t_start >= budget_ms) { more = 1; break; }
-        struct wnode *s = p->script_wait ? p->script_wait : next_script(p->doc->root); if (!s) break;
+        struct wnode *s = p->script_wait ? p->script_wait : next_script(p->doc->root, p->defer_ph347 ? 0 : (js_modules_on(p) ? 1 : 2));
+        if (!s && !p->defer_ph347) {   /* SOMA_347: fin del analisis: readyState "interactive" y luego los diferidos */
+            p->defer_ph347 = 1; wjs_set_ready(p->js, "interactive");
+            s = next_script(p->doc->root, 0);
+        }
+        if (!s) break;
         int resumed = p->script_wait != 0; p->script_wait = 0;
 #if SOMA_WEB_PERF_LOG
         uint64_t ts0 = now_ms(); const char *slog = wd_attr(s, "src");
@@ -2527,7 +2794,7 @@ static int caret_from_click(struct wpage *p, struct wnode *n, int px, int py)
 {
     const char *t = wl_ctl_text(n); int x, y, w, h; uint32_t len = wu_strlen(t);
     if (!p->lay || !wl_node_rect(p->lay, n, &x, &y, &w, &h)) return (int)len;
-    const struct wstyle *s = n->st; int fpx = s && s->font_px ? s->font_px : 14; int fl = (s && s->bold ? WF_BOLD : 0) | (s && s->mono ? WF_MONO : 0) | WF_WEB;   /* SOMA_182 */
+    const struct wstyle *s = n->st; int fpx = s && s->font_px ? s->font_px : 14; int fl = (s && s->bold ? WF_BOLD : 0) | (s && s->mono ? WF_MONO : 0) | (s && s->serif ? WF_SERIF : 0) | WF_WEB;   /* SOMA_182, SOMA_347 */
     int lh = fpx + fpx / 4 + 2, line = 0; uint32_t start = 0;
     if (n->tag == WT_TEXTAREA) {
         line = (py - y - 3) / (lh > 0 ? lh : 16); if (line < 0) line = 0;
@@ -2587,12 +2854,39 @@ static void follow_link(struct wpage *p, struct wnode *a)
     char u[WN_URL_MAX]; abs_url(p, href, u, sizeof u);
     host_navigate(p, u, 0);
 }
+/* SOMA_350_NAVEGADOR_VIDEO: clic en un <video>: su MP4 (src o el primer <source> MP4) va al reproductor nativo de SOMA (H.264 + AAC),
+ * el mismo de "youtube mp4". La pagina lo deja en media_url/media_seq y la ventana del navegador (nucleo) lo abre: el motor de
+ * ring 3 no puede abrir ventanas. HLS (.m3u8), WebM y blob: no los sabe reproducir: se dice en la barra de estado. */
+static int video_mp4_ok(const char *u, const char *ty)
+{
+    if (ty && *ty) return wu_findi(ty, "mp4") != 0;
+    uint32_t n = 0; while (u[n] && u[n] != '?' && u[n] != '#') n++;
+    if (n > 5 && (wu_strnieq(u + n - 5, ".m3u8", 5) || wu_strnieq(u + n - 5, ".webm", 5))) return 0;
+    if (n > 4 && (wu_strnieq(u + n - 4, ".ogv", 4) || wu_strnieq(u + n - 4, ".mpd", 4))) return 0;
+    return 1;
+}
+static void video_play350(struct wpage *p, struct wnode *v)
+{
+    const char *src = wd_attr(v, "src"), *ty = wd_attr(v, "type");
+    if (!src || !*src || !video_mp4_ok(src, ty)) {
+        src = 0;
+        for (struct wnode *c = v->first; c; c = c->next) {
+            if (c->type != WN_ELEM || !c->name || !wu_strieq(c->name, "source")) continue;
+            const char *cs = wd_attr(c, "src"); if (cs && *cs && video_mp4_ok(cs, wd_attr(c, "type"))) { src = cs; break; }
+        }
+    }
+    char u[WN_URL_MAX]; if (src) abs_url(p, src, u, sizeof u);
+    if (!src || (!wu_startsi(u, "http://") && !wu_startsi(u, "https://"))) { set_status(p, WPS_ERR, "Este video no esta en MP4 (H.264): SOMA no lo sabe reproducir"); return; }
+    wu_copy(p->media_url, u, sizeof p->media_url); p->media_seq++;
+    set_status(p, WPS_OK, "Abriendo el video en el reproductor de SOMA...");
+}
 static void activate_node(struct wpage *p, struct wnode *n, int px, int py)
 {
     for (struct wnode *a = n; a; a = a->parent) {
         if (a->type != WN_ELEM) continue;
         switch (a->tag) {
         case WT_A: if (wd_attr(a, "href")) { follow_link(p, a); return; } break;
+        case WT_VIDEO: { video_play350(p, a); return; }               /* SOMA_350_NAVEGADOR_VIDEO */
         case WT_BUTTON: {
             if (ctl_disabled(a)) return;
             const char *t = wd_attr(a, "type"); struct wnode *f = enclosing_form(a);
@@ -2920,6 +3214,7 @@ int wp_tick(struct wpage *p, uint64_t now)
         (soma151_io.owner != p || soma151_io.ticket.generation != soma151_generation || p->img_pending == 0))
         (void)soma151_collect(p);
 #endif
+    if (img_events(p, now)) next = 1;                              /* SOMA_346_NAVEGADOR_RENDER */
     if (p->doc && p->img_pending > 0 && !p->stop) {
         int did = 0;
         for (int k = 0; k < SOMA_WEB_IMAGES_PER_TICK && p->img_pending > 0; k++) did |= img_load_one(p);

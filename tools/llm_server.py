@@ -7,6 +7,10 @@
 #      llama-server con los mismos flags que el otro proyecto.
 #   3) Espera a que cargue el modelo (/health devuelve 503 mientras carga).
 # Todo se configura con las mismas variables de entorno que config.py.
+#
+# SOMA_355_STRATA: el menu tambien ofrece los perfiles de Strata del servidor (~/strata-custom/*.json, STRATA_PERFILES). Se lanzan con
+# strata serve --profile P --host 0.0.0.0 --port SERVER_PORT --parallel 1, en el mismo puerto que llama-server, asi que SOMA los usa
+# igual. Los .gguf con un mmproj*.gguf en su carpeta se lanzan con --mmproj (vision).
 
 from __future__ import annotations
 
@@ -49,6 +53,13 @@ PREDICT = int(os.getenv("REMOTE_PREDICT", "16384"))
 CUDA_DEVICE = os.getenv("CUDA_DEVICE", "0")
 EXTRA_ARGS = os.getenv("LLAMA_EXTRA_ARGS", "")
 HEALTH_TIMEOUT_S = float(os.getenv("SERVER_HEALTH_TIMEOUT_S", "180"))
+# SOMA_355_STRATA
+STRATA_BIN = os.getenv("STRATA_BIN", "strata")
+STRATA_DIR = os.getenv("STRATA_PERFILES", "~/strata-custom")
+# SOMA_356_STRATA_UNO: que perfiles salen en el menu: el de tu script (por defecto), varios separados por comas, o "*" (todos)
+STRATA_PERFIL = os.getenv("STRATA_PERFIL", "iq3s-latin-vision-120k.json")
+STRATA_EXTRA_ARGS = os.getenv("STRATA_EXTRA_ARGS", "")
+STRATA_TIMEOUT_S = float(os.getenv("STRATA_HEALTH_TIMEOUT_S", "600"))   # Strata con vision tarda mas en cargar
 
 SPLIT_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
 
@@ -69,9 +80,14 @@ def warn(msg: str) -> None:
 class Model:
     path: str
     size: int
+    motor: str = "llama"        # SOMA_355_STRATA: "llama" (llama-server) o "strata" (un perfil JSON)
+    mmproj: str = ""            # proyector de vision del .gguf (se pasa con --mmproj)
+    vision: bool = False
 
     @property
     def rel(self) -> str:
+        if self.motor == "strata":
+            return "Strata: " + os.path.basename(self.path)
         if self.path.startswith(MODELS_DIR):
             return self.path[len(MODELS_DIR):].lstrip("/")
         return self.path
@@ -99,9 +115,17 @@ def health_status() -> int | None:
         with urllib.request.urlopen(url, timeout=2.0) as r:
             return r.status
     except urllib.error.HTTPError as e:
-        return e.code
+        if e.code != 404:
+            return e.code
     except Exception:
         return None
+    try:   # SOMA_355_STRATA: un servidor sin /health (Strata): listo si /v1/models contesta
+        with urllib.request.urlopen(f"http://{SERVER_IP}:{SERVER_PORT}/v1/models", timeout=3.0) as r:
+            return 200 if r.status == 200 else 503
+    except urllib.error.HTTPError as e:
+        return 503 if e.code in (503, 404) else e.code
+    except Exception:
+        return 503
 
 
 def loaded_model() -> str:
@@ -135,7 +159,10 @@ def process_alive() -> bool:
 def list_models() -> list[Model]:
     cmd = (
         f"find {shlex.quote(MODELS_DIR)} -type f -name '*.gguf' "
-        "-printf '%s\\t%p\\n' 2>/dev/null"
+        "-printf '%s\\t%p\\n' 2>/dev/null; "
+        # SOMA_355_STRATA: perfiles de Strata (marca S, y V si el perfil habla de vision)
+        f"for f in {STRATA_DIR}/*.json; do [ -f \"$f\" ] || continue; "
+        "if grep -qiE 'vision|mmproj|image' \"$f\"; then printf 'SV\\t%s\\n' \"$f\"; else printf 'S\\t%s\\n' \"$f\"; fi; done 2>/dev/null"
     )
     try:
         out = run_ssh(cmd, timeout=40).stdout
@@ -144,12 +171,21 @@ def list_models() -> list[Model]:
         return []
 
     groups: dict[str, dict] = {}
+    strata: list[Model] = []
     for line in out.splitlines():
         size_s, _, path = line.partition("\t")
+        if size_s in ("S", "SV") and path:                    # SOMA_355_STRATA
+            want = [w.strip() for w in STRATA_PERFIL.split(",") if w.strip()]   # SOMA_356_STRATA_UNO: solo el perfil elegido
+            n = os.path.basename(path)
+            if "*" in want or any(n == w or n == w + ".json" for w in want):
+                strata.append(Model(path, 0, "strata", "", size_s == "SV"))
+            continue
         if not size_s.isdigit() or not path:
             continue
         if "mmproj" in os.path.basename(path).lower():
             continue  # proyectores de vision: no son modelos autonomos
+        if "/embeddings/" in path or "bge-m3" in os.path.basename(path).lower():
+            continue  # SOMA_356: los de embeddings no son LLM (como en el lanzador)
         m = SPLIT_RE.search(path)
         key = SPLIT_RE.sub(".gguf", path)
         g = groups.setdefault(key, {"size": 0, "first": None})
@@ -157,12 +193,20 @@ def list_models() -> list[Model]:
         if m is None or m.group(1) == "00001":
             g["first"] = path  # llama.cpp carga el resto de partes solo
 
-    models = [Model(g["first"], g["size"]) for g in groups.values() if g["first"]]
+    mm: dict[str, str] = {}                                    # SOMA_355_STRATA: mmproj*.gguf de cada carpeta
+    for line in out.splitlines():
+        size_s, _, path = line.partition("\t")
+        if size_s.isdigit() and "mmproj" in os.path.basename(path).lower():
+            mm.setdefault(os.path.dirname(path), path)
+    models = [Model(g["first"], g["size"], "llama", mm.get(os.path.dirname(g["first"]), ""), os.path.dirname(g["first"]) in mm)
+              for g in groups.values() if g["first"]]
     models.sort(key=lambda m: m.path.lower())
-    return models
+    return models + sorted(strata, key=lambda m: m.path.lower())
 
 
 def alias_for(path: str) -> str:
+    if path.lower().endswith(".json"):                         # SOMA_355_STRATA: un perfil de Strata
+        return "strata-" + (re.sub(r"[^a-z0-9._-]+", "-", os.path.basename(path)[:-5].lower()).strip("-")[:40] or "perfil")
     if path == DEFAULT_MODEL_PATH:
         return DEFAULT_ALIAS
     name = os.path.basename(path)
@@ -180,7 +224,8 @@ def choose_model(models: list[Model]) -> Model | None:
     print("\nModelos disponibles en el servidor:")
     for i, m in enumerate(models, 1):
         mark = "   <- por defecto" if i - 1 == default_idx else ""
-        print(f"  {i:2d}) {m.rel}  [{m.size / 2**30:.1f} GiB]{mark}")
+        tam = "Strata" if m.motor == "strata" else f"{m.size / 2**30:.1f} GiB"
+        print(f"  {i:2d}) {m.rel}  [{tam}{', vision' if m.vision else ''}]{mark}")
 
     while True:
         try:
@@ -199,7 +244,38 @@ def choose_model(models: list[Model]) -> Model | None:
 
 # ---------------------------------------------------------------- ciclo de vida
 
-def launch(model_path: str, alias: str) -> bool:
+def launch_strata(model: Model, alias: str) -> bool:
+    """SOMA_355_STRATA: strata serve con el perfil, en la red local y en el puerto del LLM. Se niega si ya hay otro Strata."""
+    global _started_by_us
+    q = shlex.quote
+    args = ["serve", "--profile", model.path, "--host", "0.0.0.0", "--port", str(SERVER_PORT), "--parallel", "1"]
+    if STRATA_EXTRA_ARGS:
+        args += shlex.split(STRATA_EXTRA_ARGS)
+    cmd = (
+        'export PATH="$HOME/.local/bin:$HOME/bin:$PATH"; '
+        f"command -v {q(STRATA_BIN)} >/dev/null 2>&1 || {{ echo 'no encuentro Strata ({STRATA_BIN})' >&2; exit 3; }}; "
+        f"P=$(cat {q(REMOTE_PID_FILE)} 2>/dev/null); [ -n \"$P\" ] && kill -- -\"$P\" 2>/dev/null; "
+        f"kill $(lsof -iTCP:{SERVER_PORT} -sTCP:LISTEN -t 2>/dev/null) 2>/dev/null; sleep 2; "
+        f"kill -9 $(lsof -iTCP:{SERVER_PORT} -sTCP:LISTEN -t 2>/dev/null) 2>/dev/null; rm -f {q(REMOTE_PID_FILE)}; "
+        "if pgrep -u \"$(id -u)\" -x strata >/dev/null || pgrep -u \"$(id -u)\" -x strata-vision >/dev/null; then "
+        "echo 'ya hay un Strata en marcha en el servidor (quiza el del Mac en el puerto 18081): detenlo primero' >&2; exit 4; fi; "
+        f"env -u CUDA_VISIBLE_DEVICES setsid nohup {q(STRATA_BIN)} {shlex.join(args)} > {q(REMOTE_LOG_FILE)} 2>&1 < /dev/null & "
+        f"echo $! > {q(REMOTE_PID_FILE)}"
+    )
+    info(f"Lanzando Strata con '{alias}' ({os.path.basename(model.path)}) ...")
+    try:
+        res = run_ssh(cmd, timeout=30)
+    except Exception as e:
+        warn(f"fallo al lanzar por SSH: {e}")
+        return False
+    if res.returncode != 0:
+        warn(f"fallo al lanzar Strata: {res.stderr.strip()}")
+        return False
+    _started_by_us = True
+    return True
+
+
+def launch(model_path: str, alias: str, mmproj: str = "") -> bool:
     global _started_by_us
 
     args = [
@@ -217,6 +293,8 @@ def launch(model_path: str, alias: str) -> bool:
         "-ctk", "q8_0", "-ctv", "q8_0",
         "--threads", str(THREADS),
     ]
+    if mmproj:                                                 # SOMA_355_STRATA: vision
+        args += ["--mmproj", mmproj]
     if EXTRA_ARGS:
         args += shlex.split(EXTRA_ARGS)
 
@@ -243,9 +321,9 @@ def launch(model_path: str, alias: str) -> bool:
     return True
 
 
-def wait_ready() -> bool:
-    deadline = time.time() + HEALTH_TIMEOUT_S
-    info(f"Esperando a http://{SERVER_IP}:{SERVER_PORT}/health (max {int(HEALTH_TIMEOUT_S)}s) ...")
+def wait_ready(timeout_s: float = HEALTH_TIMEOUT_S) -> bool:
+    deadline = time.time() + timeout_s
+    info(f"Esperando a http://{SERVER_IP}:{SERVER_PORT} (max {int(timeout_s)}s) ...")
     last_print = 0.0
     last_alive = time.time()
 
@@ -277,12 +355,12 @@ def stop_server() -> None:
     global _started_by_us
     if not _started_by_us or _keep_running:
         return
-    info("Deteniendo llama-server (liberando VRAM) ...")
+    info("Deteniendo el servidor del modelo (liberando VRAM) ...")
     pid = shlex.quote(REMOTE_PID_FILE)
     cmd = (
         f"if [ -f {pid} ]; then P=$(cat {pid} 2>/dev/null); "
-        f'[ -n "$P" ] && kill "$P" 2>/dev/null; sleep 2; '
-        f'[ -n "$P" ] && kill -9 "$P" 2>/dev/null; rm -f {pid}; fi; true'
+        f'[ -n "$P" ] && {{ kill -- -"$P" 2>/dev/null || kill "$P" 2>/dev/null; }}; sleep 3; '      # SOMA_355_STRATA: con su grupo (strata-vision)
+        f'[ -n "$P" ] && {{ kill -9 -- -"$P" 2>/dev/null; kill -9 "$P" 2>/dev/null; }}; rm -f {pid}; fi; true'
     )
     try:
         run_ssh(cmd, timeout=15)
@@ -357,6 +435,7 @@ def ensure_server(args) -> None:
         info("Sin LLM: SOMA arrancara sin servidor.")
         return
 
-    if launch(choice.path, alias_for(choice.path)):
-        if not wait_ready():
+    ok = launch_strata(choice, alias_for(choice.path)) if choice.motor == "strata" else launch(choice.path, alias_for(choice.path), choice.mmproj)
+    if ok:
+        if not wait_ready(STRATA_TIMEOUT_S if choice.motor == "strata" else HEALTH_TIMEOUT_S):
             warn("el servidor no llego a estar listo; SOMA arrancara y el test LLM fallara.")

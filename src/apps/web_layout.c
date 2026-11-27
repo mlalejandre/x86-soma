@@ -26,7 +26,7 @@ static int lenv(const struct wlen *l, int base, int def)
     if (l->kind == LK_VAL) return l->px + (int)(((int64_t)base * l->pct) / 10000);
     return def;
 }
-static int fontfl(const struct wstyle *s) { return (s->bold ? WF_BOLD : 0) | (s->italic ? WF_ITALIC : 0) | (s->mono ? WF_MONO : 0); }
+static int fontfl(const struct wstyle *s) { return (s->bold ? WF_BOLD : 0) | (s->italic ? WF_ITALIC : 0) | (s->mono ? WF_MONO : 0) | (s->serif ? WF_SERIF : 0) | WF_FACE(s->wface); }   /* SOMA_348: cara de @font-face */
 static int textw(const struct wstyle *s, const char *t, uint32_t n)
 {
     int w = ceil64(wf_width64(t, n, s->font_px, fontfl(s)));
@@ -217,6 +217,22 @@ static void flush_run(struct wcont *C)
         }
         struct wbox *a = mkbox(B, C->host, C->b->st, BK_BLOCK); if (!a) { C->run.n = 0; return; }
         a->flags |= BF_ANON;
+        /* SOMA_347_NAVEGADOR_FLEXANON: el elemento flex/grid anonimo (texto suelto dentro del contenedor) compartia el estilo del
+         * contenedor y tomaba su height, flex, order, align-self, min/max y colocacion en rejilla. Con height:30px el texto quedaba
+         * arriba aunque el contenedor pidiera align-items:center (boton "Anadenos en Google"). CSS: el anonimo tiene los valores
+         * iniciales de esas propiedades; hereda solo las heredables (texto, color, alineacion). */
+        if (C->flexlike && a->st && !wl181_off()) {
+            struct wstyle *ns = (struct wstyle *)wa_alloc(&L->ar, sizeof *ns);
+            if (ns) {
+                *ns = *a->st;
+                ns->width.kind = ns->height.kind = LK_AUTO; ns->min_w.kind = ns->min_h.kind = LK_VAL; ns->min_w.px = ns->min_h.px = 0; ns->min_w.pct = ns->min_h.pct = 0;
+                ns->max_w.kind = ns->max_h.kind = LK_NONE; ns->flex_grow = 0; ns->flex_shrink = 100; ns->flex_basis.kind = LK_AUTO; ns->order = 0;
+                ns->align_self = AI_AUTO; ns->justify_self = 0; ns->ar_w = ns->ar_h = 0; ns->garea = 0; ns->gx = 0;
+                for (int k = 0; k < 2; k++) { ns->gs[k] = ns->ge[k] = ns->gsp[k] = 0; }
+                ns->tr_x.kind = ns->tr_y.kind = LK_AUTO; ns->rot10 = 0; ns->sc_x = ns->sc_y = 0; ns->z_index = 0;
+                a->st = ns;
+            }
+        }
         a->items = (struct wii *)wa_alloc(&L->ar, cnt * sizeof(*a->items)); if (!a->items) { C->run.n = 0; return; }
         memcpy(a->items, src, cnt * sizeof(*a->items)); a->nitems = cnt;
         addchild(C->b, a);
@@ -644,46 +660,60 @@ static int hextra_half(const struct wstyle *s, int right)   /* margen+relleno+bo
     return lenv(&s->margin[i], 0, 0) + wmax(0, lenv(&s->padding[i], 0, 0)) + (s->border_style[i] ? s->border_w[i] : 0);
 }
 
+static void outer_mm(const struct wbox *c, int *omin, int *omax);
 static void intr_items(struct wlay *L, struct wbox *b)
 {
     int cur = 0, mx = 0, mn = 0; int sp_pend = 0, spfr = 0;
+    int flsum = 0;   /* SOMA_346: flotantes de la linea (en max-content van uno al lado de otro, junto al texto) */
+    /* SOMA_349: min-content = el tramo mas ancho entre dos oportunidades de corte (run0 = donde empieza el tramo actual). Antes un
+     * texto nowrap tomaba el ancho de TODA la linea desde el principio: el icono a[target=_blank]:after{white-space:nowrap} de PyPI
+     * hacia el parrafo entero inquebrantable (865 px de minimo en vez de 122) y la tabla del pie se desbordaba. */
+    int run0 = 0, brk = 0;
     for (int i = 0; i < b->nitems; i++) {
         struct wii *it = &b->items[i];
         switch (it->type) {
         case II_TEXT: {
             const struct wstyle *st = it->st; int pre = st->white_space == WS_PRE || st->white_space == WS_PRE_WRAP, nw = st->white_space == WS_NOWRAP || st->white_space == WS_PRE;
-            uint32_t pos = 0; struct { uint32_t s, n; int kind; } k; int wsw = spacew(st); int runw = 0;
+            uint32_t pos = 0; struct { uint32_t s, n; int kind; } k; int wsw = spacew(st);
             while (pos < it->len) {
-                uint32_t s0 = pos; k.kind = 0;
+                uint32_t s0 = pos; k.kind = 0; int cjk = 0;
                 if (it->txt[pos] == '\n') { k.kind = 2; pos++; }
                 else if (it->txt[pos] == ' ') { while (pos < it->len && it->txt[pos] == ' ' && (pre || pos == s0)) pos++; k.kind = 1; }
                 else {
                     uint32_t adv; uint32_t cp = wu_utf8_next(it->txt + pos, &adv);
-                    if (cp >= 0x2E80 && cp < 0xA000) pos += adv; else { while (pos < it->len && it->txt[pos] != ' ' && it->txt[pos] != '\n') { cp = wu_utf8_next(it->txt + pos, &adv); if (cp >= 0x2E80 && cp < 0xA000) break; pos += adv; } }
+                    if (cp >= 0x2E80 && cp < 0xA000) { pos += adv; cjk = 1; } else { while (pos < it->len && it->txt[pos] != ' ' && it->txt[pos] != '\n') { cp = wu_utf8_next(it->txt + pos, &adv); if (cp >= 0x2E80 && cp < 0xA000) break; pos += adv; } }
                 }
                 k.s = s0; k.n = pos - s0;
-                if (k.kind == 2) { mx = wmax(mx, cur); cur = 0; sp_pend = 0; spfr = 0; mn = wmax(mn, runw); runw = 0; continue; }
-                if (k.kind == 1) { if (pre) { cur += (int)k.n * wsw; runw += (int)k.n * wsw; } else if (cur > 0) sp_pend = sp_carry(&spfr, st); if (!pre && nw) runw += cur ? wsw : 0; continue; }
+                if (k.kind == 2) { mx = wmax(mx, cur + flsum); cur = 0; sp_pend = 0; spfr = 0; run0 = 0; brk = 0; continue; }
+                if (k.kind == 1) {
+                    if (pre) { cur += (int)k.n * wsw; if (!nw) { run0 = cur; brk = 0; } else mn = wmax(mn, cur - run0); }
+                    else { if (cur > 0) sp_pend = sp_carry(&spfr, st); if (!nw) brk = 1; }
+                    continue;
+                }
                 int w = textw(st, it->txt + k.s, k.n);
                 if (sp_pend && cur > 0) { cur += sp_pend; } sp_pend = 0;
+                if (brk || (cjk && !nw)) { run0 = cur; brk = 0; }
                 cur += w;
-                if (nw) runw = cur; else mn = wmax(mn, w);
+                mn = wmax(mn, cur - run0);
+                if (cjk && !nw) brk = 1;
             }
-            mn = wmax(mn, runw);
             break; }
         case II_OPEN: { cur += hextra_half(it->st, 0); break; }
         case II_CLOSE: { cur += hextra_half(it->st, 1); break; }
-        case II_BR: mx = wmax(mx, cur); cur = 0; sp_pend = 0; spfr = 0; break;
+        case II_BR: mx = wmax(mx, cur + flsum); cur = 0; sp_pend = 0; spfr = 0; run0 = 0; brk = 0; break;
         case II_ATOM: case II_FLOAT: {
             struct wbox *x = it->box; if (!x) break; intrinsic(L, x);
-            int ex = hextra(x) + hmargin(x); int xo = x->imax + ex, xi = x->imin + ex;
-            if (it->type == II_FLOAT) { mx = wmax(mx, xo); mn = wmax(mn, xi); }
-            else { if (sp_pend && cur > 0) cur += sp_pend; sp_pend = 0; cur += xo; mn = wmax(mn, xi); }
+            /* SOMA_346_NAVEGADOR_RENDER: con su ancho fijo si lo tiene (antes solo el del contenido: un <li style="width:100px"> vacio
+             * media 0), y los flotantes se suman en max-content (antes el mayor). Un menu de <li> flotantes dentro de un elemento flex
+             * (El Bierzo Digital) media lo que el mas ancho y los puntos del menu caian uno debajo de otro. */
+            int xi, xo; outer_mm(x, &xi, &xo);
+            if (it->type == II_FLOAT) { if (x->st && x->st->clear) { mx = wmax(mx, cur + flsum); flsum = 0; } flsum += xo; mn = wmax(mn, xi); }
+            else { if (sp_pend && cur > 0) cur += sp_pend; sp_pend = 0; run0 = cur; cur += xo; mn = wmax(mn, xi); run0 = cur; brk = 0; }   /* se puede cortar antes y despues */
             break; }
         default: break;
         }
     }
-    mx = wmax(mx, cur); b->imax = mx; b->imin = mn; if (b->imin > b->imax) b->imax = b->imin;
+    mx = wmax(mx, cur + flsum); b->imax = mx; b->imin = mn; if (b->imin > b->imax) b->imax = b->imin;
 }
 
 /* ----------------------------- tablas: columnas ----------------------------- */
@@ -751,6 +781,10 @@ static void outer_mm(const struct wbox *c, int *omin, int *omax)
         *omin = *omax = fw + ex;
     }
     if (s && !(c->flags & BF_ANON) && s->max_w.kind == LK_VAL && !s->max_w.pct) { int mw = s->max_w.px - (s->box_sizing ? hextra(c) : 0) + ex; if (*omax > mw) *omax = mw; if (*omin > mw) *omin = mw; }
+    /* SOMA_349: un reemplazado (imagen) con max-width o width en porcentaje es "comprimible" (CSS Sizing 3, 5.2.2): aporta 0 al ancho
+     * minimo aunque tenga width fijo. img{width:220px;max-width:100%} en una celda de tabla (PyPI) se quedaba sus 220 px y la columna
+     * de texto se estrechaba. */
+    if (s && c->kind == BK_REPL && c->ctl == CTL_IMG && !wl181_off() && ((s->max_w.kind == LK_VAL && s->max_w.pct) || (s->width.kind == LK_VAL && s->width.pct))) *omin = ex;
 }
 
 static void intrinsic(struct wlay *L, struct wbox *b)
@@ -770,13 +804,16 @@ static void intrinsic(struct wlay *L, struct wbox *b)
         mx += sp * (n + 1); mn += sp * (n + 1);
         for (struct wbox *c = b->first; c; c = c->next) if (c->tab_sub == TS_CAPTION) { intrinsic(L, c); if (c->imin > mn) mn = c->imin; if (c->imax > mx) mx = c->imax; }
         b->imin = mn; b->imax = wmax(mx, mn); return; }
-    case BK_BLOCK:
+    case BK_BLOCK: {
         if (b->items) { intr_items(L, b); return; }
+        int flsum = 0;   /* SOMA_346: flotantes seguidos van en la misma fila (max-content) */
         for (struct wbox *c = b->first; c; c = c->next) {
             if (c->flags & BF_ABS) continue;
-            intrinsic(L, c); int a, z; outer_mm(c, &a, &z); mn = wmax(mn, a); mx = wmax(mx, z);
+            intrinsic(L, c); int a, z; outer_mm(c, &a, &z); mn = wmax(mn, a);
+            if (c->flags & BF_FLOAT) { if (c->st && c->st->clear) { mx = wmax(mx, flsum); flsum = 0; } flsum += z; mx = wmax(mx, flsum); }
+            else { flsum = 0; mx = wmax(mx, z); }
         }
-        break;
+        break; }
     case BK_FLEX: {
         int row = s->flex_dir < 2, gap = lenv(&s->gap_c, 0, 0), cnt = 0, sm = 0, sx = 0;
         for (struct wbox *c = b->first; c; c = c->next) {
@@ -1273,6 +1310,10 @@ static void shift_content(struct wbox *b, int dy)
 
 /* ----------------------------- flex ----------------------------- */
 struct wfi { struct wbox *b; int base, minv, maxv, grow, shrink, main, frozen, cross, auto_m; };
+/* SOMA_347_NAVEGADOR_FLEXMIN: tamano principal hipotetico = base flex acotada por min/max (CSS Flexbox 9.2). Con el se reparten
+ * las lineas y el espacio libre. Antes se usaba la base sin acotar: un elemento con min-width:30% y poco contenido media su
+ * contenido (66 px en vez de 370 en la barra de El Bierzo Digital). */
+static inline int fi_hyp347(const struct wfi *f) { int v = f->base; if (f->maxv < v) v = f->maxv; if (v < f->minv) v = f->minv; return v; }
 
 /* SOMA_181: una columna flex con hijos que crecen/encogen o reparten espacio necesita recolocarse cuando su alto cambia por estiramiento */
 static int col_needs_height(const struct wbox *c)
@@ -1315,13 +1356,13 @@ static int lay_flex(struct wlay *L, struct wbox *b, int cw)
         while (i0 < n) {
             int i1 = i0, sum = 0;
             while (i1 < n) {
-                int add = it[i1].base + (i1 > i0 ? gapm : 0);
+                int add = fi_hyp347(&it[i1]) + (i1 > i0 ? gapm : 0);
                 if (s->flex_wrap && i1 > i0 && sum + add > cw) break;
                 sum += add; i1++;
             }
             int cnt = i1 - i0;
             int free_ = cw - sum;
-            for (int i = i0; i < i1; i++) { it[i].main = it[i].base; it[i].frozen = 0; }
+            for (int i = i0; i < i1; i++) { it[i].main = fi_hyp347(&it[i]); it[i].frozen = 0; }
             if (free_ > 0) {
                 int tg = 0; for (int i = i0; i < i1; i++) tg += it[i].grow;
                 if (tg > 0) {
@@ -1506,6 +1547,33 @@ static int grid_areas_parse(const char *t, struct garea *out, int max, int *nrow
     }
     *nrows_out = row; *ncols_out = maxc; return na;
 }
+#define GRID_LAY_TRACKS 32   /* SOMA_347: pistas de columna al maquetar (repeat(auto-fill) expandido) */
+/* SOMA_347_NAVEGADOR_GRID: numero de linea (1..) de un nombre en el eje dado (0 columnas, 1 filas) o 0 si no existe. Busca en los
+ * nombres de grid-template-columns/rows (con el indice ajustado al repeat(auto-fill) expandido) y, si no, en las areas con nombre
+ * (nombre-start / nombre-end, o el nombre a secas: su inicio o su fin segun is_end). */
+static int grid_line_named(const struct wstyle *s, const char *name, int axis, int is_end, const struct garea *areas, int na, int rep_at, int rep_n, int rep_k)
+{
+    if (!name || !*name) return 0;
+    const char *nm = s->gx ? (axis ? s->gx->rnames : s->gx->cnames) : 0; uint32_t L = (uint32_t)wu_strlen(name);
+    for (const char *p = nm; p && *p; ) {
+        int idx = wu_atoi(p); while (*p && *p != ':') p++; if (*p) p++;
+        const char *q = p; while (*q && *q != ';') q++;
+        if ((uint32_t)(q - p) == L && !memcmp(p, name, L)) {
+            if (rep_at >= 0 && idx >= rep_at + rep_n) idx += (rep_k - 1) * rep_n;
+            return idx + 1;
+        }
+        p = *q ? q + 1 : q;
+    }
+    uint32_t bl = L; int want_end = is_end;
+    if (L > 6 && !memcmp(name + L - 6, "-start", 6)) { bl = L - 6; want_end = 0; }
+    else if (L > 4 && !memcmp(name + L - 4, "-end", 4)) { bl = L - 4; want_end = 1; }
+    for (int a = 0; a < na; a++) if ((uint32_t)areas[a].nl == bl && !memcmp(areas[a].name, name, bl))
+        return axis ? (want_end ? areas[a].r1 + 1 : areas[a].r0 + 1) : (want_end ? areas[a].c1 + 1 : areas[a].c0 + 1);
+    if (bl == L) {   /* nombre a secas sin area: las lineas nombre-start / nombre-end */
+        char b[96]; if (L + 7 < sizeof b) { memcpy(b, name, L); memcpy(b + L, is_end ? "-end" : "-start", is_end ? 5 : 7); return grid_line_named(s, b, axis, is_end, areas, na, rep_at, rep_n, rep_k); }
+    }
+    return 0;
+}
 static int gr_free(const uint8_t *occ, int nc, int r, int c, int rs, int cs) { for (int y = r; y < r + rs; y++) for (int x = c; x < c + cs; x++) if (occ[y * nc + x]) return 0; return 1; }
 static void gr_mark(uint8_t *occ, int nc, int r, int c, int rs, int cs) { for (int y = r; y < r + rs; y++) for (int x = c; x < c + cs; x++) occ[y * nc + x] = 1; }
 
@@ -1515,9 +1583,23 @@ static int lay_grid(struct wlay *L, struct wbox *b, int cw)
     int legacy = wl181_off();
     int nc = s->grid_cols > 0 ? s->grid_cols : 1; if (nc > GRID_MAX_TRACKS) nc = GRID_MAX_TRACKS;
     int gapc = lenv(&s->gap_c, cw, 0), gapr = lenv(&s->gap_r, cw, 0);
-    struct wlen gtr[GRID_MAX_TRACKS]; memcpy(gtr, s->grid_tracks, sizeof gtr);
+    struct wlen gtr[GRID_LAY_TRACKS]; memset(gtr, 0, sizeof gtr); memcpy(gtr, s->grid_tracks, sizeof s->grid_tracks);
     int explicit_cols = s->grid_cols;
-    if (s->grid_auto_min > 0) {      /* SOMA_PARCHE_028_UI: repeat(auto-fit, minmax(N, 1fr)) */
+    int rep_at = -1, rep_n = 0, rep_k = 1;   /* SOMA_347: repeat(auto-fill) expandido aqui, con el ancho real */
+    if (s->grid_auto_min > 0 && s->gx && s->gx->rep_at >= 0 && s->gx->rep_n > 0 && s->gx->rep_at + s->gx->rep_n <= s->grid_cols) {
+        /* SOMA_347_NAVEGADOR_GRID: [a] repeat(auto-fill, minmax(60px, 1fr)) [b] 300px [c]: se conservan las pistas de antes y de
+         * despues (antes se sustituian todas por 1fr y la de 300px se perdia) y se repite el patron cuantas veces quepa */
+        rep_at = s->gx->rep_at; rep_n = s->gx->rep_n; int nb = rep_at, naf = s->grid_cols - rep_at - rep_n, fixed = 0;
+        for (int c = 0; c < s->grid_cols; c++) if (c < rep_at || c >= rep_at + rep_n) { if (s->grid_tracks[c].kind == LK_VAL) fixed += lenv(&s->grid_tracks[c], cw, 0); }
+        int room = cw - fixed - (nb + naf) * gapc + gapc;
+        rep_k = room / (rep_n * (s->grid_auto_min + gapc)); if (rep_k < 1) rep_k = 1;
+        while (nb + naf + rep_k * rep_n > GRID_LAY_TRACKS && rep_k > 1) rep_k--;
+        nc = 0;
+        for (int c = 0; c < rep_at; c++) gtr[nc++] = s->grid_tracks[c];
+        for (int k = 0; k < rep_k; k++) for (int c = 0; c < rep_n; c++) gtr[nc++] = s->grid_tracks[rep_at + c];
+        for (int c = rep_at + rep_n; c < s->grid_cols && nc < GRID_LAY_TRACKS; c++) gtr[nc++] = s->grid_tracks[c];
+        explicit_cols = nc;
+    } else if (s->grid_auto_min > 0) {      /* SOMA_PARCHE_028_UI: repeat(auto-fit, minmax(N, 1fr)) */
         nc = (cw + gapc) / (s->grid_auto_min + gapc); if (nc < 1) nc = 1; if (nc > GRID_MAX_TRACKS) nc = GRID_MAX_TRACKS;
         for (int c = 0; c < nc; c++) { gtr[c].kind = LK_FR; gtr[c].px = 100; gtr[c].pct = 0; }
     }
@@ -1562,8 +1644,14 @@ static int lay_grid(struct wlay *L, struct wbox *b, int cw)
             if (cs->garea) {
                 for (int a = 0; a < na; a++) if (areas[a].nl == (int)wu_strlen(cs->garea) && !memcmp(areas[a].name, cs->garea, (size_t)areas[a].nl)) { r0 = areas[a].r0; c0 = areas[a].c0; rs = areas[a].r1 - areas[a].r0; csn = areas[a].c1 - areas[a].c0; break; }
             }
+            if (c0 < 0 && cs->garea && !(s->gx && s->gx->areas)) {   /* SOMA_347: grid-area: nombre sin plantilla de areas: lineas nombre-start/-end */
+                int a0 = grid_line_named(s, cs->garea, 0, 0, areas, na, rep_at, rep_n, rep_k), a1 = grid_line_named(s, cs->garea, 0, 1, areas, na, rep_at, rep_n, rep_k);
+                if (a0 > 0 && a1 > a0) { c0 = a0 - 1; csn = a1 - a0; }
+            }
             if (c0 < 0) {
                 int st0 = cs->gs[0], en = cs->ge[0], sp = cs->gsp[0] ? cs->gsp[0] : (cs->col_span > 1 ? cs->col_span : 0);
+                if (cs->gx && cs->gx->nm[0]) { int l = grid_line_named(s, cs->gx->nm[0], 0, 0, areas, na, rep_at, rep_n, rep_k); if (l > 0) st0 = l; }   /* SOMA_347 */
+                if (cs->gx && cs->gx->nm[1]) { int l = grid_line_named(s, cs->gx->nm[1], 0, 1, areas, na, rep_at, rep_n, rep_k); if (l > 0) en = l; }
                 int tl = nc + 1;   /* numero de lineas */
                 if (st0 < 0) st0 = tl + st0 + 1;
                 if (en < 0) en = tl + en + 1;
@@ -1575,6 +1663,8 @@ static int lay_grid(struct wlay *L, struct wbox *b, int cw)
             }
             if (r0 < 0) {
                 int st0 = cs->gs[1], en = cs->ge[1], sp = cs->gsp[1];
+                if (cs->gx && cs->gx->nm[2]) { int l = grid_line_named(s, cs->gx->nm[2], 1, 0, areas, na, -1, 0, 1); if (l > 0) st0 = l; }   /* SOMA_347 */
+                if (cs->gx && cs->gx->nm[3]) { int l = grid_line_named(s, cs->gx->nm[3], 1, 1, areas, na, -1, 0, 1); if (l > 0) en = l; }
                 int tl = (s->gx ? s->gx->nrows : 0) + 1; if (arows + 1 > tl) tl = arows + 1;
                 if (st0 < 0) st0 = tl + st0 + 1;
                 if (en < 0) en = tl + en + 1;
@@ -1619,7 +1709,7 @@ static int lay_grid(struct wlay *L, struct wbox *b, int cw)
     }
     if (nrows < 1) nrows = 1;
     /* anchos de columna */
-    int tw[GRID_MAX_TRACKS]; int autoc[GRID_MAX_TRACKS]; memset(autoc, 0, sizeof autoc);
+    int tw[GRID_LAY_TRACKS]; int autoc[GRID_LAY_TRACKS]; memset(autoc, 0, sizeof autoc);
     int fr_sum = 0, fixed = 0;
     for (int c = 0; c < nc; c++) {
         const struct wlen *t = &gtr[c];
@@ -1640,14 +1730,24 @@ static int lay_grid(struct wlay *L, struct wbox *b, int cw)
         for (int c = 0; c < nc; c++) if (explicit_cols > 0 && gtr[c].kind == LK_FR) {
             tw[c] = (int)((int64_t)rem * gtr[c].px / fr_sum);
             /* los fr no bajan del contenido minimo */
-            int mn = 0; for (int i = 0; i < n; i++) if (pc[i * 4 + 1] == c && pc[i * 4 + 2] == 1) { intrinsic(L, its[i]); int a, z; outer_mm(its[i], &a, &z); if (a > mn) mn = a; }
+            int mn = 0;
+            /* SOMA_347: en repeat(auto-fill|auto-fit, minmax(60px, 1fr)) el minimo de la pista son esos 60px, no el contenido (eso solo
+             * vale para 1fr = minmax(auto, 1fr)). Un elemento colocado solo en la primera columna la ensanchaba a su min-content:
+             * 148 px en vez de 66 en 20minutos y todo el articulo 80 px mas ancho que en Chrome. */
+            int min_fijo = s->grid_auto_min > 0 && !legacy && (rep_at < 0 || (c >= rep_at && c < rep_at + rep_k * rep_n));
+            if (min_fijo) mn = s->grid_auto_min;
+            else for (int i = 0; i < n; i++) if (pc[i * 4 + 1] == c && pc[i * 4 + 2] == 1) { intrinsic(L, its[i]); int a, z; outer_mm(its[i], &a, &z); if (a > mn) mn = a; }
             if (tw[c] < mn && gtr[c].px > 0) tw[c] = mn;
+        }
+        {   /* SOMA_347: los pixeles que pierde el redondeo de las fr van a las primeras (8 columnas de 66,25 px median 8 menos) */
+            int used = 0, nfr = 0; for (int c = 0; c < nc; c++) if (explicit_cols > 0 && gtr[c].kind == LK_FR) { used += tw[c]; nfr++; }
+            int left2 = rem - used; for (int c = 0; c < nc && left2 > 0 && left2 < nfr; c++) if (explicit_cols > 0 && gtr[c].kind == LK_FR && gtr[c].px > 0) { tw[c]++; left2--; }
         }
     } else if (explicit_cols > 0) {
         int sum = fixed + auto_total, na2 = 0; for (int c = 0; c < nc; c++) na2 += autoc[c];
         if (na2 && avail > sum) { int add = (avail - sum) / na2; for (int c = 0; c < nc; c++) if (autoc[c]) tw[c] += add; }
     }
-    int colx[GRID_MAX_TRACKS + 1]; colx[0] = left; for (int c = 0; c < nc; c++) colx[c + 1] = colx[c] + tw[c] + gapc;
+    int colx[GRID_LAY_TRACKS + 1]; colx[0] = left; for (int c = 0; c < nc; c++) colx[c + 1] = colx[c] + tw[c] + gapc;
     /* maquetar cada elemento en su celda (ancho) y medir su alto */
     int *rh = (int *)kmalloc(sizeof(int) * (size_t)(nrows + 1) * 2); if (!rh) { kfree(its); kfree(pc); kfree(occ); return 0; }
     int *ry = rh + nrows + 1;
@@ -1978,17 +2078,24 @@ static void rrect(struct wpt *P, int x, int y, int w, int h, int r, uint32_t arg
     }
     fillr(P, x, y + r, w, h - 2 * r, argb);
 }
+/* SOMA_346_NAVEGADOR_RENDER: interpolacion con alfa premultiplicado, como manda CSS (y hace Chrome): un extremo transparente no aporta
+ * su color. Antes se mezclaba canal a canal: "linear-gradient(#fff0, rgb(0 0 0 / .6))", la sombra sobre las fotos para leer el titular,
+ * pasaba por grises claros y dejaba un velo blanco sobre la foto. */
 static uint32_t lerp_col(uint32_t a, uint32_t b, int t, int den)
 {
     if (den <= 0) return a;
-    uint32_t o = 0;
-    for (int s = 0; s < 32; s += 8) { int ca = (a >> s) & 255, cb = (b >> s) & 255; o |= (uint32_t)(ca + (cb - ca) * t / den) << s; }
+    int aa = (int)(a >> 24), ab = (int)(b >> 24), ao = aa + (ab - aa) * t / den;
+    if (ao <= 0) return 0;
+    uint32_t o = (uint32_t)ao << 24;
+    for (int s = 0; s < 24; s += 8) {
+        int ca = (int)((a >> s) & 255) * aa, cb = (int)((b >> s) & 255) * ab;   /* premultiplicados (x255) */
+        int c = (ca + (cb - ca) * t / den) / ao; if (c > 255) c = 255; if (c < 0) c = 0;
+        o |= (uint32_t)c << s;
+    }
     return o;
 }
 static void gradient(struct wpt *P, int x, int y, int w, int h, uint32_t a, uint32_t b, int horiz, int alpha)
 {
-    if (a >> 24 == 0) a |= 0xFF000000u;
-    if (b >> 24 == 0) b |= 0xFF000000u;
     if (horiz) { int x0 = x < P->cx0 ? P->cx0 : x, x1 = x + w > P->cx1 ? P->cx1 : x + w; for (int i = x0; i < x1; i++) fillr(P, i, y, 1, h, mul_alpha(lerp_col(a, b, i - x, w > 1 ? w - 1 : 1), alpha)); }
     else { int y0 = y < P->cy0 ? P->cy0 : y, y1 = y + h > P->cy1 ? P->cy1 : y + h; for (int j = y0; j < y1; j++) fillr(P, x, j, w, 1, mul_alpha(lerp_col(a, b, j - y, h > 1 ? h - 1 : 1), alpha)); }
 }
@@ -1998,8 +2105,6 @@ static void gradient_r(struct wpt *P, int x, int y, int w, int h, uint32_t a, ui
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
     if (r <= 0) { gradient(P, x, y, w, h, a, b, horiz, alpha); return; }
-    if (a >> 24 == 0) a |= 0xFF000000u;
-    if (b >> 24 == 0) b |= 0xFF000000u;
     if (horiz) {
         int x0 = x < P->cx0 ? P->cx0 : x, x1 = x + w > P->cx1 ? P->cx1 : x + w;
         for (int i = x0; i < x1; i++) { int k = i - x, e = k < r ? k : (w - 1 - k < r ? w - 1 - k : -1), in = e >= 0 ? corner_inset(r, e) : 0; fillr(P, i, y + in, 1, h - 2 * in, mul_alpha(lerp_col(a, b, k, w > 1 ? w - 1 : 1), alpha)); }
@@ -2172,6 +2277,37 @@ static void draw_image(struct wpt *P, int x, int y, int w, int h, const struct w
     kfree(xt);
     kfree(tmp);
 }
+/* SOMA_347_NAVEGADOR_ICONOS: un borde redondeado se dibujaba como rectangulo redondeado del color del borde y, encima, otro
+ * relleno con el color de fondo: tapaba la imagen de fondo (el logo "G" del boton de 20minutos), los degradados y lo que hubiera
+ * debajo de un fondo transparente. Si el fondo no es un color opaco, se guarda el interior antes y se restaura despues
+ * (solo los pixeles dentro de la curva interior). */
+struct ring347 { uint32_t *buf; int x, y, w, h; };
+static int ring_need(const struct wstyle *s) { return !(s->bg_color && (s->bg_color >> 24) == 255 && !s->has_grad && !s->bg_image); }
+static void ring_save(struct wpt *P, struct ring347 *R, int ix, int iy, int iw, int ih)
+{
+    R->buf = 0;
+    int x0 = ix > P->cx0 ? ix : P->cx0, y0 = iy > P->cy0 ? iy : P->cy0, x1 = ix + iw < P->cx1 ? ix + iw : P->cx1, y1 = iy + ih < P->cy1 ? iy + ih : P->cy1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 <= x0 || y1 <= y0 || (int64_t)(x1 - x0) * (y1 - y0) > (1 << 20)) return;
+    uint32_t *b = (uint32_t *)kmalloc((size_t)(x1 - x0) * (size_t)(y1 - y0) * 4u); if (!b) return;
+    if (!fb_read_rect(x0, y0, x1 - x0, y1 - y0, b)) { kfree(b); return; }
+    R->buf = b; R->x = x0; R->y = y0; R->w = x1 - x0; R->h = y1 - y0;
+}
+static void ring_restore(struct ring347 *R, int ix, int iy, int iw, int ih, int ir)
+{
+    if (!R->buf) return;
+    if (ir > iw / 2) ir = iw / 2;
+    if (ir > ih / 2) ir = ih / 2;
+    for (int j = 0; j < R->h; j++) {
+        int rel = R->y + j - iy, in = 0;
+        if (ir > 0 && rel < ir) in = corner_inset(ir, rel); else if (ir > 0 && rel >= ih - ir) in = corner_inset(ir, ih - 1 - rel);
+        uint32_t *row = R->buf + (size_t)j * (size_t)R->w;
+        for (int i = 0; i < R->w; i++) { int X = R->x + i; row[i] = (row[i] & 0xFFFFFFu) | (X >= ix + in && X < ix + iw - in ? 0xFF000000u : 0); }
+    }
+    fb_blit_alpha(R->x, R->y, R->buf, R->w, R->h, R->w);
+    kfree(R->buf); R->buf = 0;
+}
 static void draw_border(struct wpt *P, int x, int y, int w, int h, const struct wbox *b, int alpha)
 {
     const struct wstyle *s = b->st; int r = s->radius;
@@ -2181,15 +2317,19 @@ static void draw_border(struct wpt *P, int x, int y, int w, int h, const struct 
         /* SOMA_188: borde de control como el tema de Chrome: linea de 1px gris redondeada; el resto del grosor es relleno */
         uint32_t c = s->border_color[0] == 1 ? s->color : s->border_color[0]; if ((c & 0xFFFFFF) == 0) c = 0xFF767676u;
         int rr = r > 0 ? r : 2;
+        struct ring347 R = {0}; if (ring_need(s)) ring_save(P, &R, x + 1, y + 1, w - 2, h - 2);
         rrect(P, x, y, w, h, rr, mul_alpha(c, alpha));
+        if (R.buf) { ring_restore(&R, x + 1, y + 1, w - 2, h - 2, wmax(0, rr - 1)); return; }
         uint32_t in = s->bg_color && (s->bg_color >> 24) == 255 ? s->bg_color : (P->bg | 0xFF000000u);
         rrect(P, x + 1, y + 1, w - 2, h - 2, wmax(0, rr - 1), mul_alpha(in, 255));
         return;
     }
     if (r > 0 && bt == br && br == bb && bb == bl && s->border_style[0] == 1) {
         uint32_t c = s->border_color[0] == 1 ? s->color : s->border_color[0];
+        struct ring347 R = {0}; if (ring_need(s)) ring_save(P, &R, x + bl, y + bt, w - 2 * bl, h - 2 * bt);
         rrect(P, x, y, w, h, r, mul_alpha(c, alpha));
-        rrect(P, x + bl, y + bt, w - 2 * bl, h - 2 * bt, wmax(0, r - bl), mul_alpha(P->bg | 0xFF000000u, 255));
+        if (R.buf) { ring_restore(&R, x + bl, y + bt, w - 2 * bl, h - 2 * bt, wmax(0, r - bl)); return; }
+        rrect(P, x + bl, y + bt, w - 2 * bl, h - 2 * bt, wmax(0, r - bl), mul_alpha(s->bg_color && (s->bg_color >> 24) == 255 ? s->bg_color : (P->bg | 0xFF000000u), 255));
         return;
     }
     for (int side = 0; side < 4; side++) {
@@ -2212,7 +2352,12 @@ static void draw_bgimage(struct wpt *P, const struct wbox *b, int x, int y, int 
     if (!s->bg_image || !img_info(P->L, s->bg_image, &ii) || ii.state != 2 || ii.w <= 0 || ii.h <= 0) return;
     int px = x + b->bl, py = y + b->bt, pw = w - b->bl - b->br, ph = h - b->bt - b->bb;
     int dw = ii.w, dh = ii.h;
-    switch (s->bg_size_mode) {
+    int mode = s->bg_size_mode;
+    /* SOMA_347_NAVEGADOR_ICONOS: un SVG con viewBox y sin width/height no tiene tamano propio: con background-size auto se
+     * encaja como contain (CSS Images 3, "default sizing"). Antes se pintaba a 512x512 en una caja de 13 px: solo se veia
+     * una esquina transparente (iconos de reloj y autor de 20minutos). */
+    if (ii.ratio_only && mode == 0 && pw > 0 && ph > 0) mode = 2;
+    switch (mode) {
     case 1: { int64_t sx = (int64_t)pw * 1000 / ii.w, sy = (int64_t)ph * 1000 / ii.h, sc = sx > sy ? sx : sy; dw = (int)(ii.w * sc / 1000); dh = (int)(ii.h * sc / 1000); break; }
     case 2: { int64_t sx = (int64_t)pw * 1000 / ii.w, sy = (int64_t)ph * 1000 / ii.h, sc = sx < sy ? sx : sy; dw = (int)(ii.w * sc / 1000); dh = (int)(ii.h * sc / 1000); break; }
     case 3: { if (s->bg_w.kind == LK_VAL) dw = lenv(&s->bg_w, pw, ii.w); if (s->bg_h.kind == LK_VAL) dh = lenv(&s->bg_h, ph, ii.h); else if (s->bg_w.kind == LK_VAL) dh = (int)((int64_t)ii.h * dw / ii.w); break; }
@@ -2403,6 +2548,14 @@ static void paint_ctl(struct wpt *P, struct wbox *b, int x, int y, int alpha)
     default:
         if (n->tag == WT_VIDEO || n->tag == WT_AUDIO || n->tag == WT_IFRAME) {
             fillr(P, cx_, cy_, cw, ch, mul_alpha(n->tag == WT_IFRAME ? 0xFFF4F4F4u : 0xFF111111u, alpha));
+            /* SOMA_349: <video poster>: la imagen de portada encajada (como object-fit: contain), como Chrome antes de reproducir.
+             * Antes solo un rectangulo negro con el triangulo. */
+            const char *poster = n->tag == WT_VIDEO ? wd_attr(n, "poster") : 0; struct wimginfo pi;
+            if (poster && *poster && cw > 0 && ch > 0 && img_info(P->L, poster, &pi) && pi.state == 2 && pi.w > 0 && pi.h > 0) {
+                int64_t sx = (int64_t)cw * 1000 / pi.w, sy = (int64_t)ch * 1000 / pi.h, sc = sx < sy ? sx : sy;
+                int dw = (int)(pi.w * sc / 1000), dh = (int)(pi.h * sc / 1000);
+                if (dw > 0 && dh > 0) draw_image(P, cx_ + (cw - dw) / 2, cy_ + (ch - dh) / 2, dw, dh, &pi, 0, alpha);
+            }
             if (n->tag != WT_AUDIO && cw > 40 && ch > 30) { int cxm = cx_ + cw / 2, cym = cy_ + ch / 2; for (int i = 0; i < 10; i++) fillr(P, cxm - 5 + i / 2, cym - 10 + i, 10 - i, 1, mul_alpha(n->tag == WT_IFRAME ? 0xFF999999u : 0xFFFFFFFFu, alpha)); for (int i = 0; i < 10; i++) fillr(P, cxm - 5, cym + i, 1, 1, 0); }
         }
         break;
@@ -2420,6 +2573,12 @@ static void paint_text_lines(struct wpt *P, struct wbox *b, int x, int y, int al
         if (dy > P->cy1 || dy + dh < P->cy0) continue;
         if (s->bg_color) rrect(P, dx, dy, dw, dh, s->radius, mul_alpha(s->bg_color, alpha));
         if (s->has_grad) gradient(P, dx, dy, dw, dh, s->grad_a, s->grad_b, s->grad_dir, alpha);
+        if (s->bg_image) {   /* SOMA_347_NAVEGADOR_ICONOS: imagen de fondo de un elemento en linea (antes solo color y degradado) */
+            struct wbox tb; memset(&tb, 0, sizeof tb); tb.st = s;
+            tb.bt = s->border_style[0] ? s->border_w[0] : 0; tb.bb = s->border_style[2] ? s->border_w[2] : 0;
+            tb.bl = d->first && s->border_style[3] ? s->border_w[3] : 0; tb.br = d->last && s->border_style[1] ? s->border_w[1] : 0;
+            draw_bgimage(P, &tb, dx, dy, dw, dh, alpha);
+        }
         for (int sd = 0; sd < 4; sd++) {
             int wd = s->border_style[sd] ? s->border_w[sd] : 0; if (!wd) continue;
             uint32_t c = mul_alpha(s->border_color[sd] == 1 ? s->color : s->border_color[sd], alpha);
@@ -2634,7 +2793,8 @@ static void paint_box(struct wpt *P, struct wbox *b, int ox, int oy, int alpha, 
             if (s->bg_color && (s->bg_color >> 24) == 255) P->bg = s->bg_color & 0xFFFFFF;
             if (!skipbg && (s->ish_color >> 24)) paint_inset_shadow(P, s, x + b->bl, y + b->bt, b->w - b->bl - b->br, b->h - b->bt - b->bb, a2);
             draw_border(P, x, y, b->w, b->h, b, a2);
-            if (s->display == D_LIST_ITEM) paint_marker(P, b, x, y, a2);
+            /* SOMA_347: un <li> elemento de un contenedor flex o grid no lleva vineta (Chrome y Safari: ul{display:flex} quita los puntos) */
+            if (s->display == D_LIST_ITEM && !(b->parent && (b->parent->kind == BK_FLEX || b->parent->kind == BK_GRID) && !wl181_off())) paint_marker(P, b, x, y, a2);
         }
     } else if (b->kind == BK_TROW && s && !anon && vis) {
         const struct wstyle *gs = (b->node && b->node->parent && b->node->parent->st && b->node->parent->st->display == D_TABLE_GROUP) ? b->node->parent->st : 0;
@@ -2703,11 +2863,21 @@ static struct wnode *hit_box(struct wlay *L, struct wbox *b, int px, int py, int
     y -= box_scroll(b);   /* SOMA_181: los hijos de una caja desplazada */
     if (s && !anon && s->visibility && !b->first && !b->items) return 0;
     struct wnode *r; struct wbox *neg[64]; int negn = 0;
+    if (b == L->root) {
+        /* SOMA_354_CLIC_MODAL: los position:fixed se pintan los ultimos, encima de todo (paint_abs_list, pasada fija: orden del documento
+         * y luego z-index de menor a mayor). El clic tiene que mirarlos al reves y ANTES que nada: antes se miraban despues de los
+         * absolutos y en orden de la cadena sin mirar el z-index. En el aviso de cookies de Google ("Antes de ir a Google", fijo y con
+         * z-index alto) el clic se lo quedaba lo que habia debajo y ningun boton respondia. */
+        struct wbox *fx[64]; int nf = 0;
+        for (struct wbox *a = b->abs_chain; a; a = a->abs_next) if ((a->flags & BF_FIXED) && nf < 64) fx[nf++] = a;
+        for (int i = 0; i < nf / 2; i++) { struct wbox *t = fx[i]; fx[i] = fx[nf - 1 - i]; fx[nf - 1 - i] = t; }   /* orden del documento */
+        for (int i = 1; i < nf; i++) { struct wbox *t = fx[i]; int j = i - 1; while (j >= 0 && fx[j]->zi > t->zi) { fx[j + 1] = fx[j]; j--; } fx[j + 1] = t; }   /* = orden de pintado */
+        for (int i = nf - 1; i >= 0; i--) if ((r = hit_box(L, fx[i], px - L->scroll_x, py - L->scroll_y, 0, 0, bo, depth + 1))) return r;
+    }
     { struct wbox *arr[64]; int n = 0; for (struct wbox *a = b->abs_chain; a; a = a->abs_next) if (!(a->flags & BF_FIXED) && n < 64) arr[n++] = a;
       for (int i = 1; i < n; i++) { struct wbox *t = arr[i]; int j = i - 1; while (j >= 0 && arr[j]->zi < t->zi) { arr[j + 1] = arr[j]; j--; } arr[j + 1] = t; }
       for (int i = 0; i < n; i++) if (arr[i]->zi >= 0 && (r = hit_box(L, arr[i], px, py, x, y, bo, depth + 1))) return r;
       negn = n; for (int i = 0; i < n; i++) neg[i] = arr[i]; }   /* SOMA_188: los de z-index negativo van detras del contenido */
-    if (b == L->root) { for (struct wbox *a = b->abs_chain; a; a = a->abs_next) if ((a->flags & BF_FIXED) && (r = hit_box(L, a, px - L->scroll_x, py - L->scroll_y, 0, 0, bo, depth + 1))) return r; }
     if (b->kind == BK_REPL) { if (inside && ptr_ok(b->node) && !(s && s->visibility)) { if (bo) *bo = b; return b->node; } return 0; }
     if (b->items) {
         for (int i = b->nitems - 1; i >= 0; i--) { struct wii *it = &b->items[i]; if ((it->type == II_ATOM || it->type == II_FLOAT) && it->box && (r = hit_box(L, it->box, px, py, x, y, bo, depth + 1))) return r; }

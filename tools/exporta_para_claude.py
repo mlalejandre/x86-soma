@@ -44,7 +44,7 @@ TEMAS = {
     "orbe": (["src/apps/chat_md.[ch]", "src/ui/gui_prompter.c", "src/ui/gui_vortice.c", "src/ui/gui_cosmos.c", "src/ui/gui_agente.c", "src/ui/gui_fotograma.c",
               "src/ui/gui.c", "src/ui/sysicon.[ch]", "tests/test_orbe_*.c"],
              "el orbe: texto de las respuestas, barra de fases, turnos del agente"),
-    "llm": (["src/agent/llm.[ch]", "src/agent/llm_proto.[ch]", "src/agent/llm_limites*.inc", "src/agent/agent.[ch]", "src/net/http.[ch]",
+    "llm": (["docs/PARCHE_355_STRATA.md", "docs/PARCHE_356_STRATA_UNO.md", "tests/test_strata_355.py", "tests/prueba_strata_qemu_355.py", "src/agent/llm.[ch]", "src/agent/llm_proto.[ch]", "src/agent/llm_limites*.inc", "src/agent/agent.[ch]", "src/net/http.[ch]",
              "src/apps/web_net.h", "tests/test_llm_*.c"],
             "el dialogo con el modelo de lenguaje (proveedores, tamanos, llm-limites)"),
     "agente": (["src/agent/agent.[ch]", "src/agent/agent_ruta.[ch]", "src/agent/shell.[ch]", "src/agent/shell_agente.c", "src/agent/lcm_soma.inc"],
@@ -90,7 +90,7 @@ TEMAS = {
                    "src/core/web_r3_abi.h", "src/apps/browser.c", "tests/test_navegador_memoria_341.c", "tests/prueba_navegador_341.py",
                    "src/apps/web_jpeg.c", "src/apps/web_layout.h", "tools/web_gateway.py", "tests/test_jpeg_reducido_342.c",
                    "tests/test_pasarela_342.py", "docs/PARCHE_342_NAVEGADOR_AGIL.md", "src/user/web_dl.c", "src/apps/web_dl.h",
-                   "src/apps/web_net.[ch]", "tests/test_web_dl_343.c", "docs/PARCHE_343_DESCARGAS.md", "docs/PARCHE_344_RED_SCRIPTS_JS.md",
+                   "src/apps/web_net.[ch]", "tests/test_web_dl_343.c", "docs/PARCHE_343_DESCARGAS.md", "docs/PARCHE_344_RED_SCRIPTS_JS.md", "docs/PARCHE_345_NAVEGADOR_REAL.md", "docs/PARCHE_346_NAVEGADOR_RENDER.md", "tests/test_web_rem_346.c", "tests/test_web_paint_346.c", "docs/PARCHE_347_NAVEGADOR_CHROME.md", "tests/test_web_bgimg_347.c", "tests/test_web_serif_347.c", "docs/PARCHE_348_FUENTES_WEB.md", "src/apps/web_wfont.[ch]", "tests/test_web_fuentes_348.c", "docs/PARCHE_349_NAVEGADOR_MEDIDAS.md", "docs/PARCHE_350_NAVEGADOR_VIDEO.md", "docs/PARCHE_351_ESTILOS_RAPIDOS.md", "tests/test_web_estilos_351.c", "docs/PARCHE_352_MENOS_MAQUETAR.md", "tests/test_web_maquetar_352.c", "docs/PARCHE_353_CACHE_HTTP.md", "tests/test_web_cache_353.c", "src/apps/web_hcache.[ch]", "docs/PARCHE_354_CLIC_MODAL.md", "tests/test_web_clic_354.c", "tests/test_web_mutation_147.c",
                    "docs/PARCHE_341_NAVEGADOR_MEMORIA.md"],
                   "el navegador: motor en ring 3, memoria, imagenes y maquetacion"),   # SOMA_341_NAVEGADOR_MEMORIA
     "red": (["src/net/*.[ch]", "tests/test_red_hostil_340.c", "tests/fuzz_net.c", "tests/test_httpd_policy.c",

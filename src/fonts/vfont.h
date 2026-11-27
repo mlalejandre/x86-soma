@@ -201,8 +201,8 @@ VF_FN int vf_load(uint32_t gid, int depth)
         if (!vf_load(gi, depth + 1)) return 0;
         for (int i = start; i < vf_np; ++i) {
             int32_t x = vf_px[i], y = vf_py[i];
-            vf_px[i] = (x * a + y * c) / 16384 + dx;
-            vf_py[i] = (x * b + y * d) / 16384 + dy;
+            vf_px[i] = (int32_t)(((int64_t)x * a + (int64_t)y * c) / 16384) + dx;   /* SOMA_348: en 64 bits (fuentes de la red) */
+            vf_py[i] = (int32_t)(((int64_t)x * b + (int64_t)y * d) / 16384) + dy;
         }
         if (!(fl & 0x20)) break;
     }

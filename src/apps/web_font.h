@@ -10,6 +10,11 @@
 #define WF_LIB    0x100  /* SOMA_184: texto con Liberation Sans aunque no sea contenido web (familia de la interfaz = Liberation) */
 #define WF_ORB    0x200  /* SOMA_225: SOMA Orbital (fuente propia) */
 #define WF_TEC    0x400  /* SOMA_225: SOMA Tecnica (fuente propia) */
+#define WF_SERIF  0x800  /* SOMA_347_NAVEGADOR_SERIF: contenido web con font-family serif: Liberation Serif (anchos de Times) */
+/* SOMA_348_FUENTES_WEB: bits 16..23 = cara de @font-face (WF_FACE(id)); si no tiene el glifo, se usa la de respaldo */
+#define WF_FACE(id) (((int)(id) & 0xFF) << 16)
+int wf_web_add(uint8_t *sfnt, uint32_t n, uint32_t key, int bold);   /* 0 = no cabe o no es TrueType; si no, la cara (sfnt pasa a ser suyo) */
+int wf_web_find(uint32_t key);                                       /* cara ya cargada con esa clave (hash de la URL) o 0 */
 extern int g_wf182_on;   /* SOMA_182: definido en web_css.c; lo fija web_page.c segun soma.webfont=off */
 int  wf_init(void);                                             /* 1 si hay fuente */
 int  wf_width64(const char *s, uint32_t n, int px, int fl);     /* ancho en 1/64 px (UTF-8) */

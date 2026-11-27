@@ -3,6 +3,9 @@
 #include "web_inflate.h"
 #include "tcp.h"
 #include "tls13.h"      /* SOMA_176A: HTTPS directo (TLS 1.3 propio) */
+#if defined(SOMA_WEBSVC) && !defined(WEB_HOST_TEST)
+#include "web_wfont.h"   /* SOMA_348: wbr_decode */
+#endif
 #include "dns.h"
 #include "net.h"
 #if SOMA_WEB_ASYNC_IMAGES
@@ -356,6 +359,15 @@ static int ka_put(const uint8_t *ip, uint16_t port, const char *sni, int h, stru
     k->ctx.h = h; if (tls) tls->io.ctx = &k->ctx; k->t = web_now_ms(); k->gen = ka_gen(); k->used = 1;
     return 1;
 }
+/* SOMA_345_NAVEGADOR_REAL: cierra la guardada que lleva mas tiempo sin usarse; 0 si no habia ninguna. El proceso del navegador tiene
+ * un numero fijo de sockets (USER_MAX_SOCKETS_WEB): las guardadas no pueden impedir abrir una conexion nueva con otro servidor. */
+static int ka_drop_oldest(void)
+{
+    struct kaconn *k = 0; uint64_t o = ~0ull;
+    for (int i = 0; i < KA_N; i++) if (ka[i].used && ka[i].t < o) { o = ka[i].t; k = &ka[i]; }
+    if (!k) return 0;
+    ka_close(k); return 1;
+}
 /* cierra las guardadas que llevan demasiado sin usarse (el bucle del navegador lo llama de vez en cuando) */
 void wn_keepalive_prune(void)
 {
@@ -397,6 +409,7 @@ again:;
     } else
 #endif
     h = tcp_connect(ip, port, timeout_ms > 8000 ? 8000 : timeout_ms);
+    if (h < 0 && KA_ON && ka_drop_oldest()) { tried_fresh = 1; goto again; }   /* SOMA_345: sin hueco; se cierra una guardada y otra vez */
     if (h < 0) { net_client_unlock(); return -1; }
     tctx.h = h;
     if (tls_sni) {                                                       /* SOMA_176A: apreton de manos TLS 1.3 sobre la conexion TCP */
@@ -511,7 +524,40 @@ void wn_free(struct wn_resp *rs) { if (rs && rs->body) { kfree(rs->body); rs->bo
 static void append_hdr(struct wb *r, const char *k, const char *v) { wb_add(r, k); wb_add(r, ": "); wb_add(r, v); wb_add(r, "\r\n"); }
 
 /* un salto de peticion: devuelve 0 con status/cuerpo/cabeceras de interes */
-struct hop { int status; char location[WN_URL_MAX]; struct wb body; char ctype[96]; };
+struct hop { int status; char location[WN_URL_MAX]; struct wb body; char ctype[96]; int32_t cache_s; };   /* SOMA_353: cache_s */
+int32_t wn_cache_secs(const char *hdrs, uint32_t len, int status)
+{
+    int32_t max_age = -1, age = 0; int no_store = 0, cookie = 0, vary = 0;
+    const char *he = hdrs + len;
+    for (const char *l = hdrs; l < he; ) {
+        const char *e = l; while (e < he && *e != '\r' && *e != '\n') e++;
+        uint32_t ll = (uint32_t)(e - l);
+        if (ll >= 11 && (wu_strnieq(l, "set-cookie:", 11) || (ll >= 18 && wu_strnieq(l, "x-soma-set-cookie:", 18)))) cookie = 1;
+        else if (ll >= 14 && wu_strnieq(l, "cache-control:", 14)) {   /* sin revalidar, no-cache es como no-store */
+            for (const char *q = l + 14; q < e; ) {
+                while (q < e && (*q == ' ' || *q == ',' || *q == '\t')) q++;
+                const char *w = q; while (w < e && *w != ',') w++;
+                const char *z = w; while (z > q && (z[-1] == ' ' || z[-1] == '\t')) z--;
+                uint32_t n = (uint32_t)(z - q);
+                if ((n == 8 && wu_strnieq(q, "no-store", 8)) || (n >= 8 && wu_strnieq(q, "no-cache", 8))) no_store = 1;
+                else if (n > 8 && wu_strnieq(q, "max-age=", 8)) { int32_t v = 0; for (const char *d = q + 8; d < z && *d >= '0' && *d <= '9'; d++) v = v > 100000000 ? v : v * 10 + (*d - '0'); max_age = v; }
+                q = w;
+            }
+        }
+        else if (ll >= 4 && wu_strnieq(l, "age:", 4)) { int32_t v = 0; const char *d = l + 4; while (d < e && *d == ' ') d++; for (; d < e && *d >= '0' && *d <= '9'; d++) v = v > 100000000 ? v : v * 10 + (*d - '0'); age = v; }
+        else if (ll >= 5 && wu_strnieq(l, "vary:", 5)) {   /* solo Accept-Encoding no cambia el cuerpo que recibe SOMA (lo descomprime) */
+            for (const char *v = l + 5; v < e; ) {
+                while (v < e && (*v == ' ' || *v == ',' || *v == '\t')) v++;
+                const char *w = v; while (w < e && *w != ',' && *w != ' ' && *w != '\t') w++;
+                if (w > v && !((uint32_t)(w - v) == 15 && wu_strnieq(v, "accept-encoding", 15))) vary = 1;
+                v = w;
+            }
+        }
+        l = e; while (l < he && (*l == '\r' || *l == '\n')) l++;
+    }
+    if (status != 200 || no_store || cookie || vary || max_age <= age) return 0;
+    return max_age - age;
+}
 /* Escapa espacios, controles y bytes no ASCII de una URL (un formulario o un enlace pueden traer "q=el pais" sin codificar) */
 static void url_sanitize(const char *s, char *out, uint32_t max)
 {
@@ -560,7 +606,11 @@ static int do_hop(const struct wn_req *rq, const char *url_in, const char *metho
     append_hdr(&req, "User-Agent", "Mozilla/5.0 (X11; SOMA) AppleWebKit/537.36 (KHTML, like Gecko) SOMA-Browser/2.0 Safari/537.36");
     append_hdr(&req, "Accept", rq->accept ? rq->accept : "text/html,application/xhtml+xml,application/xml;q=0.9,image/*;q=0.8,*/*;q=0.5");
     append_hdr(&req, "Accept-Language", "es-ES,es;q=0.9,en;q=0.8");
+#if defined(SOMA_WEBSVC) && !defined(WEB_HOST_TEST)
+    append_hdr(&req, "Accept-Encoding", legacy ? "identity" : (gateway ? "gzip, deflate" : "gzip, deflate, br"));   /* SOMA_348: Brotli sin pasarela */
+#else
     append_hdr(&req, "Accept-Encoding", legacy ? "identity" : "gzip, deflate");
+#endif
     if (rq->referer && *rq->referer) append_hdr(&req, "Referer", rq->referer);
     if (rq->extra_headers && !gateway) wb_add(&req, rq->extra_headers);   /* SOMA_195 */
     if (gateway && !legacy) {
@@ -579,8 +629,10 @@ static int do_hop(const struct wn_req *rq, const char *url_in, const char *metho
     uint32_t tmo = rq->timeout_ms ? rq->timeout_ms : 15000, maxb = rq->max_body ? rq->max_body : (8u << 20);
     int rc = http_exchange(ip, port, req.p, req.len, use_body ? rq->body : 0, use_body ? rq->body_len : 0, &raw, maxb + 65536, tmo, &hl, rq->cancel, direct_tls ? u.host : 0);
     wb_free(&req);
-    if (gateway && rc == -1 && raw_gw_state != 0 && !legacy) {
-        /* no hay pasarela binaria: se prueba el proxy antiguo */
+    if (gateway && rc == -1 && raw_gw_state == -1 && !legacy) {
+        /* no hay pasarela binaria: se prueba el proxy antiguo. SOMA_345_NAVEGADOR_REAL: solo si nunca ha respondido; antes, un fallo
+         * suelto con la pasarela ya en marcha (p. ej. sin hueco para otra conexion) la daba por caida 20 s y todo iba al proxy antiguo,
+         * que casi nunca esta: fallaban todas las imagenes seguidas */
         raw_gw_state = 0; raw_gw_t = web_now_ms(); wb_free(&raw);
         if (gwcmd || rq->via_gateway) return -1;
         return do_hop(rq, url, method, use_body, H, via_gw);
@@ -588,7 +640,7 @@ static int do_hop(const struct wn_req *rq, const char *url_in, const char *metho
     if (gateway && rc == 0 && !legacy) raw_gw_state = 1;
     if (rc < 0) { wb_free(&raw); return rc; }
     /* analisis de cabeceras */
-    H->status = 0; H->location[0] = 0; H->ctype[0] = 0; int chunked = 0, enc_gz = 0, enc_df = 0;
+    H->status = 0; H->location[0] = 0; H->ctype[0] = 0; int chunked = 0, enc_gz = 0, enc_df = 0, enc_br = 0;
     const char *p = raw.p; if (raw.len < 12 || !wu_starts(p, "HTTP/1.")) { wb_free(&raw); return -7; }
     const char *sp = p; while (*sp && *sp != ' ') sp++; H->status = wu_atoi(sp);
     const char *he = p + hl;
@@ -597,7 +649,7 @@ static int do_hop(const struct wn_req *rq, const char *url_in, const char *metho
         if (wu_startsi(l, "location:")) { const char *v = l + 9; while (*v == ' ') v++; wu_copyn(H->location, v, (uint32_t)(e - v), sizeof H->location); }
         else if (wu_startsi(l, "content-type:")) { const char *v = l + 13; while (*v == ' ') v++; wu_copyn(H->ctype, v, (uint32_t)(e - v), sizeof H->ctype); }
         else if (wu_startsi(l, "transfer-encoding:")) { if (wu_findi(l, "chunked")) chunked = 1; }
-        else if (wu_startsi(l, "content-encoding:")) { char t[40]; wu_copyn(t, l + 17, (uint32_t)(e - l - 17), sizeof t); if (wu_findi(t, "gzip")) enc_gz = 1; else if (wu_findi(t, "deflate")) enc_df = 1; }
+        else if (wu_startsi(l, "content-encoding:")) { char t[40]; wu_copyn(t, l + 17, (uint32_t)(e - l - 17), sizeof t); if (wu_findi(t, "gzip")) enc_gz = 1; else if (wu_findi(t, "deflate")) enc_df = 1; else if (wu_findi(t, "br")) enc_br = 1; }
         else if (wu_startsi(l, "set-cookie:") || wu_startsi(l, "x-soma-set-cookie:")) { const char *v = l + (l[0] == 'x' || l[0] == 'X' ? 18 : 11); while (*v == ' ') v++; char t[512]; wu_copyn(t, v, (uint32_t)(e - v), sizeof t); wn_cookie_store(url, t); }
         else if (gateway && !legacy && wu_startsi(l, "x-soma-status:")) H->status = wu_atoi(l + 14);
         else if (gateway && !legacy && wu_startsi(l, "x-soma-gateway:")) {
@@ -606,10 +658,20 @@ static int do_hop(const struct wn_req *rq, const char *url_in, const char *metho
         }
         l = e + 2;
     }
+    H->cache_s = wn_cache_secs(p, (uint32_t)hl, H->status);   /* SOMA_353_CACHE_HTTP */
     const char *bp = p + hl; uint32_t bl = raw.len - (uint32_t)hl;
     struct wb body = {0};
     if (chunked) { if (dechunk(bp, bl, &body) < 0 && !body.len) { wb_addn(&body, bp, bl); } } else wb_addn(&body, bp, bl);
     wb_free(&raw);
+#if defined(SOMA_WEBSVC) && !defined(WEB_HOST_TEST)
+    if (enc_br && body.len) {                                              /* SOMA_348_FUENTES_WEB: Brotli */
+        struct wb un = {0}; int br = wbr_decode((const uint8_t *)body.p, body.len, &un, maxb + 65536);
+        if (br < 0 && !un.len) { wb_free(&un); wb_free(&body); return -8; }
+        wb_free(&body); body = un;
+    }
+#else
+    (void)enc_br;
+#endif
     if ((enc_gz || enc_df) && body.len) {
         struct wb un = {0}; int zr = wz_inflate((const uint8_t *)body.p, body.len, enc_gz ? 2 : 3, &un, maxb + 65536);
         if (zr < 0 && !un.len) { wb_free(&un); wb_free(&body); return -8; }
@@ -644,6 +706,8 @@ static int wn_fetch_impl(const struct wn_req *rq, struct wn_resp *rs)
         for (char *q = rs->ctype; *q; q++) if (*q == ';') { *q = 0; break; }
         for (char *q = rs->ctype; *q; q++) *q = (char)wu_lower(*q);
         rs->body = H.body.p; rs->len = H.body.len; if (!rs->body) { rs->body = (char *)kmalloc(1); if (rs->body) rs->body[0] = 0; }
+        /* SOMA_353_CACHE_HTTP: solo un GET sin cuerpo, sin redirecciones y sin cabeceras propias */
+        rs->cache_s = (!use_body && wu_streq(method, "GET") && !rs->redirects && !rq->extra_headers) ? H.cache_s : 0;
         return 0;
     }
     wu_copy(rs->err, "demasiadas redirecciones", sizeof rs->err); return -9;

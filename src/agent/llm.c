@@ -417,7 +417,24 @@ static int llm_health_unlocked(void)
         return 1;
     }
     int code = llm_http_local(ip, port, "/health", 0, http_resp_buf, g_resp_cap, &resp, 5000, 0);   /* SOMA_260_LLM_TAM; SOMA_327 */
+    if (code == 404) code = llm_http_local(ip, port, "/v1/models", 0, http_resp_buf, g_resp_cap, &resp, 5000, 0);   /* SOMA_355_STRATA: servidor sin /health */
     if (code != 200) set_err("LLM: el servidor local no responde en ", llm_conf_get()->base[LLM_LOCAL]);
+    else {
+        /* SOMA_355_STRATA: si el servidor sirve UN solo modelo y no es el configurado (p. ej. ejecutar.py lanzo Strata, que tiene su
+         * propio nombre y puede no aceptar otro), se adopta el suyo. Con llama-server no cambia nada: sirve el alias configurado. */
+        struct http_response r2;
+        if (llm_http_local(ip, port, "/v1/models", 0, http_resp_buf, g_resp_cap, &r2, 5000, 0) == 200 && r2.body) {
+            static char lista[1024]; static const struct llm_conf oa = { .prov = LLM_LOCAL };
+            int n = llm_proto_model_list(&oa, r2.body, lista, sizeof lista);
+            const char *cur = llm_conf_get()->model[LLM_LOCAL]; uint32_t l = 0; while (lista[l] && lista[l] != '\n') l++;
+            int igual = l > 0 && my_strlen(cur) == l; for (uint32_t i = 0; igual && i < l; i++) if (cur[i] != lista[i]) igual = 0;
+            if (n == 1 && l > 0 && l < LLM_MODEL_MAX && !igual) {
+                static struct llm_conf c; c = *llm_conf_get(); lista[l] = 0;
+                if (llm_conf_set(&c, LLM_LOCAL, "modelo", lista) == 0) (void)llm_conf_save(&c);
+                kprint("LLM: el servidor sirve el modelo "); kprint(lista); kprint(" (adoptado)\n");
+            }
+        }
+    }
     return (code == 200);
 }
 
@@ -764,6 +781,8 @@ int llm_launcher_emb_start(uint32_t max_wait_ms, void (*progress)(uint32_t secs)
 int llm_launcher_start(const char *model, uint32_t max_wait_ms, void (*progress)(uint32_t secs))
 {
     if (launcher_post(LLM_L_START, model) != 0) return 0;
+    if (model && model[0] == 's' && model[1] == 't' && model[2] == 'r' && model[3] == 'a' && model[4] == 't' && model[5] == 'a' && model[6] == '-' && max_wait_ms < 600000u)
+        max_wait_ms = 600000u;                           /* SOMA_355_STRATA: un perfil de Strata con vision tarda mas en cargar */
     uint64_t t0 = timer_get_uptime_ms();
     int fails = 0;
     for (;;) {
@@ -779,7 +798,12 @@ int llm_launcher_start(const char *model, uint32_t max_wait_ms, void (*progress)
     }
     static struct llm_conf c; c = *llm_conf_get();
     c.prov = LLM_LOCAL;
-    if (llm_conf_set(&c, LLM_LOCAL, "modelo", model) == 0) (void)llm_conf_save(&c);
+    {   /* SOMA_355_STRATA: el nombre con el que el servidor sirve el modelo (/v1/models, segun el lanzador). llama-server usa el alias y
+         * acepta cualquiera; Strata tiene el suyo y puede no aceptar otro. */
+        char served[LLM_MODEL_MAX]; served[0] = 0;
+        if (llm_launcher_status(served, sizeof served) == 1 && served[0]) model = served;
+        if (llm_conf_set(&c, LLM_LOCAL, "modelo", model) == 0) (void)llm_conf_save(&c);
+    }
     return 1;
 }
 

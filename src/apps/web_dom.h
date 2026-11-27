@@ -29,7 +29,8 @@ enum wtag {
 #define WNF_DIRTY    0x40   /* estilo/maquetacion a recalcular */
 #define WNF_OPEN     0x80
 #define WNF_EDITED   0x100  /* valor de formulario modificado por el usuario */
-#define WNF_PSEUDO   0x200  /* SOMA_188: ::before/::after sintetico (fuera de la lista de hijos; invisible para el DOM de JS) */
+#define WNF_PSEUDO   0x200
+#define WNF_IMGEV    0x400  /* SOMA_346: ya se le disparo load/error a esta <img> con su src actual */  /* SOMA_188: ::before/::after sintetico (fuera de la lista de hijos; invisible para el DOM de JS) */
 
 struct wattr { struct wattr *next; const char *name; const char *val; };
 

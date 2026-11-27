@@ -206,6 +206,7 @@ void wd_set_attr(struct wdoc *d, struct wnode *n, const char *name, const char *
 {
     if (!n || !name) return;
     const char *v = wa_strdup(&d->ar, val ? val : "");
+    if (n->tag == WT_IMG && (wu_streq(name, "src") || wu_streq(name, "srcset"))) n->flags &= (uint16_t)~WNF_IMGEV;   /* SOMA_346: otro load/error */
     for (struct wattr *a = n->attrs; a; a = a->next) if (wu_streq(a->name, name)) { a->val = v; n->flags |= WNF_DIRTY; return; }
     struct wattr *a = (struct wattr *)wa_alloc(&d->ar, sizeof(*a)); if (!a) return;
     a->name = wa_strdup(&d->ar, name); a->val = v; a->next = 0;

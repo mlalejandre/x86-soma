@@ -14,7 +14,9 @@ static void gui_open_browser__impl(const char *url)
 {
     if (!url || !*url) return;
     char local_url[160];
-    if (url[0] != '/' && memcmp(url, "file://", 7) != 0 && memcmp(url, "http://", 7) != 0 && memcmp(url, "https://", 8) != 0) {
+    /* SOMA_350: data: y about: son direcciones, no rutas (antes "navegador data:text/html,..." abria file:///data:...) */
+    if (url[0] != '/' && memcmp(url, "file://", 7) != 0 && memcmp(url, "http://", 7) != 0 && memcmp(url, "https://", 8) != 0 &&
+        memcmp(url, "data:", 5) != 0 && memcmp(url, "about:", 6) != 0) {
         local_url[0] = '/';
         uint32_t p = 0;
         while (url[p] && p < sizeof(local_url) - 2) {

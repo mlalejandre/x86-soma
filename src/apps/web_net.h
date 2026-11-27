@@ -26,6 +26,7 @@ struct wn_resp {
     int status; char *body; uint32_t len;
     char ctype[96]; char charset[24]; char final_url[WN_URL_MAX]; int redirects; int via_gateway;
     char err[96];
+    int32_t cache_s;   /* SOMA_353_CACHE_HTTP: segundos que la respuesta sigue fresca y se puede guardar (0 = no se guarda) */
 };
 
 int  wn_url_parse(const char *url, struct wn_url *u);                        /* 0 = OK */
@@ -34,6 +35,10 @@ void wn_url_origin(const char *url, char *out, uint32_t max);                /* 
 void wn_url_encode(const char *s, char *out, uint32_t max);
 void wn_http_lock_init(void); /* SOMA 151: registrar mutex antes de iniciar IO */
 int  wn_fetch(const struct wn_req *rq, struct wn_resp *rs);                  /* 0 = respuesta recibida (mira rs->status) */
+/* SOMA_353_CACHE_HTTP: segundos que una respuesta GET puede servirse de la cache sin preguntar (max-age menos Age), mirando su
+ * bloque de cabeceras; 0 si no se debe guardar: no es 200, no-store o no-cache, Set-Cookie, Vary distinto de Accept-Encoding,
+ * o sin max-age. */
+int32_t wn_cache_secs(const char *hdrs, uint32_t len, int status);
 /* PARCHE 142: lo mismo pero en el servicio aislado netsvc (x86_64; src/apps/web_net_sbx.c). Lo usa el kernel. */
 int  wn_fetch_isolated(const struct wn_req *rq, struct wn_resp *rs);
 void wn_free_isolated(struct wn_resp *rs);

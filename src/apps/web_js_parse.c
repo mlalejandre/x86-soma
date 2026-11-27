@@ -10,6 +10,7 @@ struct ps {
     struct jfc *fc; struct pjmp *jmp; int *bcap; int no_in; int in_async; int in_gen; int in_fn; int nfunc; int strict;
     const char *prev_start, *prev2_start, *prev_end; uint32_t ntok;   /* SOMA 188B: inicio y fin de los ultimos tokens (texto exacto de Function.prototype.toString) */
     char err[160]; int err_line; const char *fsrc;
+    int spec;   /* SOMA_352: > 0 = analisis de prueba (try_arrow): el error se descarta, no se formatea */
 };
 
 static void *pal(struct ps *p, uint32_t n) { void *m = js_alloc(p->rt, n); if (!m) { p->rt->halted = 1; } return m; }
@@ -18,7 +19,10 @@ static void perr(struct ps *p, const char *msg)
     if (!p->err[0]) {
         wu_copy(p->err, msg, sizeof p->err); p->err_line = p->tok.line ? p->tok.line : p->line;
         const char *at = p->tok.start ? p->tok.start : p->cur;   /* SOMA_188: columna y fragmento (lineas minificadas de miles de caracteres) */
-        if (at && at >= p->s && at <= p->e) {
+        /* SOMA_352_MENOS_MAQUETAR: en un analisis de prueba ("(" que podria ser una flecha) el error se tira: buscar el principio de
+         * la linea era recorrer hacia atras todo el archivo minificado (una sola linea de 500 KB) en cada "(" que no era flecha.
+         * El SDK de consentimiento de 20minutos pasaba ahi el 86 % de su analisis. */
+        if (!p->spec && at && at >= p->s && at <= p->e) {
             const char *ls = at; while (ls > p->s && ls[-1] != '\n') ls--;
             uint32_t k = wu_strlen(p->err); char *o = p->err;
             if (k + 40 < sizeof p->err) { wu_copy(o + k, " (col ", sizeof p->err - k); k += 6; k += (uint32_t)wu_itoa((int64_t)(at - ls) + 1, o + k); o[k++] = ':'; o[k++] = ' ';
@@ -41,7 +45,8 @@ static const char *KW[] = { "var", "let", "const", "function", "return", "if", "
     "new", "delete", "typeof", "instanceof", "in", "void", "this", "null", "true", "false", "class", "extends", "super", "yield", "import", "export", "debugger", "with", "enum", 0 };
 static int is_kw(const char *s, uint32_t n)
 {
-    for (int i = 0; KW[i]; i++) if (wu_strlen(KW[i]) == n && wu_strneq(KW[i], s, n)) return 1;
+    if (n < 2 || n > 10 || s[0] < 'b' || s[0] > 'y') return 0;   /* SOMA_352: las palabras reservadas van de "do" a "instanceof" y de b a y */
+    for (int i = 0; KW[i]; i++) if (KW[i][0] == s[0] && wu_strlen(KW[i]) == n && wu_strneq(KW[i], s, n)) return 1;
     return 0;
 }
 static void skip_ws(struct ps *p)
@@ -174,6 +179,7 @@ static void lex(struct ps *p)
         p->prev_regex_ok = 0; return;
     }
     for (int i = 0; PUNCTS[i]; i++) {
+        if (PUNCTS[i][0] != (char)c) continue;   /* SOMA_352: antes, strlen y memcmp con los 58 operadores en cada simbolo */
         uint32_t n = wu_strlen(PUNCTS[i]);
         if (p->cur + n <= p->e && !memcmp(p->cur, PUNCTS[i], n)) {
             if (n == 2 && PUNCTS[i][0] == '?' && PUNCTS[i][1] == '.' && wu_isdigit((unsigned char)p->cur[2])) continue;   /* a?.5:1 */
@@ -597,14 +603,16 @@ static struct jn *try_arrow(struct ps *p, int flags, const char *src0)
     struct lstate ls; save(p, &ls); struct pjmp jb; jb.up = p->jmp; p->jmp = &jb;
     struct jfi *fi = (struct jfi *)pal(p, sizeof *fi); struct jfc fc; int cnt = 0; struct jn *params = 0;
     char saveerr[160]; memcpy(saveerr, p->err, sizeof saveerr); int saveel = p->err_line;
-    struct jfc *old_fc = p->fc; int old_nf = p->nfunc; int old_in_async = p->in_async; int old_in_gen = p->in_gen;
+    struct jfc *old_fc = p->fc; int old_nf = p->nfunc; int old_in_async = p->in_async; int old_in_gen = p->in_gen; int old_spec = p->spec;
     if (__builtin_setjmp(jb.jb)) {
         /* fallo: se restaura todo */
-        p->jmp = jb.up; restore(p, &ls); p->fc = old_fc; p->nfunc = old_nf; p->in_async = old_in_async; p->in_gen = old_in_gen; memcpy(p->err, saveerr, sizeof saveerr); p->err_line = saveel; return 0;
+        p->jmp = jb.up; restore(p, &ls); p->fc = old_fc; p->nfunc = old_nf; p->in_async = old_in_async; p->in_gen = old_in_gen; memcpy(p->err, saveerr, sizeof saveerr); p->err_line = saveel; p->spec = old_spec; return 0;
     }
+    p->spec = old_spec + 1;
     begin_fn(p, &fc, fi, 1);
     params = parse_params(p, &cnt);
     if (!isp(p, "=>") || p->tok.nl) perr(p, "no es flecha");
+    p->spec = old_spec;
     p->jmp = jb.up;
     next(p);
     struct jn *f = make_arrow(p, params, cnt, flags, &fc, fi, src0);

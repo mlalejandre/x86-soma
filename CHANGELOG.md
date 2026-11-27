@@ -7,6 +7,120 @@ todavía es software experimental. Esta fase sirve para encontrar fallos con má
 Desde el parche 311, lo que llega de Internet (páginas, correo, YouTube, noticias, TLS) y el motor de IA se procesan en
 servicios aislados de ring 3; el escritorio y las aplicaciones siguen en ring 0.  <!-- SOMA_339_GITHUB -->
 
+<!-- SOMA_356_STRATA_UNO -->
+### Solo tu perfil de Strata en la lista (356)
+- La lista de modelos ofrece solo el perfil de Strata que usas (`iq3s-latin-vision-120k.json`), no todos los de pruebas de
+  `~/strata-custom`; otro u otros con `STRATA_PERFIL` (`*` = todos). El menú de `./ejecutar.py` ya no muestra `bge-m3` como LLM.
+
+<!-- SOMA_355_STRATA -->
+### Strata en el servidor y consultas con imágenes (355)
+- Los perfiles de Strata del servidor (`~/strata-custom/*.json`) salen en la lista de modelos, en Ajustes > Inteligencia
+  artificial > Lanzador, en `llm-config lanzador modelos` y en el menú de `./ejecutar.py`. Se lanzan con
+  `strata serve --profile … --host 0.0.0.0 --port 8087 --parallel 1`, en el puerto de siempre, así que SOMA los usa igual (también
+  sin `/health` y con el nombre de modelo de Strata). Cambiar de modelo para Strata con su `strata-vision`; no se lanza si ya hay
+  otro Strata en marcha.
+- Los `.gguf` con un `mmproj*.gguf` en su carpeta se lanzan con `--mmproj` y ven imágenes.
+- Orden nueva `mirar <ruta|pantalla> [pregunta]`: manda una imagen al modelo (si tiene visión). El agente la usa, también con las
+  imágenes adjuntas en el chat en modo Agente. Pruebas nuevas `test_strata_355` y `prueba_strata_qemu_355` (QEMU).
+
+<!-- SOMA_354_CLIC_MODAL -->
+### Los clics llegan a los diálogos fijos (354)
+- Arreglado: en avisos de cookies como «Antes de ir a Google» ningún botón ni enlace respondía. El clic se lo quedaba lo que había
+  debajo, porque la búsqueda del elemento bajo el ratón miraba los `position: fixed` después de los `absolute` y sin su
+  `z-index`. Ahora sigue el mismo orden que el dibujo. Prueba nueva `test_web_clic_354`.
+
+<!-- SOMA_353_CACHE_HTTP -->
+### Caché HTTP del navegador y ventana fantasma (353)
+- El CSS, los scripts, las fuentes y las imágenes que el servidor declara frescos (`Cache-Control: max-age`) se guardan en memoria
+  del proceso del navegador y se reutilizan al volver atrás o al abrir otra página del mismo sitio, sin volver a bajarlos. Nada
+  con `no-store`/`no-cache`, cookies o `Vary`; el HTML de la página siempre se pide de nuevo; nada va al disco. 12 MiB (48 MiB con
+  memoria de sobra). Prueba nueva `test_web_cache_353`.
+- Arreglada la «ventana fantasma»: al abrir el navegador con `navegador <dirección>` salía una copia recortada arriba a la izquierda
+  que además cortaba el borde izquierdo de la ventana de verdad. El repintado rápido del navegador usaba una geometría sin poner
+  al día.
+
+<!-- SOMA_352_MENOS_MAQUETAR -->
+### Menos maquetaciones, hojas de estilo en paralelo y JavaScript más rápido (352)
+- Un cambio del DOM desde JavaScript que no cambia nada (el mismo valor otra vez) o que toca un nodo fuera del documento
+  (`new Image().src`, plantillas con `innerHTML`) ya no recalcula estilos ni maqueta: en 20minutos, de ~63 a ~38 maquetaciones
+  por minuto. El atributo `style` queda siempre como en Chrome (`color: blue; top: 1px;`).
+- Las hojas de estilo enlazadas se bajan en paralelo (hasta 4) y se aplican en el orden del documento: una página con 8 hojas a
+  300 ms pasa de 2,9 s a 0,8 s.
+- El analizador de JavaScript ya no formatea los errores de sus intentos de función flecha (recorría hacia atrás todo el archivo
+  minificado en cada paréntesis) y busca operadores y palabras reservadas por su inicial: el SDK de consentimiento de 20minutos
+  (513 KB) se analiza en ~45 ms en vez de 185 ms. Prueba nueva `test_web_maquetar_352`.
+- Seguridad: los procesos aislados que lanzan `sandbox.c` (incluido netsvc) y el reproductor de vídeo podían recibir hasta 8
+  sockets en vez de 4. La estructura con sus opciones no se ponía a cero y el límite del parche 345 quedaba con basura de la pila.
+
+<!-- SOMA_351_ESTILOS_RAPIDOS -->
+### Estilos 2-3 veces más rápidos (351)
+- El cálculo de estilos de una página descarta antes las reglas que no pueden coincidir: tabla de 1024 cubos con el hash completo
+  de cada clase o id, y un filtro de antepasados como el de WebKit. En 20minutos (QEMU) cada maquetación pasa de ~200 ms de
+  estilos a ~75 ms; el resultado es idéntico (volcado de cajas de 20minutos y PyPI igual byte a byte). Prueba nueva
+  `test_web_estilos_351` con 300 documentos al azar.
+
+<!-- SOMA_350_NAVEGADOR_VIDEO -->
+### Vídeo desde el navegador (350)
+- Un clic en un `<video>` abre su MP4 en el reproductor nativo de SOMA (H.264 + AAC), el de `youtube mp4`. Si el vídeo es HLS,
+  WebM u otro formato que SOMA no reproduce, la barra de estado lo dice.
+- `navegador data:…` y `navegador about:…` abren esas direcciones (antes las buscaba como archivos del disco).
+
+<!-- SOMA_349_NAVEGADOR_MEDIDAS -->
+### Fechas como Chrome y anchos mínimos (349)
+- `toLocaleDateString`, `toLocaleTimeString`, `toLocaleString` e `Intl.DateTimeFormat` respetan las opciones: «26 de noviembre»,
+  «22:15», «jue, 26 nov» (antes, siempre la fecha entera y los segundos). Hay 26 casos comparados con Chrome.
+- Una imagen con `max-width: 100%` no fija el ancho mínimo de su columna aunque tenga `width` fijo (PyPI).
+- Un trozo `nowrap` (el icono de enlace externo de PyPI) ya no vuelve inquebrantable todo el párrafo.
+- `<video poster>` muestra su portada (antes, un rectángulo negro).
+
+<!-- SOMA_348_FUENTES_WEB -->
+### Fuentes web en el navegador (348)
+- `@font-face` con TrueType, WOFF y WOFF2: los titulares, menús y textos salen con la fuente de la página, y los iconos de las
+  fuentes de iconos (Font Awesome, Weather Icons…) ya se ven. La fuente se descarga aparte y la página se vuelve a maquetar al
+  llegar (como `font-display: swap`).
+- Decodificador Brotli de Google (licencia MIT) en el navegador de ring 3: WOFF2 y `Content-Encoding: br` sin pasarela.
+- Las fuentes reconstruidas son idénticas glifo a glifo a las de fontTools. Las fuentes de la red se tratan como datos hostiles:
+  6000 archivos mutados bajo ASan y UBSan sin fallos.
+- Las hojas de estilo diferidas (`rel="preload" as="style" onload=…`, `media="print" onload=…`) se aplican, como acaba pasando en
+  Chrome; antes no llegaban nunca (iconos de El Bierzo Digital).
+- `FontFace` en JavaScript.
+
+<!-- SOMA_347_NAVEGADOR_CHROME -->
+### El navegador, más cerca de Chrome en webs reales (347)
+- Fuentes con serifa: Liberation Serif (anchos de Times New Roman). `font-family` salta las fuentes web que no hay, y los pesos
+  mayores que 500 son negrita. Los titulares de 20minutos cortan en las mismas palabras que en Chrome.
+- Rejilla CSS con líneas con nombre y `repeat(auto-fill, minmax(60px, 1fr))` junto a pistas fijas: el artículo de 20minutos mide
+  lo mismo que en Chrome (antes, 80 px más ancho).
+- Los scripts `defer` y los módulos se ejecutan al terminar de analizar el documento, con `readyState` en `"interactive"`.
+- `Intl` completo (fechas, números, plurales, tiempos relativos, listas…), `setHTML` y `Sanitizer`, y errores con su pila.
+- Iconos: SVG sin tamaño propio en el fondo, fondos en elementos en línea, `var()` en `<svg>`, y los bordes redondeados ya no
+  tapan el fondo. La pasarela deja pasar el SVG original.
+- El texto suelto de un contenedor flex o grid se alinea bien, y `ul { display: flex }` quita las viñetas.
+- `box-sizing: inherit` (Bootstrap, WordPress) y `unset` como en el estándar; en flex, la base se acota por `min`/`max-width`.
+- `querySelectorAll` funciona en la orden `js`.
+
+<!-- SOMA_346_NAVEGADOR_RENDER -->
+### El navegador, comparado con Chrome en webs reales (346)
+- `rem` usa el tamaño de letra de `<html>` (antes, 16 px fijos): 20minutos salía un 60 % más grande y con otra maquetación.
+- Las clases de Babel ya no se quedan sin prototipo («Cannot call a class as a function» rompía el JavaScript de 20minutos).
+- Las imágenes disparan `load` y `error` (antes nunca), también las de `new Image()`. `complete` y `naturalWidth` dicen la verdad.
+- `srcset` con URLs `data:` ya no se corta en la coma. `window` y `document` heredan de `Window` y `HTMLDocument`.
+- Los flotantes se suman en el ancho intrínseco: los menús de `<li>` flotantes ya no caen en vertical (El Bierzo Digital).
+- Los degradados con transparencia se pintan como en Chrome (antes `transparent` se volvía opaco y quedaba un velo sobre las fotos).
+
+<!-- SOMA_345_NAVEGADOR_REAL -->
+### El navegador, probado en webs reales (345)
+- Las imágenes de las webs que sirven desde varios servidores (El País) ya no fallan con «no se pudo conectar»: el navegador tiene
+  8 sockets (antes 4, los mismos que cualquier servicio) y las conexiones guardadas ceden el sitio. El núcleo admite 24 conexiones.
+- La pasarela de QEMU ya no se da por caída con un fallo suelto. Las imágenes se reintentan dos veces, con espera.
+- `<noscript>` ya no se dibuja (el reto anti-bots de PyPI tapaba la página con HTML en crudo), y los iconos de las fuentes de iconos
+  ya no salen como «?».
+- MutationObserver admite 4096 observadores (antes 64; Stimulus en PyPI pasaba de 500) y cada cambio del DOM mira solo el nodo y
+  sus antepasados.
+- JavaScript moderno que faltaba: `Object.getOwnPropertyDescriptors` (yarnpkg.com se rompía entera sin él), `groupBy`, los métodos
+  nuevos de `Set`, `toSpliced`, `Array.fromAsync`, `AbortSignal.any`… Y los símbolos en `Reflect.ownKeys`,
+  `getOwnPropertySymbols`, `Object.assign` y `{...o}`.
+
 <!-- SOMA_344_RED_SCRIPTS_JS -->
 ### Red más ágil, scripts en paralelo y cadenas de JavaScript más baratas (344)
 - La red del núcleo recoge los paquetes antes cuando hay tráfico (1 ms en vez de 10 ms), tiene más búferes de recepción

@@ -206,6 +206,17 @@ def _fit(im):
     return im
 
 
+def adapt_for_client(ctype, body, accept):
+    """SOMA_347: el SVG se guarda tal cual; solo se pasa a PNG si el cliente no anuncia image/svg+xml (SOMA anterior al 180)."""
+    if (ctype or "").lower().startswith("image/svg") and "image/svg+xml" not in (accept or "").lower():
+        png = svg_to_png(body)
+        if png:
+            with _lock:
+                _stats["svg"] += 1
+            return "image/png", png
+    return ctype, body
+
+
 def convert_image(data, kind):
     """Devuelve (bytes, content_type) en un formato que SOMA decodifica, o None si no hay que tocarla / no se puede."""
     if kind == "svg":
@@ -1074,7 +1085,9 @@ def get_resource(url, method, body, h, want_image):
     kind = None
     if 200 <= status < 300 and data and (low.startswith("image/") or want_image or low.startswith("application/octet-stream") or not low):
         kind = sniff_image(data)
-    if kind:
+    if kind == "svg":                   # SOMA_347: se guarda tal cual; _reply lo convierte solo si el cliente no sabe dibujarlo
+        ctype = "image/svg+xml"
+    elif kind:
         conv = convert_image(data, kind)
         if conv:
             data, ctype = conv
@@ -1224,6 +1237,9 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("[pasarela] %s\n" % (fmt % args))
 
     def _reply(self, status, ctype, body, extra=None, compress=True):
+        # SOMA_347_NAVEGADOR_ICONOS: SOMA (desde el 180) anuncia image/svg+xml y dibuja el SVG al tamano al que se muestra;
+        # al pasarlo a PNG se perdia que un SVG solo con viewBox no tiene tamano propio (iconos de 512 px en cajas de 13).
+        ctype, body = adapt_for_client(ctype, body, self.headers.get("X-Soma-Accept"))
         out_headers = [("X-Soma-Status", str(status)), ("X-Soma-Gateway", self._caps()), ("Content-Type", ctype or "application/octet-stream")]
         if compress and len(body) > 600 and "gzip" in (self.headers.get("Accept-Encoding") or "") and \
                 any((ctype or "").lower().startswith(t) for t in _TEXT_TYPES):

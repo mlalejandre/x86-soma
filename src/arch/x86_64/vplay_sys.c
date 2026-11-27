@@ -100,7 +100,8 @@ static void vplay_thread(void *arg)
     if (!why) {
         struct vp_ctrl *c = (struct vp_ctrl *)(uintptr_t)sh.frames[0];
         c->version = VP_VERSION; c->paused = (uint32_t)I->paused; c->mode = I->mode; c->out_max_ms = I->max_ms; c->magic = VP_MAGIC;
-        struct uexec_spec sp; sp.may_thr = 0; sp.sysmask = SYSMASK; sp.nregions = 2; sp.regions[0] = &heap; sp.regions[1] = &sh; sp.regions[2] = sp.regions[3] = 0;
+        struct uexec_spec sp = {0}; sp.may_thr = 0;   /* SOMA_352: entera a cero (max_sockets quedaba con basura de la pila) */
+        sp.sysmask = SYSMASK; sp.nregions = 2; sp.regions[0] = &heap; sp.regions[1] = &sh; sp.regions[2] = sp.regions[3] = 0;
         sp.reserve_frames = 4096;                              /* el monton no crece si quedan menos de 16 MiB libres */
         int e = 0;
         pid = -1;                                              /* SOMA_314_PROGZ: se descomprime, se lanza y se libera */

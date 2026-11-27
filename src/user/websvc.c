@@ -195,6 +195,7 @@ static void fill_state(void)
     S->img_ok = P->img_ok; S->img_fail = P->img_fail; S->nimg = P->nimg; S->heap_used = (uint32_t)(h_used >> 10);
     scopy(S->url, P->url, sizeof S->url); scopy(S->title, P->title, sizeof S->title); scopy(S->status, wp_status(P), sizeof S->status);
     scopy(S->alert_msg, P->alert_msg, sizeof S->alert_msg);
+    if (S->media_seq != P->media_seq) { scopy(S->media_url, P->media_url, sizeof S->media_url); S->media_seq = P->media_seq; }   /* SOMA_350 */
     S->cursor = WPK_NONE; S->hover_href[0] = 0;
     if (P->lay && !P->lay_busy && s_mx >= 0) {
         S->cursor = wp_hit_cursor(P, s_mx, s_my);

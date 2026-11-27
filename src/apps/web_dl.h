@@ -12,5 +12,6 @@ void wdl_pump(void);                             /* un turno a cada descarga viv
 int  wdl_live(void);                             /* descargas en marcha */
 int  wdl_inside(void);                           /* 1 = estamos dentro de una descarga */
 void wdl_yield(void);                            /* desde una descarga: cede al bucle principal */
+void unet_idle(void);                            /* SOMA_352: espera un instante dando turno a las descargas (src/user/websvc.c) */
 
 #endif

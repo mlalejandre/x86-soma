@@ -10,7 +10,9 @@ static int wf_state = 0; /* 0 sin iniciar, 1 lista, -1 sin fuente */
 
 /* SOMA_182: caras de la web. 0 = DejaVu Sans (la de siempre, tambien respaldo de glifos), 1 = Liberation Sans (anchos de Arial),
  * 2 = Liberation Sans negrita. Cada cara guarda su copia del estado del lector (vf, vf_ascii); wf_use() la activa. */
-#define WF_NFACE 5                                   /* SOMA_225: + 3 SOMA Orbital, 4 SOMA Tecnica */
+#define WF_NFIX 7                                    /* SOMA_225: + 3 SOMA Orbital, 4 SOMA Tecnica; SOMA_347: 5 y 6 Liberation Serif */
+#define WF_MAXWEB 40                                 /* SOMA_348_FUENTES_WEB: caras de @font-face (7..46) */
+#define WF_NFACE (WF_NFIX + WF_MAXWEB)
 static struct { struct vf_font f; uint16_t ascii[256]; int ok; } wf_faces[WF_NFACE];
 static int wf_cur = -1;
 static int wf_face_state = 0;   /* 0 sin iniciar, 1 listas las caras Liberation, -1 no hay */
@@ -59,6 +61,37 @@ static int wf_own_ready(int k)
     }
     return wf_own_state[k] == 1;
 }
+/* SOMA_347_NAVEGADOR_SERIF: caras con serifa (se cargan la primera vez que una pagina las pide) */
+static int wf_serif_state;                                      /* 0 sin intentar, 1 listas, -1 fallo */
+static int wf_serif_ready(void)
+{
+    if (wf_serif_state == 0) {
+        if (!wf_init()) { wf_serif_state = -1; return 0; }
+        wf_face_load(5, WEB_TTF_SERIF_PTR, WEB_TTF_SERIF_LEN);
+        wf_face_load(6, WEB_TTF_SERIFB_PTR, WEB_TTF_SERIFB_LEN);
+        wf_serif_state = (wf_faces[5].ok && wf_faces[6].ok) ? 1 : -1;
+    }
+    return wf_serif_state == 1;
+}
+static inline int wf_web_serif(int fl) { return (fl & WF_SERIF) && (fl & WF_WEB) && g_wf182_on && !(fl & WF_MONO) && wf_serif_ready(); }
+/* SOMA_348_FUENTES_WEB: caras de @font-face. Se guardan para toda la sesion del navegador (la misma URL en otra pagina no se vuelve a
+ * descargar); como mucho WF_MAXWEB caras y WF_WEB_BYTES en total. Los datos (sfnt) son de la cara: no se liberan mientras exista. */
+#define WF_WEB_BYTES (48u << 20)
+static uint32_t wf_web_key[WF_NFACE]; static uint8_t wf_web_bold[WF_NFACE]; static int wf_nweb; static uint32_t wf_web_bytes;
+int wf_web_find(uint32_t key) { for (int i = WF_NFIX; i < WF_NFIX + wf_nweb; i++) if (wf_web_key[i] == key && wf_faces[i].ok) return i; return 0; }
+int wf_web_add(uint8_t *sfnt, uint32_t n, uint32_t key, int bold)
+{
+    int f = wf_web_find(key); if (f) return f;
+    if (!sfnt || wf_nweb >= WF_MAXWEB || wf_web_bytes + n > WF_WEB_BYTES || !wf_init()) return 0;
+    f = WF_NFIX + wf_nweb;
+    wf_face_load(f, sfnt, n);
+    if (!wf_faces[f].ok) { wf_cur = -1; return 0; }
+    wf_cur = -1;                                   /* la cara activa la vuelve a elegir quien dibuje */
+    wf_web_key[f] = key; wf_web_bold[f] = (uint8_t)(bold != 0); wf_nweb++; wf_web_bytes += n;
+    return f;
+}
+static inline int wf_webface(int fl) { int f = (fl >> 16) & 0xFF; return (f >= WF_NFIX && f < WF_NFIX + wf_nweb && wf_faces[f].ok) ? f : 0; }
+static inline int wf_real_bold(int face) { return face == 2 || face == 6 || (face >= WF_NFIX && wf_web_bold[face]); }   /* caras que ya son negrita (no se engordan) */
 static inline int wf_web_arial(int fl) { return (((fl & WF_WEB) && g_wf182_on) || (fl & WF_LIB)) && !(fl & WF_MONO) && wf_arial_ready(); }   /* SOMA_184: WF_LIB = familia Liberation de la interfaz */
 
 /* PARCHE 085: ajustes de fuente de la interfaz */
@@ -91,6 +124,8 @@ static uint32_t glyph_of(uint32_t cp)
  * que Liberation no cubre) salen de DejaVu. Deja activa la cara elegida y devuelve el glifo (0 = ninguno). */
 static uint32_t wf_pick(uint32_t cp, int fl, int *face)
 {
+    { int wf = wf_webface(fl);                                   /* SOMA_348_FUENTES_WEB: la fuente de @font-face primero */
+      if (wf) { wf_use(wf); uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp); if (g) { *face = wf; return g; } } }
     if ((fl & (WF_ORB | WF_TEC)) && !(fl & WF_MONO)) {          /* SOMA_225: fuente propia; lo que no tenga sale de DejaVu */
         int k = (fl & WF_ORB) ? 0 : 1;
         if (wf_own_ready(k)) {
@@ -98,6 +133,12 @@ static uint32_t wf_pick(uint32_t cp, int fl, int *face)
             uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp);
             if (g) { *face = 3 + k; return g; }
         }
+    }
+    if (wf_web_serif(fl)) {
+        int want = (fl & WF_BOLD) ? 6 : 5;
+        wf_use(want);
+        uint32_t g = (cp < 256) ? vf_ascii[cp] : vf_lookup(cp);
+        if (g) { *face = want; return g; }
     }
     if (wf_web_arial(fl)) {
         int want = (fl & WF_BOLD) ? 2 : 1;
@@ -113,6 +154,14 @@ static uint32_t wf_pick(uint32_t cp, int fl, int *face)
 int wf_cp_adv64(uint32_t cp, int px, int fl)
 {
     px = clamp_px(px);
+    /* SOMA_345_NAVEGADOR_REAL: zona de uso privado de Unicode. Ahi ponen sus dibujos las fuentes de iconos (Font Awesome, Material
+     * Icons...), que SOMA no carga: salia un "?" en cada pestana, boton y enlace externo (PyPI). Sin la fuente, no ocupa ni se dibuja. */
+    int wf = wf_webface(fl), wg = 0;                        /* SOMA_348_FUENTES_WEB: con fuente web, sus glifos (iconos incluidos) */
+    if (wf) { wf_use(wf); wg = (cp < 256) ? vf_ascii[cp] : (int)vf_lookup(cp); }
+    /* negrita simulada en una cara web: se engorda el trazo pero no el avance, como Chrome (Skia); con fuentes variables el ancho
+     * de verdad de un 599/700 es solo un 1-2 % mayor que el del 400 (Source Serif: 1058 frente a 1046 px en un titular) */
+    if (wg) return (int)(((uint64_t)vf_adv((uint32_t)wg) * (uint64_t)px * 64u + vf.upem / 2) / vf.upem);
+    if ((cp >= 0xE000 && cp <= 0xF8FF) || cp >= 0xF0000) return 0;
     if (fl & WF_MONO) return ((px * 1233 + 1024) / 2048) * 64;
     if (cp == 0xAD || (cp >= 0x200B && cp <= 0x200F) || cp == 0xFEFF) return 0;
     if (cp == 0xA0) cp = ' ';
@@ -120,7 +169,7 @@ int wf_cp_adv64(uint32_t cp, int px, int fl)
     int face; uint32_t g = wf_pick(cp, fl, &face);
     if (!g) return px * 32;
     int w = (int)(((uint64_t)vf_adv(g) * (uint64_t)px * 64u + vf.upem / 2) / vf.upem);
-    if ((fl & WF_BOLD) && face != 2) w += (px >= 20) ? 64 : 32;
+    if ((fl & WF_BOLD) && !wf_real_bold(face)) w += (px >= 20) ? 64 : 32;
     return w;
 }
 
@@ -167,15 +216,16 @@ void wf_draw(int32_t x, int32_t baseline_y, const char *s, uint32_t n, int px, u
         int a64 = wf_cp_adv64(cp, px, fl);
         int32_t gx = (int32_t)((pen + 32) >> 6);
         if (cp > 32 && cp != 0xA0 && a64) {
-            if (mono_ok) {
+            int webg = 0; { int wf = wf_webface(fl); if (wf) { wf_use(wf); webg = ((cp < 256) ? vf_ascii[cp] : vf_lookup(cp)) != 0; } }   /* SOMA_348 */
+            if (mono_ok && !webg) {
                 font_vec_draw(gx, baseline_y, cp, rgb | (uint32_t)(alpha & 255) << 24, px, a64 >> 6, 0);
             } else if (wf_init() || (fl & (WF_ORB | WF_TEC))) {
                 int face; uint32_t g = wf_pick(cp, fl, &face);
                 if (g) {
                     struct vf_ce *ce = vf_get(g, px);
-                    if (fl & WF_MONO) { int nat = (int)(((uint64_t)vf_adv(g) * (uint64_t)px + vf.upem / 2) / vf.upem); int off = ((a64 >> 6) - nat) / 2; gx += off; }
+                    if ((fl & WF_MONO) && face < WF_NFIX) { int nat = (int)(((uint64_t)vf_adv(g) * (uint64_t)px + vf.upem / 2) / vf.upem); int off = ((a64 >> 6) - nat) / 2; gx += off; }
                     draw_glyph(gx, baseline_y, ce, rgb, alpha, fl, px);
-                    if ((fl & WF_BOLD) && face != 2) draw_glyph(gx + (px >= 20 ? 2 : 1), baseline_y, ce, rgb, alpha, fl, px);
+                    if ((fl & WF_BOLD) && !wf_real_bold(face)) draw_glyph(gx + (px >= 20 ? 2 : 1), baseline_y, ce, rgb, alpha, fl, px);
                 }
             }
         }

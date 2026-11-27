@@ -19,6 +19,7 @@ static jobj *mkctor(struct jrt *rt, const char *name, jnative f, int nargs, int 
 jstr *js_json_stringify(struct jrt *rt, jv v, jv replacer, jv indent);
 static jobj *own_keys(struct jrt *rt, jv v, int all)
 {
+    js_fn_proto_ensure(rt, v);   /* SOMA_345 */
     jobj *out = js_arr_new(rt, 8);
     if (v.t == JT_STR) { uint32_t n16 = js_u16len(v.u.s); for (uint32_t i = 0; i < n16; i++) { char t[16]; int l = wu_itoa(i, t); js_arr_push(rt, out, jstrv(js_str_new(rt, t, (uint32_t)l))); } return out; }
     if (v.t != JT_OBJ) return out;
@@ -32,9 +33,27 @@ static jobj *own_keys(struct jrt *rt, jv v, int all)
     return out;
 }
 jobj *js_own_keys(struct jrt *rt, jv v, int all) { return own_keys(rt, v, all); }
+/* SOMA_345_NAVEGADOR_REAL: los simbolos son cadenas "@@..." (ver sym_ctor). Los del programa ("@@desc#n", "@@for:clave") y los bien
+ * conocidos son claves de verdad; "@@st", "@@cl", "@@ds", "@@rs", "@@fonts", "@@proxy"... son ranuras internas del motor y nunca se
+ * enumeran. Antes Reflect.ownKeys y getOwnPropertySymbols no devolvian ningun simbolo (getOwnPropertySymbols daba las claves de texto). */
+int js_user_sym(const jstr *k)
+{
+    if (k->len < 3 || k->d[0] != '@' || k->d[1] != '@') return 0;
+    for (uint32_t i = 2; i < k->len; i++) if (k->d[i] == '#') return 1;
+    if (k->len > 6 && !memcmp(k->d, "@@for:", 6)) return 1;
+    static const char *const WK[] = { "iterator", "asyncIterator", "toStringTag", "toPrimitive", "hasInstance", "species", "isConcatSpreadable",
+                                      "match", "matchAll", "replace", "search", "split", "unscopables", 0 };
+    for (int i = 0; WK[i]; i++) { uint32_t n = (uint32_t)wu_strlen(WK[i]); if (k->len == n + 2 && !memcmp(k->d + 2, WK[i], n)) return 1; }
+    return 0;
+}
+static void own_syms_into(jobj *o, jobj *out, struct jrt *rt, int enum_only)
+{
+    if (o->cls == JC_PROXY) return;
+    for (uint32_t i = 0; i < o->np; i++) { struct jprop *p = &o->props[i]; if ((enum_only && !(p->flags & JP_ENUM)) || !js_user_sym(p->key)) continue; js_arr_push(rt, out, jstrv(p->key)); }
+}
 
 /* ------------------------------ Object ------------------------------ */
-enum { O_KEYS, O_VALUES, O_ENTRIES, O_ASSIGN, O_FREEZE, O_ISFROZEN, O_CREATE, O_GETPROTO, O_SETPROTO, O_DEFPROP, O_DEFPROPS, O_GETOWNNAMES, O_GETOWNDESC, O_FROMENTRIES, O_HASOWN, O_SEAL, O_ISEXT, O_PREVENT, O_IS, O_GETOWNDESCS };
+enum { O_KEYS, O_VALUES, O_ENTRIES, O_ASSIGN, O_FREEZE, O_ISFROZEN, O_CREATE, O_GETPROTO, O_SETPROTO, O_DEFPROP, O_DEFPROPS, O_GETOWNNAMES, O_GETOWNDESC, O_FROMENTRIES, O_HASOWN, O_SEAL, O_ISEXT, O_PREVENT, O_IS, O_GETOWNDESCS, O_GETOWNSYMS };
 static void from_desc(struct jrt *rt, jobj *o, jstr *key, jv d)
 {
     if (d.t != JT_OBJ) js_throw_err(rt, E_TYPE, "El descriptor debe ser un objeto");
@@ -65,6 +84,7 @@ static int fromentries_cb(struct jrt *r, jv item, void *ud) { js_put(r, jobjv((j
 static jv obj_static(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
     jv a = ARG(0);
+    if (magic == O_DEFPROP || magic == O_DEFPROPS || magic == O_GETOWNDESC) js_fn_proto_ensure(rt, a);   /* SOMA_345: el prototype aun sin crear */
     switch (magic) {
     case O_KEYS: case O_VALUES: case O_ENTRIES: {
         if (IS_NULLISH(a)) js_throw_err(rt, E_TYPE, "No se puede convertir undefined o null a objeto");
@@ -76,7 +96,7 @@ static jv obj_static(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     }
     case O_ASSIGN: {
         if (IS_NULLISH(a)) js_throw_err(rt, E_TYPE, "No se puede convertir undefined o null a objeto");
-        for (int i = 1; i < argc; i++) { if (IS_NULLISH(args[i])) continue; jobj *ks = own_keys(rt, args[i], 0); for (uint32_t k = 0; k < ks->alen; k++) js_put(rt, a, ks->el[k].u.s, js_get(rt, args[i], ks->el[k].u.s)); }
+        for (int i = 1; i < argc; i++) { if (IS_NULLISH(args[i])) continue; jobj *ks = own_keys(rt, args[i], 0); if (args[i].t == JT_OBJ) own_syms_into(args[i].u.o, ks, rt, 1); for (uint32_t k = 0; k < ks->alen; k++) js_put(rt, a, ks->el[k].u.s, js_get(rt, args[i], ks->el[k].u.s)); }   /* SOMA_345: y los simbolos enumerables */
         return a;
     }
     case O_FREEZE: if (a.t == JT_OBJ) { a.u.o->frozen = 1; a.u.o->extensible = 0; } return a;
@@ -98,7 +118,8 @@ static jv obj_static(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
             jv ta[3] = { a.u.o->el[0], ARG(1), ARG(2) }; obj_static(rt, thisv, ta, 3, O_DEFPROP); return a;
         }
         from_desc(rt, a.u.o, js_tostr(rt, ARG(1)), ARG(2)); return a;
-    case O_DEFPROPS: { if (a.t != JT_OBJ) js_throw_err(rt, E_TYPE, "no es un objeto"); jobj *ks = own_keys(rt, ARG(1), 0); for (uint32_t i = 0; i < ks->alen; i++) from_desc(rt, a.u.o, ks->el[i].u.s, js_get(rt, args[1], ks->el[i].u.s)); return a; }
+    case O_DEFPROPS: { if (a.t != JT_OBJ) js_throw_err(rt, E_TYPE, "no es un objeto"); jobj *ks = own_keys(rt, ARG(1), 0); if (ARG(1).t == JT_OBJ) own_syms_into(args[1].u.o, ks, rt, 1); for (uint32_t i = 0; i < ks->alen; i++) from_desc(rt, a.u.o, ks->el[i].u.s, js_get(rt, args[1], ks->el[i].u.s)); return a; }
+    case O_GETOWNSYMS: { jobj *ks = js_arr_new(rt, 4); if (a.t == JT_OBJ) own_syms_into(a.u.o, ks, rt, 0); return jobjv(ks); }   /* SOMA_345 */
     case O_GETOWNNAMES: { jobj *ks = own_keys(rt, a, 1); if (a.t == JT_OBJ && (a.u.o->cls == JC_ARRAY)) js_arr_push(rt, ks, jstrv(rt->s_length)); return jobjv(ks); }
     case O_GETOWNDESC: case O_GETOWNDESCS: {
         if (a.t != JT_OBJ) return jundef();
@@ -345,7 +366,7 @@ static jv reflect_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
     jv t = ARG(0);
     switch (magic) {
-    case R_OWNKEYS: return jobjv(own_keys(rt, t, 1));
+    case R_OWNKEYS: { jobj *ks = own_keys(rt, t, 1); if (t.t == JT_OBJ) own_syms_into(t.u.o, ks, rt, 0); return jobjv(ks); }   /* SOMA_345: con los simbolos */
     case R_HAS: if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.has llamado sobre un valor que no es objeto"); return jbool(js_has(rt, t.u.o, js_tostr(rt, ARG(1))));
     case R_GET:
         if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.get llamado sobre un valor que no es objeto");
@@ -403,7 +424,7 @@ static jv reflect_fn(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case R_SETPROTO: if (t.t != JT_OBJ) js_throw_err(rt, E_TYPE, "Reflect.setPrototypeOf llamado sobre un valor que no es objeto"); obj_static(rt, thisv, args, argc, O_SETPROTO); return jbool(1);
     case R_ISEXT: return t.t == JT_OBJ ? obj_static(rt, thisv, args, argc, O_ISEXT) : jbool(0);
     case R_PREVENT: if (t.t == JT_OBJ) obj_static(rt, thisv, args, argc, O_PREVENT); return jbool(t.t == JT_OBJ);
-    case R_DEFINE: if (t.t == JT_OBJ) { from_desc(rt, t.u.o, js_tostr(rt, ARG(1)), ARG(2)); return jbool(1); } return jbool(0);
+    case R_DEFINE: if (t.t == JT_OBJ) { js_fn_proto_ensure(rt, t); from_desc(rt, t.u.o, js_tostr(rt, ARG(1)), ARG(2)); return jbool(1); } return jbool(0);
     case R_DELETE: return jbool(t.t == JT_OBJ && js_delete(rt, t.u.o, js_tostr(rt, ARG(1))));
     }
     return jundef();
@@ -523,7 +544,7 @@ void js_lib_init(struct jrt *rt)
     jobj *oc = mkctor(rt, "Object", obj_ctor, 1, 0, rt->p_object);
     static const struct { const char *n; int m; int a; } OS[] = { { "keys", O_KEYS, 1 }, { "values", O_VALUES, 1 }, { "entries", O_ENTRIES, 1 }, { "assign", O_ASSIGN, 2 }, { "freeze", O_FREEZE, 1 }, { "isFrozen", O_ISFROZEN, 1 }, { "seal", O_SEAL, 1 }, { "isSealed", O_ISFROZEN, 1 },
         { "preventExtensions", O_PREVENT, 1 }, { "isExtensible", O_ISEXT, 1 }, { "create", O_CREATE, 2 }, { "getPrototypeOf", O_GETPROTO, 1 }, { "setPrototypeOf", O_SETPROTO, 2 }, { "defineProperty", O_DEFPROP, 3 }, { "defineProperties", O_DEFPROPS, 2 },
-        { "getOwnPropertyNames", O_GETOWNNAMES, 1 }, { "getOwnPropertyDescriptor", O_GETOWNDESC, 2 }, { "fromEntries", O_FROMENTRIES, 1 }, { "hasOwn", O_HASOWN, 2 }, { "is", O_IS, 2 }, { "getOwnPropertySymbols", O_KEYS, 1 }, { 0, 0, 0 } };
+        { "getOwnPropertyNames", O_GETOWNNAMES, 1 }, { "getOwnPropertyDescriptor", O_GETOWNDESC, 2 }, { "fromEntries", O_FROMENTRIES, 1 }, { "hasOwn", O_HASOWN, 2 }, { "is", O_IS, 2 }, { "getOwnPropertySymbols", O_GETOWNSYMS, 1 }, { 0, 0, 0 } };
     for (int i = 0; OS[i].n; i++) js_method(rt, oc, OS[i].n, obj_static, OS[i].a, OS[i].m);
     js_method(rt, oc->u.nat.f ? rt->p_object : rt->p_object, "hasOwnProperty", obj_proto, 1, OP_HASOWN);
     js_method(rt, rt->p_object, "toString", obj_proto, 0, OP_TOSTRING); js_method(rt, rt->p_object, "valueOf", obj_proto, 0, OP_VALUEOF); js_method(rt, rt->p_object, "isPrototypeOf", obj_proto, 1, OP_ISPROTO);

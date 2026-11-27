@@ -20,7 +20,11 @@ struct wvar { struct wvar *next; const char *name; const char *val; };
 
 #define GRID_MAX_TRACKS 12   /* SOMA_181 (antes 8) */
 #define GRID_MAX_ROWS 10
-struct wgx { struct wlen rows[GRID_MAX_ROWS]; int8_t nrows; struct wlen auto_rows; const char *areas; };   /* SOMA_181: filas y areas de una rejilla */
+struct wgx { struct wlen rows[GRID_MAX_ROWS]; int8_t nrows; struct wlen auto_rows; const char *areas;
+             /* SOMA_347_NAVEGADOR_GRID: nombres de lineas ("indice:nombre;" con el indice de linea antes de expandir repeat()),
+              * el repeat(auto-fill/auto-fit) de las columnas (desde la pista rep_at, rep_n pistas; se expande al maquetar con el ancho
+              * real) y, en un elemento, las lineas por nombre de grid-column/grid-row (0 col ini, 1 col fin, 2 fila ini, 3 fila fin) */
+             int8_t rep_at, rep_n; const char *cnames, *rnames; const char *nm[4]; };   /* SOMA_181: filas y areas de una rejilla */
 struct wstyle {
     uint8_t display, position, floating, clear, visibility, overflow_x, overflow_y, white_space, text_align;
     uint8_t text_decor;           /* bit0 underline, bit1 line-through, bit2 overline */
@@ -31,6 +35,8 @@ struct wstyle {
     uint8_t border_style[4];      /* 0 none, 1 solid, 2 dashed, 3 dotted */
     uint8_t border_collapse, text_overflow, word_break, bg_repeat, bg_size_mode, opacity;
     uint8_t grad_dir, has_grad, pointer, clearfix;
+    uint8_t serif;                /* SOMA_347_NAVEGADOR_SERIF: font-family con serifa (heredado) */
+    uint8_t wfam, wface;          /* SOMA_348_FUENTES_WEB: familia de @font-face (1..N, 0 = ninguna; heredada) y cara cargada que le toca (0 = aun no) */
     uint8_t no_ptr;               /* SOMA_188: pointer-events:none (heredado): el elemento no recibe clics; sus hijos con auto si */
     struct wnode *pse[2];
     uint32_t svg_fill, svg_stroke;   /* SOMA_188: fill/stroke de CSS (heredados) para SVG en linea: 0 = no fijado, 1 = none, 2 = currentColor, si no 0xFF000000|rgb */
@@ -82,8 +88,16 @@ extern int g_wl181_off;   /* SOMA_181 */
 extern int g_wc_zoom;     /* SOMA_248_DOC: escala de las unidades absolutas en % (100 = normal) */
 extern int (*g_wc_zoom_owner)(void);   /* SOMA_248_DOC: 1 si el hilo actual es el que pidio la escala */
 extern int g_wf182_on;    /* SOMA_182 */
+extern int g_wc351_off;   /* SOMA_351_ESTILOS_RAPIDOS: 1 = sin filtro de antepasados (solo pruebas) */
 struct wcss;                                   /* contexto de estilos del documento */
 struct wcss *wc_new(struct wdoc *d);
+int wc_subst_vars(const struct wvar *vars, const char *in, char *out, uint32_t max);   /* SOMA_347: var(--x) en un valor */
+/* SOMA_348_FUENTES_WEB: reglas @font-face de la pagina. state: 0 sin pedir, 1 pedida, 2 cargada (face = cara de web_font), 3 fallo.
+ * want: la usa algun elemento (se pide). latin: su unicode-range cubre el latin basico (o no tiene). */
+#define WC_MAXFONT 64
+#define WC_MAXFAM  32
+struct wcfont { const char *url; int16_t w0, w1; uint8_t fam, italic, state, face, want, latin; };
+struct wcfont *wc_fonts(struct wcss *c, int *n);
 void wc_free(struct wcss *c);
 /* anade una hoja (origin 0 = UA, 1 = autor) */
 void wc_add_sheet(struct wcss *c, const char *css, uint32_t len, int origin);

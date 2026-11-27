@@ -1,5 +1,19 @@
 /* SOMA_PARCHE_NAVEGADOR: Promise, Map, Set, temporizadores, bucle de eventos. */
 #include "web_js_i.h"
+
+/* SOMA_347: texto de una excepcion no capturada. Con la pila (primeras 3 lineas) si la tiene: antes de un temporizador o una promesa
+ * solo salia el mensaje ("querySelectorAll no es una funcion") y no habia forma de saber donde. */
+static void exc_text(struct jrt *rt, jv exc, const char *pre, char *buf, uint32_t cap)
+{
+    uint32_t k = wu_copy(buf, pre, cap);
+    jv st = exc.t == JT_OBJ && exc.u.o->cls == JC_ERROR ? js_get_c(rt, exc, "stack") : jundef();
+    if (st.t == JT_STR && st.u.s->len) {
+        const char *p = st.u.s->d; int lines = 0;
+        while (*p && k + 1 < cap) { if (*p == '\n' && ++lines >= 3) break; buf[k++] = *p == '\n' ? ' ' : *p; p++; }
+        buf[k < cap ? k : cap - 1] = 0; return;
+    }
+    jstr *s = exc.t == JT_OBJ ? js_inspect(rt, exc, 1) : js_tostr(rt, exc); wu_copy(buf + k, s->d, cap - k);
+}
 #define ARG(i) ((i) < argc ? args[i] : jundef())
 static jobj *mkctor4(struct jrt *rt, const char *name, jnative f, int nargs, int magic, jobj *proto)
 {
@@ -31,7 +45,7 @@ static void run_job(struct jrt *rt, struct jmicro *m)
         rt->depth = tb.depth; rt->stop = tb.sstop;
         if (m->kind == 1 && m->prom) js_promise_reject(rt, m->prom, tb.exc);
         else if (m->kind == 2) js_promise_reject(rt, m->prom, tb.exc);
-        else { char buf[240]; jstr *s = tb.exc.t == JT_OBJ ? js_inspect(rt, tb.exc, 1) : js_tostr(rt, tb.exc); wu_copy(buf, "Uncaught (en tarea): ", sizeof buf); wu_copy(buf + 21, s->d, sizeof buf - 21); js_log(rt, 2, buf); }
+        else { char buf[300]; exc_text(rt, tb.exc, "Uncaught (en tarea): ", buf, sizeof buf); js_log(rt, 2, buf); }
         return;
     }
     switch (m->kind) {
@@ -52,8 +66,7 @@ static void report_unhandled(struct jrt *rt)
     jobj *u = rt->unhandled; rt->unhandled = 0;
     for (uint32_t i = 0; i < u->alen; i++) {
         jobj *p = u->el[i].u.o; if (p->u.prom.handled & 1) continue;
-        char buf[300]; jstr *s = p->u.prom.value.t == JT_OBJ ? js_inspect(rt, p->u.prom.value, 1) : js_tostr(rt, p->u.prom.value);
-        wu_copy(buf, "Uncaught (in promise) ", sizeof buf); wu_copy(buf + 22, s->d, sizeof buf - 22); js_log(rt, 2, buf);
+        char buf[300]; exc_text(rt, p->u.prom.value, "Uncaught (in promise) ", buf, sizeof buf); js_log(rt, 2, buf);
     }
 }
 static int run_one_micro(struct jrt *rt)
@@ -325,8 +338,7 @@ static void fire_timer(struct jrt *rt, struct jtimer *t)
 {
     struct jtry tb; tb.up = rt->try_top; tb.depth = rt->depth; tb.sstop = rt->stop; rt->try_top = &tb;
     if (__builtin_setjmp(tb.jb)) {
-        rt->depth = tb.depth; rt->stop = tb.sstop; char buf[300]; jstr *s = tb.exc.t == JT_OBJ ? js_inspect(rt, tb.exc, 1) : js_tostr(rt, tb.exc);
-        wu_copy(buf, "Uncaught ", sizeof buf); wu_copy(buf + 9, s->d, sizeof buf - 9); js_log(rt, 2, buf); return;
+        rt->depth = tb.depth; rt->stop = tb.sstop; char buf[300]; exc_text(rt, tb.exc, "Uncaught ", buf, sizeof buf); js_log(rt, 2, buf); return;
     }
     if (t->fn.t == JT_STR) { int ok; js_eval_string(rt, t->fn.u.s->d, t->fn.u.s->len, &ok); }
     else js_call(rt, t->fn, jobjv(rt->global), t->args, t->nargs);

@@ -348,6 +348,73 @@ static jv date_static(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 }
 enum { DG_TIME, DG_YEAR, DG_MONTH, DG_DATE, DG_DAY, DG_HOURS, DG_MIN, DG_SEC, DG_MS, DS_TIME, DS_YEAR, DS_MONTH, DS_DATE, DS_HOURS, DS_MIN, DS_SEC, DS_MS, DT_ISO, DT_TOSTRING, DT_DATESTR, DT_TIMESTR, DT_LOCALE, DT_LOCALEDATE, DT_LOCALETIME, DT_TZO, DT_UTCSTR, DT_JSON };
 static void p2(struct wb *b, int v) { wb_addc(b, (char)('0' + v / 10 % 10)); wb_addc(b, (char)('0' + v % 10)); }
+/* SOMA_349_NAVEGADOR_MEDIDAS: toLocaleString/DateString/TimeString (y por ellas Intl.DateTimeFormat) con las opciones de ECMA-402: solo los componentes
+ * pedidos (weekday, year, month, day, hour, minute, second; numeric, 2-digit, long, short) y hour12. Antes salian siempre la fecha
+ * entera y los segundos: "26 de noviembre de 2026" y "22:15:07" donde Chrome pone "26 de noviembre" y "22:15". Valores = Chrome. */
+static const char *MONES_C[] = { "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sept", "oct", "nov", "dic" };
+static const char *DAYES_C[] = { "dom", "lun", "mar", "mi\303\251", "jue", "vie", "s\303\241b" };
+enum { DL_NO = 0, DL_NUM, DL_2D, DL_LONG, DL_SHORT, DL_NARROW };
+static int dl_opt(struct jrt *rt, jv o, const char *k)
+{
+    if (o.t != JT_OBJ) return DL_NO;
+    jv v = js_get_c(rt, o, k); if (v.t != JT_STR) return DL_NO;
+    const char *x = v.u.s->d;
+    return wu_streq(x, "numeric") ? DL_NUM : wu_streq(x, "2-digit") ? DL_2D : wu_streq(x, "long") ? DL_LONG : wu_streq(x, "short") ? DL_SHORT : wu_streq(x, "narrow") ? DL_NARROW : DL_NO;
+}
+static void dl_num(struct wb *b, int v, int mode) { if (mode == DL_2D) { char t[4] = { (char)('0' + (v / 10) % 10), (char)('0' + v % 10), 0, 0 }; wb_add(b, t); } else wb_addint(b, v); }
+static void dt_locale349(struct jrt *rt, struct wb *b, const struct dt *d, int magic, jv locv, jv o)
+{
+    const char *loc = locv.t == JT_STR ? locv.u.s->d : "es-ES";
+    int en = wu_starts(loc, "en"), us = en && !wu_starts(loc, "en-GB") && !wu_starts(loc, "en-AU") && !wu_starts(loc, "en-IE") && !wu_starts(loc, "en-NZ");
+    int de = wu_starts(loc, "de");
+    int wd = dl_opt(rt, o, "weekday"), yr = dl_opt(rt, o, "year"), mo = dl_opt(rt, o, "month"), dy = dl_opt(rt, o, "day");
+    int hr = dl_opt(rt, o, "hour"), mi = dl_opt(rt, o, "minute"), se = dl_opt(rt, o, "second");
+    int expd = wd || yr || mo || dy, expt = hr || mi || se;          /* componentes pedidos de forma explicita */
+    int defd = (magic == DT_LOCALEDATE && !expd) || (magic == DT_LOCALE && !expd && !expt);
+    int deft = (magic == DT_LOCALETIME && !expt) || (magic == DT_LOCALE && !expd && !expt);
+    if (defd) { yr = DL_NUM; mo = DL_NUM; dy = DL_NUM; }
+    if (deft) { hr = DL_NUM; mi = DL_2D; se = DL_2D; }
+    int anyd = wd || yr || mo || dy, anyt = hr || mi || se;
+    int h12 = us; jv hh = o.t == JT_OBJ ? js_get_c(rt, o, "hour12") : jundef(); if (hh.t == JT_BOOL) h12 = hh.u.b;
+    jv hc = o.t == JT_OBJ ? js_get_c(rt, o, "hourCycle") : jundef(); if (hc.t == JT_STR) h12 = wu_streq(hc.u.s->d, "h12") || wu_streq(hc.u.s->d, "h11");
+    int y = yr == DL_2D ? d->y % 100 : d->y;
+    if (anyd) {
+        int textual = mo == DL_LONG || mo == DL_SHORT || mo == DL_NARROW, more = yr || mo || dy;
+        if (wd) { const char *w = en || de ? (wd == DL_LONG ? DAYF[d->wd] : DAY[d->wd]) : (wd == DL_LONG ? DAYES[d->wd] : DAYES_C[d->wd]); wb_add(b, w); if (more) wb_add(b, ", "); }
+        if (textual) {
+            const char *mn = (en || de) ? (mo == DL_LONG ? MONF[d->mo - 1] : MON[d->mo - 1]) : (mo == DL_LONG ? MONES[d->mo - 1] : MONES_C[d->mo - 1]);
+            if (us) {                                                  /* Nov 26, 2026 / November 2026 */
+                wb_add(b, mn); if (dy) { wb_addc(b, ' '); dl_num(b, d->d, dy); }
+                if (yr) { wb_add(b, dy ? ", " : " "); dl_num(b, y, yr); }
+            } else if (en || de) {                                     /* 26 November 2026 */
+                if (dy) { dl_num(b, d->d, dy); wb_add(b, de ? ". " : " "); }
+                wb_add(b, mn); if (yr) { wb_addc(b, ' '); dl_num(b, y, yr); }
+            } else {                                                   /* 26 de noviembre de 2026 / 26 nov 2026 / noviembre de 2026 */
+                int lg = mo == DL_LONG;
+                if (dy) { dl_num(b, d->d, dy); wb_add(b, lg ? " de " : " "); }
+                wb_add(b, mn); if (yr) { wb_add(b, lg ? " de " : " "); dl_num(b, y, yr); }
+            }
+        } else {
+            char sep = de ? '.' : '/'; int n = 0;
+            int ord[3]; if (us) { ord[0] = 1; ord[1] = 0; ord[2] = 2; } else { ord[0] = 0; ord[1] = 1; ord[2] = 2; }
+            int gbpad = (en && !us) && defd;                           /* en-GB por defecto: 26/11/2026 con dos cifras */
+            for (int k = 0; k < 3; k++) {
+                int which = ord[k], mode = which == 0 ? dy : which == 1 ? mo : yr; if (!mode) continue;
+                if (n++) wb_addc(b, sep);
+                int v = which == 0 ? d->d : which == 1 ? d->mo : y;
+                dl_num(b, v, (gbpad && which < 2) ? DL_2D : mode);
+            }
+        }
+    }
+    if (anyt) {
+        if (anyd) wb_add(b, (!en && !de && (mo == DL_LONG)) ? " a las " : ", ");
+        int h = d->h; if (h12) { h %= 12; if (!h) h = 12; }
+        if (hr) dl_num(b, h, hr == DL_2D ? DL_2D : DL_NUM);
+        if (mi) { if (hr) wb_addc(b, ':'); dl_num(b, d->mi, DL_2D); }
+        if (se) { if (hr || mi) wb_addc(b, ':'); dl_num(b, d->s, DL_2D); }
+        if (h12 && hr) wb_add(b, en ? (d->h < 12 ? " AM" : " PM") : (d->h < 12 ? " a. m." : " p. m."));
+    }
+}
 static jv date_proto(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
 {
     if (thisv.t != JT_OBJ || thisv.u.o->cls != JC_DATE) js_throw_err(rt, E_TYPE, "this no es un objeto Date");
@@ -374,24 +441,7 @@ static jv date_proto(struct jrt *rt, jv thisv, jv *args, int argc, int magic)
     case DT_DATESTR: wb_add(&b, DAY[d.wd]); wb_addc(&b, ' '); wb_add(&b, MON[d.mo - 1]); wb_addc(&b, ' '); p2(&b, d.d); wb_addc(&b, ' '); wb_addint(&b, d.y); break;
     case DT_TIMESTR: p2(&b, d.h); wb_addc(&b, ':'); p2(&b, d.mi); wb_addc(&b, ':'); p2(&b, d.s); wb_add(&b, " GMT+0000 (UTC)"); break;
     case DT_TOSTRING: wb_add(&b, DAY[d.wd]); wb_addc(&b, ' '); wb_add(&b, MON[d.mo - 1]); wb_addc(&b, ' '); p2(&b, d.d); wb_addc(&b, ' '); wb_addint(&b, d.y); wb_addc(&b, ' '); p2(&b, d.h); wb_addc(&b, ':'); p2(&b, d.mi); wb_addc(&b, ':'); p2(&b, d.s); wb_add(&b, " GMT+0000 (UTC)"); break;
-    case DT_LOCALE: case DT_LOCALEDATE: case DT_LOCALETIME: {
-        const char *loc = ARG(0).t == JT_STR ? args[0].u.s->d : "es-ES"; int es = !wu_starts(loc, "en"); int us = wu_starts(loc, "en-US") || wu_streq(loc, "en");
-        jv opts = ARG(1); int longmonth = 0, wkd = 0, onlydate = magic == DT_LOCALEDATE, h12 = us;
-        if (opts.t == JT_OBJ) { jv m = js_get_c(rt, opts, "month"); if (m.t == JT_STR && (wu_streq(m.u.s->d, "long") || wu_streq(m.u.s->d, "short"))) longmonth = wu_streq(m.u.s->d, "long") ? 2 : 1; if (js_get_c(rt, opts, "weekday").t == JT_STR) wkd = 1; jv hh = js_get_c(rt, opts, "hour12"); if (hh.t == JT_BOOL) h12 = hh.u.b; }
-        if (magic != DT_LOCALETIME) {
-            if (wkd) { wb_add(&b, es ? DAYES[d.wd] : DAYF[d.wd]); wb_add(&b, ", "); }
-            if (longmonth) { if (es) { wb_addint(&b, d.d); wb_add(&b, " de "); wb_add(&b, MONES[d.mo - 1]); wb_add(&b, " de "); wb_addint(&b, d.y); } else { wb_add(&b, longmonth == 2 ? MONF[d.mo - 1] : MON[d.mo - 1]); wb_addc(&b, ' '); wb_addint(&b, d.d); wb_add(&b, ", "); wb_addint(&b, d.y); } }
-            else if (us) { wb_addint(&b, d.mo); wb_addc(&b, '/'); wb_addint(&b, d.d); wb_addc(&b, '/'); wb_addint(&b, d.y); }
-            else if (wu_starts(loc, "en-GB") || wu_starts(loc, "fr") || wu_starts(loc, "it") || wu_starts(loc, "pt")) { p2(&b, d.d); wb_addc(&b, '/'); p2(&b, d.mo); wb_addc(&b, '/'); wb_addint(&b, d.y); }
-            else if (wu_starts(loc, "de")) { wb_addint(&b, d.d); wb_addc(&b, '.'); wb_addint(&b, d.mo); wb_addc(&b, '.'); wb_addint(&b, d.y); }
-            else { wb_addint(&b, d.d); wb_addc(&b, '/'); wb_addint(&b, d.mo); wb_addc(&b, '/'); wb_addint(&b, d.y); }
-        }
-        if (!onlydate) {
-            if (magic == DT_LOCALE) wb_add(&b, ", ");
-            if (h12) { int hh = d.h % 12; if (!hh) hh = 12; wb_addint(&b, hh); } else p2(&b, d.h);
-            wb_addc(&b, ':'); p2(&b, d.mi); wb_addc(&b, ':'); p2(&b, d.s); if (h12) wb_add(&b, d.h < 12 ? " AM" : " PM");
-        }
-        break; }
+    case DT_LOCALE: case DT_LOCALEDATE: case DT_LOCALETIME: dt_locale349(rt, &b, &d, magic, ARG(0), ARG(1)); break;
     }
     jstr *r = js_str_new(rt, b.p ? b.p : "", b.len); wb_free(&b); return jstrv(r);
 }

@@ -7,6 +7,7 @@
 #include "jsrun_core.h"
 
 struct jrt *wjs_rt(struct wjs *js);
+#include "web_css.h"
 struct wdoc *wd_new(void);
 void wd_parse(struct wdoc *d, const char *html, uint32_t len);
 void wd_free(struct wdoc *d);
@@ -222,8 +223,9 @@ int jsrun_run(const struct jsr_io *io, const char *src, uint32_t len, const char
     struct wdoc *d = wd_new();
     if (!d) return JSR_ERR_MEM;
     wd_parse(d, html, wu_strlen(html));
+    struct wcss *css347 = wc_new(d); d->sheets = css347;   /* SOMA_347: sin hoja, querySelector(All)/matches/closest no encontraban nada */
     struct wjs *js = wjs_new(d, &h);
-    if (!js) { wd_free(d); return JSR_ERR_MEM; }
+    if (!js) { d->sheets = 0; wc_free(css347); wd_free(d); return JSR_ERR_MEM; }
     int rc = JSR_OK;
     if (check) {
         /* solo sintaxis: se analiza con el mismo analizador y no se ejecuta nada */
@@ -257,7 +259,7 @@ int jsrun_run(const struct jsr_io *io, const char *src, uint32_t len, const char
         gflush();
         if (g_win_open && io->win_close) io->win_close(io->ud);
     }
-    wjs_free(js); wd_free(d);
+    wjs_free(js); d->sheets = 0; wc_free(css347); wd_free(d);
     if (g_exit >= 0) return JSR_ERR_EXIT + g_exit;
     return rc;
 }

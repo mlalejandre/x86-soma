@@ -57,6 +57,15 @@ int main(void) {
     chk(j, "characterData queued", "var text=el.firstChild,changes=[];var mch=new MutationObserver(function(rs){changes.push(rs[0].oldValue)});mch.observe(text,{characterData:true,characterDataOldValue:true});text.textContent='abcd';'queued'", "queued");
     chk(j, "characterData delivered", "changes.join(',')", "abc");
     chk(j, "characterData options", "(function(){var ob2=new MutationObserver(function(){});ob2.observe(p,{characterData:true,subtree:true});return true;})()", "true");
+    /* SOMA_345_NAVEGADOR_REAL: Stimulus (PyPI, GitHub) crea cientos de observadores; antes el 65 daba RangeError */
+    chk(j, "600 observers", "var hits=0,obs=[],box=document.createElement('div');document.body.appendChild(box);for(var i=0;i<600;i++){var e=document.createElement('p');box.appendChild(e);var o=new MutationObserver(function(r){hits+=r.length;});o.observe(e,{attributes:true});obs.push([o,e]);}for(var i=0;i<600;i++)obs[i][1].setAttribute('data-n',''+i);'queued'", "queued");
+    chk(j, "600 delivered", "hits", "600");
+    chk(j, "observe twice: one record", "var tw=0,te=document.createElement('a');box.appendChild(te);var to=new MutationObserver(function(r){tw+=r.length;});to.observe(te,{attributes:true});to.observe(te,{attributes:true,attributeOldValue:true});te.setAttribute('x','1');'queued'", "queued");
+    chk(j, "observe twice delivered", "tw", "1");
+    chk(j, "subtree + target: one record", "var sb=0,so2=new MutationObserver(function(r){sb+=r.length;});so2.observe(box,{attributes:true,subtree:true});so2.observe(te,{attributes:true});te.setAttribute('y','2');'queued'", "queued");
+    chk(j, "subtree + target delivered", "sb", "1");
+    chk(j, "disconnect then observe", "for(var i=0;i<600;i++)obs[i][0].disconnect();hits=0;obs[5][1].setAttribute('z','1');obs[7][0].observe(obs[7][1],{attributes:true});obs[7][1].setAttribute('z','1');'queued'", "queued");
+    chk(j, "disconnect delivered", "hits", "1");
     if (errors) { fprintf(stderr, "Errores JS no esperados: %d\n", errors); return 1; }
     fprintf(stderr, "SOMA 147: %d pruebas nativas OK\n", count);
     wjs_free(j); wd_free(doc); return 0;

@@ -746,6 +746,11 @@ int cmd_vsoma(const char *args, char *out_buf, uint32_t max_out)
         }
         if (!kgetc_ready() && timer_get_uptime_ms() - her_last_anim < her152_period - 3u && !her_dragging && !her_resizing && !mouse_left_held()) thread_sleep(1);
         uint64_t now = timer_get_uptime_ms();
+        /* SOMA_353_VENTANA_FANTASMA: la ventana se puede abrir o mover desde otro hilo (la orden 'navegador', el agente: her_open_app
+         * con el turno de la GUI) y eso cambia her_win_*, pero no estas copias del bucle hasta el siguiente HER_SYNC_WIN. Mientras,
+         * el fotograma rapido del navegador (SOMA_152) lo pintaba con la geometria inicial: una "ventana fantasma" arriba a la
+         * izquierda que tapaba el borde izquierdo de la de verdad, y el raton del navegador con las coordenadas de esa. */
+        HER_SYNC_WIN();
 
         /* SOMA_PARCHE_021_FPU: un proceso de usuario tiene la pantalla; la GUI espera sin dibujar */
         if (fb_user_exclusive()) {

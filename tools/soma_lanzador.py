@@ -7,7 +7,12 @@
 # pide por HTTP desde Ajustes > IA o con la orden llm-config:
 #
 #   GET  /v1/estado    {"estado": "listo" | "cargando" | "parado" | "error", "modelo": ..., "detalle": ...}
-#   GET  /v1/modelos   {"data": [{"id": alias, "archivo": ruta relativa, "gib": tamano}, ...]}
+#   GET  /v1/modelos   {"data": [{"id": alias, "archivo": ruta relativa, "gib": tamano, "motor": "llama"|"strata", "vision": bool}, ...]}
+#
+# SOMA_355_STRATA: ademas de los .gguf (llama-server), cada perfil de Strata (~/strata-custom/*.json, o STRATA_PERFILES) sale como un
+# modelo mas ("strata-<perfil>"). Se lanza con  strata serve --profile P --host 0.0.0.0 --port SERVER_PORT --parallel 1  en el mismo
+# puerto que llama-server, asi que SOMA lo usa igual (API compatible con OpenAI en /v1). Los modelos con vision (un perfil que lo
+# diga, o un .gguf con su mmproj*.gguf en la misma carpeta, que se pasa con --mmproj) aceptan imagenes desde SOMA.
 #   POST /v1/lanzar    {"modelo": alias}   para lo que hubiera en el puerto y arranca llama-server con ese modelo
 #   POST /v1/parar     para llama-server (libera la VRAM)
 #
@@ -36,6 +41,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -59,6 +65,12 @@ THREADS = int(os.getenv("REMOTE_THREADS", "8"))
 PREDICT = int(os.getenv("REMOTE_PREDICT", "16384"))
 CUDA_DEVICE = os.getenv("CUDA_DEVICE", "0")
 EXTRA_ARGS = os.getenv("LLAMA_EXTRA_ARGS", "")
+# SOMA_355_STRATA
+STRATA_BIN = os.getenv("STRATA_BIN", "strata")              # nombre (se busca en el PATH, ~/.local/bin y ~/bin) o ruta
+STRATA_DIR = os.path.expanduser(os.getenv("STRATA_PERFILES", "~/strata-custom"))
+# SOMA_356_STRATA_UNO: que perfiles salen en la lista: el de tu script (por defecto), varios separados por comas, o "*" (todos)
+STRATA_PERFIL = os.getenv("STRATA_PERFIL", "iq3s-latin-vision-120k.json")
+STRATA_EXTRA_ARGS = os.getenv("STRATA_EXTRA_ARGS", "")
 
 # SOMA_278_EMBEDDINGS
 EMB_PORT = int(os.getenv("SOMA_EMB_PORT", "8089"))
@@ -121,6 +133,56 @@ def alias_for(path: str) -> str:
     return re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip("-")[:48] or "model"
 
 
+def strata_bin() -> str:
+    """SOMA_355_STRATA: el ejecutable de Strata. Como servicio de systemd el PATH no trae ~/.local/bin: se mira ahi tambien."""
+    if os.sep in STRATA_BIN:
+        return STRATA_BIN if os.access(STRATA_BIN, os.X_OK) else ""
+    path = os.pathsep.join([os.environ.get("PATH", ""), os.path.expanduser("~/.local/bin"), os.path.expanduser("~/bin")])
+    return shutil.which(STRATA_BIN, path=path) or ""
+
+
+def strata_elegido(nombre: str) -> bool:
+    """SOMA_356_STRATA_UNO: en ~/strata-custom hay muchos perfiles de pruebas; solo se ofrecen los de STRATA_PERFIL."""
+    want = [w.strip() for w in STRATA_PERFIL.split(",") if w.strip()]
+    if "*" in want:
+        return True
+    return any(nombre == w or nombre == w + ".json" for w in want)
+
+
+def strata_profiles() -> list[dict]:
+    """SOMA_355_STRATA: un modelo por perfil JSON de Strata. "vision" si el perfil lo menciona (vision, mmproj, image)."""
+    out = []
+    try:
+        names = sorted(n for n in os.listdir(STRATA_DIR) if n.lower().endswith(".json") and strata_elegido(n))
+    except OSError:
+        return out
+    for n in names:
+        path = os.path.join(STRATA_DIR, n)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                txt = f.read(1 << 20)
+            json.loads(txt)                                   # un perfil roto no se ofrece
+        except (OSError, ValueError):
+            continue
+        low = txt.lower()
+        alias = "strata-" + (re.sub(r"[^a-z0-9._-]+", "-", n[:-5].lower()).strip("-")[:40] or "perfil")
+        out.append({"id": alias, "archivo": "strata: " + n, "gib": 0, "ruta": path, "motor": "strata",
+                    "vision": any(k in low for k in ("vision", "mmproj", "image"))})
+    return out
+
+
+def mmproj_for(path: str) -> str:
+    """SOMA_355_STRATA: el proyector de vision (mmproj*.gguf) que haya en la carpeta del modelo, para lanzarlo con --mmproj."""
+    d = os.path.dirname(path)
+    try:
+        cand = sorted(n for n in os.listdir(d) if n.lower().endswith(".gguf") and "mmproj" in n.lower())
+    except OSError:
+        return ""
+    return os.path.join(d, cand[0]) if cand else ""
+
+
 def list_models() -> list[dict]:
     groups: dict[str, dict] = {}
     for root, _dirs, files in os.walk(MODELS_DIR, followlinks=True):
@@ -148,9 +210,15 @@ def list_models() -> list[dict]:
             n += 1
         seen.add(alias)
         rel = g["first"][len(MODELS_DIR):].lstrip("/") if g["first"].startswith(MODELS_DIR) else g["first"]
-        out.append({"id": alias, "archivo": rel, "gib": round(g["size"] / 2**30, 1), "ruta": g["first"]})
+        mm = mmproj_for(g["first"])
+        out.append({"id": alias, "archivo": rel, "gib": round(g["size"] / 2**30, 1), "ruta": g["first"], "motor": "llama", "vision": bool(mm), "mmproj": mm})
     if not out and os.path.exists(DEFAULT_MODEL_PATH):
-        out.append({"id": DEFAULT_ALIAS, "archivo": os.path.basename(DEFAULT_MODEL_PATH), "gib": 0, "ruta": DEFAULT_MODEL_PATH})
+        mm = mmproj_for(DEFAULT_MODEL_PATH)
+        out.append({"id": DEFAULT_ALIAS, "archivo": os.path.basename(DEFAULT_MODEL_PATH), "gib": 0, "ruta": DEFAULT_MODEL_PATH, "motor": "llama", "vision": bool(mm), "mmproj": mm})
+    for m in strata_profiles():                               # SOMA_355_STRATA
+        if m["id"] not in seen:
+            seen.add(m["id"])
+            out.append(m)
     return out
 
 
@@ -161,9 +229,17 @@ def health() -> int | None:
         with urllib.request.urlopen(f"http://127.0.0.1:{SERVER_PORT}/health", timeout=2.0) as r:
             return r.status
     except urllib.error.HTTPError as e:
-        return e.code
+        if e.code != 404:
+            return e.code
     except Exception:
         return None
+    try:                                                      # SOMA_355_STRATA: un servidor sin /health (Strata): listo si /v1/models contesta
+        with urllib.request.urlopen(f"http://127.0.0.1:{SERVER_PORT}/v1/models", timeout=3.0) as r:
+            return 200 if r.status == 200 else 503
+    except urllib.error.HTTPError as e:
+        return 503 if e.code in (503, 404) else e.code
+    except Exception:
+        return 503
 
 
 def loaded_model() -> str:
@@ -201,11 +277,14 @@ def kill_port() -> None:
     except (OSError, subprocess.SubprocessError):
         pass
     pids.discard(os.getpid())
-    for sig, wait in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.5)):
+    for sig, wait in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 0.5)):
         alive = False
         for p in pids:
-            try:
-                os.kill(p, sig)
+            try:                                              # SOMA_355_STRATA: todo su grupo (Strata arranca strata-vision aparte)
+                if os.getpgid(p) == p:
+                    os.killpg(p, sig)
+                else:
+                    os.kill(p, sig)
                 alive = True
             except OSError:
                 pass
@@ -229,6 +308,8 @@ def launch(alias: str) -> tuple[bool, str]:
     model = next((m for m in list_models() if m["id"] == alias), None)
     if model is None:
         return False, f"no hay ningun modelo llamado '{alias}' en {MODELS_DIR}"
+    if model.get("motor") == "strata":                        # SOMA_355_STRATA
+        return launch_strata(alias, model)
     if not os.access(LLAMA_SERVER_BIN, os.X_OK):
         return False, f"no encuentro llama-server en {LLAMA_SERVER_BIN} (variable LLAMA_SERVER_BIN)"
     args = [
@@ -246,6 +327,8 @@ def launch(alias: str) -> tuple[bool, str]:
         "-ctk", "q8_0", "-ctv", "q8_0",
         "--threads", str(THREADS),
     ]
+    if model.get("mmproj"):                                   # SOMA_355_STRATA: con su proyector, el modelo ve imagenes
+        args += ["--mmproj", model["mmproj"]]
     if EXTRA_ARGS:
         args += shlex.split(EXTRA_ARGS)
     with _lock:
@@ -264,6 +347,64 @@ def launch(alias: str) -> tuple[bool, str]:
     return True, ""
 
 
+def strata_ajenos() -> list[int]:
+    """SOMA_355_STRATA: procesos strata o strata-vision de este usuario que no lanzo el lanzador (p. ej. el script del Mac en el
+    puerto 18081). Ocupan las GPU: lanzar otro encima acabaria sin memoria."""
+    mine: set[int] = set()
+    if _proc is not None and _proc.poll() is None:
+        try:
+            mine.add(os.getpgid(_proc.pid))
+        except OSError:
+            pass
+    out = []
+    for name in ("strata", "strata-vision"):
+        try:
+            r = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", name], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for p in r.stdout.split():
+            if not p.isdigit():
+                continue
+            try:
+                if os.getpgid(int(p)) in mine:
+                    continue
+            except OSError:
+                continue
+            out.append(int(p))
+    return out
+
+
+def launch_strata(alias: str, model: dict) -> tuple[bool, str]:
+    """SOMA_355_STRATA: strata serve con el perfil, escuchando en la red local en el puerto de siempre del LLM."""
+    global _proc, _alias, _started
+    exe = strata_bin()
+    if not exe:
+        return False, f"no encuentro Strata ({STRATA_BIN}) en el PATH, ~/.local/bin ni ~/bin (variable STRATA_BIN)"
+    args = [exe, "serve", "--profile", model["ruta"], "--host", "0.0.0.0", "--port", str(SERVER_PORT), "--parallel", "1"]
+    if STRATA_EXTRA_ARGS:
+        args += shlex.split(STRATA_EXTRA_ARGS)
+    with _lock:
+        kill_port()                                           # lo que hubiera en el puerto (llama-server u otro Strata nuestro)
+        otros = strata_ajenos()
+        if otros:
+            return False, ("ya hay un Strata en marcha en el servidor (pid " + ", ".join(map(str, otros[:4])) +
+                           "), quiza el del Mac en el puerto 18081: detenlo primero (Control+C en su terminal)")
+        env = dict(os.environ)                                # sin CUDA_VISIBLE_DEVICES: el perfil reparte las GPU
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+        env["PATH"] = os.pathsep.join([os.path.dirname(exe), os.path.expanduser("~/.local/bin"), os.path.expanduser("~/bin"), env.get("PATH", "")])
+        try:
+            log = open(LOG_FILE, "wb")
+            _proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+            log.close()
+        except OSError as e:
+            _proc = None
+            return False, f"no se pudo lanzar Strata: {e}"
+        Path(PID_FILE).write_text(f"{_proc.pid}\n")
+        _alias, _started = alias, time.time()
+    info(f"Strata lanzado con '{alias}' ({os.path.basename(model['ruta'])}), pid {_proc.pid}")
+    return True, ""
+
+
 def status() -> dict:
     h = health()
     if h == 200:
@@ -274,7 +415,7 @@ def status() -> dict:
     if h == 503 or (ours and not dead):
         return {"estado": "cargando", "modelo": _alias, "detalle": f"{int(time.time() - _started)} s" if ours else ""}
     if dead:
-        return {"estado": "error", "modelo": _alias, "detalle": "llama-server ha terminado: " + (log_tail() or "sin registro")}
+        return {"estado": "error", "modelo": _alias, "detalle": "el servidor del modelo ha terminado: " + (log_tail() or "sin registro")}
     return {"estado": "parado", "modelo": "", "detalle": ""}
 
 
@@ -447,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/v1/embeddings/estado":
             self._send(200, emb_status())
         elif self.path == "/v1/modelos":
-            self._send(200, {"data": [{k: m[k] for k in ("id", "archivo", "gib")} for m in list_models()]})
+            self._send(200, {"data": [{k: m.get(k) for k in ("id", "archivo", "gib", "motor", "vision")} for m in list_models()]})
         else:
             self._send(404, {"error": "no existe"})
 
@@ -514,7 +655,7 @@ def install_service() -> int:
     names = ("SERVER_PORT", "SERVER_PORT_4090", "LLAMA_SERVER_BIN", "MODELS_DIR", "REMOTE_MODEL_PATH", "REMOTE_MODEL_ALIAS", "SOMA_PID_FILE",
              "SOMA_LOG_FILE", "REMOTE_CTX", "REMOTE_THREADS", "REMOTE_PREDICT", "CUDA_DEVICE", "LLAMA_EXTRA_ARGS", "SOMA_LANZADOR_PORT",
              "SOMA_LANZADOR_CLAVE", "LD_LIBRARY_PATH", "SOMA_EMB_PORT", "SOMA_EMB_BIN", "SOMA_EMB_MODEL", "SOMA_EMB_THREADS",
-             "SOMA_EMB_CTX", "SOMA_EMB_EXTRA_ARGS", "SOMA_EMB_PID_FILE", "SOMA_EMB_LOG_FILE")
+             "SOMA_EMB_CTX", "SOMA_EMB_EXTRA_ARGS", "SOMA_EMB_PID_FILE", "SOMA_EMB_LOG_FILE", "STRATA_BIN", "STRATA_PERFILES", "STRATA_PERFIL", "STRATA_EXTRA_ARGS")
     env = "".join(f'Environment="{n}={os.environ[n]}"\n' for n in names if n in os.environ)   # conserva la configuracion de ahora
     unit = unit_dir / "soma-lanzador.service"
     unit.write_text(UNIT.format(python=sys.executable, script=Path(__file__).resolve(), env=env))
