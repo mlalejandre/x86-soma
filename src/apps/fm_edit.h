@@ -94,9 +94,10 @@ static inline int fm_ed_name_ok(const char *n)
 /* Mi unidad: el explorador solo entra en /usuario y sus carpetas; sin "..", sin otra raiz */
 static inline int fm_ed_ruta_ok(const char *p)
 {
-    static const char *r = "/usuario";
+    static const char *r = "/usuario", *u = "/usb";            /* SOMA_363_ACCESO: y los medios USB externos */
     if (!p) return 0;
-    uint32_t i = 0; for (; r[i]; ++i) if (p[i] != r[i]) return 0;
+    uint32_t i = 0; for (; r[i]; ++i) if (p[i] != r[i]) break;
+    if (r[i]) { for (i = 0; u[i]; ++i) if (p[i] != u[i]) return 0; }
     if (p[i] && p[i] != '/') return 0;
     for (const char *q = p; *q; ++q)
         if (q[0] == '.' && q[1] == '.' && (q == p || q[-1] == '/') && (q[2] == '/' || q[2] == '\0')) return 0;

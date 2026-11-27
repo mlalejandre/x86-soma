@@ -42,6 +42,14 @@ int xhci_msc_read(uint64_t lba, uint32_t n, void *buf);                     /* n
 int xhci_msc_write(uint64_t lba, uint32_t n, const void *buf);
 int xhci_msc_write_nosync(uint64_t lba, uint32_t n, const void *buf);   /* SOMA_162: sin SYNCHRONIZE CACHE */
 int xhci_msc_sync(void);
+/* SOMA_363_ACCESO: varios discos USB. El "primario" es el del sistema (lo elige usbdisk); las funciones sin _n usan ese. */
+int xhci_msc_count(void);
+const struct xhci_msc_info *xhci_msc_get_n(int i);
+int xhci_msc_read_n(int i, uint64_t lba, uint32_t n, void *buf);
+int xhci_msc_write_n(int i, uint64_t lba, uint32_t n, const void *buf);     /* sin SYNCHRONIZE CACHE (xhci_msc_sync_n) */
+int xhci_msc_sync_n(int i);
+int xhci_msc_primario(void);
+void xhci_msc_pon_primario(int i);
 uint32_t xhci_msc_generation(void);                                  /* cambia cada vez que el disco USB se reinicia */
 int xhci_rescanning(void);
 int xhci_probe(struct xhci_info *o);               /* 0 = controlador activo y puertos enumerados */

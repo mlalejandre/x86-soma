@@ -5,6 +5,7 @@
  *           -> 4 Reparar (hasta 3 rondas) -> 5 Revision -> 6 Entrega.
  * Copia de seguridad previa y rollback automatico si el resultado final no compila.
  */
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include "lang.h"
 #include "coder_app.h"
 #include "fb.h"
@@ -667,13 +668,22 @@ static int cdr_path_allowed(const char *p)
     return 1;
 }
 
+/* SOMA_363_ACCESO: los programas nuevos van a /usuario/Proyectos (sin unidad del usuario, a /workspace como antes) */
+static const char *cdr_base(void)
+{
+    static char b[64];
+    if (!acceso_usuario() || acceso_carpeta(ACC_PROYECTOS, b, sizeof b - 1) != 0) return "/workspace/";
+    uint32_t n = 0; while (b[n]) n++;
+    b[n] = '/'; b[n + 1] = 0;
+    return b;
+}
 static int cdr_normalize_target(const char *in, char *out, uint32_t cap)
 {
     uint32_t i = 0, n;
     while (in[i] == ' ') i++;
     if (!in[i]) return -1;
     out[0] = '\0';
-    if (in[i] != '/') cdr_copy(out, cap, "/workspace/");
+    if (in[i] != '/') cdr_copy(out, cap, cdr_base());
     n = cdr_len(out);
     while (in[i] && n + 1 < cap) {
         out[n++] = (in[i] == ' ') ? '_' : in[i];
@@ -1045,7 +1055,7 @@ static void coder_start_creation(void)
      * y nunca se pisa un programa existente: crear es crear, no modificar la calculadora. */
     {
         int deflt = !input_create_file[0] || (cdr_eq(input_create_file, "/workspace/calc.soma") && !cdr_has_ci(input_create_prompt, "calc"));
-        if (input_create_file[0] && input_create_file[0] != '/') { char t[96]; cdr_copy(t, sizeof t, "/workspace/"); cdr_cat(t, sizeof t, input_create_file); cdr_copy(input_create_file, sizeof input_create_file, t); }
+        if (input_create_file[0] && input_create_file[0] != '/') { char t[96]; cdr_copy(t, sizeof t, cdr_base()); cdr_cat(t, sizeof t, input_create_file); cdr_copy(input_create_file, sizeof input_create_file, t); }
         if (!deflt && !cdr_is_prog(input_create_file)) cdr_cat(input_create_file, sizeof input_create_file, cdr_ext_for(input_create_prompt));
         if (deflt || vfs_size(input_create_file) > 0) {
             char t[96], base[96];
@@ -1561,7 +1571,7 @@ static void ide_action(int act)
     case CE_ACT_SAVE: ide_save(); break;
     case CE_ACT_RUN: ide_run(); break;
     case CE_ACT_VERIFY: ide_verify(); break;
-    case CE_ACT_NEW: ce_new("/workspace/nuevo.soma"); ce_prompt(CE_PR_SAVEAS); ide_say("Archivo nuevo: escribe la ruta y pulsa Intro (o Esc y guardalo mas tarde).", CDR_C_AMBER); break;
+    case CE_ACT_NEW: { char t[96]; cdr_copy(t, sizeof t, cdr_base()); cdr_cat(t, sizeof t, "nuevo.soma"); ce_new(t); } ce_prompt(CE_PR_SAVEAS); ide_say("Archivo nuevo: escribe la ruta y pulsa Intro (o Esc y guardalo mas tarde).", CDR_C_AMBER); break;
     case CE_ACT_OPEN: { char p[128]; cdr_copy(p, sizeof p, ce_prompt_value()); if (p[0] != '/') { ide_say("La ruta debe empezar por /", CDR_C_RED); break; } ide_open(p); break; }
     case CE_ACT_SAVEAS: {
         char p[128]; cdr_copy(p, sizeof p, ce_prompt_value());
@@ -1981,7 +1991,7 @@ static void ui_do_rename(void)
 {
     if (project_selected < 0 || project_selected >= project_count) return;
     char np[96]; cdr_copy(np, sizeof np, ui_renbuf);
-    if (np[0] != '/') { char t[96]; cdr_copy(t, sizeof t, "/workspace/"); cdr_cat(t, sizeof t, np); cdr_copy(np, sizeof np, t); }
+    if (np[0] != '/') { char t[96]; cdr_copy(t, sizeof t, cdr_base()); cdr_cat(t, sizeof t, np); cdr_copy(np, sizeof np, t); }
     const char *op = projects[project_selected].path;
     if (!cdr_is_prog(np)) cdr_cat(np, sizeof np, cdr_ext_of(op));
     if (cdr_eq(np, op)) { cdr_copy(ui_pmsg, sizeof ui_pmsg, "Es la misma ruta."); ui_pmsg_col = CDR_C_AMBER; return; }
@@ -2286,7 +2296,7 @@ void coder_pick_target(const char *mission, char *out, uint32_t cap)
             char t[96]; uint32_t n = (uint32_t)(p + 5 - b); if (n > sizeof t - 1) n = sizeof t - 1;
             for (uint32_t i = 0; i < n; i++) t[i] = b[i];
             t[n] = 0;
-            if (t[0] == '/') cdr_copy(out, cap, t); else { cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, t); }
+            if (t[0] == '/') cdr_copy(out, cap, t); else { cdr_copy(out, cap, cdr_base()); cdr_cat(out, cap, t); }
             return;
         }
     }
@@ -2314,9 +2324,9 @@ void coder_pick_target(const char *mission, char *out, uint32_t cap)
     }
     if (!name[0]) cdr_copy(name, sizeof name, "app");
     const char *x = cdr_ext_for(mission);                            /* SOMA_239: .py si se programa en Python; SOMA_265_CC: .c en C */
-    cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, name); cdr_cat(out, cap, x);
+    cdr_copy(out, cap, cdr_base()); cdr_cat(out, cap, name); cdr_cat(out, cap, x);
     for (uint32_t k = 2; vfs_size(out) > 0 && k < 100; k++) {          /* PARCHE 098: crear nunca pisa otro programa */
-        cdr_copy(out, cap, "/workspace/"); cdr_cat(out, cap, name); cdr_cat(out, cap, "_"); cdr_cat_u32(out, cap, k); cdr_cat(out, cap, x);
+        cdr_copy(out, cap, cdr_base()); cdr_cat(out, cap, name); cdr_cat(out, cap, "_"); cdr_cat_u32(out, cap, k); cdr_cat(out, cap, x);
     }
 }
 
@@ -2378,7 +2388,7 @@ int coder_run_mission(const char *target_in, const char *mission, char *out, uin
     static struct cc_result cr;
     char target[128];
     uint32_t p = 0;
-    if (target_in && target_in[0]) { if (target_in[0] == '/') cdr_copy(target, sizeof target, target_in); else { cdr_copy(target, sizeof target, "/workspace/"); cdr_cat(target, sizeof target, target_in); } }
+    if (target_in && target_in[0]) { if (target_in[0] == '/') cdr_copy(target, sizeof target, target_in); else { cdr_copy(target, sizeof target, cdr_base()); cdr_cat(target, sizeof target, target_in); } }
     else coder_pick_target(mission, target, sizeof target);
     cm_trace_n = 0; cm_trace[0] = 0;
     cm_tr_add("Mision: ", 16); cm_tr_add(mission, 600); cm_tr_add("\nArchivo: ", 16); cm_tr_add(target, 128); cm_tr_add("\n", 2);

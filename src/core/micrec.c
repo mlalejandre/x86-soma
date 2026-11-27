@@ -1,4 +1,6 @@
 /* SOMA_177_T480S: motor de grabacion del microfono. Ver micrec.h */
+#include "acceso.h"      /* SOMA_363_ACCESO */
+#include "fs.h"
 #include <stdint.h>
 #include <stddef.h>
 #include "micrec.h"
@@ -440,6 +442,22 @@ int micrec_save(const char *path, char *used, uint32_t max)
 {
     if (rec_bytes < 2) return -61;
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
+    if ((!path || !*path) && acceso_usuario()) {                  /* SOMA_363_ACCESO: las grabaciones, a /usuario/Audio */
+        char dir[64], nm[128]; struct acc_sec as; acceso_carpeta(ACC_AUDIO, dir, sizeof dir);
+        if (acceso_libre(dir, "grab_", ".wav", nm, sizeof nm) != 0 || acceso_sec_abre(&as, nm) != 0) return -28;
+        uint8_t hdr[44]; wav_make_header(hdr, 1, rec_rate, (uint32_t)rec_bytes);
+        int rc = acceso_sec_pon(&as, 0, hdr, 44) ? -28 : 0;
+        uint8_t *buf = (uint8_t *)kmalloc(65536); if (!buf) rc = -12;
+        uint64_t off = 0;
+        while (rc == 0 && off < rec_bytes) { uint32_t n = rec_read(off, buf, 65536); if (!n) break; if (acceso_sec_pon(&as, 44 + off, buf, n)) { rc = -28; break; } off += n; }
+        if (buf) kfree(buf);
+        if (rc == 0 && off != rec_bytes) rc = -5;
+        if (acceso_sec_fin(&as, rc == 0) != 0 && rc == 0) rc = -28;
+        if (rc) return rc;
+        unsaved = 0;
+        if (used) { uint32_t q = 0; ap_s(used, max, &q, nm); }
+        return 0;
+    }
     if (!fs) { (void)e; return -19; }
     char name[BIGFS_PATH_MAX + 1]; uint32_t p = 0;
     if (path && *path) ap_s(name, sizeof name, &p, path);
@@ -479,13 +497,18 @@ int micrec_load(const char *path)
     if (!path || !*path) return -22;
     micrec_stop();
     for (int i = 0; i < 100 && (cur_mode != MR_IDLE || play_alive); ++i) thread_sleep(5);
-    int e = 0; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return e < 0 ? e : -19;
-    uint32_t ino; struct bigfs_stat st;
-    if (bigfs_lookup(fs, path, &ino) != (int)BIGFS_T_FILE || bigfs_stat(fs, ino, &st) < 0) return -2;
+    int e = 0; struct bigfs *fs = 0;
+    int vf = acceso_ruta_ok(path);                                 /* SOMA_363_ACCESO: tambien de /usuario y /usb */
+    uint32_t ino = 0; struct bigfs_stat st;
+    if (vf) { int t = vfs_size(path); if (t < 44) return -2; st.size = (uint64_t)t; }
+    else {
+        fs = bigfs_sys(&e);
+        if (!fs) return e < 0 ? e : -19;
+        if (bigfs_lookup(fs, path, &ino) != (int)BIGFS_T_FILE || bigfs_stat(fs, ino, &st) < 0) return -2;
+    }
     uint8_t *buf = (uint8_t *)kmalloc(32768);
     if (!buf) return -12;
-    int64_t g = bigfs_read(fs, ino, 0, buf, 4096);
+    int64_t g = vf ? vfs_read_at(path, 0, buf, 4096) : bigfs_read(fs, ino, 0, buf, 4096);
     struct wav_info w;
     int r = g > 0 ? wav_parse(buf, (size_t)g, &w) : WAV_E_SHORT;
     if (r != WAV_OK) { kfree(buf); setmsg(wav_strerror(r)); return -22; }
@@ -501,7 +524,7 @@ int micrec_load(const char *path)
     int16_t mono[8192 / 2];
     while (done < frames && ok) {
         uint64_t want = frames - done; if (want > 8192 / 4) want = 8192 / 4;
-        int64_t n = bigfs_read(fs, ino, w.data_offset + done * fr, buf, want * fr);
+        int64_t n = vf ? vfs_read_at(path, w.data_offset + done * fr, buf, (uint32_t)(want * fr)) : bigfs_read(fs, ino, w.data_offset + done * fr, buf, want * fr);
         if (n <= 0) break;
         uint32_t k = (uint32_t)n / fr;
         for (uint32_t i = 0; i < k; ++i) {
@@ -521,6 +544,7 @@ int micrec_load(const char *path)
 
 int micrec_delete(const char *path)
 {
+    if (acceso_ruta_ok(path)) return vfs_delete(path);            /* SOMA_363_ACCESO */
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) return e < 0 ? e : -19;
     return bigfs_unlink(fs, path);

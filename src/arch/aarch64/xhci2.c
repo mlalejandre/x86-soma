@@ -23,4 +23,11 @@
 #define xhci_rescanning       xhci2_rescanning
 #define xhci_autostart_early  xhci2_autostart_early
 #define xhci_msc_report       xhci2_msc_report       /* SOMA_175A: la del 171B (en ARM se compilaba dos veces) */
+#define xhci_msc_count        xhci2_msc_count        /* SOMA_363_ACCESO */
+#define xhci_msc_get_n        xhci2_msc_get_n
+#define xhci_msc_read_n       xhci2_msc_read_n
+#define xhci_msc_write_n      xhci2_msc_write_n
+#define xhci_msc_sync_n       xhci2_msc_sync_n
+#define xhci_msc_primario     xhci2_msc_primario
+#define xhci_msc_pon_primario xhci2_msc_pon_primario
 #include "../x86_64/xhci.c"

@@ -69,7 +69,19 @@ int  vfs_usuario_puede_escribir(const char *name);   /* 1 si se permite escribir
 /* SOMA_268_ACCESO: carpetas de la unidad del usuario (/usuario) para el gestor de archivos. 0 = bien, -1 = error o no es de una unidad */
 int  vfs_unid_mkdir(const char *name);
 int  vfs_unid_rename(const char *de, const char *a);          /* archivos y carpetas */
-int  vfs_unid_borrar_rec(const char *name);                   /* archivo, o carpeta con todo lo que contiene */   /* SOMA_193: 1 si el hilo actual es un agente y `name` es un archivo con secretos */
+int  vfs_unid_borrar_rec(const char *name);
+/* SOMA_363_ACCESO: los medios USB externos (/usb/<nombre>). Los exFAT son unidades (como /usuario); el listado de /usb y los medios FAT
+ * (solo lectura) los resuelve src/core/medios.c a traves de estas funciones (0 = sin medios). Bajo /usb nunca se crean archivos de RamFS. */
+struct vfs_medios_ops {
+    int (*es)(const char *ruta);                                           /* 1 = "/usb" o un medio FAT */
+    int (*tam)(const char *ruta, uint64_t *tam, int *es_carpeta);          /* 0 = bien */
+    int (*leer)(const char *ruta, uint64_t off, void *buf, uint32_t n);    /* bytes o <0 */
+    int (*lista)(int todo, const char *dir, char *out, uint32_t max, int consola);
+};
+extern const struct vfs_medios_ops *vfs_medios;
+int  vfs_es_usb(const char *name);                            /* la ruta empieza por /usb */
+/* SOMA_363_ACCESO: leer un trozo (para archivos grandes de /usuario y /usb sin cargarlos enteros). Bytes leidos o <0 */
+int  vfs_read_at(const char *name, uint64_t off, void *buf, uint32_t n);                   /* archivo, o carpeta con todo lo que contiene */   /* SOMA_193: 1 si el hilo actual es un agente y `name` es un archivo con secretos */
 
 /* Motor de Búsqueda Semántica y Ponderada BM25 */
 int  vfs_search_bm25(const char *query, const char *path_prefix, char *out, uint32_t max);

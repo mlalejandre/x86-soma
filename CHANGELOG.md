@@ -7,6 +7,37 @@ todavía es software experimental. Esta fase sirve para encontrar fallos con má
 Desde el parche 311, lo que llega de Internet (páginas, correo, YouTube, noticias, TLS) y el motor de IA se procesan en
 servicios aislados de ring 3; el escritorio y las aplicaciones siguen en ring 0.  <!-- SOMA_339_GITHUB -->
 
+<!-- SOMA_363_ACCESO -->
+### Un solo sitio para tus archivos: Mi unidad y los USB (363)
+- **Todos los programas guardan y abren en Mi unidad** (`/usuario`), cada uno en su carpeta: «Guardar imagen» del navegador
+  va a Imágenes, las descargas a Descargas, Paint a Imágenes/Dibujos, la cámara a Imágenes/Fotos y Vídeos, las capturas a
+  Imágenes/Capturas, Vídeos y Audio, la Grabadora a Audio, el Bloc de notas y la Maquetación a Documentos, la Hoja de cálculo a
+  Documentos/Hojas de cálculo y el programador y el editor de código a Proyectos. Las subcarpetas se crean solas la primera vez.
+  Antes muchos guardaban en `/workspace` o en el almacén y luego no se podía abrir lo guardado.
+- **Pendrives y discos USB externos** en `/usb/<nombre>` (Archivos, cuadros de abrir y guardar, `ls /usb`, `disco`): exFAT con
+  lectura y escritura, FAT de solo lectura; se montan solos al enchufarlos. El pendrive del sistema nunca aparece.
+- Ver `docs/PARCHE_363_ACCESO_USUARIO.md`.
+
+<!-- SOMA_362_CARGA_CEDE -->
+### El sistema ya no se frena mientras se carga un modelo de IA (362)
+- Al cargar un modelo (el de embeddings de la memoria al arrancar o tras 10 minutos sin uso, o el LLM local), el motor leía
+  cientos de MiB del pendrive dentro de una sola llamada tras otra: el disco USB espera cada transferencia girando y el reloj solo
+  desaloja a un proceso cuando lo pilla en ring 3, así que el escritorio se quedaba casi sin CPU hasta que terminaba la carga.
+  Ahora una lectura larga cede el núcleo 0 entre trozos cuando el proceso ha gastado su rodaja de 10 ms. Vale para todos los
+  programas de ring 3 (IA, voz, Python…).
+
+<!-- SOMA_361_HILOS_IA -->
+### El motor de IA local ya no va a trompicones con la memoria (361)
+- El hilo principal del motor (el que marca el paso en cada barrera de ggml) corre en el núcleo 0 junto a todo el sistema; con 8
+  hilos, los otros 7 pasaban buena parte del tiempo esperándolo. Ahora, por defecto, **un hilo por núcleo físico**: con SMT
+  (T480s: 4 núcleos, 8 hilos) se usan 4 y nunca el hermano HT del núcleo 0. Los hilos de usuario (IA y voz) se reparten por
+  núcleos físicos distintos.
+- **Un threadpool por orden**: antes llama.cpp lanzaba y recogía los hilos en cada grafo (en el chat local, en cada token).
+- `ia hilos [N|auto]` fija los hilos de cálculo para medir; `ia` enseña los que se usan. Nunca más que núcleos libres + 1: antes,
+  si la voz cogía núcleos a mitad de una orden, el motor podía caerse al crear hilos.
+- Memoria: el vector de la misión se calcula una vez (antes, en cada paso del agente) y se reutilizan los últimos 4 vectores
+  durante 10 minutos; los embeddings pendientes en segundo plano se cortan en cuanto llega una pregunta.
+
 <!-- SOMA_360_HOJA_GRAFICOS -->
 ### Hoja de cálculo: gráficos, IA y el resto de SOMA (360)
 - **Gráficos** de columnas, barras, líneas, tarta, área y dispersión: botón de gráficos de la barra (con la selección o la tabla

@@ -207,8 +207,27 @@ static int json_esc(char *o, uint32_t cap, uint32_t *p, const char *s, uint32_t 
     o[*p] = 0;
     return 1;
 }
+/* SOMA_361_HILOS_IA: los ultimos vectores calculados. El agente pide el contexto de memoria en CADA paso con la misma mision, y
+ * con el motor local cada peticion es una pasada entera de bge-m3 que ocupa todos los nucleos: se reutiliza el vector.
+ * Se mira y se rellena con g_emb_mx cogido. La clave lleva el modelo y el motor: si cambian, no se confunde. */
+#define EMB_CACHE_N  4
+#define EMB_CACHE_MS (10u * 60u * 1000u)
+static struct { uint64_t h, t; uint32_t len, dim; int8_t v[MC_DIM_MAX]; } g_ecache[EMB_CACHE_N];
+static uint64_t emb_clave(const char *txt, uint32_t *len)
+{
+    uint64_t h = 1469598103934665603ULL; uint32_t n = 0;
+    for (; txt[n] && n < 6000; n++) { h ^= (uint8_t)txt[n]; h *= 1099511628211ULL; }
+    h ^= 0xFF; h *= 1099511628211ULL;
+    for (uint32_t i = 0; g_c.modelo[i]; i++) { h ^= (uint8_t)g_c.modelo[i]; h *= 1099511628211ULL; }
+#if defined(__x86_64__)
+    h ^= (uint64_t)(g_c.local ? 1 : 2); h *= 1099511628211ULL;
+#endif
+    *len = n;
+    return h;
+}
+
 /* 1 = vector en out (dimension en *dim); 0 = no hay servidor o no contesta (se vuelve a intentar a los 30 s) */
-static int emb_texto(const char *txt, int8_t *out, uint32_t *dim)
+static int emb_texto_c(const char *txt, int8_t *out, uint32_t *dim, int usa_cache)
 {
     static char body[3200], *resp;
 #if defined(__x86_64__)
@@ -222,6 +241,15 @@ static int emb_texto(const char *txt, int8_t *out, uint32_t *dim)
     uint64_t now = timer_get_uptime_ms();
     if (g_emb_cae_hasta && now < g_emb_cae_hasta) return 0;
     kmutex_lock(&g_emb_mx);
+    uint32_t clen = 0; uint64_t clave = emb_clave(txt, &clen);              /* SOMA_361_HILOS_IA */
+    now = timer_get_uptime_ms();                                                /* (la espera del cerrojo puede ser larga) */
+    for (int i = 0; usa_cache && i < EMB_CACHE_N; i++) {
+        if (!g_ecache[i].t || g_ecache[i].h != clave || g_ecache[i].len != clen || now - g_ecache[i].t > EMB_CACHE_MS) continue;
+        for (uint32_t k = 0; k < g_ecache[i].dim; k++) out[k] = g_ecache[i].v[k];
+        *dim = g_ecache[i].dim; g_ecache[i].t = now;
+        kmutex_unlock(&g_emb_mx);
+        return 1;
+    }
     if (!resp) resp = (char *)kmalloc(80 * 1024);
     int ok = 0;
     if (resp) {
@@ -249,13 +277,21 @@ static int emb_texto(const char *txt, int8_t *out, uint32_t *dim)
         code = llm_http_local(g_c.ip, g_c.port, "/v1/embeddings", body, resp, 80 * 1024, &r, 8000, 0);   /* SOMA_327_RED_FUERA: por netsvc */
         if (code == 200 && r.body) {
             int d = mc_parse_embedding(r.body, out, MC_DIM_MAX);
-            if (d > 0) { *dim = (uint32_t)d; g_dim_servidor = d; ok = 1; g_emb_ok++; }
+            if (d > 0) {
+                *dim = (uint32_t)d; g_dim_servidor = d; ok = 1; g_emb_ok++;
+                int vic = 0;                                                    /* SOMA_361_HILOS_IA: el hueco mas antiguo */
+                for (int i = 1; i < EMB_CACHE_N; i++) if (g_ecache[i].t < g_ecache[vic].t) vic = i;
+                g_ecache[vic].h = clave; g_ecache[vic].len = clen; g_ecache[vic].dim = (uint32_t)d;
+                for (int k = 0; k < d && k < MC_DIM_MAX; k++) g_ecache[vic].v[k] = out[k];
+                g_ecache[vic].t = timer_get_uptime_ms() | 1;
+            }
         }
         if (!ok) { g_emb_mal++; g_emb_cae_hasta = timer_get_uptime_ms() + 30000u; }
     }
     kmutex_unlock(&g_emb_mx);
     return ok;
 }
+static int emb_texto(const char *txt, int8_t *out, uint32_t *dim) { return emb_texto_c(txt, out, dim, 1); }
 
 /* SOMA_327_RED_FUERA: prueba (tools/sbx_check.py): un embedding contra el servidor de url, por el camino real (netsvc) */
 int memoria_prueba_emb(const char *url, const char *txt, uint32_t *dim)
@@ -265,7 +301,7 @@ int memoria_prueba_emb(const char *url, const char *txt, uint32_t *dim)
     uint32_t i = 0; while (url && url[i] && i + 1 < sizeof g_c.url) { g_c.url[i] = url[i]; i++; } g_c.url[i] = 0;
     g_c.motor = 2;                                     /* SOMA_329: esta prueba es la del servidor */
     conf_srv(&g_c); g_emb_cae_hasta = 0; *dim = 0;
-    int ok = emb_texto(txt, v, dim);
+    int ok = emb_texto_c(txt, v, dim, 0);              /* SOMA_361: la prueba va de verdad al servidor */
     g_c = antes; g_emb_cae_hasta = 0;
     return ok;
 }
@@ -453,6 +489,7 @@ static int embebe_pendientes_(void)
         if (id) { const struct mc_item *e = &g_m.it[id - 1]; uint32_t n = 0; while (e->texto[n] && n < MC_TEXTO_MAX) { txt[n] = e->texto[n]; n++; } txt[n] = 0; }
         kmutex_unlock(&g_mx);
         if (!id) return hechos;
+        if (g_agentes) return hechos;           /* SOMA_361_HILOS_IA: llega una pregunta: el motor es para ella, el resto luego */
         uint32_t dim = 0;
         if (!emb_texto(txt, vec, &dim)) return hechos;
         kmutex_lock(&g_mx); mc_set_vec(&g_m, id, vec, dim); kmutex_unlock(&g_mx);
@@ -1709,7 +1746,7 @@ int memoria_cmd(const char *args, char *out, uint32_t max)
         if (!g_c.srv) { op(out, max, &p, "No hay servidor de embeddings configurado: memoria config emb_url http://IP:8089"); return 1; }
         g_emb_cae_hasta = 0;
         uint64_t t0 = timer_get_uptime_ms();
-        if (emb_texto("prueba de embeddings", v, &d)) { op(out, max, &p, g_c.local ? "Motor local de embeddings OK: " : "Servidor de embeddings OK: "); opd(out, max, &p, d); op(out, max, &p, " dimensiones, "); opd(out, max, &p, (uint32_t)(timer_get_uptime_ms() - t0)); op(out, max, &p, " ms"); }
+        if (emb_texto_c("prueba de embeddings", v, &d, 0)) { op(out, max, &p, g_c.local ? "Motor local de embeddings OK: " : "Servidor de embeddings OK: "); opd(out, max, &p, d); op(out, max, &p, " dimensiones, "); opd(out, max, &p, (uint32_t)(timer_get_uptime_ms() - t0)); op(out, max, &p, " ms"); }
         else if (g_c.local) { op(out, max, &p, "El motor local no pudo calcular el embedding con "); op(out, max, &p, g_c.ruta_local[0] ? g_c.ruta_local : g_c.modelo); op(out, max, &p, " (ia instalar "); op(out, max, &p, g_c.modelo); op(out, max, &p, " lo copia del pendrive). Mientras, la memoria busca por palabras."); }
         else { op(out, max, &p, "El servidor "); op(out, max, &p, g_c.url); op(out, max, &p, " no contesta a /v1/embeddings (arrancalo con: memoria servidor arrancar). Mientras, la memoria busca por palabras."); }
         return 1;

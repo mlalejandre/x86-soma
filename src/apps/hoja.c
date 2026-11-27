@@ -10,6 +10,7 @@
 #include "bigfs_glue.h"
 #if defined(__x86_64__) && !defined(WEB_HOST_TEST)
 #include "sandbox.h"
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #endif
 
 void *hj_alloc(uint32_t n) { return kmalloc(n ? n : 1); }
@@ -48,8 +49,8 @@ static int ruta_valida(const char *r, int escribir)
 {
     if (!r || r[0] != '/' || sl(r) >= 190 || !hoja_formato_ruta(r)) return 0;
     for (const char *z = r; *z; ++z) { if ((uint8_t)*z < 32 || *z == '\\') return 0; if (z[0] == '/' && z[1] == '.' ) return 0; }
-    if (!escribir) return 1;
-    return emp(r, "/usuario/") || emp(r, "/tmp/");
+    if (!escribir) return emp(r, "/usuario/") || emp(r, "/usb/") || emp(r, "/tmp/") || emp(r, "/workspace/");   /* SOMA_363_ACCESO */
+    return emp(r, "/usuario/") || emp(r, "/usb/") || emp(r, "/tmp/");
 }
 static uint8_t *lee_archivo(const char *ruta, uint32_t *n, uint32_t max)
 {
@@ -107,6 +108,15 @@ void hoja_toca(int i) { struct hj_libro *l = hoja_libro(i); if (!l) return; l->v
 int hoja_actual(void) { return g_actual >= 0 && g_doc[g_actual] ? g_actual : -1; }
 void hoja_pon_actual(int i) { if (i >= 0 && i < HOJA_LIBROS && g_doc[i]) { g_actual = i; ++g_ver; } }
 static int hueco(void) { for (int i = 0; i < HOJA_LIBROS; ++i) if (!g_doc[i]) return i; return -1; }
+/* SOMA_363_ACCESO: los libros nuevos van a /usuario/Documentos/Hojas de calculo (sin unidad del usuario, a /tmp) */
+const char *hoja_carpeta(void)
+{
+    static char d[96];
+    acceso_carpeta(ACC_HOJAS, d, sizeof d - 1);
+    uint32_t n = 0; while (d[n]) n++;
+    d[n] = '/'; d[n + 1] = 0;
+    return d;
+}
 int hoja_nuevo(const char *nombre)
 {
     ini();
@@ -116,7 +126,7 @@ int hoja_nuevo(const char *nombre)
     if (hj_libro_nuevo(&d->l)) { kfree(d); return -1; }
     char nb[96]; cpy(nb, sizeof nb, nombre && nombre[0] ? nombre : "Libro");
     for (char *z = nb; *z; ++z) if (*z == '/' || *z == '\\' || *z == ':' || (uint8_t)*z < 32) *z = '_';
-    uint32_t p = 0; put(d->ruta, sizeof d->ruta, &p, "/usuario/"); put(d->ruta, sizeof d->ruta, &p, nb); if (!hoja_formato_ruta(d->ruta)) put(d->ruta, sizeof d->ruta, &p, ".xlsx");
+    uint32_t p = 0; put(d->ruta, sizeof d->ruta, &p, hoja_carpeta()); put(d->ruta, sizeof d->ruta, &p, nb);   /* SOMA_363 */ if (!hoja_formato_ruta(d->ruta)) put(d->ruta, sizeof d->ruta, &p, ".xlsx");
     d->formato = hoja_formato_ruta(d->ruta); d->ver_guardada = d->l.version;
     g_doc[i] = d; g_actual = i; ++g_ver;
     return i;
@@ -225,8 +235,15 @@ static void ver_rango(struct hj_libro *l, int h, uint32_t f1, uint32_t c1, uint3
         if (*p + 400 >= max) { put(o, max, p, "\342\200\246\n"); break; }
     }
 }
-/* "gastos.xlsx" -> "/usuario/gastos.xlsx" */
-static const char *ruta_entera(const char *r, char *b, uint32_t cap) { if (!*r || *r == '/') return r; uint32_t p = 0; b[0] = 0; put(b, cap, &p, "/usuario/"); put(b, cap, &p, r); return b; }
+/* "gastos.xlsx" -> "/usuario/Documentos/Hojas de calculo/gastos.xlsx" (SOMA_363_ACCESO; si no esta ahi pero si en /usuario, esa) */
+static const char *ruta_entera(const char *r, char *b, uint32_t cap)
+{
+    if (!*r || *r == '/') return r;
+    uint32_t p = 0; b[0] = 0; put(b, cap, &p, "/usuario/"); put(b, cap, &p, r);
+    if (vfs_size(b) >= 0) return b;                                      /* los de antes del 363, en la raiz de Mi unidad */
+    p = 0; b[0] = 0; put(b, cap, &p, hoja_carpeta()); put(b, cap, &p, r);
+    return b;
+}
 static int col_de(const char *s, uint32_t *c) { uint32_t v = 0; int n = 0; s = sin_blancos(s); while (((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z')) && n < 4) { v = v * 26 + (uint32_t)(baja(*s) - 'a' + 1); ++s; ++n; } if (!n || n > 3 || v > HJ_COLS) return 0; *c = v - 1; return n; }
 int hoja_cmd(const char *args, char *out, uint32_t max)
 {

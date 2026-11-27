@@ -14,6 +14,7 @@
 #include "fs.h"
 #include "unidades.h"      /* SOMA_268_ACCESO: /usuario */
 #include "agent_policy.h"   /* SOMA_268_ACCESO: usuario_ruta_escribible */
+#include "medios.h"         /* SOMA_363_ACCESO: /usb */
 #include "mem.h"
 #include "arch.h"
 #include "rtc.h"
@@ -335,8 +336,9 @@ static struct bigfs *fm_big(void) {
 static char ram_buf[4096];
 
 /* SOMA_268_ACCESO: "Mi unidad" (/usuario) es donde trabaja el gestor; el resto del sistema se puede ver pero no cambiar (solo /tmp, temporal) */
-static int fm_es_unid(const char *p) { return p && str_starts_with(p, "/usuario") && (p[8] == '/' || p[8] == '\0'); }
+static int fm_es_unid(const char *p) { return p && ((str_starts_with(p, "/usuario") && (p[8] == '/' || p[8] == '\0')) || vfs_es_usb(p)); }   /* SOMA_363: y /usb */
 static int fm_puede(const char *p) {
+    if (vfs_es_usb(p) && unid_ruta(p, 0) < 0) { fm_say(medios_es_raiz(p) || str_eq(p, "/usb") ? "En /usb solo estan los medios: entra en uno" : "Este medio USB es de solo lectura (FAT)"); return 0; }   /* SOMA_363 */
     if (usuario_ruta_escribible(p)) return 1;
     fm_say("Solo puedes cambiar archivos en Mi unidad (/usuario)");
     return 0;
@@ -572,13 +574,44 @@ static void fm_update_status(void) {
 static int fm_match(const char *name) { return !fm_filter_len || str_contains_ci(name, fm_filter); }
 
 /* SOMA_268_ACCESO: el contenido de una carpeta de /usuario (exFAT): se lee directamente de la unidad, con tamanos y carpetas reales */
+/* SOMA_363_ACCESO: /usb (los medios) y los medios FAT (solo lectura) */
+static void fm_reload_usb(void) {
+    if (medios_es_raiz(current_folder) || str_eq(current_folder, "/usb")) {
+        for (int i = 0; i < medios_n() && file_count < MAX_FM_FILES; ++i) {
+            struct medio_info mi; if (medios_info(i, &mi) || mi.tipo == MEDIO_OTRO || !fm_match(mi.etiqueta)) continue;
+            struct fm_item *it = &file_list[file_count++];
+            fm_item_clear(it);
+            str_copy(it->name, mi.etiqueta, sizeof(it->name)); str_copy(it->full_path, mi.ruta, sizeof(it->full_path));
+            it->is_dir = 1;
+        }
+        if (!file_count) fm_say("No hay pendrives ni discos USB externos (el del sistema no se muestra)");
+        return;
+    }
+    int cap = 128, total = 0;
+    struct fat_dirent *d = (struct fat_dirent *)kmalloc((size_t)cap * sizeof *d);
+    if (!d) { fm_say("Memoria insuficiente"); return; }
+    int n = medios_fat_listar(current_folder, d, cap, &total);
+    if (n < 0) { fm_say("Ese medio USB ya no esta"); kfree(d); return; }
+    for (int i = 0; i < n && file_count < MAX_FM_FILES; ++i) {
+        if (d[i].name[0] == '.' || !fm_match(d[i].name)) continue;
+        struct fm_item *it = &file_list[file_count++];
+        fm_item_clear(it);
+        str_copy(it->name, d[i].name, sizeof(it->name));
+        fm_build_path(current_folder, d[i].name, it->full_path, sizeof(it->full_path));
+        it->is_dir = d[i].is_dir ? 1 : 0;
+        if (!it->is_dir) { it->size = d[i].size; it->cat = (uint8_t)fm_cat_of(d[i].name); }
+    }
+    if (total > n) fm_say("Hay mas elementos de los que caben en la vista");
+    kfree(d);
+}
 static void fm_reload_unid(void) {
+    if (vfs_es_usb(current_folder) && unid_ruta(current_folder, 0) < 0) { fm_reload_usb(); return; }   /* SOMA_363_ACCESO */
     int cap = MAX_FM_FILES, total = 0, n;                       /* un nombre exFAT ocupa hasta 768 bytes: ~200 KiB para 256 entradas */
     struct exfat_dirent *d = (struct exfat_dirent *)kmalloc((size_t)cap * sizeof *d);
     if (!d) { cap = 64; d = (struct exfat_dirent *)kmalloc((size_t)cap * sizeof *d); }
     if (!d) { fm_say("Memoria insuficiente"); return; }
     n = unid_listar(current_folder, d, cap, &total);
-    if (n < 0) { fm_say("La unidad del usuario no esta disponible en este pendrive"); kfree(d); return; }
+    if (n < 0) { fm_say(vfs_es_usb(current_folder) ? "Ese medio USB ya no esta" : "La unidad del usuario no esta disponible en este pendrive"); kfree(d); return; }
     for (int i = 0; i < n && file_count < MAX_FM_FILES; ++i) {
         if (!fm_match(d[i].name)) continue;
         struct fm_item *it = &file_list[file_count++];
@@ -683,6 +716,7 @@ static void fm_reload_lib(void) {
 
 static void fm_update_preview(int idx);
 static void fm_side_rebuild(void);
+static void fm_side_medios(void);
 
 static void fm_reload(void) {
     file_count = 0; selected_idx = -1;
@@ -692,6 +726,7 @@ static void fm_reload(void) {
     else fm_reload_lib();
     fm_sort_list();
     if (fm_view == FV_RAM && str_eq(current_folder, "/usuario")) fm_side_rebuild();      /* SOMA_273_ARCHIVOS */
+    fm_side_medios();                                                                   /* SOMA_363_ACCESO */
     if (scroll_offset > file_count - 1) scroll_offset = 0;
     if (scroll_offset < 0) scroll_offset = 0;
     fm_update_status();
@@ -746,7 +781,7 @@ void fm_open_folder(const char *folder) {
 static void fm_go_up(void) {
     if (fm_view == FV_CAT) { fm_goto(FV_LIB, 0, 0); return; }
     if (fm_view == FV_LIB) return;
-    if (str_eq(current_folder, "/") || str_eq(current_folder, "/usuario")) return;      /* SOMA_273_ARCHIVOS: no se sube de Mi unidad */
+    if (str_eq(current_folder, "/") || str_eq(current_folder, "/usuario") || str_eq(current_folder, "/usb")) return;      /* SOMA_273_ARCHIVOS: no se sube de Mi unidad (SOMA_363: ni de /usb) */
     char parent[FM_PATH];
     fm_get_parent_folder(current_folder, parent, sizeof(parent));
     fm_goto(fm_view, parent, 0);
@@ -1118,13 +1153,14 @@ struct side_row { uint8_t kind; /* 0 titulo, 1 carpeta */ const char *label; con
 #define SIDE_MAX 24
 static char side_lab[SIDE_MAX][64], side_pat[SIDE_MAX][FM_PATH];
 static struct side_row side_rows[SIDE_MAX] = { {0, "MI UNIDAD", 0, 0}, {1, "Mi unidad", "/usuario", 0} };
-static int side_n = 2;
+static int side_n = 2, side_n_carpetas = 2;                      /* SOMA_363: detras de las carpetas, los medios USB */
+static uint32_t side_med_ver;
 #define SIDE_N side_n
 #define SIDE_HEAD_H 28
 #define SIDE_ITEM_H 26
 static void fm_side_rebuild(void) {
     if (fm_filter_len) return;
-    side_n = 2; int dirs = 0;
+    side_n = 2; side_n_carpetas = 2; side_med_ver = 0; int dirs = 0;
     for (int i = 0; i < file_count; ++i) if (file_list[i].is_dir) dirs++;
     if (!dirs) return;
     side_rows[side_n].kind = 0; side_rows[side_n].label = "CARPETAS"; side_rows[side_n].path = 0; side_rows[side_n].cat = 0; side_n++;
@@ -1132,6 +1168,24 @@ static void fm_side_rebuild(void) {
         if (!file_list[i].is_dir) continue;
         int k = side_n;
         str_copy(side_lab[k], file_list[i].name, sizeof(side_lab[k])); str_copy(side_pat[k], file_list[i].full_path, sizeof(side_pat[k]));
+        side_rows[k].kind = 1; side_rows[k].label = side_lab[k]; side_rows[k].path = side_pat[k]; side_rows[k].cat = 0; side_n++;
+    }
+    side_n_carpetas = side_n;
+}
+/* SOMA_363_ACCESO: "USB" en la barra lateral, con cada pendrive o disco externo (se rehace al enchufar o quitar) */
+static void fm_side_medios(void) {
+    uint32_t v = medios_version();
+    if (v == side_med_ver && side_n >= side_n_carpetas) return;
+    side_med_ver = v; side_n = side_n_carpetas;
+    int hay = 0;
+    for (int i = 0; i < medios_n(); ++i) { struct medio_info mi; if (!medios_info(i, &mi) && mi.tipo != MEDIO_OTRO) hay = 1; }
+    if (!hay || side_n + 2 > SIDE_MAX) return;
+    side_rows[side_n].kind = 0; side_rows[side_n].label = "USB"; side_rows[side_n].path = 0; side_rows[side_n].cat = 0; side_n++;
+    for (int i = 0; i < medios_n() && side_n < SIDE_MAX; ++i) {
+        struct medio_info mi; if (medios_info(i, &mi) || mi.tipo == MEDIO_OTRO) continue;
+        int k = side_n;
+        str_copy(side_lab[k], mi.etiqueta, sizeof(side_lab[k]));          /* (los de solo lectura lo dicen al intentar cambiar algo) */
+        str_copy(side_pat[k], mi.ruta, sizeof(side_pat[k]));
         side_rows[k].kind = 1; side_rows[k].label = side_lab[k]; side_rows[k].path = side_pat[k]; side_rows[k].cat = 0; side_n++;
     }
 }
@@ -1170,10 +1224,12 @@ static void fm_build_crumbs(const struct fl *L) {
         CR_ADD(FV_LIB, 0, "Biblioteca", 10, 0);
         if (fm_view == FV_CAT) CR_ADD(FV_CAT, fm_cat, cat_name[fm_cat], str_len(cat_name[fm_cat]), 0);
     } else {
-        if (fm_view == FV_RAM) CR_ADD(FV_RAM, 0, "Mi unidad", 9, 8);
+        int usb = fm_view == FV_RAM && vfs_es_usb(current_folder);                 /* SOMA_363_ACCESO */
+        if (usb) CR_ADD(FV_RAM, 0, "USB", 3, 4);
+        else if (fm_view == FV_RAM) CR_ADD(FV_RAM, 0, "Mi unidad", 9, 8);
         else CR_ADD(FV_BIG, 0, "BIGFS", 5, 1);
         const char *p = current_folder;
-        uint32_t pos = (fm_view == FV_RAM && fm_es_unid(current_folder)) ? 8 : 0;
+        uint32_t pos = usb ? 4 : (fm_view == FV_RAM && fm_es_unid(current_folder)) ? 8 : 0;
         while (p[pos]) {
             while (p[pos] == '/') pos++;
             if (!p[pos]) break;

@@ -1,4 +1,5 @@
 /* PARCHE 093: editor de codigo profesional para SOMA Studio (Coder). Ver codeedit.h. */
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include "codeedit.h"
 #include "fb.h"
 #include "gui_font.h"
@@ -271,7 +272,15 @@ int ce_load(const char *p)
     rebuild(); ce_cur = ce_anc = 0; top = left = 0; want_col = -1; dirty = 0; err_line = 0; err_msg[0] = 0;
     return d ? 1 : 0;
 }
-void ce_new(const char *p) { hist_clear(); scpy(path_, p && *p ? p : "/workspace/nuevo.soma", sizeof path_); N = 0; rebuild(); ce_cur = ce_anc = 0; top = left = 0; dirty = 0; err_line = 0; err_msg[0] = 0; }
+static const char *ce_nuevo_def(void)                                   /* SOMA_363_ACCESO: /usuario/Proyectos/nuevo.soma */
+{
+    static char b[96];
+    if (!acceso_usuario() || acceso_carpeta(ACC_PROYECTOS, b, sizeof b - 12) != 0) return "/workspace/nuevo.soma";
+    uint32_t n = 0; while (b[n]) n++;
+    const char *t = "/nuevo.soma"; while (*t) b[n++] = *t++; b[n] = 0;
+    return b;
+}
+void ce_new(const char *p) { hist_clear(); scpy(path_, p && *p ? p : ce_nuevo_def(), sizeof path_); N = 0; rebuild(); ce_cur = ce_anc = 0; top = left = 0; dirty = 0; err_line = 0; err_msg[0] = 0; }
 int ce_save(void)
 {
     if (vfs_write(path_, B, N) < 0) return 0;
@@ -448,7 +457,7 @@ void ce_prompt(int kind)
         else scpy(pr_a, find_s, sizeof pr_a);
         scpy(find_s, pr_a, sizeof find_s);
     } else if (kind == CE_PR_GOTO) pr_a[0] = 0;
-    else if (kind == CE_PR_OPEN) scpy(pr_a, "/workspace/", sizeof pr_a);
+    else if (kind == CE_PR_OPEN) { if (acceso_usuario() && acceso_carpeta(ACC_PROYECTOS, pr_a, sizeof pr_a - 1) == 0) { uint32_t n = 0; while (pr_a[n]) n++; pr_a[n] = '/'; pr_a[n + 1] = 0; } else scpy(pr_a, "/workspace/", sizeof pr_a); }   /* SOMA_363_ACCESO */
     else if (kind == CE_PR_SAVEAS) scpy(pr_a, path_, sizeof pr_a);
     tf_ready(); tf_set(&tfa, pr_a); tf_set(&tfb, pr_b);
     if (kind == CE_PR_SAVEAS) {                     /* selecciona el nombre sin la carpeta ni la extension */

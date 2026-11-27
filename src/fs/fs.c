@@ -782,6 +782,11 @@ void (*vfs_live_hook)(const char *name, const char *data, uint32_t len) = 0;
 /* SOMA_267_DISCOS: las rutas /usuario/... y /modelos/... no son de RamFS: van a las unidades exFAT del pendrive (src/core/unidades.c).
  * Asi cat, write, rm, cp, mv, head, ls, nano... funcionan alli sin cambiar cada orden. /modelos es de solo lectura desde aqui. */
 static int unid_es(const char *name) { return name && unid_ruta(name, 0) >= 0; }
+/* SOMA_363_ACCESO: /usb (ver fs.h) */
+const struct vfs_medios_ops *vfs_medios = 0;
+int vfs_es_usb(const char *n) { return n && n[0] == '/' && n[1] == 'u' && n[2] == 's' && n[3] == 'b' && (n[4] == 0 || n[4] == '/'); }
+static int usb_otro(const char *n) { return vfs_es_usb(n) && !unid_es(n); }          /* /usb pero no un exFAT: medios.c o nada */
+static int med_es(const char *n) { return usb_otro(n) && vfs_medios && vfs_medios->es(n); }
 static void ul_put(char *o, uint32_t max, uint32_t *p, const char *s) { while (s && *s && *p + 1 < max) o[(*p)++] = *s++; if (max) o[*p] = 0; }
 /* lista una carpeta de una unidad: "Archivos: /usuario/Documentos/, /usuario/a.txt" (o por la consola) */
 static int unid_lista(int show_all, const char *dir, char *out, uint32_t max, int consola)
@@ -842,6 +847,7 @@ static int vfs_write_core(const char *name, const char *data, uint32_t len)
     if (agent_path_denied(name)) return -1;
     if (str_eq(name, "/dev/null") || str_eq(name, "/dev/zero")) return (int)len;
     if (unid_es(name)) return unid_escribir(name, data, len, 0) == 0 ? (int)len : -1;     /* SOMA_267_DISCOS */
+    if (vfs_es_usb(name)) return -1;                                       /* SOMA_363: un medio de solo lectura o que ya no esta */
 
     kmutex_lock(&vfs_mutex);
     for (int i = 0; i < FS_MAX_FILES; ++i) {
@@ -896,6 +902,12 @@ int vfs_read(const char *name, char *buf_out, uint32_t max_len)
         buf_out[r] = '\0';
         return r;
     }
+    if (usb_otro(name)) {                                                  /* SOMA_363_ACCESO */
+        int r = med_es(name) ? vfs_medios->leer(name, 0, buf_out, max_len - 1) : -1;
+        if (r < 0) { buf_out[0] = '\0'; return -1; }
+        buf_out[r] = '\0';
+        return r;
+    }
 
     kmutex_lock(&vfs_mutex);
     int r = vfs_read_unlocked(name, buf_out, max_len);
@@ -906,6 +918,7 @@ int vfs_read(const char *name, char *buf_out, uint32_t max_len)
 int vfs_delete(const char *name)
 {
     if (unid_es(name)) return agent_path_denied(name) || unid_borrar(name, 0) ? -1 : 0;   /* SOMA_267_DISCOS */
+    if (vfs_es_usb(name)) return -1;                                       /* SOMA_363 */
     kmutex_lock(&vfs_mutex);
     if (!fs_initialized) vfs_init();
     if (is_proc_path(name) || is_dev_path(name)) { kmutex_unlock(&vfs_mutex); return -1; }
@@ -930,6 +943,10 @@ int vfs_delete(const char *name)
 void vfs_list_ext(int show_all, const char *filter_dir)
 {
     if (unid_es(filter_dir)) { (void)unid_lista(show_all, filter_dir, 0, 0, 1); return; }   /* SOMA_267_DISCOS */
+    if (usb_otro(filter_dir)) {                                            /* SOMA_363_ACCESO */
+        if (vfs_medios) (void)vfs_medios->lista(show_all, filter_dir, 0, 0, 1); else kprint("\nNo hay medios USB externos.\n\n");
+        return;
+    }
     kmutex_lock(&vfs_mutex);
     if (!fs_initialized) vfs_init();
 
@@ -977,6 +994,11 @@ void vfs_list_ext(int show_all, const char *filter_dir)
 int vfs_format_list_ext(int show_all, const char *filter_dir, char *out_buf, uint32_t max)
 {
     if (unid_es(filter_dir)) return unid_lista(show_all, filter_dir, out_buf, max, 0);    /* SOMA_267_DISCOS */
+    if (usb_otro(filter_dir)) {                                            /* SOMA_363_ACCESO */
+        if (vfs_medios) return vfs_medios->lista(show_all, filter_dir, out_buf, max, 0);
+        if (out_buf && max) { uint32_t p = 0; const char *h = "Archivos: "; while (*h && p + 1 < max) out_buf[p++] = *h++; out_buf[p] = 0; return (int)p; }
+        return 0;
+    }
     kmutex_lock(&vfs_mutex);
     if (!fs_initialized) vfs_init();
     uint32_t pos = 0;
@@ -1415,6 +1437,8 @@ void vfs_format(void)
 
 int vfs_create(const char *name, const char *initial_data)
 {
+    if (name && name[0] == '/' && name[1] == 'u' && name[2] == 's' && name[3] == 'b' && (name[4] == 0 || name[4] == '/'))   /* SOMA_363 */
+        return vfs_write(name, initial_data, str_len(initial_data)) >= 0 ? 0 : -1;
     kmutex_lock(&vfs_mutex);
     uint32_t len = str_len(initial_data);
     int r = vfs_create_unlocked(name, initial_data, len);
@@ -1454,6 +1478,10 @@ int vfs_size(const char *name)
         uint64_t t = 0; int d = 0;
         return unid_tam(name, &t, &d) || d || t > 0x7FFFFFFFu ? -1 : (int)t;
     }
+    if (usb_otro(name)) {                                                  /* SOMA_363_ACCESO */
+        uint64_t t = 0; int d = 0;
+        return !med_es(name) || vfs_medios->tam(name, &t, &d) || d || t > 0x7FFFFFFFu ? -1 : (int)t;
+    }
     kmutex_lock(&vfs_mutex);
     int r = -1;
     for (int i = 0; i < FS_MAX_FILES; ++i) if (files[i].used && vfs_names_equal(files[i].name, name)) { r = (int)files[i].size; break; }
@@ -1481,6 +1509,15 @@ char *vfs_read_alloc(const char *name, uint32_t *len_out)
         u[t] = 0; if (len_out) *len_out = (uint32_t)t;
         return u;
     }
+    if (usb_otro(name)) {                                                  /* SOMA_363_ACCESO: medios FAT */
+        uint64_t t = 0; int d = 0;
+        if (!med_es(name) || vfs_medios->tam(name, &t, &d) || d || t > FS_FILE_MAX) return 0;
+        char *u = (char *)kmalloc((size_t)t + 1);
+        if (!u) return 0;
+        if (vfs_medios->leer(name, 0, u, (uint32_t)t) != (int)t) { kfree(u); return 0; }
+        u[t] = 0; if (len_out) *len_out = (uint32_t)t;
+        return u;
+    }
     kmutex_lock(&vfs_mutex);
     char *b = 0;
     for (int i = 0; i < FS_MAX_FILES; ++i) {
@@ -1493,6 +1530,20 @@ char *vfs_read_alloc(const char *name, uint32_t *len_out)
     }
     kmutex_unlock(&vfs_mutex);
     return b;
+}
+/* SOMA_363_ACCESO: ver fs.h */
+int vfs_read_at(const char *name, uint64_t off, void *buf, uint32_t n)
+{
+    if (!name || (!buf && n)) return -1;
+    if (vfs_agent_secret(name)) return -1;
+    if (unid_es(name)) return unid_leer(name, off, buf, n);
+    if (usb_otro(name)) return med_es(name) ? vfs_medios->leer(name, off, buf, n) : -1;
+    uint32_t len = 0; char *d = vfs_read_alloc(name, &len);
+    if (!d) return -1;
+    uint32_t k = 0;
+    if (off < len) { k = len - (uint32_t)off; if (k > n) k = n; memcpy(buf, d + off, k); }
+    kfree(d);
+    return (int)k;
 }
 int vfs_big_persist(void)
 {

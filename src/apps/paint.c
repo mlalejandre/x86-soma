@@ -7,6 +7,7 @@
  *  - deshacer y rehacer (12 pasos), atajos de teclado;
  *  - guarda en PNG comprimido (un dibujo ocupa pocos KiB y cabe en RamFS) o BMP; abre PNG, BMP, JPEG y GIF.
  * El portapapeles (SOMA_PARCHE_PORTAPAPELES) sigue funcionando con el lienzo nuevo. */
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include "paint.h"
 #include "fb.h"
 #include "gui_font.h"
@@ -68,7 +69,9 @@ static uint32_t recent[8]; static int n_recent;
 static int hue = 1024, sat = 200, val = 246;   /* tono 0..1535, saturacion y brillo 0..255 */
 static int zoom = 0;                  /* 0 = ajustar; si no, porcentaje */
 static int pan_x, pan_y;
-static char path[96] = "/workspace/dibujo.png";
+static char path[96] = "/usuario/Im\303\241genes/Dibujos/dibujo.png";   /* SOMA_363_ACCESO */
+static void s_cat(char *d, const char *s, int max);
+static void ruta_nueva(void) { acceso_carpeta(ACC_DIBUJOS, path, sizeof path); s_cat(path, "/dibujo.png", sizeof path); }
 static char msg[96] = ""; static uint64_t msg_until; static int msg_ok = 1;
 static int cur_x = -1, cur_y = -1;
 static uint32_t rng = 0x12345678u;
@@ -187,7 +190,7 @@ void paint_init(void)
     tool = T_BRUSH; bsize = 4; zoom = 0; pan_x = pan_y = 0; drag = D_NONE;
     set_color(0x003B82F6, 1);
     if (!n_recent) { recent[0] = 0x000F172A; recent[1] = 0x00DC2626; recent[2] = 0x0016A34A; n_recent = 3; }
-    s_cpy(path, "/workspace/dibujo.png", sizeof path); p_named = 0; p_dirty = 0;
+    ruta_nueva(); p_named = 0; p_dirty = 0;
     say("Lienzo nuevo de 320 x 240", 1);
 }
 
@@ -878,7 +881,7 @@ static void pt_blank(void)                                  /* estado de un Pain
     for (int i = 0; i < UNDO_N; ++i) { undo_buf[i] = 0; undo_w[i] = undo_h[i] = 0; }
     u_top = u_count = r_count = 0; tool = prev_tool = T_BRUSH; bsize = 4; color = 0x003B82F6; n_recent = 0;
     hue = 1024; sat = 200; val = 246; zoom = 0; pan_x = pan_y = 0;
-    s_cpy(path, "/workspace/dibujo.png", sizeof path); msg[0] = 0; msg_until = 0; msg_ok = 1;
+    ruta_nueva(); msg[0] = 0; msg_until = 0; msg_ok = 1;
     cur_x = cur_y = -1; drag = 0; sx0 = sy0 = sx1 = sy1 = 0; last_x = last_y = -1; hand_mx = hand_my = 0; hover_btn = -1; g_last_z = 100; p_named = 0; p_dirty = 0;
     ia_abierto = 0; ia_len = 0; ia_txt[0] = 0;
 }

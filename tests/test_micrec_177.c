@@ -9,6 +9,17 @@
 #include <math.h>
 #include "micrec.c"
 #include "wav.c"
+/* SOMA_363_ACCESO: sin unidad del usuario (las grabaciones siguen en BIGFS, que es lo que se prueba aqui) */
+int acceso_usuario(void) { return 0; }
+int acceso_carpeta(int t, char *o, uint32_t c) { (void)t; if (c) snprintf(o, c, "/tmp"); return -1; }
+int acceso_libre(const char *d, const char *p, const char *e, char *o, uint32_t c) { (void)d; (void)p; (void)e; (void)o; (void)c; return -1; }
+int acceso_sec_abre(struct acc_sec *s, const char *r) { (void)s; (void)r; return -1; }
+int acceso_sec_pon(void *s, uint64_t off, const void *b, uint32_t n) { (void)s; (void)off; (void)b; (void)n; return -1; }
+int acceso_sec_fin(struct acc_sec *s, int ok) { (void)s; (void)ok; return -1; }
+int acceso_ruta_ok(const char *r) { (void)r; return 0; }
+int vfs_size(const char *n) { (void)n; return -1; }
+int vfs_read_at(const char *n, uint64_t off, void *b, uint32_t k) { (void)n; (void)off; (void)b; (void)k; return -1; }
+int vfs_delete(const char *n) { (void)n; return -1; }
 
 static uint64_t now_ms;
 uint64_t timer_get_uptime_ms(void) { return now_ms; }

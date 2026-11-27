@@ -24,6 +24,7 @@
 #include "mem.h"
 #include "rtc.h"
 #include "hora.h"     /* SOMA_332_HORA */
+#include "medios.h"   /* SOMA_363_ACCESO */
 
 
 static struct kmutex g_lock __attribute__((aligned(16)));
@@ -49,12 +50,30 @@ static int raw(int wr, uint64_t lba, uint32_t n, void *buf)
 static void mark_build(uint8_t *s) { ud_mark_build(s, g.part_lba, g.part_sectors, g.disk_sig); }
 static int mark_ok(const uint8_t *s) { return ud_mark_ok(s, g.part_lba, g.part_sectors, g.disk_sig); }
 
+static int still_ours(void);
+int usbdisk_disco_sistema(void)
+{
+    if (!g.active) return -1;
+    kmutex_lock(&g_lock);
+    int r = still_ours() ? xhci_msc_primario() : -1;
+    kmutex_unlock(&g_lock);
+    return r;
+}
 /* Tras un reinicio del controlador: sigue siendo el mismo pendrive? (llamar con g_lock) */
 static int still_ours(void)
 {
     if (!g.active) return 0;
     if (xhci_msc_generation() == g_gen) return !g.lost;
     for (int t = 0; t < 400 && xhci_rescanning(); t++) thread_sleep(25);          /* sin pendrive: no esperar (cada E/S tardaria) */
+    /* SOMA_363_ACCESO: con varios discos USB, el del sistema puede haber cambiado de numero: se busca la marca en todos */
+    if (xhci_msc_ready() && (raw(0, g.part_lba, 1, g_sec) != 0 || !mark_ok(g_sec))) {
+        for (int i = 0; i < xhci_msc_count(); i++) {
+            const struct xhci_msc_info *mi = xhci_msc_get_n(i);
+            if (!mi || mi->sectors < g.part_lba + g.part_sectors) continue;
+            xhci_msc_pon_primario(i);
+            if (raw(0, g.part_lba, 1, g_sec) == 0 && mark_ok(g_sec)) break;
+        }
+    }
     if (!xhci_msc_ready() || raw(0, g.part_lba, 1, g_sec) != 0 || !mark_ok(g_sec)) {
         if (!g.lost) kprint("DISCO USB: el pendrive del sistema ha cambiado o no responde: no se escribe nada hasta que vuelva\n");
         g.readonly = 1; g.lost = 1;
@@ -183,6 +202,25 @@ int usbdisk_attach(void)
         if (g.wait_ms >= 100) { kprint("DISCO USB: el pendrive tardo "); kprint_dec(g.wait_ms); kprint(" ms en responder\n"); }
     }
     if (!xhci_msc_ready()) { g.why = "no hay disco USB (almacenamiento masivo)"; return -1; }
+    /* SOMA_363_ACCESO: con varios discos USB, el del sistema es el que tiene SOMADATA (o la marca, o SOMADATA.IMG); los demas son
+     * medios externos (medios.c) */
+    if (xhci_msc_count() > 1) {
+        int elegido = -1;
+        for (int i = 0; i < xhci_msc_count() && elegido < 0; i++) {
+            xhci_msc_pon_primario(i);
+            const struct xhci_msc_info *mx = xhci_msc_get();
+            struct ud_part q[4]; uint32_t sg;
+            if (raw(0, 0, 1, g_sec) != 0) continue;
+            int nq = ud_parse_mbr(g_sec, mx->sectors, q, &sg);
+            for (int k = 0; k < nq && elegido < 0; k++) {
+                if (raw(0, q[k].lba, 1, g_sec) != 0) continue;
+                if (ud_is_fat_somadata(g_sec) || ud_mark_loose(g_sec, q[k].lba)) elegido = i;
+            }
+            if (elegido < 0 && nq > 0) { g.part_lba = g.part_sectors = 0; if (find_file() == 0) elegido = i; g.in_file = 0; g.part_lba = g.part_sectors = 0; }
+        }
+        xhci_msc_pon_primario(elegido >= 0 ? elegido : 0);
+        if (elegido > 0) { kprint("DISCO USB: el pendrive del sistema es el disco USB "); kprint_dec((uint32_t)elegido); kprint("\n"); }
+    }
     const struct xhci_msc_info *mi = xhci_msc_get();
     g_gen = xhci_msc_generation();
     if (raw(0, 0, 1, g_sec) != 0) { g.why = "no se pudo leer el sector 0 del pendrive"; return -1; }
@@ -483,13 +521,23 @@ static void usbdisk_unidades(void)
 /* para la orden "disco" y el informe */
 void usbdisk_unidades_info(void)
 {
-    for (int u = 0; u < UNID_N; u++) {
+    for (int u = 0; u < UNID_EXT0; u++) {                               /* SOMA_363: los externos los cuenta medios.c */
         kprint("  /"); kprint(unid_nombre(u)); kprint(": ");
         uint64_t li, to; char et[16];
         if (unid_info(u, &li, &to, et, sizeof et) == 0) {
             kprint("exFAT '"); kprint(et); kprint("', particion de "); kprint_dec((uint32_t)(g_up[u].n / 2048)); kprint(" MiB, libres ");
             kprint_dec((uint32_t)(li >> 20)); kprint(" MiB"); kprint(u == UNID_MODELOS ? " (solo lectura desde SOMA)\n" : "\n");
         } else { kprint(g_uwhy[u]); kprint("\n"); }
+    }
+    {   /* SOMA_363_ACCESO: los medios USB externos */
+        int k = 0;
+        for (int i = 0; i < medios_n(); ++i) {
+            struct medio_info mi; if (medios_info(i, &mi)) continue;
+            kprint(k++ ? "  " : "Medios USB externos (/usb):\n  "); kprint(mi.ruta); kprint(": "); kprint(mi.fs);
+            kprint(mi.tipo == MEDIO_EXFAT ? ", lectura y escritura" : mi.tipo == MEDIO_FAT ? ", solo lectura" : ", no se puede abrir");
+            if (mi.tipo == MEDIO_EXFAT) { kprint(", libres "); kprint_dec((uint32_t)(mi.libre >> 20)); kprint(" MiB"); }
+            kprint("\n");
+        }
     }
     if (g_ugrow_mod) { kprint("  agrandadas en este arranque: MODELOS "); kprint_dec(g_ugrow_mod); kprint(" MiB, USUARIO "); kprint_dec(g_ugrow_usu); kprint(" MiB\n"); }
     else if (g_ugrow_why && g_ugrow_why[0]) { kprint("  sin agrandar: "); kprint(g_ugrow_why); kprint("\n"); }

@@ -505,7 +505,7 @@ OBJS_CORE += $(BUILD)/sd_proto.o $(BUILD)/pcie_proto.o $(BUILD)/mbox_proto.o $(B
 endif
 
 # SOMA_267_DISCOS: exFAT (MODELOS y USUARIO del pendrive) y las unidades /usuario y /modelos
-OBJS_CORE += $(BUILD)/exfat.o $(BUILD)/unidades.o
+OBJS_CORE += $(BUILD)/exfat.o $(BUILD)/unidades.o $(BUILD)/medios.o $(BUILD)/acceso.o
 HOST_MACHINE := $(shell uname -m)
 HOST_SO := $(shell uname -s)
 # Las pruebas del anfitrion se exigen en Linux x86_64 (el equipo de referencia). En otro (macOS, ARM) las que no COMPILAN alli
@@ -719,6 +719,7 @@ test:
 	$(HOST_CC) $(TEST_CFLAGS) -Isrc/arch/x86_64 tests/test_uaccess.c -o build/tests/test_uaccess
 	$(HOST_CC) $(TEST_CFLAGS) -Isrc/arch/x86_64 tests/test_pic_irq.c -o build/tests/test_pic_irq
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_agent_policy.c -o build/tests/test_agent_policy
+	$(HOST_CC) $(TEST_CFLAGS) tests/test_acceso_363.c src/core/unidades.c src/core/exfat.c src/core/acceso.c -o build/tests/test_acceso_363   # SOMA_363_ACCESO
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_user_path.c -o build/tests/test_user_path
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_pmm_scan.c -o build/tests/test_pmm_scan
 	$(HOST_CC) $(TEST_CFLAGS) tests/test_pila_canario_306.c -o build/tests/test_pila_canario_306      # SOMA_306_PILAS
@@ -874,6 +875,7 @@ test:
 	./build/tests/test_uaccess
 	./build/tests/test_pic_irq
 	./build/tests/test_agent_policy
+	./build/tests/test_acceso_363
 	./build/tests/test_user_path
 	./build/tests/test_pmm_scan
 	./build/tests/test_pila_canario_306

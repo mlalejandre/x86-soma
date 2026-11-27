@@ -1,3 +1,4 @@
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include "notepad.h"
 #include "fb.h"
 #include "gui_font.h"
@@ -152,8 +153,8 @@ struct np_inst {
 };
 #define NP_INST_MAX 8
 static struct np_inst np_inst1 = {
-    .np_path = "/workspace/notas.txt", .np_status = "Listo", .np_sel = -1, .np_goal_col = -1, .np_ctx_hover = -1,
-    .dlg_mode = NP_DLG_NONE, .dlg_folder = "/documentos", .dlg_filename = "notas.txt", .dlg_filename_len = 9, .dlg_sel_idx = -1,
+    .np_path = "/usuario/Documentos/notas.txt", .np_status = "Listo", .np_sel = -1, .np_goal_col = -1, .np_ctx_hover = -1,
+    .dlg_mode = NP_DLG_NONE, .dlg_folder = "/usuario/Documentos", .dlg_filename = "notas.txt", .dlg_filename_len = 9, .dlg_sel_idx = -1,
 };
 static struct np_inst *np_insts[NP_INST_MAX + 1] = { 0, &np_inst1 };
 static struct np_inst *NP = &np_inst1;
@@ -291,8 +292,9 @@ static uint32_t utf8_prev(const char *s, uint32_t pos) {
 /* -------------------------------------------------------------------------
  * Gestión del Explorador de Archivos Modal
  * ------------------------------------------------------------------------- */
+static int np_es_persona(const char *f) { return acceso_ruta_ok(f); }       /* SOMA_363_ACCESO: /usuario o /usb */
 static const char *np_ram_list_begin(void) {
-    int len = vfs_format_list_ext(1, 0, ram_buf, sizeof(ram_buf) - 1);
+    int len = vfs_format_list_ext(1, np_es_persona(dlg_folder) ? dlg_folder : 0, ram_buf, sizeof(ram_buf) - 1);
     if (len <= 0) return 0;
     ram_buf[len] = '\0';
     const char *p = ram_buf;
@@ -315,7 +317,7 @@ static void dlg_refresh_files(void) {
     dlg_sel_idx = -1;
     dlg_scroll = 0;
 
-    if (!str_eq(dlg_folder, "/")) {
+    if (!str_eq(dlg_folder, "/") && !str_eq(dlg_folder, "/usuario") && !str_eq(dlg_folder, "/usb")) {   /* SOMA_363: no se sale de lo de la persona */
         str_copy(dlg_items[dlg_item_count].name, "..", sizeof(dlg_items[0].name));
         dlg_items[dlg_item_count].is_dir = 1;
         dlg_items[dlg_item_count].size = 0;
@@ -375,7 +377,7 @@ static void dlg_open_folder(const char *folder) {
 }
 
 static void dlg_go_up(void) {
-    if (str_eq(dlg_folder, "/")) return;
+    if (str_eq(dlg_folder, "/") || str_eq(dlg_folder, "/usuario") || str_eq(dlg_folder, "/usb")) return;
     uint32_t len = str_len(dlg_folder);
     while (len > 1 && dlg_folder[len - 1] == '/') len--;
     int slash = -1;
@@ -389,17 +391,12 @@ static void dlg_go_up(void) {
 
 /* Abrir por defecto la carpeta de documentos donde residen los .txt */
 static void dlg_open_documents_folder(void) {
-    str_copy(dlg_folder, "/documentos", sizeof(dlg_folder));
-    dlg_refresh_files();
-    if (dlg_item_count > 0) return;
-
-    str_copy(dlg_folder, "/workspace", sizeof(dlg_folder));
-    dlg_refresh_files();
-    if (dlg_item_count > 0) return;
-
-    str_copy(dlg_folder, "/documentos", sizeof(dlg_folder));
+    if (np_es_persona(dlg_folder) && !str_eq(dlg_folder, "/usb")) { dlg_refresh_files(); return; }   /* SOMA_363_ACCESO: la ultima carpeta usada */
+    acceso_carpeta(ACC_DOCUMENTOS, dlg_folder, sizeof(dlg_folder));
     dlg_refresh_files();
 }
+/* SOMA_363_ACCESO: documento nuevo: /usuario/Documentos/notas.txt (o /tmp sin unidad) */
+static void np_ruta_nueva(char *o, uint32_t cap) { acceso_carpeta(ACC_DOCUMENTOS, o, cap); ap(o, cap, "/notas.txt"); }
 
 /* -------------------------------------------------------------------------
  * Ciclo de Vida y Persistencia
@@ -468,7 +465,7 @@ static void np_new_doc(void)
     }
     np_new_t = 0;
     notepad_init();
-    str_copy(np_path, "/workspace/notas.txt", sizeof(np_path));
+    np_ruta_nueva(np_path, sizeof(np_path));
     str_copy(np_status, "Documento nuevo", sizeof(np_status));
 }
 static int notepad_save(void) {
@@ -1024,8 +1021,8 @@ static void render_file_dialog(uint32_t win_x, uint32_t win_y, uint32_t win_w, u
     fb_fill_rect(dx + 2, dy + 35, pw, dh - 37 - 52, 0x000F121C);
     fb_fill_rect(dx + pw + 2, dy + 35, 1, dh - 35 - 52, 0x00262E3D);
     si_text((int32_t)dx + 14, (int32_t)dy + 38, 22, "LUGARES", 10, SI_FAINT, 1);
-    static const char *const pl_name[4] = { "Documentos", "Workspace", "Mis archivos", "Raíz ( / )" };
-    static const char *const pl_path[4] = { "/documentos", "/workspace", "/mis_archivos", "/" };
+    static const char *const pl_name[4] = { "Documentos", "Descargas", "Mi unidad", "USB" };          /* SOMA_363_ACCESO */
+    static const char *const pl_path[4] = { "/usuario/Documentos", "/usuario/Descargas", "/usuario", "/usb" };
     for (int k = 0; k < 4; k++) {
         int32_t py = (int32_t)dy + 62 + 28 * k;
         int cur = str_eq(dlg_folder, pl_path[k]);
@@ -1635,10 +1632,10 @@ int notepad_handle_click(int32_t mx, int32_t my, uint32_t win_x, uint32_t win_y,
         /* Panel Lugares: Documentos, Workspace, Mis Archivos, Raíz */
         uint32_t pw = 128;
         if (mx >= (int32_t)(dx + 6) && mx <= (int32_t)(dx + pw)) {
-            if (my >= (int32_t)(dy + 62) && my <= (int32_t)(dy + 86)) { dlg_open_folder("/documentos"); return 1; }
-            if (my >= (int32_t)(dy + 90) && my <= (int32_t)(dy + 114)) { dlg_open_folder("/workspace"); return 1; }
-            if (my >= (int32_t)(dy + 118) && my <= (int32_t)(dy + 142)) { dlg_open_folder("/mis_archivos"); return 1; }
-            if (my >= (int32_t)(dy + 146) && my <= (int32_t)(dy + 170)) { dlg_open_folder("/"); return 1; }
+            if (my >= (int32_t)(dy + 62) && my <= (int32_t)(dy + 86)) { char d[64]; acceso_carpeta(ACC_DOCUMENTOS, d, sizeof d); dlg_open_folder(d); return 1; }   /* SOMA_363 */
+            if (my >= (int32_t)(dy + 90) && my <= (int32_t)(dy + 114)) { char d[64]; acceso_carpeta(ACC_DESCARGAS, d, sizeof d); dlg_open_folder(d); return 1; }
+            if (my >= (int32_t)(dy + 118) && my <= (int32_t)(dy + 142)) { dlg_open_folder(acceso_usuario() ? "/usuario" : "/tmp"); return 1; }
+            if (my >= (int32_t)(dy + 146) && my <= (int32_t)(dy + 170)) { dlg_open_folder("/usb"); return 1; }
         }
 
         /* Subir nivel al hacer clic en la barra de ruta */
@@ -2193,7 +2190,8 @@ int notepad_clip_op(int op) {
  * Live Hook (IA SOMA)
  * ------------------------------------------------------------------------- */
 void notepad_live_begin(const char *path, const char *data, uint32_t len) {
-    if (!path) path = "/workspace/notas.txt";
+    static char np_def[96];                                               /* SOMA_363_ACCESO */
+    if (!path) { np_ruta_nueva(np_def, sizeof np_def); path = np_def; }
     if (!data) { data = ""; len = 0; }
     if (len > NP_MAX_SIZE - 2) len = NP_MAX_SIZE - 2;
 
@@ -2297,11 +2295,11 @@ void notepad_live_end(void) {
 static void np_inst_defaults(struct np_inst *p)
 {
     memset(p, 0, sizeof *p);
-    str_copy(p->np_path, "/workspace/notas.txt", sizeof p->np_path);
+    np_ruta_nueva(p->np_path, sizeof p->np_path);                                     /* SOMA_363_ACCESO */
     str_copy(p->np_status, "Nuevo documento", sizeof p->np_status);
     p->np_sel = -1; p->np_goal_col = -1; p->np_ctx_hover = -1;
     p->dlg_mode = NP_DLG_NONE;
-    str_copy(p->dlg_folder, "/documentos", sizeof p->dlg_folder);
+    str_copy(p->dlg_folder, "/usuario/Documentos", sizeof p->dlg_folder);
     str_copy(p->dlg_filename, "notas.txt", sizeof p->dlg_filename);
     p->dlg_filename_len = 9; p->dlg_sel_idx = -1;
 }

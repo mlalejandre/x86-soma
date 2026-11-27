@@ -139,7 +139,7 @@ void capapp_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, in
         si_text(x0, y, 20, "Atajos en cualquier momento", 13, SI_TXT, 1); y += 28;
         if (y + 20 <= L.py + L.ph - 8) { help_row(x0, y, w0, SI_IMAGE, 0x0034D399u, "ImprPant: captura de imagen de la pantalla"); y += 26; }
         if (y + 20 <= L.py + L.ph - 8) { help_row(x0, y, w0, SI_VIDEO, 0x00FB7185u, "Control+ImprPant: empezar o parar video con audio"); y += 26; }
-        if (y + 20 <= L.py + L.ph - 8) { help_row(x0, y, w0, SI_FOLDER, SI_DIM, "Archivos en /capturas (BIGFS): PNG, AVI y WAV"); y += 26; }
+        if (y + 20 <= L.py + L.ph - 8) { help_row(x0, y, w0, SI_FOLDER, SI_DIM, "Se guardan en Mi unidad: Im\303\241genes/Capturas, V\303\255deos y Audio"); y += 26; }
         if (y + 20 <= L.py + L.ph - 8) help_row(x0, y, w0, SI_NEXT, SI_FAINT, "Teclas en esta ventana: P imagen, V video, A audio, B video con audio");
     }
 

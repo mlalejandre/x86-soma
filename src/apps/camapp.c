@@ -106,7 +106,7 @@ void camapp_render_window(uint32_t wx, uint32_t wy, uint32_t ww, uint32_t wh, in
         const char *m = in.running ? "Esperando imagen de la camara..." : "Pulsa Encender para ver la camara";
         si_icon(in.running ? SI_CAMERA : SI_CAMERA_OFF, L.px + L.pw / 2, cy - 18, 52, 0x00334155u);
         si_text_c(L.px, cy + 16, L.pw, 20, m, 13, SI_DIM, 1);
-        if (!in.running) si_text_c(L.px, cy + 36, L.pw, 18, "Las fotos van a /fotos y los videos a /videos (BIGFS)", 12, SI_FAINT, 0);
+        if (!in.running) si_text_c(L.px, cy + 36, L.pw, 18, "Las fotos van a Im\303\241genes/Fotos y los v\303\255deos a V\303\255deos (Mi unidad)", 12, SI_FAINT, 0);
     }
 
     for (int i = 0; i < L.nb; ++i) {

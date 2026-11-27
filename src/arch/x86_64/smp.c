@@ -212,6 +212,8 @@ static const char *g_why = "";
 static uint64_t g_cr0, g_cr4, g_efer, g_pat, g_xcr0;
 static uint32_t g_tramp;
 static uint32_t g_boot_ms[SMP_MAX];
+static uint32_t g_smt_shift;       /* SOMA_361_HILOS_IA: bits bajos del ID de LAPIC que separan los hilos de un nucleo fisico (0 = sin SMT) */
+static void smt_detecta(void);
 
 static inline uint64_t rdtsc_(void) { uint32_t lo, hi; __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
 static inline uint64_t rdmsr_(uint32_t m) { uint32_t lo, hi; __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(m)); return (uint64_t)hi << 32 | lo; }
@@ -387,6 +389,7 @@ void smp_init(void)
         n++;
     }
     g_ncpu = n;
+    smt_detecta();                                                              /* SOMA_361_HILOS_IA */
     if (n > 1) { g_method = apic_lapic_x2() ? "INIT-SIPI por x2APIC" : "INIT-SIPI por xAPIC"; if (!*g_why) g_why = "activo"; }
 out:
     kprint("SMP: "); kprint_dec((uint32_t)g_ncpu); kprint(g_ncpu == 1 ? " nucleo en marcha" : " nucleos en marcha");
@@ -395,6 +398,18 @@ out:
     kprint("; el 0 lleva el sistema, el resto calcula en paralelo: 'cpus')\n");
     if (g_ncpu > 1 && g_ncpu < g_found && want < 0) { kprint("SMP: aviso: "); kprint(g_why); kprint("\n"); }
 }
+
+/* SOMA_361_HILOS_IA: CPUID 0xB, nivel 0 = SMT: cuantos bits del ID de LAPIC son el hilo dentro del nucleo fisico */
+static void smt_detecta(void)
+{
+    uint32_t a = 0, b, c, d;
+    __asm__ volatile ("cpuid" : "+a"(a), "=b"(b), "=c"(c), "=d"(d));
+    if (a < 0xB) return;
+    a = 0xB; c = 0;
+    __asm__ volatile ("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    if (b != 0 && ((c >> 8) & 0xFF) == 1) g_smt_shift = a & 0x1F;
+}
+static uint32_t fisico(int c) { return g_slot[c].apic_id >> g_smt_shift; }
 
 int smp_cpus(void) { return g_enabled ? g_ncpu : 1; }
 int smp_enabled(void) { return g_enabled; }
@@ -474,13 +489,43 @@ int smp_user_free(void)
     for (int c = 1; c < g_ncpu; c++) if (g_slot[c].online && g_ujob[c].state == 0) n++;
     return n;
 }
+/* SOMA_361_HILOS_IA: como de bueno es el nucleo libre c para un hilo de calculo nuevo.
+ *   2 = su nucleo fisico no es el del 0 y no tiene ya otro hilo de usuario; 1 = no es el fisico del 0; 0 = hermano HT del 0.
+ * Con SMT, dos hilos de calculo en el mismo nucleo fisico apenas suman (comparten las unidades AVX2) y el hermano del 0 le quita
+ * ciclos al hilo principal del proceso, que es el que marca el paso en cada barrera de ggml. */
+static int user_score(int c)
+{
+    if (!g_smt_shift) return 2;
+    if (fisico(c) == fisico(0)) return 0;
+    for (int k = 1; k < g_ncpu; k++) if (k != c && g_ujob[k].state != 0 && fisico(k) == fisico(c)) return 1;
+    return 2;
+}
+/* nucleos libres en nucleos fisicos distintos entre si, distintos del 0 y sin hilos de usuario */
+int smp_user_free_fisicos(void)
+{
+    if (!g_enabled) return 0;
+    if (!g_smt_shift) return smp_user_free();
+    uint32_t vistos[SMP_MAX]; int nv = 0, n = 0;
+    for (int c = 1; c < g_ncpu; c++) {
+        if (!g_slot[c].online || g_ujob[c].state != 0 || user_score(c) != 2) continue;
+        int rep = 0; for (int i = 0; i < nv; i++) if (vistos[i] == fisico(c)) rep = 1;
+        if (rep) continue;
+        vistos[nv++] = fisico(c); n++;
+    }
+    return n;
+}
+int smp_smt_shift(void) { return (int)g_smt_shift; }
 /* Lanza un hilo de usuario en un nucleo libre. Devuelve el nucleo (>0) o <0 (-11 = no hay nucleo libre, -12 sin memoria). */
 int smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint64_t exit_rip, uint32_t owner, uint64_t fs)
 {
     if (!g_enabled || g_ncpu < 2 || __atomic_load_n(&g_busy, __ATOMIC_ACQUIRE)) return -11;
-    int c;
-    for (c = 1; c < g_ncpu; c++) if (g_slot[c].online && g_ujob[c].state == 0) break;
-    if (c >= g_ncpu) return -11;
+    int c = -1, best = -1;                                       /* SOMA_361_HILOS_IA: el mejor nucleo libre, no el primero */
+    for (int k = 1; k < g_ncpu; k++) {
+        if (!g_slot[k].online || g_ujob[k].state != 0) continue;
+        int sc = user_score(k);
+        if (sc > best) { best = sc; c = k; if (sc == 2) break; }
+    }
+    if (c < 1) return -11;
     struct ujob *j = &g_ujob[c];
     if (!j->trap_stack) { j->trap_stack = (uint8_t *)kmalloc(UJOB_TRAP); if (!j->trap_stack) return -12; }
     j->cr3 = cr3; j->rip = rip; j->rsp = rsp; j->arg = arg; j->exit_rip = exit_rip; j->owner = owner;

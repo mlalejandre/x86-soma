@@ -1,4 +1,9 @@
 /* SOMA_177_T480S: aplicacion Grabadora. Ver recorder.h */
+#include "acceso.h"      /* SOMA_363_ACCESO */
+#include "unidades.h"
+#include "exfat.h"
+#include "fs.h"
+#include "mem.h"
 #include <stdint.h>
 #include <stddef.h>
 #include "recorder.h"
@@ -40,6 +45,8 @@ static const char *const RATE_NAME[] = { "8 kHz (llamada)", "16 kHz (voz)", "22 
 static int rate_i = 1;
 
 static char names[MAXREC][40]; static uint32_t sizes[MAXREC];
+static uint8_t en_usu[MAXREC];                                  /* SOMA_363_ACCESO: 1 = /usuario/Audio, 0 = /grabaciones (BIGFS, las de antes) */
+static char g_dir_usu[64];
 static int nrec, sel = -1, scroll, scanned, del_armed, discard_armed;
 static char umsg[96];
 static uint64_t last_tick, umsg_at;
@@ -60,18 +67,28 @@ static uint32_t isqrt(uint32_t v) { uint32_t r = 0, bit = 1u << 30; while (bit >
 static void rescan(void)
 {
     scanned = 1; nrec = 0; del_armed = 0;
+    if (acceso_carpeta(ACC_AUDIO, g_dir_usu, sizeof g_dir_usu) == 0) {          /* SOMA_363_ACCESO: las de la persona */
+        struct exfat_dirent *d = (struct exfat_dirent *)kmalloc(MAXREC * sizeof *d);
+        int tot = 0, n = d ? unid_listar(g_dir_usu, d, MAXREC, &tot) : -1;
+        for (int k = 0; k < n && nrec < MAXREC; ++k) {
+            if (d[k].is_dir || !has_wav(d[k].name) || slen(d[k].name) >= sizeof names[0]) continue;
+            uint32_t i = 0; while (d[k].name[i]) { names[nrec][i] = d[k].name[i]; i++; } names[nrec][i] = 0;
+            sizes[nrec] = d[k].size > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)d[k].size; en_usu[nrec] = 1; nrec++;
+        }
+        if (d) kfree(d);
+    }
     int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return;
     uint32_t dir;
-    if (bigfs_lookup(fs, "/grabaciones", &dir) != (int)BIGFS_T_DIR) return;
-    uint32_t cur = 0; struct bigfs_stat st;
-    while (nrec < MAXREC && bigfs_readdir(fs, dir, &cur, &st) == 1) {
-        if (st.type != BIGFS_T_FILE || !has_wav(st.name)) continue;
-        uint32_t i = 0; while (st.name[i] && i + 1 < sizeof names[0]) { names[nrec][i] = st.name[i]; i++; } names[nrec][i] = 0;
-        sizes[nrec] = (uint32_t)st.size; nrec++;
+    if (fs && bigfs_lookup(fs, "/grabaciones", &dir) == (int)BIGFS_T_DIR) {
+        uint32_t cur = 0; struct bigfs_stat st;
+        while (nrec < MAXREC && bigfs_readdir(fs, dir, &cur, &st) == 1) {
+            if (st.type != BIGFS_T_FILE || !has_wav(st.name)) continue;
+            uint32_t i = 0; while (st.name[i] && i + 1 < sizeof names[0]) { names[nrec][i] = st.name[i]; i++; } names[nrec][i] = 0;
+            sizes[nrec] = (uint32_t)st.size; en_usu[nrec] = 0; nrec++;
+        }
     }
     for (int a = 1; a < nrec; ++a) {                              /* orden alfabetico (grab_001, grab_002...) */
-        char t[40]; uint32_t sz = sizes[a]; int b = a - 1;
+        char t[40]; uint32_t sz = sizes[a]; uint8_t eu = en_usu[a]; int b = a - 1;
         for (uint32_t i = 0; i < 40; ++i) t[i] = names[a][i];
         while (b >= 0) {
             int gt = 0;
@@ -81,15 +98,15 @@ static void rescan(void)
             }
             if (!gt) break;
             for (uint32_t i = 0; i < 40; ++i) names[b + 1][i] = names[b][i];
-            sizes[b + 1] = sizes[b];
+            sizes[b + 1] = sizes[b]; en_usu[b + 1] = en_usu[b];
             b--;
         }
         for (uint32_t i = 0; i < 40; ++i) names[b + 1][i] = t[i];
-        sizes[b + 1] = sz;
+        sizes[b + 1] = sz; en_usu[b + 1] = eu;
     }
     if (sel >= nrec) sel = nrec - 1;
 }
-static void full_path(int i, char *out, uint32_t max) { uint32_t p = 0; put_s(out, max, &p, "/grabaciones/"); put_s(out, max, &p, names[i]); }
+static void full_path(int i, char *out, uint32_t max) { uint32_t p = 0; if (en_usu[i]) { put_s(out, max, &p, g_dir_usu); put_s(out, max, &p, "/"); } else put_s(out, max, &p, "/grabaciones/"); put_s(out, max, &p, names[i]); }
 
 void recorder_init(void) { rescan(); umsg[0] = 0; discard_armed = 0; }
 
@@ -103,9 +120,13 @@ static uint64_t vz_t0;
 static void vz_save_txt(void)
 {
     int e; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs || !vz_text[0]) return;
     char tp[84]; uint32_t p = 0; put_s(tp, sizeof tp, &p, vz_path);
     if (p > 4) { tp[p - 3] = 't'; tp[p - 2] = 'x'; tp[p - 1] = 't'; }
+    if (vz_text[0] && acceso_ruta_ok(tp)) {                                    /* SOMA_363_ACCESO: junto al audio, en /usuario/Audio */
+        static char t2[4100]; uint32_t q = 0; put_s(t2, sizeof t2, &q, vz_text); put_s(t2, sizeof t2, &q, "\n");
+        (void)vfs_write(tp, t2, q); return;
+    }
+    if (!fs || !vz_text[0]) return;
     uint32_t ino;
     if (bigfs_lookup(fs, tp, &ino) >= 0) bigfs_unlink(fs, tp);
     if (bigfs_create(fs, tp, &ino) >= 0) { (void)bigfs_write(fs, ino, 0, vz_text, slen(vz_text)); (void)bigfs_write(fs, ino, slen(vz_text), "\n", 1); }
@@ -437,7 +458,7 @@ static void do_save(void)
     int r = micrec_save(0, used, sizeof used);
     if (r == 0) { char m[130]; uint32_t p = 0; put_s(m, sizeof m, &p, "Guardado en "); put_s(m, sizeof m, &p, used); setu(m); rescan(); sel = nrec - 1; discard_armed = 0; }
     else if (r == -61) setu("No hay nada que guardar");
-    else if (r == -19) setu("Almacen BIGFS no disponible: formatealo con la orden 'big format yes'");
+    else if (r == -19) setu("No hay unidad del usuario ni almacen BIGFS donde guardar");
     else { char m[130]; uint32_t p = 0; put_s(m, sizeof m, &p, "No se pudo guardar: "); put_s(m, sizeof m, &p, bigfs_strerror(r)); setu(m); }
 }
 

@@ -14,6 +14,7 @@ const char *const UNID_CARPETAS_USUARIO[] = { "Documentos", "Im\xC3\xA1genes", "
 const char *const UNID_CARPETAS_MODELOS[] = { "voz", "llm", 0 };
 
 static struct exfat_vol g_vol[UNID_N];
+static char g_ext[UNID_N][48];                         /* SOMA_363_ACCESO: "usb/NOMBRE" de los medios externos */
 static int g_on[UNID_N];
 static uint32_t g_gen[UNID_N];
 static void (*g_lock)(void), (*g_unlock)(void);
@@ -49,13 +50,23 @@ int unid_montar(int u, const struct exfat_io *io, uint64_t sectores)
     ulk();
     return r;
 }
+int unid_montar_ext(int u, const struct exfat_io *io, uint64_t sectores, const char *nombre)
+{
+    if (u < UNID_EXT0 || u >= UNID_N || !nombre || !nombre[0]) return EXFAT_E_ARG;
+    lk();
+    uint32_t k = 0; const char *pre = "usb/"; while (pre[k]) { g_ext[u][k] = pre[k]; k++; }
+    for (const char *s = nombre; *s && k + 1 < sizeof g_ext[u]; ++s) g_ext[u][k++] = *s == '/' ? '_' : *s;
+    g_ext[u][k] = 0;
+    ulk();
+    return unid_montar(u, io, sectores);
+}
 void unid_desmontar(int u)
 {
     if (u < 0 || u >= UNID_N) return;
     lk(); if (g_on[u]) { exfat_umount(&g_vol[u]); g_on[u] = 0; g_gen[u]++; } ulk();
 }
 int unid_activa(int u) { return u >= 0 && u < UNID_N && g_on[u]; }
-const char *unid_nombre(int u) { return u == UNID_USUARIO ? "usuario" : u == UNID_MODELOS ? "modelos" : "?"; }
+const char *unid_nombre(int u) { return u == UNID_USUARIO ? "usuario" : u == UNID_MODELOS ? "modelos" : u >= UNID_EXT0 && u < UNID_N && g_ext[u][0] ? g_ext[u] : "?"; }
 int unid_info(int u, uint64_t *libre, uint64_t *total, char *etiqueta, uint32_t cap)
 {
     if (!unid_activa(u)) return EXFAT_E_NOENT;
@@ -78,6 +89,13 @@ int unid_ruta(const char *ruta, const char **resto)
     int u = -1; const char *q = 0;
     if (pref(r, "/usuario")) { u = UNID_USUARIO; q = r + 8; }
     else if (pref(r, "/modelos")) { u = UNID_MODELOS; q = r + 8; }
+    else if (pref(r, "/usb/"))                                         /* SOMA_363_ACCESO: los medios externos */
+        for (int k = UNID_EXT0; k < UNID_N && u < 0; ++k) {
+            if (!g_on[k] || !g_ext[k][0]) continue;
+            uint32_t n = 0; while (g_ext[k][n]) n++;
+            const char *a = r + 1, *b = g_ext[k]; uint32_t i = 0; while (i < n && a[i] == b[i]) i++;
+            if (i == n && (a[n] == 0 || a[n] == '/')) { u = k; q = a + n; }
+        }
     if (u < 0 || (*q && *q != '/')) return -1;
     if (resto) *resto = *q ? q : raiz;
     return u;
@@ -102,7 +120,7 @@ static int prep(const char *ruta, const char **resto)
     if (!ruta_ok(*resto)) return EXFAT_E_NAME;
     return u;
 }
-static int escribible(int u, int priv) { return u == UNID_USUARIO || priv; }
+static int escribible(int u, int priv) { return u == UNID_USUARIO || u >= UNID_EXT0 || priv; }   /* SOMA_363: y los medios externos */
 
 /* ------------------------------------------------------------------ operaciones */
 int unid_tam(const char *ruta, uint64_t *tam, int *es_carpeta)

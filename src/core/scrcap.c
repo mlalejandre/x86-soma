@@ -1,4 +1,6 @@
 /* SOMA_179_T480S: captura de pantalla. Ver scrcap.h */
+#include "acceso.h"      /* SOMA_363_ACCESO */
+#include "fs.h"
 #include <stdint.h>
 #include <stddef.h>
 #include "scrcap.h"
@@ -139,7 +141,8 @@ int scrcap_shot(const char *path, char *used, uint32_t max)
     if (__sync_lock_test_and_set(&busy_shot, 1)) return -16;
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     int rc = 0;
-    if (!fs) { rc = -19; goto out; }
+    int usu = (!path || !*path) && acceso_usuario();               /* SOMA_363_ACCESO: las capturas, a /usuario/Imagenes/Capturas */
+    if (!fs && !usu) { rc = -19; goto out; }
     uint32_t W = fb_get_width(), H = fb_get_height();
     if (!W || !H) { rc = -22; goto out; }
     uint32_t *px = (uint32_t *)kmalloc((size_t)W * H * 4u);
@@ -150,6 +153,12 @@ int scrcap_shot(const char *path, char *used, uint32_t max)
     size_t pn = png_encode_rgb(px, (int)W, (int)H, png, cap, work);
     if (!pn) { rc = -5; goto free3; }
     char name[BIGFS_PATH_MAX + 1]; uint32_t p = 0;
+    if (usu) {
+        char dir[64]; acceso_carpeta(ACC_CAPTURAS, dir, sizeof dir);
+        if (acceso_libre(dir, "captura_", ".png", name, sizeof name) != 0 || vfs_write(name, (const char *)png, (uint32_t)pn) < 0) rc = -28;
+        else { rc = 0; if (used) { uint32_t q = 0; ap_s(used, max, &q, name); } remember(name); }
+        goto free3;
+    }
     if (path && *path) ap_s(name, sizeof name, &p, path);
     else { ensure_dir(fs, "/capturas"); next_name(fs, "/capturas", "captura_", ".png", name, sizeof name); }
     uint32_t ino; rc = bigfs_create(fs, name, &ino);
@@ -262,8 +271,10 @@ static int save_all(const char *path, char *used, uint32_t max)
     uint64_t stop_ms = timer_get_uptime_ms() - t0;
     if (rec_mode & SC_AUDIO) { a_on = 1; a_pad(stop_ms * (ARATE / 1000u)); }
     a_on = 0; for (int i = 0; i < 200 && tap_in; i++) thread_sleep(2);
-    if (!fs) return -19;
+    int usu = (!path || !*path) && acceso_usuario();               /* SOMA_363_ACCESO: videos y audio, a /usuario/Videos y /usuario/Audio */
+    if (!fs && !usu) return -19;
     char name[BIGFS_PATH_MAX + 1]; uint32_t p = 0; struct bsink bs = { fs, 0 };
+    struct acc_sec as; char dir[64];
     if (rec_mode & SC_VIDEO) {
         uint32_t n = nvf; if (n < 2) return -61;
         uint32_t first = vf_ms[0], last = vf_ms[n - 1], span = last > first ? last - first : 1u;
@@ -276,6 +287,14 @@ static int save_all(const char *path, char *used, uint32_t max)
         uint32_t tcap = maxf + 65536u + 64u;
         uint8_t *tmp = (uint8_t *)kmalloc(tcap), *idx = (uint8_t *)kmalloc(16u * (2u * n + 2u));
         if (!tmp || !idx) { if (tmp) { kfree(tmp); } if (idx) { kfree(idx); } return -12; }
+        if (usu) {
+            acceso_carpeta(ACC_VIDEOS, dir, sizeof dir);
+            if (acceso_libre(dir, "pantalla_", ".avi", name, sizeof name) != 0 || acceso_sec_abre(&as, name) != 0) rc = -28;
+            else { rc = avi_write(&src, acceso_sec_pon, &as, tmp, tcap, idx); if (acceso_sec_fin(&as, rc == 0) != 0) rc = rc == 0 || rc == AVI_WR_E_SINK ? -28 : -5; }
+            kfree(tmp); kfree(idx);
+            if (rc == 0) { if (used) { uint32_t q = 0; ap_s(used, max, &q, name); } remember(name); }
+            return rc;
+        }
         if (path && *path) ap_s(name, sizeof name, &p, path);
         else { ensure_dir(fs, "/capturas"); next_name(fs, "/capturas", (rec_mode & SC_AUDIO) ? "pantalla_" : "pantalla_", ".avi", name, sizeof name); }
         rc = bigfs_create(fs, name, &bs.ino);
@@ -287,6 +306,22 @@ static int save_all(const char *path, char *used, uint32_t max)
     } else {
         uint64_t bytes = apos * 2u;
         if (bytes < (uint64_t)ARATE / 5u * 2u) return -61;                       /* menos de 0,2 s */
+        if (usu) {
+            acceso_carpeta(ACC_AUDIO, dir, sizeof dir);
+            if (acceso_libre(dir, "audio_", ".wav", name, sizeof name) != 0 || acceso_sec_abre(&as, name) != 0) return -28;
+            uint8_t hdr[44]; wav_make_header(hdr, 1, ARATE, (uint32_t)bytes);
+            rc = acceso_sec_pon(&as, 0, hdr, 44) ? -28 : 0;
+            uint8_t *buf = (uint8_t *)kmalloc(65536u); if (!buf) rc = -12;
+            for (uint64_t off = 0; rc >= 0 && off < bytes; ) {
+                uint32_t k = ga_cb(0, off, buf, 65536u); if (!k) { rc = -5; break; }
+                if (acceso_sec_pon(&as, 44u + off, buf, k)) { rc = -28; break; }
+                off += k;
+            }
+            if (buf) kfree(buf);
+            if (acceso_sec_fin(&as, rc == 0) != 0 && rc == 0) rc = -28;
+            if (rc == 0) { if (used) { uint32_t q = 0; ap_s(used, max, &q, name); } remember(name); }
+            return rc;
+        }
         if (path && *path) ap_s(name, sizeof name, &p, path);
         else { ensure_dir(fs, "/capturas"); next_name(fs, "/capturas", "audio_", ".wav", name, sizeof name); }
         rc = bigfs_create(fs, name, &bs.ino);

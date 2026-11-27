@@ -8,7 +8,8 @@
 
 #define HOJA_LIBROS 8
 
-int   hoja_nuevo(const char *nombre);                           /* indice o -1; ruta /usuario/<nombre>.xlsx */
+const char *hoja_carpeta(void);                                 /* SOMA_363_ACCESO: "/usuario/Documentos/Hojas de calculo/" */
+int   hoja_nuevo(const char *nombre);                           /* indice o -1; ruta <hoja_carpeta()><nombre>.xlsx */
 int   hoja_abre(const char *ruta, char *msg, uint32_t cap);     /* indice (si ya estaba abierto, ese) o <0 */
 int   hoja_guarda(int i, const char *ruta, char *msg, uint32_t cap);   /* ruta 0 = la suya; el formato sale de la extension */
 int   hoja_cierra(int i);

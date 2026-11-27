@@ -7,6 +7,7 @@
  *     o, en QEMU, desde -fw_cfg name=opt/soma/modelo,file=ggml-base-q5_1.bin.
  *   - voz_last_recording: la ultima grabacion de la Grabadora (/grabaciones/grab_N.wav) para "voz ultima".
  * El modelo recomendado es ggml-base-q5_1.bin (60 MB, multilingue: espanol incluido). */
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include <stdint.h>
 #include <stddef.h>
 #include "voz_sys.h"
@@ -376,6 +377,17 @@ int voz_install(char *msg, uint32_t cap)
 /* Ultima grabacion de la Grabadora: el .wav mas reciente de /grabaciones. */
 int voz_last_recording(char *path, uint32_t cap)
 {
+    {   /* SOMA_363_ACCESO: la Grabadora guarda en /usuario/Audio */
+        char dir[64];
+        if (acceso_carpeta(ACC_AUDIO, dir, sizeof dir) == 0) {
+            struct exfat_dirent *d = (struct exfat_dirent *)kmalloc(64 * sizeof *d);
+            int tot = 0, n = d ? unid_listar(dir, d, 64, &tot) : -1, best = -1;
+            for (int i = 0; i < n; ++i) if (!d[i].is_dir && ends_with(d[i].name, ".wav") && (best < 0 || d[i].mtime >= d[best].mtime)) best = i;
+            if (best >= 0) { uint32_t p = 0; sput(path, cap, &p, dir); sput(path, cap, &p, "/"); sput(path, cap, &p, d[best].name); }
+            if (d) kfree(d);
+            if (best >= 0) return 0;
+        }
+    }
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
     if (!fs) return -1;
     uint32_t ino;

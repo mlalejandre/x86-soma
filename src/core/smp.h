@@ -29,6 +29,8 @@ uint32_t smp_core_boot_ms(int i);        /* lo que tardo en arrancar */
 uint32_t smp_tramp_addr(void);
 /* SOMA_244_HILOS: hilos de usuario (solo calculo) en los nucleos secundarios; ver smp.c */
 int  smp_user_free(void);
+int  smp_user_free_fisicos(void);      /* SOMA_361: libres en nucleos fisicos distintos (y distintos del 0) */
+int  smp_smt_shift(void);              /* SOMA_361: bits de hilo SMT en el ID de LAPIC (0 = sin SMT) */
 int  smp_user_start(uint64_t cr3, uint64_t rip, uint64_t rsp, uint64_t arg, uint64_t exit_rip, uint32_t owner, uint64_t fs);   /* SOMA_329: fs = base de FS */
 int  smp_user_poll(int core, uint32_t owner, int64_t *status);
 void smp_user_kill_owner(uint32_t owner);

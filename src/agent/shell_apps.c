@@ -188,7 +188,7 @@ static int cmd_descargar(const char *args, char *out_buf, uint32_t max_out)
 {
     if (agent_net_denied("descargar", args, out_buf, max_out)) return 1;   /* SOMA_193 */
     char rep[256]; rep[0] = 0;
-    char url[300], dst[FS_NAME_MAX]; uint32_t p = 0, k = 0;
+    char url[300], dst[192]; uint32_t p = 0, k = 0;                 /* SOMA_363: las rutas de /usuario pueden ser largas */
     while (args && *args == ' ') args++;
     while (args && *args && *args != ' ' && k < sizeof url - 1) url[k++] = *args++;
     url[k] = 0;
@@ -196,6 +196,13 @@ static int cmd_descargar(const char *args, char *out_buf, uint32_t max_out)
     k = 0; while (args && *args && *args != ' ' && k < sizeof dst - 1) dst[k++] = *args++;
     dst[k] = 0;
     if (!url[0]) { soma_str_put(rep, sizeof rep, &p, "Uso: descargar <url> [archivo]"); { soma_str_put(rep, sizeof rep, &p, "\n"); shell_emit(rep, out_buf, max_out); } return 1; }
+    if (!dst[0] && !agent_dispatch_mode) {   /* SOMA_363_ACCESO: la persona descarga en /usuario/Descargas (los agentes, en /workspace) */
+        const char *b = url, *q; for (q = url; *q && *q != '?' && *q != '#'; q++) if (*q == '/') b = q + 1;
+        char nm[64]; uint32_t n = 0; for (q = b; *q && *q != '?' && *q != '#' && n < sizeof nm - 1; q++) nm[n++] = *q;
+        nm[n] = 0; if (!n) { const char *d = "descarga"; while (*d) nm[n++] = *d++; nm[n] = 0; }
+        uint32_t l = 0; char car[64]; acceso_carpeta(ACC_DESCARGAS, car, sizeof car);
+        soma_str_put(dst, sizeof dst, &l, car); soma_str_put(dst, sizeof dst, &l, "/"); soma_str_put(dst, sizeof dst, &l, nm);
+    }
     if (!dst[0]) {   /* nombre: lo ultimo de la ruta, en /workspace */
         const char *b = url, *q; for (q = url; *q && *q != '?' && *q != '#'; q++) if (*q == '/') b = q + 1;
         char nm[40]; uint32_t n = 0; for (q = b; *q && *q != '?' && *q != '#' && n < sizeof nm - 1; q++) nm[n++] = *q;

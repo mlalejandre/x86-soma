@@ -1,4 +1,5 @@
 /* SOMA_289_VISOR: ver web_visor.h */
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include "web_visor.h"
 #include "web_tipo.h"
 #include "web_net.h"
@@ -356,7 +357,7 @@ static void abrir_maquetacion(void)
     char ruta[200];
     if (s_ruta[0]) s_cpy(ruta, s_ruta, sizeof ruta);
     else {
-        s_cpy(ruta, "/workspace/Descargas/", sizeof ruta); s_cat(ruta, s_nombre, sizeof ruta);
+        acceso_carpeta(ACC_DESCARGAS, ruta, sizeof ruta); s_cat(ruta, "/", sizeof ruta); s_cat(ruta, s_nombre, sizeof ruta);   /* SOMA_363_ACCESO */
         if (!wt_ext(ruta, ".tex")) s_cat(ruta, ".tex", sizeof ruta);
         if (vfs_write(ruta, s_src, s_src_len) < 0) { clip_toast("No se pudo guardar el documento para la Maquetacion"); return; }
         s_cpy(s_ruta, ruta, sizeof s_ruta);

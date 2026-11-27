@@ -1,4 +1,6 @@
 /* SOMA_178_T480S: motor de la camara web. Ver camera.h */
+#include "acceso.h"      /* SOMA_363_ACCESO */
+#include "fs.h"
 #include <stdint.h>
 #include <stddef.h>
 #include "camera.h"
@@ -235,7 +237,8 @@ int camera_photo(const char *path, char *used, uint32_t max)
 {
     if (!running || !jbuf || !jlen) return -61;
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) return -19;
+    int usu = (!path || !*path) && acceso_usuario();               /* SOMA_363_ACCESO: las fotos, a /usuario/Imagenes/Fotos */
+    if (!fs && !usu) return -19;
     uint8_t *tmp = (uint8_t *)kmalloc(asm_cap + 512u);
     if (!tmp) return -12;
     uint32_t n;
@@ -261,6 +264,15 @@ int camera_photo(const char *path, char *used, uint32_t max)
         if (r > 0 && rfix) { data = rfix; dn = (uint32_t)r; }
     }
     char name[BIGFS_PATH_MAX + 1]; uint32_t p = 0;
+    if (usu) {
+        char dir[64]; acceso_carpeta(ACC_FOTOS, dir, sizeof dir);
+        int ok = acceso_libre(dir, "foto_", ext, name, sizeof name) == 0 && vfs_write(name, (const char *)data, dn) >= 0;
+        if (png) kfree(png);
+        kfree(tmp);
+        if (!ok) return -5;
+        if (used) { uint32_t q = 0; ap_s(used, max, &q, name); }
+        return 0;
+    }
     if (path && *path) ap_s(name, sizeof name, &p, path);
     else { ensure_dir(fs, "/fotos"); next_name(fs, "/fotos", "foto_", ext, name, sizeof name); }
     uint32_t ino; int r = bigfs_create(fs, name, &ino);
@@ -328,7 +340,8 @@ int camera_rec_stop(const char *path, char *used, uint32_t max)
     uint32_t n = nvf;
     if (n < 2) { rc = -61; goto out; }
     int e = 0; struct bigfs *fs = bigfs_sys(&e);
-    if (!fs) { rc = -19; goto out; }
+    int usu = (!path || !*path) && acceso_usuario();               /* SOMA_363_ACCESO: los videos, a /usuario/Videos */
+    if (!fs && !usu) { rc = -19; goto out; }
     uint32_t last = vf_ms[n - 1], first = vf_ms[0];
     uint32_t span = last > first ? last - first : 1u;
     uint32_t upf = (uint32_t)((uint64_t)span * 1000u / (n - 1u));                   /* microsegundos entre tramas */
@@ -352,6 +365,17 @@ int camera_rec_stop(const char *path, char *used, uint32_t max)
         rc = -12; goto out;
     }
     char name[BIGFS_PATH_MAX + 1]; uint32_t p = 0;
+    if (usu) {
+        char dir[64]; struct acc_sec as; acceso_carpeta(ACC_VIDEOS, dir, sizeof dir);
+        if (acceso_libre(dir, "vid_", ".avi", name, sizeof name) != 0 || acceso_sec_abre(&as, name) != 0) rc = -5;
+        else {
+            rc = avi_write(&src, acceso_sec_pon, &as, tmp, tcap, idx);
+            if (acceso_sec_fin(&as, rc == 0) != 0) rc = rc == AVI_WR_E_SINK || rc == 0 ? -28 : -5;
+            else if (used) { uint32_t q = 0; ap_s(used, max, &q, name); }
+        }
+        kfree(tmp); kfree(idx);
+        goto out;
+    }
     if (path && *path) ap_s(name, sizeof name, &p, path);
     else { ensure_dir(fs, "/videos"); next_name(fs, "/videos", "vid_", ".avi", name, sizeof name); }
     struct bsink bs = { fs, 0 };

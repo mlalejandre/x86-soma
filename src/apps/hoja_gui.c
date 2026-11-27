@@ -1,5 +1,6 @@
 /* SOMA_359_HOJA_VENTANA: ver hoja_gui.h. Las zonas pulsables se anotan al pintar (g_hit) y el clic las lee (la ultima gana).
  * La cuadricula se pinta con lo visible: columnas y filas inmovilizadas primero y luego desde la primera desplazada. */
+#include "medios.h"      /* SOMA_363_ACCESO */
 #include <stdint.h>
 #include <stddef.h>
 #include "hoja_gui.h"
@@ -152,7 +153,7 @@ static int nuevo_nombre(char *out, int cap)
 {
     for (int k = 1; k < 100; ++k) {
         char n[24]; n[0] = 0; cat(n, "Libro", sizeof n); num(n, sizeof n, k);
-        char r[64]; cpy(r, "/usuario/", sizeof r); cat(r, n, sizeof r); cat(r, ".xlsx", sizeof r);
+        char r[128]; cpy(r, hoja_carpeta(), sizeof r); cat(r, n, sizeof r); cat(r, ".xlsx", sizeof r);   /* SOMA_363 */
         int usado = vfs_size(r) >= 0;
         for (int i = 0; i < HOJA_LIBROS && !usado; ++i) if (hoja_libro(i)) { const char *a = hoja_ruta(i), *b = r; while (*a && *a == *b) { ++a; ++b; } if (!*a && !*b) usado = 1; }
         if (!usado) { cpy(out, n, cap); return 0; }
@@ -781,8 +782,12 @@ static void lista_archivos(void)
 {
     g_nsug = 0;
     static char lista[8192];
-    static const char *const D[] = { "/usuario", "/usuario/Documentos", "/usuario/Descargas", "/tmp", "/workspace", "/workspace/Descargas", 0 };
-    for (int d = 0; D[d] && g_nsug < 12; ++d) {
+    static char D[10][64]; int nd = 0;                                  /* SOMA_363_ACCESO: lo de la persona y los USB */
+    { const char *hc = hoja_carpeta(); uint32_t k = 0; while (hc[k] && k < 63) { D[nd][k] = hc[k]; k++; } if (k && D[nd][k - 1] == '/') k--; D[nd][k] = 0; nd++; }   /* SOMA_363 */
+    cpy(D[nd++], "/usuario", 64); cpy(D[nd++], "/usuario/Documentos", 64); cpy(D[nd++], "/usuario/Descargas", 64);
+    for (int i = 0; i < medios_n() && nd < 9; ++i) { struct medio_info mi; if (!medios_info(i, &mi) && mi.tipo != MEDIO_OTRO) cpy(D[nd++], mi.ruta, 64); }
+    cpy(D[nd++], "/tmp", 64);
+    for (int d = 0; d < nd && g_nsug < 12; ++d) {
         lista[0] = 0; (void)vfs_format_list_ext(0, D[d], lista, sizeof lista);
         const char *s = lista; if (s[0] == 'A') { while (*s && *s != ' ') ++s; if (*s) ++s; }
         while (*s && g_nsug < 12) {
@@ -800,7 +805,7 @@ static void abre_barra(int tipo)
     g_barra = tipo; g_foco = F_BARRA; g_nsug = 0; g_menu = M_NADA;
     tf_init(&g_tbarra, g_bbarra, sizeof g_bbarra, 0); tf_init(&g_tbarra2, g_bbarra2, sizeof g_bbarra2, 0);
     struct hj_libro *l = L(); struct vista *v = V();
-    if (tipo == BA_ABRIR) { tf_set(&g_tbarra, "/usuario/"); lista_archivos(); }
+    if (tipo == BA_ABRIR) { tf_set(&g_tbarra, hoja_carpeta()); lista_archivos(); }   /* SOMA_363_ACCESO */
     else if (tipo == BA_GUARDAR) { tf_set(&g_tbarra, hoja_ruta(g_doc)); }
     else if (tipo == BA_RENOMBRAR) { tf_set(&g_tbarra, l->h[l->activa].nombre); tf_select_all(&g_tbarra); }
     else if (tipo == BA_IR) { char d[16]; hj_dir(v->af, v->ac, d); tf_set(&g_tbarra, d); tf_select_all(&g_tbarra); }

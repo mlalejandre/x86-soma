@@ -14,6 +14,7 @@
  *  - Barra: abrir y recargar el .tex, editarlo en el Bloc de notas, tamano de letra, ruta; rueda y barra de desplazamiento.
  *  - Abajo: el subagente "maquetador" escribe documentos LaTeX a partir de una peticion (y se guardan en /workspace/documento.tex).
  *  - Compatibilidad: los documentos #SOMA-LAYOUT v1 de antes se convierten a LaTeX al cargarlos. */
+#include "acceso.h"      /* SOMA_363_ACCESO */
 #include "layout.h"
 #include "fb.h"
 #include "gui_font.h"
@@ -55,7 +56,7 @@ int keyboard_last_mods(void);
 #define POOL_CAP      (192 * 1024)
 
 static char ly_src[LY_SRC_MAX]; static uint32_t ly_src_len;
-static char ly_path[128] = "/workspace/documento.tex";
+static char ly_path[128] = "/usuario/Documentos/documento.tex";   /* SOMA_363_ACCESO */
 static char ly_prompt[LY_PROMPT_MAX];
 enum { F_NONE = 0, F_PATH, F_PROMPT };
 static struct tfield ly_ptf, ly_tf; static int ly_fields; static int ly_focus, ly_hover = -1;   /* SOMA_254: campos de texto, foco y boton bajo el raton */
@@ -110,9 +111,11 @@ static struct icache *img_get(const char *path)
     struct icache *c = &g_img[g_img_next]; g_img_next = (g_img_next + 1) % 4;
     if (c->ok) wi_free(&c->im);
     c->ok = 0; s_cpy(c->path, path, sizeof c->path);
-    char full[128] = ""; if (path[0] != '/') s_cpy(full, "/workspace/", sizeof full);
+    char full[160] = "";
+    if (path[0] != '/') { s_cpy(full, ly_path, sizeof full); int q = s_len(full); while (q > 0 && full[q - 1] != '/') q--; full[q] = 0; }   /* SOMA_363: junto al documento */
     s_cat(full, path, sizeof full);
     uint32_t un = 0; uint8_t *raw = (uint8_t *)vfs_read_alloc(full, &un);   /* PARCHE 087: imagenes de cualquier tamano */
+    if (!raw && path[0] != '/') { s_cpy(full, "/workspace/", sizeof full); s_cat(full, path, sizeof full); raw = (uint8_t *)vfs_read_alloc(full, &un); }   /* como antes */
     if (!raw && path[0] != '/') raw = (uint8_t *)vfs_read_alloc(path, &un);
     if (!raw) return c;
     if (un > 8 && wi_decode(raw, un, &c->im) == 0) c->ok = 1;
@@ -635,7 +638,8 @@ static void open_browser(void)
 {
     char dir[128]; s_cpy(dir, ly_path, sizeof dir);
     int k = s_len(dir); while (k > 1 && dir[k - 1] != '/') k--;
-    if (k > 1) dir[k - 1] = 0; else s_cpy(dir, "/workspace", sizeof dir);
+    if (k > 1) dir[k - 1] = 0; else s_cpy(dir, "/usuario", sizeof dir);
+    if (!acceso_ruta_ok(dir)) acceso_carpeta(ACC_DOCUMENTOS, dir, sizeof dir);   /* SOMA_363_ACCESO: Archivos solo abre lo de la persona */
     status("Elige un .tex o .html en el explorador (doble clic) o escribe la ruta arriba", 1);
     gui_open_file_manager(dir);
 }

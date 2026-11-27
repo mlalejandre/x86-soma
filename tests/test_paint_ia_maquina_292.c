@@ -39,6 +39,7 @@ int clip_set_image(const uint32_t *p, int w, int h) { (void)p; (void)w; (void)h;
 void clip_toast(const char *m) { (void)m; }
 char *vfs_read_alloc(const char *n, uint32_t *l) { (void)n; (void)l; return 0; }
 int vfs_write(const char *n, const char *d, uint32_t l) { (void)n; (void)d; (void)l; return 0; }
+int acceso_carpeta(int t, char *o, uint32_t c) { (void)t; snprintf(o, c, "/usuario/Im\303\241genes"); return 0; }   /* SOMA_363_ACCESO */
 size_t png_work_size(int w, int h) { (void)w; (void)h; return 0; }
 size_t png_encode_rgb(const uint32_t *px, int w, int h, uint8_t *out, size_t cap, void *work) { (void)px; (void)w; (void)h; (void)out; (void)cap; (void)work; return 0; }
 /* el modelo */

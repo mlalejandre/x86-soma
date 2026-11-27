@@ -7,6 +7,9 @@
 #include "gui_font.h"
 #include "png_enc.h"
 #include "bigfs_glue.h"
+#include "acceso.h"     /* SOMA_363_ACCESO */
+#include "medios.h"
+#include "agent_policy.h"
 #include "clipboard.h"
 
 uint64_t timer_get_uptime_ms(void);
@@ -24,7 +27,7 @@ uint64_t timer_get_uptime_ms(void);
 
 static int g_on;
 static uint32_t *g_px; static int g_w, g_h;
-static char g_name[80], g_dir[96] = "/workspace";
+static char g_name[80], g_dir[96] = "";
 static int g_focus;                                   /* 0 nombre, 1 carpeta */
 /* PARCHE 092: campos de texto de verdad: cursor, seleccion (lo que se escriba la reemplaza), flechas, Inicio/Fin, Supr, UTF-8 */
 static int g_cur[2], g_sa[2], g_sb[2];                 /* cursor y seleccion [sa,sb) por campo */
@@ -32,7 +35,7 @@ static uint8_t g_u8[4]; static int g_u8n, g_u8need;
 static int g_fmt, g_scale_i;                          /* fmt 0 PNG, 1 BMP; escala 100/75/50/25 */
 static int g_est = -1, g_est_key = -1;
 static char g_msg[120]; static int g_msg_ok = 1;
-static char g_chips[6][48]; static int g_nchips;
+static char g_chips[6][64]; static int g_nchips;
 static const int SC[4] = { 100, 75, 50, 25 };
 
 static int s_len(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
@@ -52,26 +55,19 @@ static int tw(const char *s, int px, int bold) { return wf_init() ? wf_width(s, 
 static void add_chip(const char *d)
 {
     for (int i = 0; i < g_nchips; i++) { const char *a = g_chips[i], *b = d; while (*a && *a == *b) { a++; b++; } if (!*a && !*b) return; }
-    if (g_nchips < 6) s_cpy(g_chips[g_nchips++], d, 48);
+    if (g_nchips < 6) s_cpy(g_chips[g_nchips++], d, 64);
 }
+/* SOMA_363_ACCESO: solo las carpetas de la persona (Mi unidad y sus carpetas) y los medios USB donde se puede escribir */
 static void collect_dirs(void)
 {
     g_nchips = 0;
-    add_chip("/workspace"); add_chip("/imagenes");
-    static char buf[4096];
-    int n = vfs_format_list_ext(1, 0, buf, sizeof buf - 1);
-    if (n > 0) {
-        buf[n] = 0;
-        const char *p = buf; if (p[0] == 'A' && p[1] == 'r') { while (*p && *p != ':') p++; if (*p) p++; }
-        while (*p && g_nchips < 5) {
-            while (*p == ' ' || *p == ',') p++;
-            char f[96]; int k = 0; while (*p && *p != ',' && k < 95) f[k++] = *p++; f[k] = 0;
-            /* carpeta de primer nivel del archivo */
-            if (f[0] == '/') { int j = 1; while (f[j] && f[j] != '/') j++; if (f[j] == '/' && j > 1) { f[j] = 0; if (!vfs_is_hidden(f) && !starts(f, "/etc") && !starts(f, "/agent") && !starts(f, "/bin")) add_chip(f); } }
-            while (*p && *p != ',') p++;
-        }
-    }
-    int err = 0; if (bigfs_sys(&err)) add_chip("big:/imagenes");
+    char d[64];
+    if (acceso_carpeta(ACC_IMAGENES, d, sizeof d) != 0) { add_chip("/tmp"); return; }
+    add_chip(d);
+    if (acceso_carpeta(ACC_DESCARGAS, d, sizeof d) == 0) add_chip(d);
+    if (acceso_carpeta(ACC_DOCUMENTOS, d, sizeof d) == 0) add_chip(d);
+    add_chip("/usuario");
+    for (int i = 0; i < medios_n() && g_nchips < 6; ++i) { struct medio_info mi; if (!medios_info(i, &mi) && mi.tipo == MEDIO_EXFAT) add_chip(mi.ruta); }
 }
 
 static void fix_ext(void)
@@ -101,6 +97,7 @@ void savedlg_open(const uint32_t *argb, int w, int h, const char *suggest)
     /* PARCHE 087: ya no hace falta reducirla para que quepa: se guarda al tamano original */
     fix_ext();
     collect_dirs();
+    if (!acceso_ruta_ok(g_dir) || !g_dir[0]) s_cpy(g_dir, g_chips[0], sizeof g_dir);   /* SOMA_363: la ultima carpeta si sigue valiendo; si no, Imagenes */
     { int n = s_len(g_name), d = n; for (int i = n - 1; i > 0; i--) if (g_name[i] == '.') { d = i; break; }
       g_sa[0] = 0; g_sb[0] = d; g_cur[0] = d; int m = s_len(g_dir); g_sa[1] = g_sb[1] = g_cur[1] = m; g_u8n = 0; }
     g_on = 1;
@@ -157,7 +154,7 @@ static void estimate(void)
     g_est = b ? (int)n : -1;
     if (b) kfree(b);
 }
-static int to_big(void) { return starts(g_dir, "big:"); }
+static int to_big(void) { return 0; }                 /* SOMA_363_ACCESO: ya no se guarda en el almacen BIGFS (no se ve desde Archivos) */
 
 static void do_save(void)
 {
@@ -168,6 +165,9 @@ static void do_save(void)
       g_sa[0] = g_sb[0] = g_cur[0] = s_len(g_name); }
     char path[200]; s_cpy(path, to_big() ? g_dir + 4 : g_dir, sizeof path);
     int n = s_len(path); if (!n || path[0] != '/') { s_cpy(g_msg, "La carpeta debe empezar por /", sizeof g_msg); g_msg_ok = 0; return; }
+    if (!usuario_ruta_escribible(path) || (!acceso_ruta_ok(path) && acceso_usuario())) {   /* SOMA_363_ACCESO */
+        s_cpy(g_msg, acceso_usuario() ? "Solo se puede guardar en Mi unidad (/usuario) o en un USB" : "Sin unidad del usuario: solo en /tmp", sizeof g_msg); g_msg_ok = 0; return;
+    }
     if (path[n - 1] != '/') s_cat(path, "/", sizeof path);
     s_cat(path, g_name, sizeof path);
     uint32_t len = 0; uint8_t *b = encode(&len);

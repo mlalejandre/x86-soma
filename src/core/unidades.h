@@ -12,7 +12,8 @@
 
 #define UNID_USUARIO 0
 #define UNID_MODELOS 1
-#define UNID_N       2
+#define UNID_EXT0    2      /* SOMA_363_ACCESO: medios USB externos con exFAT (lectura y escritura), en /usb/<nombre> */
+#define UNID_N       6
 
 /* MODELOS y USUARIO de la imagen del repositorio (5 GiB + 1 MiB): se agrandan en el primer arranque si estan vacias */
 #define UNID_SERIE_IMG_MOD 0x50AA0003u
@@ -32,6 +33,8 @@ int unid_plan(uint64_t total, uint32_t datos_n, struct unid_part p[4]);
 void unid_set_lock(void (*lock)(void), void (*unlock)(void));
 int  unid_montar(int u, const struct exfat_io *io, uint64_t sectores);   /* 0 = montada; io relativo a la particion */
 void unid_desmontar(int u);
+/* SOMA_363_ACCESO: un medio externo (u >= UNID_EXT0) en /usb/<nombre> (nombre sin '/') */
+int  unid_montar_ext(int u, const struct exfat_io *io, uint64_t sectores, const char *nombre);
 int  unid_activa(int u);
 const char *unid_nombre(int u);                                          /* "usuario" / "modelos" */
 int  unid_info(int u, uint64_t *libre, uint64_t *total, char *etiqueta, uint32_t cap);

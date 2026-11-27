@@ -26,4 +26,6 @@ int usbdisk_bootfile_read(const char *name, uint32_t off, void *buf, uint32_t le
 int usbdisk_bootdir(const char *path, struct fat_dirent *out, int max, const char **why);
 /* SOMA_267_DISCOS: estado de las unidades /usuario y /modelos (particiones 4 y 3, exFAT) para la orden "disco" */
 void usbdisk_unidades_info(void);
+/* SOMA_363_ACCESO: numero (xhci_msc_*_n) del disco USB del sistema, comprobado ahora; -1 si no hay o no responde */
+int usbdisk_disco_sistema(void);
 #endif

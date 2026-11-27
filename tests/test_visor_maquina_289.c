@@ -68,6 +68,8 @@ int pdfview_handle_click(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_
 void pdfview_handle_key(char c) { (void)c; pv_teclas++; }
 int pdfview_mouse(int32_t mx, int32_t my, uint32_t x, uint32_t y, uint32_t w, uint32_t h, int wh, int held) { (void)mx; (void)my; (void)x; (void)y; (void)w; (void)h; (void)held; return wh != 0; }
 
+/* SOMA_363_ACCESO: la unidad del usuario, con su carpeta Descargas */
+int acceso_carpeta(int t, char *o, uint32_t c) { (void)t; snprintf(o, c, "/usuario/Descargas"); return 0; }
 #include "../src/apps/web_visor.c"
 
 static int ok_n, total;
@@ -135,7 +137,7 @@ int main(void)
     chk(wv_sync(tit, "https://raw.ejemplo.org/paper.tex") == 1, "tex remoto");
     wv_descarga(); wv_pinta(X, Y, W, H); (void)botones(X, W, b);
     (void)wv_click(b[B_MAQ].x + 3, Y + 20, X, Y, W, H);
-    chk(!strcmp(g_escrito, "/workspace/Descargas/paper.tex") && g_escrito_n == strlen(TEX) && !strcmp(g_maq, g_escrito), "remoto: se guarda en Descargas y se abre");
+    chk(!strcmp(g_escrito, "/usuario/Descargas/paper.tex") && g_escrito_n == strlen(TEX) && !strcmp(g_maq, g_escrito), "remoto: se guarda en Descargas y se abre");
     /* 5. tex remoto que resulta ser una pagina web */
     g_red_body = "<!DOCTYPE html><html><body>Hola</body></html>";
     wt_marca(tit, sizeof tit, WT_TEX, "otro.tex");

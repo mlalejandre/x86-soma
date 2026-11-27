@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "llama.h"
+#include "ggml-cpu.h"
 #include "../../core/ia_abi.h"
 
 extern "C" {
@@ -180,6 +181,41 @@ static cargado g_emb, g_chat;
 static int g_hilos = 1;
 static std::string g_err;
 
+// SOMA_361_HILOS_IA: un threadpool de ggml por orden. Sin el, llama.cpp crea y espera (join) los hilos secundarios en CADA grafo:
+// en el chat, una vez por token, y cada join es una llamada al sistema que cede el nucleo 0 a todo el sistema hasta que le vuelve
+// a tocar. Con el pool, los hilos se lanzan al empezar la orden y se recogen al acabarla; entre ordenes los nucleos quedan libres
+// (el escritorio los usa para pintar en paralelo).
+static int g_hilos_reales = 1;                          // los que lanzo de verdad el pool de la ultima orden
+struct pool_orden {
+    ggml_threadpool * tp = nullptr;
+    llama_context * ctx = nullptr;
+    int n = 1;
+    pool_orden(llama_context * c, int hilos) : ctx(c)
+    {
+        int libres = voz_threads_free();                 // la voz puede haber cogido nucleos: nunca mas hilos que libres + 1
+        if (libres < 0) libres = 0;
+        n = hilos < 1 ? 1 : hilos;
+        if (n > libres + 1) n = libres + 1;
+        g_hilos_reales = n;
+        if (!c) return;
+        llama_set_n_threads(c, n, n);
+        if (n <= 1) return;
+        ggml_threadpool_params p = ggml_threadpool_params_default(n);
+        tp = ggml_threadpool_new(&p);
+        if (tp) llama_attach_threadpool(c, tp, nullptr);
+        else { g_hilos_reales = 1; llama_set_n_threads(c, 1, 1); }
+    }
+    ~pool_orden()
+    {
+        if (!tp) return;
+        llama_detach_threadpool(ctx);
+        ggml_threadpool_free(tp);
+        llama_set_n_threads(ctx, g_hilos, g_hilos);
+    }
+    pool_orden(const pool_orden &) = delete;
+    pool_orden & operator=(const pool_orden &) = delete;
+};
+
 static void suelta(cargado & c)
 {
     if (c.ctx) llama_free(c.ctx);
@@ -236,6 +272,7 @@ struct salida { char * buf; uint32_t cap; std::string s; };
 static int orden_embed(const char * ruta, const std::string & texto, std::string & out, uint32_t & tin, uint32_t & ms_carga)
 {
     if (!asegura(g_emb, ruta, true, 0, ms_carga)) return -1;
+    pool_orden pool(g_emb.ctx, g_hilos);                // SOMA_361_HILOS_IA
     const llama_vocab * v = llama_model_get_vocab(g_emb.m);
     std::vector<llama_token> t = tokeniza(v, texto, true, false);
     if (t.empty()) { g_err = "texto vacio"; return -1; }
@@ -274,6 +311,7 @@ static int orden_chat(const char * ruta, const char * cuerpo, uint32_t n_ctx, st
     if (!parse_peticion(cuerpo, pq) || (pq.msgs.empty() && pq.prompt.empty())) { g_err = "peticion de chat no valida"; return -1; }
     if (pq.imagen) { g_err = "el modelo local no admite imagenes"; return -2; }
     if (!asegura(g_chat, ruta, false, n_ctx, ms_carga)) return -1;
+    pool_orden pool(g_chat.ctx, g_hilos);               // SOMA_361_HILOS_IA
     const llama_vocab * v = llama_model_get_vocab(g_chat.m);
     // plantilla del modelo (o ChatML si no trae)
     std::string prompt;
@@ -391,7 +429,9 @@ static int g_hilos_pedidos;
 static void elige_hilos(uint32_t pedidos)
 {
     int h = (int)pedidos;
-    if (h <= 0) { int f = voz_threads_free(); if (f < 0) f = 0; h = 1 + (f < 7 ? f : 7); }
+    int f = voz_threads_free(); if (f < 0) f = 0;
+    if (h <= 0) h = 1 + (f < 7 ? f : 7);
+    if (h > f + 1) h = f + 1;                            // SOMA_361_HILOS_IA: pedir mas de los libres hacia fallar pthread_create
     if (h > 8) h = 8;
     if (h != g_hilos_pedidos) {
         g_hilos_pedidos = h; g_hilos = h;
@@ -429,6 +469,7 @@ int ia_main(int, char **)
         std::memcpy(ruta, (const char *)c->modelo, sizeof ruta); ruta[sizeof ruta - 1] = 0;
         elige_hilos(c->hilos);
         c->hilos_usados = (uint32_t)g_hilos;
+        g_hilos_reales = g_hilos;
         g_err.clear();
         std::string out;
         uint32_t tin = 0, tout = 0, msc = 0;
@@ -448,6 +489,7 @@ int ia_main(int, char **)
             size_t k = g_err.size() < sizeof c->err - 1 ? g_err.size() : sizeof c->err - 1;
             std::memcpy((char *)c->err, g_err.data(), k); ((char *)c->err)[k] = 0;
         }
+        c->hilos_usados = (uint32_t)g_hilos_reales;      // SOMA_361_HILOS_IA
         c->tokens_entrada = tin; c->tokens_salida = tout; c->ms_carga = msc; c->ms_proceso = (uint32_t)(ahora() - t0);
         c->cmd_res = r;
         c->estado = IA_E_LISTO;

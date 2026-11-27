@@ -1,5 +1,6 @@
 /* SOMA_357_CONTACTOS: ver contactos_gui.h. Las zonas pulsables se anotan al pintar (g_hit) y el clic las lee.
  * Las fotos se decodifican aisladas (imgdec, ring 3) y se guardan ya reducidas en una cache pequena (miniaturas redondas). */
+#include "medios.h"      /* SOMA_363_ACCESO */
 #include <stdint.h>
 #include <stddef.h>
 #include "contactos_gui.h"
@@ -469,8 +470,10 @@ static void abre_barra(int tipo)
     if (tipo == B_IMPORTAR) {
         tf_set(&g_tbarra, "/usuario/");
         static char lista[8192]; lista[0] = 0;
-        static const char *const D[] = { "/usuario", "/usuario/Descargas", "/workspace/Descargas", 0 };
-        for (int d = 0; D[d] && g_nsug < 12; ++d) {
+        static char D[10][64]; int nd = 0;                              /* SOMA_363_ACCESO: lo de la persona y los USB */
+        cpy(D[nd++], "/usuario", 64); cpy(D[nd++], "/usuario/Descargas", 64); cpy(D[nd++], "/usuario/Documentos", 64);
+        for (int i = 0; i < medios_n() && nd < 10; ++i) { struct medio_info mi; if (!medios_info(i, &mi) && mi.tipo != MEDIO_OTRO) cpy(D[nd++], mi.ruta, 64); }
+        for (int d = 0; d < nd && g_nsug < 12; ++d) {
             lista[0] = 0; (void)vfs_format_list_ext(0, D[d], lista, sizeof lista);
             const char *s = lista; if (s[0] == 'A') { while (*s && *s != ' ') ++s; ++s; }
             while (*s && g_nsug < 12) {
@@ -483,7 +486,7 @@ static void abre_barra(int tipo)
         }
         if (g_nsug) tf_set(&g_tbarra, g_sug[0]);
     } else if (tipo == B_FOTOS) {
-        tf_set(&g_tbarra, "/fotos/");
+        tf_set(&g_tbarra, "/usuario/Im\303\241genes/");                         /* SOMA_363_ACCESO */
         static char r[12][96]; int n = contactos_imagenes(r, 12);
         for (int i = 0; i < n; ++i) cpy(g_sug[i], r[i], 96);
         g_nsug = n;

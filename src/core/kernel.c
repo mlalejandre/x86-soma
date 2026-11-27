@@ -59,6 +59,7 @@ void xhci2_autostart(void);
 #include "backlight.h"                               /* SOMA_168_T480S */
 #endif
 #include "crypto.h"
+#include "medios.h"                                 /* SOMA_363_ACCESO */
 
 extern uint32_t multiboot_magic;
 extern uint32_t multiboot_info_addr;
@@ -441,6 +442,7 @@ static void start_desktop(void)
     kprint("\033[1;32m[SOMA ready]\033[0m Sistema interactivo listo en consola serie.\n\n");
     kprint("\033[1;36m[DESKTOP]: Iniciando Entorno Grafico SOMA por defecto...\033[0m\n");
     BD("escritorio", 0);
+    medios_inicia();               /* SOMA_363_ACCESO: pendrives y discos USB externos en /usb (hilo "medios") */
 #ifdef __x86_64__
     thread_create("llmtest", llm_selftest_thread, 0);  /* los hilos arrancan cuando kernel_main ceda la CPU */
     thread_create("arranque", boot_done_thread, 0);    /* SOMA_228_ARRANQUE */

@@ -26,6 +26,7 @@
 #include "fat.h"
 #include "idt.h"
 #include "progz.h"
+#include "smp.h"
 PROGZ_DECL(ia);
 
 #define IA_MONTON_MIB  6144u                  /* region virtual del monton (solo se gasta lo que se toca) */
@@ -39,6 +40,15 @@ static volatile uint64_t g_ultimo;            /* ultima orden (ms) */
 static volatile int g_vigia;
 static char g_log[4096];                      /* lo que el proceso escribe (errores internos) */
 static uint32_t g_ordenes, g_fallos;
+static uint32_t g_hilos_conf;                 /* SOMA_361_HILOS_IA: hilos pedidos con "ia hilos N" (0 = automatico) */
+
+/* SOMA_361_HILOS_IA: automatico = el hilo principal (nucleo 0) + uno por cada nucleo fisico libre distinto del 0. Con SMT (T480s:
+ * 4 nucleos, 8 hilos) salen 4 y no 8: los hermanos HT no suman en AVX2 y el del 0 frena al hilo principal, que marca el paso. */
+static uint32_t hilos_para_orden(void)
+{
+    uint32_t h = g_hilos_conf ? g_hilos_conf : 1u + (uint32_t)smp_user_free_fisicos();
+    return h > 8 ? 8 : h;
+}
 
 static uint32_t slen(const char *s) { uint32_t n = 0; while (s && s[n]) n++; return n; }
 static void sput(char *o, uint32_t cap, uint32_t *p, const char *s) { while (s && *s && *p + 1 < cap) o[(*p)++] = *s++; if (cap) o[*p < cap ? *p : cap - 1] = 0; }
@@ -193,6 +203,7 @@ int ia_orden(int cmd, const char *modelo, const char *in, uint32_t in_len, char 
     if (in_len) sh_escribe(IA_IN_OFF, in, in_len);
     { char m[sizeof c->modelo]; uint32_t k = 0; for (; modelo && modelo[k] && k + 1 < sizeof m; ++k) m[k] = modelo[k]; m[k] = 0;
       for (uint32_t i = 0; i <= k; ++i) ((volatile char *)c->modelo)[i] = m[i]; }
+    c->hilos = hilos_para_orden();                             /* SOMA_361_HILOS_IA: el proceso no pasa de los libres */
     c->in_len = in_len; c->cmd = (uint32_t)cmd; c->cancela = 0; c->err[0] = 0; c->parcial_len = 0;
     uint32_t s = __atomic_add_fetch(&c->cmd_seq, 1, __ATOMIC_RELEASE);
     uint64_t t0 = timer_get_uptime_ms();
@@ -266,6 +277,10 @@ int ia_estado(char *out, uint32_t cap)
             sdec(out, cap, &p, g_ctl->hilos_usados); sput(out, cap, &p, g_ctl->hilos_usados == 1 ? " hilo\n" : " hilos\n");
         }
     }
+    sput(out, cap, &p, "  hilos de calculo: ");                             /* SOMA_361_HILOS_IA */
+    if (g_hilos_conf) { sdec(out, cap, &p, g_hilos_conf); sput(out, cap, &p, " (fijados con 'ia hilos')"); }
+    else { sput(out, cap, &p, "automatico, ahora "); sdec(out, cap, &p, hilos_para_orden()); }
+    sput(out, cap, &p, smp_smt_shift() ? "; SMT detectado: un hilo por nucleo fisico\n" : "\n");
     sput(out, cap, &p, "  ordenes: "); sdec(out, cap, &p, g_ordenes); sput(out, cap, &p, ", fallidas: "); sdec(out, cap, &p, g_fallos); sput(out, cap, &p, "\n");
     return (int)p;
 }
@@ -425,6 +440,20 @@ int ia_cmd(const char *args, char *out, uint32_t cap)
         if (!n) sput(out, cap, &p, "no hay modelos .gguf en /modelos (ia instalar <nombre> los copia de la carpeta MODELOS del pendrive)\n");
         return 1;
     }
+    if (!ia_strcmp(w, "hilos")) {                                       /* SOMA_361_HILOS_IA: ia hilos [N|auto] */
+        r = palabra(r, m, sizeof m);
+        if (m[0]) {
+            uint32_t v = 0; int ok = 1;
+            if (!ia_strcmp(m, "auto")) v = 0;
+            else { for (int i = 0; m[i]; i++) { if (m[i] < '0' || m[i] > '9') { ok = 0; break; } v = v * 10 + (uint32_t)(m[i] - '0'); if (v > 99) break; } }
+            if (!ok || v > 8) { sput(out, cap, &p, "uso: ia hilos [1..8|auto]\n"); return 1; }
+            g_hilos_conf = v;
+        }
+        sput(out, cap, &p, "hilos de calculo del motor de IA: ");
+        if (g_hilos_conf) sdec(out, cap, &p, g_hilos_conf); else { sput(out, cap, &p, "automatico (ahora "); sdec(out, cap, &p, hilos_para_orden()); sput(out, cap, &p, ")"); }
+        sput(out, cap, &p, "; nunca mas que nucleos libres + 1. Vale desde la siguiente orden (no se guarda al reiniciar)\n");
+        return 1;
+    }
     if (!ia_strcmp(w, "parar")) { ia_para(); sput(out, cap, &p, "motor de IA parado (memoria liberada)\n"); return 1; }
     if (!ia_strcmp(w, "instalar")) {
         static char msg[256]; r = palabra(r, m, sizeof m);
@@ -453,6 +482,6 @@ int ia_cmd(const char *args, char *out, uint32_t cap)
         sput(out, cap, &p, "\n["); sdec(out, cap, &p, timer_get_uptime_ms() - t0); sput(out, cap, &p, " ms]\n");
         return 1;
     }
-    sput(out, cap, &p, "uso: ia [estado] | ia modelos | ia instalar <nombre> | ia chat <modelo> <texto> | ia completa <modelo> <texto> | ia embed <modelo> <texto> | ia tokens <modelo> <texto> | ia parar\n");
+    sput(out, cap, &p, "uso: ia [estado] | ia modelos | ia instalar <nombre> | ia chat <modelo> <texto> | ia completa <modelo> <texto> | ia embed <modelo> <texto> | ia tokens <modelo> <texto> | ia hilos [N|auto] | ia parar\n");
     return 1;
 }

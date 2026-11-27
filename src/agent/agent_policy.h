@@ -60,6 +60,7 @@ static inline int usuario_ruta_escribible(const char *path)
 {
     char c[AGENT_POLICY_PATH_MAX + 1];
     if (!path || !agent_path_canon(path, c, sizeof c)) return 0;
-    return agent_path_has_prefix(c, "/usuario") || agent_path_has_prefix(c, "/tmp");
+    return agent_path_has_prefix(c, "/usuario") || agent_path_has_prefix(c, "/tmp")
+        || agent_path_has_prefix(c, "/usb");                       /* SOMA_363_ACCESO: medios USB externos (los de solo lectura fallan al escribir) */
 }
 #endif

@@ -383,6 +383,14 @@ static int64_t sys_tcp_close(uint64_t h)
     return 0;
 }
 
+/* SOMA_362_CARGA_CEDE: una lectura larga cede el nucleo 0 cuando el proceso ha gastado su rodaja. El disco USB espera cada
+ * transferencia girando (xhci wait_event) y el reloj solo desaloja a un proceso si lo pilla en ring 3: al cargar un modelo de IA
+ * (cientos de MiB, casi todo el tiempo dentro de esta llamada) el escritorio se quedaba sin CPU hasta que acababa la carga.
+ * Se cede entre trozos, fuera de bigfs y del driver, como en SYS_YIELD. */
+static void sys_io_cede(void)
+{
+    if (timer_get_uptime_ms() - slice_start_ms >= USER_SLICE_MS) thread_yield();
+}
 static int64_t sys_read(uint64_t fdn, uint64_t ubuf, uint64_t len)
 {
     struct ufd *f = get_fd((int64_t)fdn);
@@ -402,6 +410,7 @@ static int64_t sys_read(uint64_t fdn, uint64_t ubuf, uint64_t len)
             copy_to_user(ubuf + done, usermode_cur->io, (uint64_t)g);
             f->pos += (uint64_t)g; done += (uint64_t)g;
             if ((uint64_t)g < n) break;
+            sys_io_cede();                                       /* SOMA_362_CARGA_CEDE */
         }
         return (int64_t)done;
     }
@@ -418,6 +427,7 @@ static int64_t sys_read(uint64_t fdn, uint64_t ubuf, uint64_t len)
         copy_to_user(ubuf + done, usermode_cur->io, (uint64_t)g);
         f->pos += (uint64_t)g; done += (uint64_t)g;
         if ((uint64_t)g < n) break;
+        sys_io_cede();                                           /* SOMA_362_CARGA_CEDE */
     }
     return (int64_t)done;
 }
@@ -693,9 +703,12 @@ static int64_t sys_soma_vfs(uint64_t op, uint64_t ureq)
         return (int64_t)m;
     }
     if (op != 1) return E_INVAL;
-    static const char ws[] = "/workspace/";
-    for (unsigned i = 0; i < sizeof ws - 1; ++i) if (path[i] != ws[i]) return E_ACCES;
-    if (!path[sizeof ws - 1]) return E_INVAL;
+    /* SOMA_363_ACCESO: los programas escriben en su /workspace, en la unidad de la persona (/usuario) y en los USB externos (/usb) */
+    static const char *const raiz[3] = { "/workspace/", "/usuario/", "/usb/" };
+    int ok = -1;
+    for (int k = 0; k < 3 && ok < 0; ++k) { unsigned i = 0; while (raiz[k][i] && path[i] == raiz[k][i]) i++; if (!raiz[k][i]) ok = (int)i; }
+    if (ok < 0) return E_ACCES;
+    if (!path[ok]) return E_INVAL;
     if (r.len > SOMA_VFS_WMAX) return SOMA_EFBIG;
     if (r.len && !user_range(r.buf, r.len, 0)) return E_FAULT;
     char *k = (char *)kmalloc(r.len + 1);
